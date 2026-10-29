@@ -1,3 +1,4 @@
+import { showSchemaJson } from './workflow-editor-actions';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createActor } from 'xstate';
@@ -208,7 +209,7 @@ describe('rename with retained drafts (repair B)', () => {
       select('Parallel node reviews');
       fireEvent.click(inspector().getAllByRole('button', { name: /Edit subgraph/ })[branch === 'quality' ? 0 : 1]);
       fireEvent.click(screen.getByRole('button', { name: 'Block settings' }));
-      type(inspector().getByLabelText('Output schema') as HTMLTextAreaElement, text);
+      type(showSchemaJson('Output schema'), text);
       fireEvent.click(screen.getByRole('button', { name: 'Root block' }));
     };
     if (liveFirst) leave('security', '{"live_security"');
@@ -467,7 +468,7 @@ describe('recovering detached text (F4)', () => {
     expect(blockAt(written(), [])!.nodes.ready).toMatchObject({ output: { fields: { status: { type: 'literal', value: 'live' } } } });
   });
 
-  it('shows the exact text a rename took along after Undo of the rename, and clears it only on discard', async () => {
+  it('carries exact unapplied text through rename Undo and Redo without detaching the live field', async () => {
     const editor = await open(exampleSource('parallel_review'));
     select('Return node ready');
     type(literals()[0], kept);
@@ -476,15 +477,16 @@ describe('recovering detached text (F4)', () => {
     fireEvent.keyDown(id, { key: 'Enter' });
     undo();
     select('Return node ready');
-    expect(literals()[0].value).toBe('"ready"');
-    expect(retained(editor)).toEqual([[kept, 'accepted · output.fields["status"].value', true]]);
+    expect(literals()[0].value).toBe(kept);
+    expect(retained(editor)).toEqual([[kept, location, false]]);
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true, shiftKey: true });
+    select('Return node accepted');
+    expect(literals()[0].value).toBe(kept);
+    expect(retained(editor)).toEqual([[kept, 'accepted · output.fields["status"].value', false]]);
     save();
-    fireEvent.click(detachedEntry().getByRole('button', { name: 'Show kept text' }));
-    expect((screen.getByRole('textbox', { name: 'Kept text of accepted · output.fields["status"].value' }) as HTMLTextAreaElement).value).toBe(kept);
     expect(isDirty(editor.getSnapshot().context)).toBe(true);
     expect(writes).toHaveLength(0);
-    fireEvent.click(detachedEntry().getByRole('button', { name: 'Discard' }));
+    fireEvent.click(pending().getByRole('button', { name: 'Discard' }));
     expect(editor.getSnapshot().context.drafts).toEqual({});
-    expect(isDirty(editor.getSnapshot().context)).toBe(false);
   });
 });

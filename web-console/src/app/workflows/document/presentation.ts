@@ -31,11 +31,6 @@ export function orderedKeys(document: WorkflowDocument, target: WorkflowOrderTar
   return [...chosen, ...keys.filter(key => !chosen.includes(key)).sort()];
 }
 
-export function resetPositions(document: WorkflowDocument): WorkflowDocument {
-  if (!document.editor) return document;
-  return { ...document, editor: { ...document.editor, nodes: document.editor.nodes?.map(({ position: _position, ...node }) => node) } };
-}
-
 type RewriteBlock = (block: BlockPath) => BlockPath | undefined;
 type RewriteNode = (node: WorkflowNodeAddress) => WorkflowNodeAddress | undefined;
 

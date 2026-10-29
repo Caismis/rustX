@@ -1,0 +1,12 @@
+{
+  "fixture": "test/fixtures/workflow-scale.ts",
+  "executableNodes": 256,
+  "blocks": 3,
+  "viewport": "1440x1000",
+  "renderMs": 975.7000000476837,
+  "layoutMs": 756.8000000715256,
+  "thresholdsMs": {
+    "render": 10000,
+    "layout": 10000
+  }
+}

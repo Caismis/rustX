@@ -4594,6 +4594,64 @@ chat_reasoning_replay = "omit"
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    async fn editor_authored_nested_file_executes_keyed_results_and_both_loop_exits() {
+        let source = include_str!("../../tests/fixtures/workflow/visual-authoring.json");
+        let document: crate::workflow_file::WorkflowFileDocument =
+            serde_json::from_str(source).expect("editor file document");
+        document.canonical_bytes().expect("bounded native metadata");
+        for satisfied in [true, false] {
+            let plane = workflow_test_plane(1);
+            let runtime = workflow_runtime(&plane);
+            let native = runtime.read_model.clone();
+            let mut definition = document.definition.clone();
+            let WorkflowNodeDefinition::Loop { until, .. } =
+                definition.block.nodes.get_mut("repeat").expect("Loop")
+            else {
+                panic!("editor fixture owns a Loop");
+            };
+            **until = WorkflowPredicate::Boolean {
+                value: WorkflowValue::Literal {
+                    value: json!(satisfied),
+                },
+            };
+            let program = Arc::new(compile_test(definition).expect("editor-authored program"));
+            let (_, cancellation) = workflow_cancellation();
+            let result = runtime
+                .run_test_foreground(
+                    program,
+                    ToolCallId::new("editor-nested"),
+                    workflow_test_context(&plane),
+                    json!({"message": "verified"}),
+                    cancellation,
+                )
+                .await
+                .expect("native execution settles");
+            assert_eq!(
+                result,
+                json!({
+                    "parallel": {"left": {"echo": "verified"}, "right": {"echo": "verified"}},
+                    "loop": {"status": if satisfied {"satisfied"} else {"exhausted"},
+                        "iterations": if satisfied {1} else {3}, "result": {"echo": "verified"}}
+                })
+            );
+            assert!(plane.registry.all_snapshots().is_empty());
+            let snapshot = native.snapshot();
+            assert!(
+                snapshot.runs[0]
+                    .instances
+                    .iter()
+                    .all(|node| node.child.is_none())
+            );
+            assert!(
+                !serde_json::to_string(&snapshot)
+                    .unwrap()
+                    .contains("Author-only")
+            );
+        }
+    }
+
+    #[cfg(unix)]
     fn workflow_runtime(plane: &WorkflowTestPlane) -> WorkflowRuntime {
         WorkflowRuntime::new(
             plane.registry.clone(),

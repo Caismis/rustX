@@ -879,3 +879,21 @@ cargo test --lib --all-features scripted_suites::
 # The App Server contracts under the manager's private test module:
 cargo test --lib --all-features local_runtime::session_runtime_manager::tests::
 ```
+
+## Visual Workflow authoring
+
+`web-console/test/e2e/workflow-visual.spec.ts` drives create, typed binding,
+structured output, in-place private Blocks, notes, one-step layout history,
+clean-profile reopen and native file copy against the real App Server and
+Product Host. It records a reproducible trace and full-shell PNG evidence;
+its 256-node fixture records render/layout durations against declared budgets.
+`workflow-editor.spec.ts` retains scope/join/unknown-contract, conflict, keyboard
+and number-fidelity browser regressions. The full browser inventory discovers
+both specs automatically; targeted runs do not replace the FULL profile.
+
+The frontend command test authors `tests/fixtures/workflow/visual-authoring.json`
+exactly. `runtime::workflow::tests::editor_authored_nested_file_executes_keyed_results_and_both_loop_exits`
+executes that shared fixture using native runtime owners and checks actual
+Parallel/Loop values and author-metadata isolation. It is a source-module unit
+test, not another runtime API. Existing native file-authoring tests own complete
+revision/CAS/digest and lost-ACK guarantees. See [the invariant/evidence map](../docs/workflow-visual-editor.md#acceptance-and-invariant-traceability).

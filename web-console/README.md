@@ -641,3 +641,36 @@ admission as the existing desktop workspace action.
 ### Temporary questions
 
 Use **Ask a side question** in the Conversation header while Agent work continues. It reads a committed snapshot, which may exclude streaming work. Closing the panel keeps execution running; **Cancel question** explicitly cancels that Call. **Check status** recovers an uncertain receipt or incomplete display without submitting again. Temporary answers expire after five minutes and are never canonical conversation messages. Settings → Models exposes independent Classification and BTW model policies. See [native semantics and limits](../docs/auxiliary-consumers.md).
+
+
+## Visual Workflow editing
+
+Open **Workflows**, choose Global or an authorized Workspace, then create or open
+one native YAML file. Select **Start** to declare arguments and the entry node.
+The inspector has one scrolling Settings surface: configure the operation,
+choose typed input variables, declare output, then connect successors. A display
+title is independent of **Native identity and rename**. Advanced JSON edits the
+same schema as visual fields without discarding constraints.
+
+Parallel branches and Loop bodies stay on the main canvas. Select a private Start
+or Return to edit its Block contract. Collapse changes only the view; Find or a
+diagnostic expands the addressed child. Loop `until` and `carry` use committed
+`result`; downstream nodes see the Loop aggregate. Text Model output is the whole
+string, selected as the node itself.
+
+Use the canvas toolbar for pan/select, Add, notes, Find, Organize, Fit and minimap.
+Add-after and legal edge insertion are atomic. Ctrl/Cmd+A selects the focused
+Block, Ctrl/Cmd+C/V copies/pastes typed fragments, Ctrl/Cmd+D duplicates, Delete
+removes selection, Ctrl/Cmd+Z / Shift+Z undo/redo, and N opens Add. Text fields,
+IME, dialogs and popovers retain their keys. Copy/Duplicate waits for owned
+pending input to be resolved. Save and Check show every remaining field and can
+return focus to it. Invalid external files remain preserved.
+
+Resize the inspector from its divider, including with arrow keys. Narrow editor
+widths use a bottom sheet. Markdown notes, geometry, titles and field order save
+in the file and survive a clean browser profile and native Copy File. Viewport
+and inspector width remain personal preferences. **Save File** is one revision
+checked write; a conflict keeps local changes for explicit reconciliation.
+
+See [the authoring contract](../docs/workflow-authoring.md) and [design, evidence
+and test traceability](../docs/workflow-visual-editor.md).

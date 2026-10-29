@@ -8,7 +8,7 @@ import css from './Editor.module.css';
 
 /** The contextual, searchable Add Node palette. It lists exactly the eight
  * native node kinds and closes on choice, Escape or outside focus. */
-export function Palette({ at, onChoose, onClose }: { at: { x: number; y: number }; onChoose: (kind: NodeKind) => void; onClose: () => void }) {
+export function Palette({ at, onChoose, onClose, insertion = false }: { at: { x: number; y: number }; onChoose: (kind: NodeKind) => void; onClose: () => void; insertion?: boolean }) {
   const tx = useTranslation();
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -16,7 +16,7 @@ export function Palette({ at, onChoose, onClose }: { at: { x: number; y: number 
   const input = useRef<HTMLInputElement>(null);
   // Take the keyboard after the opening gesture has settled.
   useEffect(() => { const frame = requestAnimationFrame(() => input.current?.focus()); return () => cancelAnimationFrame(frame); }, []);
-  const kinds = NODE_KINDS.filter(kind => tx(`workflows:kind.${kind}`).toLowerCase().includes(query.trim().toLowerCase()) || kind.includes(query.trim().toLowerCase()));
+  const kinds = NODE_KINDS.filter(kind => (!insertion || !['branch', 'loop', 'return'].includes(kind)) && (tx(`workflows:kind.${kind}`).toLowerCase().includes(query.trim().toLowerCase()) || kind.includes(query.trim().toLowerCase())));
   useEffect(() => {
     const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) onClose(); };
     document.addEventListener('pointerdown', outside, true);
@@ -24,11 +24,13 @@ export function Palette({ at, onChoose, onClose }: { at: { x: number; y: number 
   }, [onClose]);
   return <div ref={root} className={css.palette} style={{ left: at.x, top: at.y }} role="dialog" aria-label={tx('workflows:canvas.add')}
     onKeyDown={event => {
+      if (event.nativeEvent.isComposing) return;
       if (event.key === 'Escape') { event.stopPropagation(); onClose(); }
       else if (event.key === 'ArrowDown') { event.preventDefault(); setActive(index => Math.min(index + 1, kinds.length - 1)); }
       else if (event.key === 'ArrowUp') { event.preventDefault(); setActive(index => Math.max(index - 1, 0)); }
       else if (event.key === 'Enter' && kinds[active]) { event.preventDefault(); onChoose(kinds[active]); }
     }}>
+    {insertion && <p className={css.note}>{tx('workflows:canvas.insertion-note')}</p>}
     <label className={css.paletteSearch}><IconSearchOutline16 /><input ref={input} value={query} placeholder={tx('workflows:palette.search')} aria-label={tx('workflows:palette.search')}
       aria-controls="workflow-palette" aria-activedescendant={kinds[active] ? `workflow-palette-${kinds[active]}` : undefined}
       onChange={event => { setQuery(event.target.value); setActive(0); }} /></label>

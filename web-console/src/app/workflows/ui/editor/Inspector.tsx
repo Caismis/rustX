@@ -1,101 +1,127 @@
-import { useCandidateAnalysis } from './forms/analysis';
-import type { ArrayEdit } from '../../document/fields';
-import { useEffect, useState, type ReactNode } from 'react';
+import { encodeField, type ArrayEdit, type FieldAddress } from '../../document/fields';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import clsx from 'clsx';
 import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../locale/react';
 import { IconCheckOutline14, IconCloseOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
-import { disconnect } from '../../document/commands';
+import { CommandRejected, disconnect, deleteNodes, duplicateNode, freshIdentifier, renameNode } from '../../document/commands';
+import { fragmentOwnsField } from '../../document/clipboard';
+import { freshNote, nodePresentation, presentationEdit, putNote, removeNotes } from '../../document/geometry';
+import { nodeField } from '../../document/fields';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
 import { blockAt, edgesOf, nodeAt, type BlockPath, type WorkflowDocument } from '../../document/model';
 import { edgePort } from '../../document/ports';
 import type { WorkflowScopePort } from '../../port';
-import type { CheckResult } from '../../machines/editor';
+import type { CheckResult, FieldDraft } from '../../machines/editor';
 import { IconBlock, KindIcon } from '../icons';
-import type { Selection } from './Canvas';
+import type { Selection } from './selection';
 import { BlockForm } from './forms/BlockForm';
-import { NodeForm, tabsOf, type Derived, type InspectorTab } from './forms/NodeForms';
+import { NodePanel } from './panels/NodePanel';
+import { DraftTextField, KeyField, NumberField, SelectField } from './forms/fields';
+import { readInspectorWidth, writeInspectorWidth } from './view-store';
+import { viewId } from './selection';
 import css from './Editor.module.css';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
-
 export type CheckState = 'not_run' | 'passed' | 'failed' | 'outdated';
-
 export function checkState(check: CheckResult | undefined, generation: number): CheckState {
   if (!check) return 'not_run';
   if (check.generation !== generation) return 'outdated';
   return check.report.structure.status === 'valid' ? 'passed' : 'failed';
 }
 
-/** The contextual right inspector. It exists only while something is
- * selected; it never reserves an empty column. */
-export function Inspector({ document, block, selection, onSelect, edit, onRenamed, navigate, vocabulary, check, generation, rejection, checks, port }: {
+/** A single Settings surface; specialized panels own node semantics and the
+ * editor machine owns all deferred text, history and save state. */
+export function Inspector({ document, block, selection, onSelect, edit, navigate, vocabulary, check, generation, rejection, checks, port, collapsed, toggleContainer, focus, drafts }: {
   document: WorkflowDocument; block: BlockPath; selection: NonNullable<Selection>; onSelect: (selection: Selection) => void;
-  edit: Edit; onRenamed: (from: string, to: string) => void; navigate: (block: BlockPath) => void; vocabulary?: WorkflowVocabulary; check?: CheckResult; generation: number;
+  edit: Edit; navigate: (block: BlockPath) => void; vocabulary?: WorkflowVocabulary; check?: CheckResult; generation: number;
   rejection?: string; checks: ReactNode; port: WorkflowScopePort;
+  collapsed: ReadonlySet<string>; toggleContainer: (path: BlockPath, id: string) => void;
+  focus?: { address?: FieldAddress; field?: string; epoch: number };
+  drafts: Readonly<Record<string, FieldDraft>>;
 }) {
-  const tx = useTranslation();
-  const owner = blockAt(document, block)!;
-  const node = selection.kind === 'node' ? nodeAt(owner, selection.id) : undefined;
-  const [tab, setTab] = useState<InspectorTab>('config');
-  const nodeId = selection.kind === 'node' ? selection.id : undefined;
-  // A new node opens on Configure; locating a field opens the tab it is on.
-  const requested = selection.kind === 'node' ? selection.tab : undefined;
-  useEffect(() => setTab(requested ?? 'config'), [nodeId, requested, requested && selection]);
+  const tx = useTranslation(), path = 'path' in selection ? selection.path ?? block : block;
+  const root = useRef<HTMLElement>(null);
+  const selectionKey = JSON.stringify(selection);
+  useEffect(() => {
+    if (!focus || !root.current) return;
+    const controls = [...root.current.querySelectorAll<HTMLElement>('[data-workflow-field]')];
+    const exact = focus.address && encodeField(focus.address);
+    const control = exact ? controls.find(control => control.dataset.workflowField === exact) : controls.find(control => {
+      try {
+        const tuple = JSON.parse(control.dataset.workflowField!);
+        const path = tuple[0] === 'workflow' ? [tuple[1]] : tuple[2];
+        return Array.isArray(path) && path.length && focus.field?.startsWith(String(typeof path[0] === 'object' ? path[0].key : path[0]));
+      } catch { return false; }
+    });
+    if (!control) return;
+    for (let parent = control.parentElement; parent && parent !== root.current; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true;
+    control.scrollIntoView?.({ block: 'nearest' }); control.focus({ preventScroll: true });
+  }, [focus, selectionKey]);
+  const owner = blockAt(document, path), node = selection.kind === 'node' && owner ? nodeAt(owner, selection.id) : undefined;
+  const [width, setWidth] = useState(readInspectorWidth), [resizing, setResizing] = useState(false);
+  const resize = useRef({ x: 0, width });
+  const changeWidth = (value: number) => { const next = Math.max(320, Math.min(640, value)); setWidth(next); writeInspectorWidth(next); };
+  useEffect(() => {
+    if (!resizing) return;
+    const move = (event: PointerEvent) => changeWidth(resize.current.width + resize.current.x - event.clientX);
+    const stop = () => setResizing(false);
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop, { once: true });
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
+  }, [resizing]);
   const state = checkState(check, generation);
-  const analysis = useCandidateAnalysis(undefined, selection.kind === 'node' && tab === 'output');
-  const report = analysis?.report?.analysis;
-  const output = report?.outputs.find(output => output.producer.node === nodeId && JSON.stringify(output.producer.block) === JSON.stringify(block));
-  const derived: Derived = !analysis ? { status: 'loading' }
-    : analysis.failed ? { status: 'failed' }
-    : output?.schema != null ? { status: 'ready', schema: output.schema }
-    : !output && report?.truncated ? { status: 'truncated' }
-    : { status: 'incomplete' };
-  let head, body;
-  if (selection.kind === 'node' && node) {
-    const tabs = tabsOf(node.type);
+  const refusePending = (ids: string[], notes: string[]) => {
+    if (Object.values(drafts).some(draft => fragmentOwnsField(path, ids, notes, draft.address))) throw new CommandRejected('pending_input');
+  };
+  let head: ReactNode, body: ReactNode;
+  if (selection.kind === 'node' && node && owner) {
+    const id = selection.id, metadata = nodePresentation(document, path, id);
     head = <div className={css.inspectTitle}>
       <span className={clsx(css.nodeIcon, css[`kind_${node.type}`])}><KindIcon kind={node.type} size={17} /></span>
-      <span className={css.nodeText}><span className={css.nodeTitle}>{selection.id}</span><span className={css.nodeType}>{tx(`workflows:kind.${node.type}`)} · {selection.id}</span></span>
+      <span className={css.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} value={metadata?.title ?? id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} /><span className={css.nodeType}>{tx(`workflows:kind.${node.type}`)}</span></span>
     </div>;
     body = <>
-      {tabs.length > 1 && <div className={css.inspectTabs} role="tablist">
-        {tabs.map(name => <button key={name} type="button" role="tab" aria-selected={tab === name} className={clsx(css.inspectTab, tab === name && css.inspectTabActive)} onClick={() => setTab(name)}>{tx(`workflows:inspector.tab-${name}`)}</button>)}
-      </div>}
-      <div className={css.inspectBody} role={tabs.length > 1 ? 'tabpanel' : undefined}>
-        <NodeForm port={port} document={document} block={block} id={selection.id} tab={tabs.includes(tab) ? tab : 'config'} vocabulary={vocabulary} edit={edit} onRenamed={onRenamed} navigate={navigate} rejected={rejection}
-          derived={derived} />
-      </div>
+      {(node.type === 'loop' || node.type === 'parallel') && <button type="button" className={css.smallButton} onClick={() => toggleContainer(path, id)}>{tx(collapsed.has(viewId(path, 'node', id)) ? 'workflows:canvas.expand' : 'workflows:canvas.collapse', { p0: metadata?.title ?? id })}</button>}
+      <DraftTextField label={tx('workflows:panel.description')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />
+      <NodePanel document={document} block={path} id={id} port={port} vocabulary={vocabulary} edit={edit} navigate={navigate} />
+      <details className={css.advanced}><summary>{tx('workflows:panel.identity')}</summary>
+        <KeyField label={tx('workflows:inspector.node-id')} hint={tx('workflows:inspector.rename-hint')} value={id} address={nodeField(path, id, [], 'key')} rename={(document, from, to) => renameNode(document, path, from, to)} />
+      </details>
+      <div className={css.row}><button type="button" className={css.smallButton} onClick={() => edit(document => { refusePending([id], []); return presentationEdit(duplicateNode(document, path, id, freshIdentifier(blockAt(document, path)!, `${id.slice(0, 52)}_copy`)), editor => editor); })}>{tx('workflows:canvas.duplicate')}</button>
+        <button type="button" className={clsx(css.smallButton, css.dangerText)} onClick={() => edit(document => deleteNodes(document, path, [id]))}>{tx('workflows:inspector.delete-node')}</button></div>
     </>;
-  } else if (selection.kind === 'edge' && edgesOf(owner)[selection.index]) {
+  } else if (selection.kind === 'edge' && owner && edgesOf(owner)[selection.index]) {
     const edge = edgesOf(owner)[selection.index];
-    head = <div className={css.inspectTitle}><span className={css.nodeText}><span className={css.nodeTitle}>{edge.from} → {edge.to}</span><span className={css.nodeType}>{tx(`workflows:port.${edgePort(edge)}`)}</span></span></div>;
-    body = <div className={css.inspectBody}>
-      <button type="button" className={clsx(css.smallButton, css.dangerText)} onClick={() => { edit(current => disconnect(current, block, [selection.index])); onSelect(undefined); }}>{tx('workflows:inspector.remove', { p0: `${edge.from} → ${edge.to}` })}</button>
-    </div>;
+    head = <div className={css.nodeText}><span className={css.nodeTitle}>{edge.from} → {edge.to}</span><span className={css.nodeType}>{tx(`workflows:port.${edgePort(edge)}`)}</span></div>;
+    body = <button type="button" className={clsx(css.smallButton, css.dangerText)} onClick={() => { edit(document => disconnect(document, path, [selection.index])); onSelect(undefined); }}>{tx('workflows:inspector.remove', { p0: `${edge.from} → ${edge.to}` })}</button>;
   } else if (selection.kind === 'check') {
-    head = <div className={css.inspectTitle}><span className={css.nodeText}><span className={css.nodeTitle}>{tx('workflows:check.problems')}</span></span></div>;
-    body = <div className={css.inspectBody}>{checks}</div>;
+    head = <span className={css.nodeTitle}>{tx('workflows:check.problems')}</span>; body = checks;
+  } else if (selection.kind === 'note') {
+    const note = document.editor?.notes?.find(note => note.id === selection.id);
+    head = <span className={css.nodeTitle}>{tx('workflows:note.title')}</span>;
+    body = note && <>
+      <DraftTextField label={tx('workflows:note.text')} value={note.text} multiline address={{ block: path, path: ['text'], role: 'value', domain: { kind: 'note', id: note.id } }} />
+      <SelectField label={tx('workflows:note.theme')} value={note.theme} options={(['neutral', 'blue', 'green', 'amber', 'rose'] as const).map(value => ({ value, label: tx(`workflows:note.${value}`) }))} onChange={theme => edit(document => putNote(document, { ...note, theme }))} />
+      {(['width', 'height'] as const).map(dimension => <NumberField key={dimension} label={tx(`workflows:note.${dimension}`)} value={note.dimensions[dimension]} min={16} max={8192} address={{ block: path, path: ['dimensions', dimension], role: 'value', domain: { kind: 'note', id: note.id } }} />)}
+      <div className={css.row}><button type="button" className={css.smallButton} onClick={() => edit(document => { refusePending([], [note.id]); return putNote(document, { ...note, id: freshNote(document), position: { x: note.position.x + 32, y: note.position.y + 32 } }); })}>{tx('workflows:canvas.duplicate')}</button>
+        <button type="button" className={css.smallButton} onClick={() => { edit(document => removeNotes(document, [note.id])); onSelect(undefined); }}>{tx('workflows:note.delete')}</button></div>
+    </>;
   } else {
-    head = <div className={css.inspectTitle}>
-      <span className={css.nodeIcon}><IconBlock size={17} /></span>
-      <span className={css.nodeText}><span className={css.nodeTitle}>{block.length ? tx('workflows:inspector.block-title') : tx('workflows:inspector.workflow-title')}</span><span className={css.nodeType}>{block.length ? block.map(step => step.branch ?? 'body').join(' / ') : tx('workflows:canvas.root')}</span></span>
-    </div>;
-    body = <div className={css.inspectBody}><BlockForm document={document} block={block} edit={edit} /></div>;
+    head = <div className={css.inspectTitle}><span className={css.nodeIcon}><IconBlock size={17} /></span><span className={css.nodeText}><span className={css.nodeTitle}>{selection.kind === 'start' ? tx(path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start') : tx(path.length ? 'workflows:inspector.block-title' : 'workflows:inspector.workflow-title')}</span></span></div>;
+    body = owner && <BlockForm document={document} block={path} edit={edit} start={selection.kind === 'start'} />;
   }
-  return <aside className={css.inspector} aria-label={tx('workflows:inspector.label')} onKeyDown={event => { if (event.key === 'Escape' && !(event.target as Element).closest('textarea, input, select')) onSelect(undefined); }}>
-    <header className={css.inspectHead}>
-      {head}
-      <button type="button" className={css.iconButton} aria-label={tx('workflows:inspector.close')} onClick={() => onSelect(undefined)}><IconCloseOutline16 /></button>
-    </header>
-    {body}
-    <footer className={css.inspectFooter}>
-      <button type="button" className={clsx(css.checkStatus, css[`check_${state}`])} onClick={() => onSelect({ kind: 'check' })}>
-        {state === 'passed' ? <IconCheckOutline14 /> : state === 'failed' ? <IconWarningOutline16 /> : null}
-        {tx(state === 'passed' ? 'workflows:check.passed' : state === 'failed' ? 'workflows:check.failed' : state === 'outdated' ? 'workflows:check.outdated' : 'workflows:check.not-run')}
-      </button>
-      <span className={css.muted}>{tx('workflows:inspector.footer-scope')}</span>
-    </footer>
+  return <aside ref={root} className={css.inspector} style={{ '--inspector-width': `${width}px` } as CSSProperties} aria-label={tx('workflows:inspector.label')} onWheel={event => event.stopPropagation()}
+    onKeyDown={event => { if (event.key === 'Escape' && !event.isDefaultPrevented() && !(event.target as Element).closest('textarea, input, select, [role="dialog"], [role="listbox"]')) { event.stopPropagation(); onSelect(undefined); } }}>
+    <div className={css.inspectorResize} role="separator" aria-label={tx('workflows:panel.resize')} aria-orientation="vertical" aria-valuemin={320} aria-valuemax={640} aria-valuenow={width} tabIndex={0}
+      onPointerDown={event => { event.preventDefault(); resize.current = { x: event.clientX, width }; setResizing(true); }}
+      onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); changeWidth(width + (event.key === 'ArrowLeft' ? 20 : -20)); } }} />
+    <header className={css.inspectHead}>{head}<button type="button" className={css.iconButton} aria-label={tx('workflows:inspector.close')} onClick={() => onSelect(undefined)}><IconCloseOutline16 /></button></header>
+    <div className={clsx(css.inspectBody, 'nowheel')} key={selection.kind === 'node' || selection.kind === 'note' ? `${selection.kind}:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>
+      {rejection && <p role="alert" className={css.hintError}>{rejection}</p>}{body}
+    </div>
+    <footer className={css.inspectFooter}><button type="button" className={clsx(css.checkStatus, css[`check_${state}`])} onClick={() => onSelect({ kind: 'check' })}>
+      {state === 'passed' ? <IconCheckOutline14 /> : state === 'failed' ? <IconWarningOutline16 /> : null}{tx(state === 'passed' ? 'workflows:check.passed' : state === 'failed' ? 'workflows:check.failed' : state === 'outdated' ? 'workflows:check.outdated' : 'workflows:check.not-run')}
+    </button><span className={css.muted}>{tx('workflows:inspector.footer-scope')}</span></footer>
   </aside>;
 }
 

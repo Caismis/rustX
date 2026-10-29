@@ -71,6 +71,14 @@ async function failUnstable(testInfo: TestInfo, stem: string, unstable: Unstable
   throw new Error(messages.join('\n'));
 }
 
+/** Real evidence uses the same stabilization and browser authority as references,
+ * without creating another visual baseline or a permissive comparison path. */
+export async function captureEvidence(target: Page | Locator, name: string, testInfo = test.info()): Promise<void> {
+  const settled = await captureStable(browserCapture(target), name);
+  if (!settled.stable) return failUnstable(testInfo, name, settled);
+  await attachPng(testInfo, name, settled.png);
+}
+
 /** Assert that `target` renders exactly its checked-in reference under the
  * rustX screenshot contract: a stable capture first, then exact geometry and
  * pixels, except the reference's own registered rasterizer-noise regions. */

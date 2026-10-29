@@ -8269,3 +8269,27 @@ Original admission scope, current controller and result reservation precede nati
   consumer and query. Controlled deferred completions prove stale-result refusal.
 - One file owns authored positions; completed drags are atomic document history
   edits. Browser coordinates are removed. Viewports remain personal preferences.
+
+
+## Workflow visual authoring invariants (Issue #511)
+
+- XState owns one complete native editing document and history. The renderer,
+  inspector and ELK are projections or commands, never competing authorities.
+- A structured Block path, view kind and local identity uniquely address each
+  view. Synthetic Starts, lanes and notes never consume executable node capacity.
+- Connection and insertion commands enforce owning Block and native ports.
+  Moving a frame preserves children-relative coordinates and lexical ownership.
+- Schema field rename changes only provably corresponding structured paths,
+  required fields, constructed keys and owned display order; task/literal text
+  and whole-value references retain their meaning.
+- Copy/paste admits bounded closed transport shapes; owned subtrees, notes,
+  metadata and internal references are remapped atomically. Unapplied fields
+  refuse export; cross-scope external references refuse paste.
+- Completed geometry/layout is one metadata transaction. Layout never changes
+  executable values/edges, moves manual notes or overwrites a newer generation.
+- Every deferred field retains exact text through selection, disclosure,
+  container navigation, rename and history; deletion detaches rather than loses
+  it. Save/Check cannot submit while unapplied input remains.
+- Editing and analysis start no Tools, provider calls or child execution. Native
+  execution of the shared authored fixture proves keyed joins, both Loop exits,
+  private arguments and absence of author-only note text from runtime snapshots.

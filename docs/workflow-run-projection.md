@@ -207,3 +207,14 @@ test covers native execution through correlation/rendering, live reconnect,
 and reopening the same durable Session in a fresh process without new requests
 or restored Workflow ownership. Existing child-inspector and root HITL suites
 remain the response-routing and inspection-isolation contracts.
+
+
+## Authoring views and execution facts
+
+The [visual authoring scene](workflow-visual-editor.md) projects synthetic Start
+anchors, private branch lanes and Markdown notes beside native nodes. These view
+IDs, collapse state and authored positions never become execution events or run
+nodes. The run projection continues to consume the existing native lifecycle and
+value owners; saving or organizing a file does not start a run or alter a frozen
+admitted program. A Return shown inside a container completes only its owning
+Block, and Loop exhaustion retains its existing ordinary exit meaning.

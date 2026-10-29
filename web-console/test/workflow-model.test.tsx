@@ -1,3 +1,4 @@
+import { showSchemaJson } from './workflow-editor-actions';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createActor } from 'xstate';
@@ -8,14 +9,12 @@ import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { exampleSource } from './workflow-fixtures';
 import { addNode, connect, nodeTemplate, renameNode, setEntry } from '../src/app/workflows/document/commands';
 import { NODE_KINDS, type NodeDefinition, type Predicate } from '../src/app/workflows/document/model';
-import { nodeField } from '../src/app/workflows/document/fields';
 import { blockReferences } from '../src/app/workflows/document/references';
 import { incompleteIdentities } from '../src/app/workflows/document/identities';
 import { outputPorts } from '../src/app/workflows/document/ports';
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import { workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
 import WorkflowEditor from '../src/app/workflows/ui/editor/WorkflowEditor';
-import { tabOfField } from '../src/app/workflows/ui/editor/forms/NodeForms';
 import { CheckResults } from '../src/app/workflows/ui/editor/Inspector';
 
 const object = { type: 'object', properties: {}, additionalProperties: false };
@@ -119,7 +118,7 @@ describe('native candidate analysis presentation', () => {
       : { type: 'loop', input: { type: 'reference', path: ['args'] }, body: { input: schema, output: schema, entry: 'done', nodes: { done: { type: 'return', output: { type: 'reference', path: ['args'] } } }, edges: [] }, until: predicate, carry: { type: 'reference', path: ['result'] }, max_iterations: 1 };
     const ports = kind === 'branch' ? ['true', 'false'] : ['satisfied', 'exhausted'];
     act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, block: { ...document.block, input: schema, nodes: { ...document.block.nodes, model: node }, edges: ports.map(port => ({ from: 'model', to: 'done', port: port as 'true' | 'false' | 'satisfied' | 'exhausted' })) } }) }));
-    fireEvent.click(inspector().getAllByRole('button', { name: 'Choose a variable' })[side === 'left' ? 0 : 1]);
+    fireEvent.click(inspector().getAllByRole('button', { name: 'Choose a variable' })[(kind === 'loop' ? 1 : 0) + (side === 'left' ? 0 : 1)]);
     expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'model' }, field: { kind: kind === 'branch' ? 'condition' : 'loop_until' }, path: [{ kind: side }] });
     await act(async () => native.complete({ references: [
       { producer: null, path: [prefix, 'count'], schema: { type: 'integer' }, availability: 'available', compatibility: 'incompatible', diagnostic: 'equality requires matching boolean/string/null types' },
@@ -139,7 +138,6 @@ describe('native candidate analysis presentation', () => {
   it('replaces output loading with a failure when the current request rejects', async () => {
     const native = controlledAnalysis();
     await open(native.analyze);
-    fireEvent.click(inspector().getByRole('tab', { name: 'Output' }));
     expect(inspector().getByRole('status').textContent).toBe("Analyzing the current candidate's output declaration…");
     expect(native.requests).toHaveLength(1);
     await act(async () => native.requests[0].reject(new Error('source authority unavailable')));
@@ -150,7 +148,6 @@ describe('native candidate analysis presentation', () => {
   it('explains a truncated output catalog when this node is absent', async () => {
     const native = controlledAnalysis();
     await open(native.analyze);
-    fireEvent.click(inspector().getByRole('tab', { name: 'Output' }));
     await act(async () => native.complete({ truncated: true, incomplete: true }));
     expect(inspector().getByRole('status').textContent).toBe('The analysis result was truncated before this output could be included.');
     expect(inspector().queryByText(/Analyzing the current candidate/)).toBeNull();
@@ -160,7 +157,6 @@ describe('native candidate analysis presentation', () => {
   it('distinguishes an incomplete declaration from a ready output even when other outputs are truncated', async () => {
     const native = controlledAnalysis();
     const editor = await open(native.analyze);
-    fireEvent.click(inspector().getByRole('tab', { name: 'Output' }));
     await act(async () => native.complete({ outputs: [{ producer: { block: [], node: 'model' }, schema: null, diagnostic: 'incomplete' }], truncated: true, incomplete: true }));
     expect(inspector().getByRole('status').textContent).toBe('The output declaration is incomplete or violates the Workflow schema contract.');
     // A new candidate must show loading while its own analysis is outstanding.
@@ -175,7 +171,6 @@ describe('native candidate analysis presentation', () => {
   it('disables known scope violations with unknown types and preserves a pending upstream selection', async () => {
     const native = controlledAnalysis();
     const editor = await open(native.analyze);
-    fireEvent.click(inspector().getByRole('tab', { name: 'Input' }));
     fireEvent.change(inspector().getByLabelText('Field name'), { target: { value: 'value' } });
     fireEvent.click(inspector().getByRole('button', { name: 'Add field' }));
     fireEvent.click(inspector().getByRole('button', { name: 'Choose a variable' }));
@@ -208,7 +203,6 @@ describe('native candidate analysis presentation', () => {
       ...Object.fromEntries(Object.entries(schemas).map(([id, schema]) => [id, { type: 'tool' as const, selector: { origin: 'builtin' as const, name: 'read' }, arguments: { type: 'reference' as const, path: ['args'] }, result: { type: 'json' as const, part: 0, schema } }])),
       model: { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'text', part: 0 } },
     }, edges: [{ from: 'string_root', to: 'array_root' }, { from: 'array_root', to: 'object_root' }, { from: 'object_root', to: 'model' }, { from: 'model', to: 'done' }] } }) }));
-    fireEvent.click(inspector().getByRole('tab', { name: 'Input' }));
     fireEvent.click(inspector().getByRole('button', { name: 'Choose a variable' }));
     expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'model' }, field: { kind: 'arguments' }, path: [] });
     const references: WorkflowCandidateAnalysis['references'] = Object.entries(schemas).map(([node, schema]) => ({ producer: { block: [], node }, path: [node], schema, availability: 'available', compatibility: node === 'object_root' ? 'unknown' : 'incompatible', diagnostic: null }));
@@ -245,9 +239,6 @@ describe('Model native editing document', () => {
     node.input = { 'content.fields.risk': { type: 'reference', path: ['classify'] } };
     document = renameNode(document, [], 'classify', 'categorize');
     expect(blockReferences(document.block)).toContainEqual(['categorize']);
-    expect(tabOfField('model', nodeField([], 'model', ['output', 'schema']))).toBe('output');
-    expect(tabOfField('model', nodeField([], 'model', ['input', { key: 'content.fields.risk' }]))).toBe('input');
-    expect(tabOfField('model', nodeField([], 'model', ['model', 'request_params']))).toBe('config');
   });
 
   it('authors registered Model/Profile selection, parameters, budget and typed bindings', async () => {
@@ -261,7 +252,6 @@ describe('Model native editing document', () => {
     fireEvent.change(inspector().getByLabelText('Maximum output tokens'), { target: { value: '1024' } });
     fireEvent.change(inspector().getByLabelText('Request parameters'), { target: { value: '{"temperature":0.25}' } });
     fireEvent.blur(inspector().getByLabelText('Request parameters'));
-    fireEvent.click(inspector().getByRole('tab', { name: 'Input' }));
     fireEvent.change(inspector().getByLabelText('Field name'), { target: { value: 'content' } });
     fireEvent.click(inspector().getByRole('button', { name: 'Add field' }));
     save();
@@ -271,13 +261,12 @@ describe('Model native editing document', () => {
 
   it('keeps a dirty JSON Schema draft after switching output mode and blocks a save until resolved', async () => {
     const actor = await open();
-    fireEvent.click(inspector().getByRole('tab', { name: 'Output' }));
     expect(inspector().queryByLabelText('Output JSON Schema')).toBeNull();
     fireEvent.change(inspector().getByLabelText('Output mode'), { target: { value: 'json_schema' } });
     act(() => actor.send({ type: 'UNDO' }));
     expect(inspector().queryByLabelText('Output JSON Schema')).toBeNull();
     act(() => actor.send({ type: 'REDO' }));
-    const schema = inspector().getByLabelText('Output JSON Schema');
+    const schema = showSchemaJson('Output JSON Schema');
     fireEvent.change(schema, { target: { value: '{"type":"object",' } });
     fireEvent.blur(schema);
     fireEvent.change(inspector().getByLabelText('Output mode'), { target: { value: 'text' } });

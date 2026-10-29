@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { WorkflowModelPolicy, WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../../locale/react';
-import type { FieldAddress, FieldStep } from '../../../document/fields';
+import { encodeField, type FieldAddress, type FieldStep } from '../../../document/fields';
 import type { WorkflowScopePort } from '../../../port';
-import { Field, JsonField, Section, SelectField } from './fields';
+import { JsonField, NumberField, Section, SelectField } from './fields';
 import css from '../Editor.module.css';
 
 type Query = { type: 'models' } | { type: 'profiles'; model: string };
@@ -61,12 +61,12 @@ export function ModelSelection({ policy, address, port, onChange }: {
   const profileValues = profiles.state?.choices?.type === 'profiles' ? profiles.state.choices.profiles : [];
   const withSelected = (values: readonly string[], selected?: string | null) => [...new Set([...values, ...(selected ? [selected] : [])])];
   return <Section title={tx('workflows:inspector.model-selection')}>
-    <SelectField label={tx('workflows:inspector.model-source')} value={policy.mode}
+    <SelectField field={encodeField(address)} label={tx('workflows:inspector.model-source')} value={policy.mode}
       options={[{ value: 'session', label: tx('workflows:inspector.model-session') }, { value: 'explicit', label: tx('workflows:inspector.model-explicit') }]}
       hint={tx('workflows:inspector.model-source-hint')}
-      onChange={mode => onChange(mode === 'session' ? { mode } : { mode, model: '', request_params: {} }, [])} />
+      onChange={mode => { if (mode !== policy.mode) onChange(mode === 'session' ? { mode } : { mode, model: '', request_params: {} }, []); }} />
     {selected && <>
-      <SelectField label={tx('workflows:inspector.model-id')} value={selected.model} disabled={models.state?.loading}
+      <SelectField field={encodeField({ ...address, path: [...address.path, 'model'] })} label={tx('workflows:inspector.model-id')} value={selected.model} disabled={models.state?.loading}
         options={[{ value: '', label: tx('workflows:inspector.model-choose') }, ...withSelected(modelValues, selected.model).map(model => ({ value: model, label: model }))]}
         onChange={model => onChange({ ...selected, model, profile: undefined }, ['model'])} />
       <ChoicePages choices={models} kind="models" />
@@ -74,9 +74,10 @@ export function ModelSelection({ policy, address, port, onChange }: {
         options={[{ value: '', label: tx('workflows:inspector.model-default-profile') }, ...withSelected(profileValues, selected.profile).map(profile => ({ value: profile, label: profile }))]}
         onChange={profile => onChange({ ...selected, profile: profile || undefined }, ['profile'])} />
       {selected.model && <ChoicePages choices={profiles} kind="profiles" />}
-      <Field label={tx('workflows:inspector.model-output-limit')} hint={tx('workflows:inspector.model-output-limit-hint')}>{fieldId => <input id={fieldId} type="number" min={1} max={4294967295} className={css.input} value={selected.max_output_tokens ?? ''}
-        onChange={event => { const text = event.target.value, tokens = Number(text); if (!text || Number.isSafeInteger(tokens) && tokens > 0 && tokens <= 4294967295) onChange({ ...selected, max_output_tokens: text ? tokens : undefined }, ['max_output_tokens']); }} />}</Field>
-      <JsonField label={tx('workflows:inspector.model-params')} hint={tx('workflows:inspector.model-params-hint')} value={selected.request_params ?? {}} rows={5} address={{ ...address, path: [...address.path, 'request_params'] }} />
+      <details className={css.advanced}><summary>{tx('workflows:panel.advanced')}</summary>
+      <NumberField label={tx('workflows:inspector.model-output-limit')} hint={tx('workflows:inspector.model-output-limit-hint')} value={selected.max_output_tokens} min={1} max={4294967295} optional address={{ ...address, path: [...address.path, 'max_output_tokens'] }} />
+      <JsonField label={tx('workflows:inspector.model-params')} hint={tx('workflows:inspector.model-params-hint')} value={selected.request_params ?? {}} rows={5} address={{ ...address, path: [...address.path, 'request_params'], role: 'optional' }} />
+      </details>
     </>}
   </Section>;
 }
