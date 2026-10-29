@@ -73,7 +73,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     const id = selection.id, metadata = nodePresentation(document, path, id);
     head = <div className={css.inspectTitle}>
       <span className={clsx(css.nodeIcon, css[`kind_${node.type}`])}><KindIcon kind={node.type} size={17} /></span>
-      <span className={css.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} placeholder={tx('workflows:panel.title-placeholder')} value={metadata?.title || id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} />{node.type !== 'branch' && <span className={css.nodeType}>{tx(`workflows:kind.${node.type}`)}</span>}</span>
+      <span className={css.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} placeholder={tx('workflows:panel.title-placeholder')} value={metadata?.title || id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} /></span>
     </div>;
     description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />;
     body = <>
@@ -104,8 +104,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     head = selection.kind === 'start'
       // As a node: the title is an inline heading that reverts to its default when cleared.
       ? <div className={css.inspectTitle}><span className={clsx(css.nodeIcon, css.startIcon)}><IconEntry size={17} /></span><span className={css.nodeText}>
-        <DraftTextField compact label={tx('workflows:panel.title')} placeholder={startTitle} value={entry?.title || startTitle} address={entryField('title')} />
-        <span className={css.nodeType}>{tx(path.length ? 'workflows:panel.body-input' : 'workflows:panel.arguments')}</span></span></div>
+        <DraftTextField compact label={tx('workflows:panel.title')} placeholder={startTitle} value={entry?.title || startTitle} address={entryField('title')} /></span></div>
       : <div className={css.inspectTitle}><span className={css.nodeIcon}><IconBlock size={17} /></span><span className={css.nodeText}><span className={css.nodeTitle}>{tx(path.length ? 'workflows:inspector.block-title' : 'workflows:inspector.workflow-title')}</span></span></div>;
     if (selection.kind === 'start') description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={entry?.description ?? ''} multiline address={entryField('description')} />;
     body = owner && <BlockForm document={document} block={path} edit={edit} onSelect={onSelect} start={selection.kind === 'start'} />;
@@ -120,6 +119,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
       <div className={css.inspectHeadRow}>{head}<button type="button" className={css.iconButton} aria-label={tx('workflows:inspector.close')} onClick={() => onSelect(undefined)}><IconCloseOutline16 /></button></div>
       {description && <div className={css.inspectDescription} key={selection.kind === 'node' ? `node:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>{description}</div>}
     </header>
+    {(selection.kind === 'start' || selection.kind === 'node' && node?.type !== 'branch') && <div className={css.inspectTabs}><span>{tx('workflows:branch.settings')}</span></div>}
     <div className={clsx(css.inspectBody, 'nowheel')} key={selection.kind === 'node' || selection.kind === 'note' ? `${selection.kind}:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>
       {rejection && <p role="alert" className={css.hintError}>{rejection}</p>}{body}
     </div>

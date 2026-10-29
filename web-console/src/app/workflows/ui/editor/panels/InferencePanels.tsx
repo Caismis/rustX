@@ -11,8 +11,10 @@ export function ModelPanel(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'model');
   return <>
     <ModelSelection key={encodeField(at('model'))} policy={node.model ?? { mode: 'session' }} address={at('model')} port={props.port} onChange={(model, field) => update(current => ({ ...current, model }), at('model', ...field))} />
-    <TextField label={tx('workflows:inspector.model-instruction')} hint={tx('workflows:inspector.model-instruction-hint')} value={node.instruction} multiline invalid={!node.instruction.trim()} field={encodeField(at('instruction'))}
-      onChange={(instruction, session) => update(current => ({ ...current, instruction }), at('instruction'), undefined, session)} />
+    <Section title={tx('workflows:panel.prompt')}>
+      <TextField label={tx('workflows:inspector.model-instruction')} hint={tx('workflows:inspector.model-instruction-hint')} value={node.instruction} multiline invalid={!node.instruction.trim()} field={encodeField(at('instruction'))}
+        onChange={(instruction, session) => update(current => ({ ...current, instruction }), at('instruction'), undefined, session)} />
+    </Section>
     <Bindings {...props} />
     <Section title={tx('workflows:panel.output')}>
       <SelectField label={tx('workflows:inspector.model-output-mode')} value={node.output.type} options={[{ value: 'text', label: tx('workflows:inspector.model-text') }, { value: 'json_schema', label: tx('workflows:inspector.model-json-schema') }]}
@@ -26,16 +28,22 @@ export function ModelPanel(props: PanelProps) {
 export function AgentPanel(props: PanelProps) {
   const tx = useTranslation(), listId = useId(), { node, at, update } = useNode(props, 'agent');
   return <>
-    <TextField label={tx('workflows:inspector.agent-profile')} hint={tx('workflows:inspector.agent-profile-hint')} value={node.profile} list={listId} invalid={!node.profile} field={encodeField(at('profile'))}
-      onChange={(profile, session) => update(current => ({ ...current, profile }), at('profile'), undefined, session)} />
-    <datalist id={listId}>{props.vocabulary?.profiles.map(name => <option key={name} value={name} />)}</datalist>
-    <TextField label={tx('workflows:inspector.agent-task')} value={node.task} multiline field={encodeField(at('task'))} onChange={(task, session) => update(current => ({ ...current, task }), at('task'), undefined, session)} />
+    <Section title={tx('workflows:panel.agent-config')}>
+      <TextField label={tx('workflows:inspector.agent-profile')} hint={tx('workflows:inspector.agent-profile-hint')} value={node.profile} list={listId} invalid={!node.profile} field={encodeField(at('profile'))}
+        onChange={(profile, session) => update(current => ({ ...current, profile }), at('profile'), undefined, session)} />
+      <datalist id={listId}>{props.vocabulary?.profiles.map(name => <option key={name} value={name} />)}</datalist>
+    </Section>
+    <Section title={tx('workflows:panel.prompt')}>
+      <TextField label={tx('workflows:inspector.agent-task')} value={node.task} multiline field={encodeField(at('task'))} onChange={(task, session) => update(current => ({ ...current, task }), at('task'), undefined, session)} />
+    </Section>
     <Bindings {...props} />
-    <SchemaEditor label={tx('workflows:inspector.agent-output')} value={node.output} address={at('output')} edit={props.edit} />
-    <details className={css.advanced}><summary>{tx('workflows:inspector.agent-override')}</summary>
-      <label className={css.check}><input type="checkbox" checked={node.override !== undefined} onChange={event => { const enabled = event.target.checked; update(current => { const { override: _previous, ...rest } = current; return enabled ? { ...rest, override: {} } : rest; }, at('override')); }} />{tx('workflows:inspector.override-enabled')}</label>
-      {node.override !== undefined && <JsonField label={tx('workflows:inspector.agent-override')} value={node.override} address={at('override')} />}
-      <p className={css.note}>{tx('workflows:inspector.agent-override-hint')}</p>
-    </details>
+    <Section title={tx('workflows:panel.output')}><SchemaEditor label={tx('workflows:inspector.agent-output')} value={node.output} address={at('output')} edit={props.edit} /></Section>
+    <Section title={tx('workflows:panel.advanced')}>
+      <details className={css.advanced}><summary>{tx('workflows:inspector.agent-override')}</summary>
+        <label className={css.check}><input type="checkbox" checked={node.override !== undefined} onChange={event => { const enabled = event.target.checked; update(current => { const { override: _previous, ...rest } = current; return enabled ? { ...rest, override: {} } : rest; }, at('override')); }} />{tx('workflows:inspector.override-enabled')}</label>
+        {node.override !== undefined && <JsonField label={tx('workflows:inspector.agent-override')} value={node.override} address={at('override')} />}
+        <p className={css.note}>{tx('workflows:inspector.agent-override-hint')}</p>
+      </details>
+    </Section>
   </>;
 }

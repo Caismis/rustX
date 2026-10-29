@@ -7,7 +7,8 @@ import { IconEllipsisOutline16 } from '../../../../presentation/primitives/icons
 import { MarkdownText } from '../../../../presentation/markdown/MarkdownText';
 import { portsOf, type ControlPort, type BuiltinPort } from '../../document/ports';
 import { KindIcon, IconEntry, IconPlus } from '../icons';
-import { nodeSummary, predicateText } from './summary';
+import { predicateText } from './summary';
+import { NodePreview } from './NodePreview';
 import type { SceneNode } from './scene';
 import css from './Editor.module.css';
 
@@ -41,12 +42,12 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
     </Handle>}
     <div className={clsx(css.nodeHead, container && css.containerHead)}>
       <span className={clsx(css.nodeIcon, node ? css[`kind_${node.type}`] : css.startIcon)}>{node ? <KindIcon kind={node.type} size={17} /> : <IconEntry size={17} />}</span>
-      <span className={css.nodeText}><span className={css.nodeTitle}>{data.view === 'start' ? data.title || tx(data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : data.title}</span>{node?.type !== 'branch' && <span className={css.nodeType}>{node ? tx(`workflows:kind.${node.type}`) : tx(data.path.length ? 'workflows:panel.body-input' : 'workflows:panel.arguments')}</span>}</span>
+      <span className={css.nodeText}><span className={css.nodeTitle}>{data.view === 'start' ? data.title || tx(data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : data.title}</span></span>
       {node && node.type === 'loop' && <button type="button" className={clsx(css.iconButton, 'nodrag nopan')} aria-label={tx(data.expanded ? 'workflows:canvas.collapse' : 'workflows:canvas.expand', { p0: data.title })} onClick={event => { event.stopPropagation(); actions.collapse(id); }}>{data.expanded ? '−' : '+'}</button>}
       <button type="button" className={clsx(css.iconButton, css.nodeMenu, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local || tx('workflows:canvas.start') })} onClick={event => { event.stopPropagation(); data.view === 'start' ? actions.addIn(id, event.currentTarget) : actions.menu(id, event.currentTarget); }}><IconEllipsisOutline16 /></button>
     </div>
     {!container && <>
-      {node && node.type !== 'branch' && <p className={css.nodeSummary}>{nodeSummary(tx, node)}</p>}
+      {node && node.type !== 'branch' && node.type !== 'start' && <NodePreview tx={tx} node={node} />}
       {node?.type === 'branch' && <div className={css.branchBody}>
         {node.cases.map((item, index) => <div key={item.id}>
           <div className={css.branchCaseLabel}><small>{node.cases.length > 1 ? tx('workflows:branch.case', { p0: String(index + 1) }) : ''}</small><b>{tx(index ? 'workflows:branch.elif' : 'workflows:branch.if')}</b></div>
@@ -60,7 +61,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
 
       {!!data.fields?.length && <div className={css.nodeFields}>{data.fields.map(field => <div key={field.name}><b aria-hidden>{'{x}'}</b><span>{field.name}</span>{data.view === 'start' && field.required && <small>{tx('workflows:schema.required')}</small>}<code>{field.type}</code></div>)}</div>}
       {/* As Dify's NodeDescription: after the body, so ports keep their places. */}
-      {(node?.type !== 'branch' && (node || data.view === 'start')) && data.description?.trim() && <p className={css.nodeDescription}>{data.description}</p>}
+      {(node?.type !== 'branch' && (node || data.view === 'start')) && data.description?.trim() && <p className={css.nodeDescription} data-node-description>{data.description}</p>}
     </>}
     {ports.map((port, index) => {
       const top = branch ? (port === 'false' ? branch.elseTop : branch.cases[index].top) : ports.length > 1 && !container ? 52 + index * 36 : 28 + index * 30;

@@ -7,6 +7,7 @@ import { edgePort } from '../../document/ports';
 import { schemaObject } from '../../document/schema';
 import { orderedKeys } from '../../document/presentation';
 import { viewId } from './selection';
+import { previewRowCount } from './summary';
 
 export const NODE_WIDTH = 256;
 export interface Size { width: number; height: number }
@@ -27,6 +28,7 @@ export interface SceneEdgeData extends Record<string, unknown> { path: BlockPath
 export type SceneEdge = Edge<SceneEdgeData>;
 
 const DESCRIPTION_HEIGHT = 40;
+const CARD_DESCRIPTION_HEIGHT = 32;
 const ENTRY_BADGE_HEIGHT = 22;
 
 /** The first six fields of an object schema, in `order` (sorted by default). */
@@ -58,7 +60,8 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
       const expanded = node.type === 'loop' && !collapsed.has(qualified);
       // A shown description (two clamped lines) extends a collapsed node.
       const described = !expanded && node.type !== 'branch' && !!metadata?.description?.trim();
-      const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? branchGeometry(node).height : 128) + (described ? DESCRIPTION_HEIGHT : 0) };
+      const preview = node.type === 'branch' ? 0 : previewRowCount(node);
+      const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? branchGeometry(node).height : 100 + Math.max(0, preview - 1) * 27) + (described ? CARD_DESCRIPTION_HEIGHT : 0) };
       const projected: SceneNode = { id: qualified, type: 'workflow', parentId, position: metadata?.position ?? { x, y: 80 }, width: NODE_WIDTH, height: minimum.height,
         data: { view: 'node', path, local: id, definition: node, title: metadata?.title || id, description: metadata?.description ?? undefined, expanded, minSize: minimum } };
       // Parents precede children, as React Flow requires.
@@ -70,8 +73,6 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
       const size = expanded ? metadata?.dimensions : measured.get(qualified);
       projected.width = Math.max(minimum.width, size?.width ?? 0); projected.height = Math.max(minimum.height, size?.height ?? 0);
       local.push(projected); x += projected.width + 96;
-      if (node.type === 'agent' || node.type === 'model' && node.output.type === 'json_schema') projected.data.fields = schemaFields(node.type === 'agent' ? node.output : node.output.type === 'json_schema' ? node.output.schema : undefined);
-      if (!expanded && projected.data.fields?.length) { minimum.height = Math.max(minimum.height, 110 + projected.data.fields.length * 26); projected.height = Math.max(projected.height, minimum.height); }
     }
     for (const note of document.editor?.notes ?? []) if (sameBlockPath(note.block, path)) local.push({ id: viewId(path, 'note', note.id), type: 'workflow', parentId,
       position: note.position, width: note.dimensions.width, height: note.dimensions.height, connectable: false,

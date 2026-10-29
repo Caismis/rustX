@@ -4,6 +4,7 @@ import { CommandRejected, replaceNode } from '../../../document/commands';
 import { encodeField, nodeField, type ArrayEdit, type FieldAddress, type FieldStep } from '../../../document/fields';
 import { blockAt, nodeAt, sameBlockPath, type BlockPath, type NodeDefinition, type Value, type WorkflowDocument } from '../../../document/model';
 import { orderedKeys } from '../../../document/presentation';
+import { schemaObject } from '../../../document/schema';
 import type { WorkflowScopePort } from '../../../port';
 import { useCandidateAnalysis } from '../forms/analysis';
 import { AddKey, ValueEditor } from '../forms/ValueEditor';
@@ -54,8 +55,17 @@ export function OutputDeclaration({ block, id }: Pick<PanelProps, 'block' | 'id'
   const report = analysis?.report?.analysis;
   const output = report?.outputs.find(value => value.producer.node === id && sameBlockPath(value.producer.block, block));
   const status = !analysis ? 'loading' : analysis.failed ? 'failed' : !output && report?.truncated ? 'truncated' : 'incomplete';
+  const schema = schemaObject(output?.schema), fields = schemaObject(schema?.properties), entries = Object.entries(fields ?? {});
   return <Section title={tx('workflows:inspector.derived-output')}>
-    {output?.schema ? <><pre className={css.codebox} tabIndex={0}>{JSON.stringify(output.schema, null, 2)}</pre><p className={css.note}>{tx('workflows:inspector.derived')}</p></>
+    {output?.schema ? <>
+      <div className={css.outputVariables}>
+        {entries.length ? entries.slice(0, 8).map(([name, value]) => <div key={name} className={css.outputVariable}><span aria-hidden>{'{x}'}</span><b>{name}</b><code>{String(schemaObject(value)?.type ?? '?')}</code></div>)
+          : <div className={css.outputVariable}><span aria-hidden>{'{x}'}</span><b>{tx('workflows:card.output')}</b><code>{String(schema?.type ?? '?')}</code></div>}
+        {entries.length > 8 && <small className={css.note}>{tx('workflows:card.more', { p0: String(entries.length - 8) })}</small>}
+      </div>
+      <details className={css.outputSchema}><summary>{tx('workflows:schema.json')}</summary><pre className={css.codebox} tabIndex={0}>{JSON.stringify(output.schema, null, 2)}</pre></details>
+      <p className={css.note}>{tx('workflows:inspector.derived')}</p>
+    </>
       : <p role={status === 'failed' ? 'alert' : 'status'} className={css.note}>{tx(`workflows:inspector.derived-${status}`)}</p>}
   </Section>;
 }

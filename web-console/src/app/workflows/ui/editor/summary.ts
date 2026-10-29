@@ -32,16 +32,15 @@ export function toolText(selector: Extract<NodeDefinition, { type: 'tool' }>['se
   return selector.origin === 'builtin' ? selector.name : `${selector.source_id}/${selector.name}`;
 }
 
-/** One line describing a node's configured behavior. */
-export function nodeSummary(tx: Translate, node: NodeDefinition): string {
+/** Number of compact configuration rows a native node renders on its card. */
+export function previewRowCount(node: NodeDefinition): number {
   switch (node.type) {
-    case 'start': return '';
-    case 'agent': return node.profile ? tx('workflows:summary.agent', { p0: node.profile }) : tx('workflows:summary.agent-unset');
-    case 'model': return clip(tx('workflows:summary.model', { p0: node.model?.mode === 'explicit' ? node.model.model || tx('workflows:inspector.model-choose') : tx('workflows:inspector.model-session'), p1: tx(node.output.type === 'text' ? 'workflows:inspector.model-text' : 'workflows:inspector.model-json-schema') }));
-    case 'tool': return node.selector.name ? tx('workflows:summary.tool', { p0: toolText(node.selector) }) : tx('workflows:summary.tool-unset');
-    case 'branch': return clip(node.cases.map(item => predicateText(tx, item.condition)).filter(Boolean).join(' / '));
-    case 'review': return clip(tx('workflows:summary.review', { p0: valueText(node.subject.value) }));
-    case 'loop': return tx('workflows:summary.loop', { p0: node.max_iterations });
-    case 'return': return clip(tx('workflows:summary.return', { p0: valueText(node.output) }));
+    case 'agent': return node.task.trim() ? 2 : 1;
+    case 'model': return 1;
+    case 'tool': return 1 + (node.arguments.type === 'object' ? Math.min(Object.keys(node.arguments.fields).length, 2) : 1);
+    case 'review': return node.context.length ? 2 : 1;
+    case 'loop': return 3;
+    case 'return': return Math.max(1, Math.min(node.output.type === 'object' ? Object.keys(node.output.fields).length : node.output.type === 'literal' && node.output.value && typeof node.output.value === 'object' && !Array.isArray(node.output.value) ? Object.keys(node.output.value).length : 1, 3));
+    case 'start': case 'branch': return 0;
   }
 }
