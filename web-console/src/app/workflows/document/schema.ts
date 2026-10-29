@@ -52,9 +52,29 @@ function mapPredicate(value: Predicate, rewrite: PathRewrite): Predicate {
   return { ...value, predicates: value.predicates.map(field => mapPredicate(field, rewrite)) };
 }
 function mappingKey(value: Value, path: readonly string[], from: string, to: string): Value {
+  // A whole-value reference may contain unrelated extra properties at runtime.
+  // Only an explicit Object construction gives this command movable keys.
+  if (value.type === 'reference') throw new CommandRejected('unsupported_schema_rename');
+  if (value.type === 'literal') {
+    // Literal data stays authored, but a known occupied destination cannot be
+    // adopted by a contract/reference rename either.
+    let current: unknown = value.value;
+    for (const key of path) {
+      const object = schemaObject(current);
+      current = object && Object.hasOwn(object, key) ? object[key] : undefined;
+    }
+    const object = schemaObject(current);
+    if (object && Object.hasOwn(object, to)) throw new CommandRejected('duplicate_identifier');
+    return value;
+  }
   if (value.type !== 'object') return value;
-  if (!path.length) return Object.hasOwn(value.fields, from) && !Object.hasOwn(value.fields, to)
-    ? { ...value, fields: Object.fromEntries(Object.entries(value.fields).map(([key, item]) => [key === from ? to : key, item])) } : value;
+  if (!path.length) {
+    // This construction belongs to the contract. Skipping an occupied key
+    // would still rebind consumers to the unrelated destination value.
+    if (Object.hasOwn(value.fields, to)) throw new CommandRejected('duplicate_identifier');
+    return Object.hasOwn(value.fields, from)
+      ? { ...value, fields: Object.fromEntries(Object.entries(value.fields).map(([key, item]) => [key === from ? to : key, item])) } : value;
+  }
   const [head, ...rest] = path;
   return Object.hasOwn(value.fields, head) ? { ...value, fields: { ...value.fields, [head]: mappingKey(value.fields[head], rest, from, to) } } : value;
 }

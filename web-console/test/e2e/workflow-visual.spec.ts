@@ -7,12 +7,13 @@ import { startDogfood } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
-import { addBranch, addNode, connect, emptyBlock, setEntry } from '../../src/app/workflows/document/commands';
+import { addBranch, addNode, connect, emptyBlock, reconnect, renameBranch, renameNode, setEntry } from '../../src/app/workflows/document/commands';
 import { putNote, setLane, setNodePresentation } from '../../src/app/workflows/document/geometry';
 import { blockAt, blockKey, type BlockPath, type WorkflowDocument } from '../../src/app/workflows/document/model';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
 import renameCases from '../../../tests/fixtures/workflow/schema-rename.json' with { type: 'json' };
 import collisionCases from '../../../tests/fixtures/workflow/schema-rename-collisions.json' with { type: 'json' };
+import constructionCollision from '../../../tests/fixtures/workflow/schema-construction-collision.json' with { type: 'json' };
 
 const canvas = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 const panel = (page: Page) => page.getByRole('complementary', { name: 'Inspector' });
@@ -180,6 +181,121 @@ test('refuses destination-only finite schema collisions without adopting extra p
       await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
     }
     expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+test('rejects construction collisions and opaque mappings before a successful Check can conceal a different downstream value', async ({ page }, info) => {
+  const fixture = await startDogfood('web_console_dogfood'), errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const cases = ['object', 'literal', 'reference'].map(kind => {
+      const document = structuredClone(constructionCollision) as WorkflowDocument, fork = document.block.nodes.fork;
+      if (fork.type !== 'parallel') throw new Error('Parallel fixture');
+      const branch = fork.branches.main;
+      if (kind === 'literal') branch.block.nodes.done = { type: 'return', output: { type: 'literal', value: { before: 'wanted', after: 'unrelated' } } };
+      if (kind === 'reference') {
+        branch.block.input = { type: 'object', properties: { before: { type: 'string' }, after: { type: 'string' } }, required: ['before', 'after'], additionalProperties: false };
+        branch.input = { type: 'object', fields: { before: { type: 'literal', value: 'wanted' }, after: { type: 'literal', value: 'unrelated' } } };
+        branch.block.nodes.done = { type: 'return', output: { type: 'reference', path: ['args'] } };
+      }
+      const id = `construction_${kind}`, file = join(directory, `${id}.yaml`); writeFileSync(file, JSON.stringify(document));
+      return { kind, id, file, document };
+    });
+    await openLibrary(page, fixture);
+    for (const example of cases) {
+      await page.getByRole('button', { name: example.id, exact: true }).click();
+      await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
+      await activate(page, 'Parallel node fork');
+      const name = schema(page, 'Output schema').getByLabel('Field name', { exact: true }).first();
+      await name.fill('after'); await name.blur();
+      await expect(name).toHaveValue('after'); await expect(name).toHaveAttribute('aria-invalid', 'true');
+      await expect(panel(page).getByRole('alert')).toContainText(example.kind === 'reference' ? 'explicit Object fields' : 'That ID is already used');
+      await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+      await page.getByRole('button', { name: 'Save File', exact: true }).click();
+      await expect(page.getByRole('alert').filter({ hasText: 'Nothing was sent.' })).toBeVisible();
+      expect(parse(readFileSync(example.file, 'utf8'))).toEqual(example.document);
+      await page.screenshot({ path: info.outputPath(`construction-${example.kind}.png`) });
+      await name.press('Escape'); await expect(name).toHaveValue('before');
+      await activate(page, 'Return node done');
+      await expect(panel(page).getByRole('button', { name: 'Choose a variable', exact: true })).toHaveText('fork / main / before');
+      await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
+      await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+    }
+    expect(errors).toEqual([]); expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+test('copies pastes and duplicates a legal args branch and its private nodes through real clipboard and all duplicate controls', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood'), errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  try {
+    let document = renameBranch(structuredClone(constructionCollision) as WorkflowDocument, [], 'fork', 'main', 'args');
+    const privatePath = [{ node: 'fork', branch: 'args' }];
+    document = setLane(document, { address: { block: [], node: 'fork' }, branch: 'args', position: { x: 24, y: 72 }, dimensions: { width: 640, height: 256 } });
+    document = setNodePresentation(document, privatePath, 'done', { title: 'Args return', position: { x: 402, y: 120 } });
+    // Orphan presentation comes from the native file, rather than the UI's
+    // live-node title command, which correctly requires an executable owner.
+    document = { ...document, editor: { ...document.editor, nodes: [...document.editor?.nodes ?? [], { address: { block: privatePath, node: 'args' }, title: 'Retained orphan' }] } };
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'args_clipboard.yaml'); writeFileSync(file, JSON.stringify(document));
+    await openLibrary(page, fixture); await page.getByRole('button', { name: 'args_clipboard', exact: true }).click();
+    await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
+    for (const child of [false, true]) {
+      const path = child ? privatePath : [], id = child ? 'done' : 'fork';
+      const label = child ? 'Return node done · fork/args' : 'Parallel node fork';
+      const copy = canvas(page).locator(`.react-flow__node[data-id=${JSON.stringify(viewId(path, 'node', `${id}_copy`))}]`);
+      const undo = async () => { await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(copy).toHaveCount(0); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible(); };
+      await activate(page, label); await canvas(page).focus(); await page.keyboard.press('Control+c'); await page.keyboard.press('Control+v');
+      await expect(copy).toHaveCount(1); await undo();
+      await activate(page, label); await panel(page).getByRole('button', { name: 'Duplicate', exact: true }).click();
+      await expect(copy).toHaveClass(/selected/); await undo();
+      await activate(page, label); await canvas(page).focus(); await page.keyboard.press('Control+d');
+      await expect(copy).toHaveClass(/selected/); await undo();
+      await activate(page, label); await canvas(page).getByRole('button', { name: 'Fit view', exact: true }).click();
+      await canvas(page).getByLabel(label, { exact: true }).getByText(child ? 'Args return' : 'fork', { exact: true }).click({ button: 'right' });
+      await canvas(page).getByRole('dialog').getByRole('button', { name: 'Duplicate', exact: true }).click();
+      await expect(copy).toHaveClass(/selected/); await undo();
+    }
+    expect(parse(readFileSync(file, 'utf8'))).toEqual(document);
+    expect(errors).toEqual([]); expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+test('shows real result producer titles in ordinary consumers and the committed result only in Loop post-body fields', async ({ page }, info) => {
+  const fixture = await startDogfood('web_console_dogfood'), errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    let document = addNode(renameNode(structuredClone(constructionCollision) as WorkflowDocument, [], 'fork', 'result'), [], 'loop', 'repeat');
+    document = reconnect(document, [], 0, 'result', 'next', 'repeat');
+    document = connect(connect(document, [], 'repeat', 'satisfied', 'done'), [], 'repeat', 'exhausted', 'done');
+    const result = document.block.nodes.result, repeat = document.block.nodes.repeat;
+    if (result.type !== 'parallel' || repeat.type !== 'loop') throw new Error('Parallel and Loop fixture');
+    repeat.body.input = structuredClone(result.branches.main.block.output); repeat.body.output = structuredClone(repeat.body.input);
+    repeat.body.nodes.done = { type: 'return', output: { type: 'reference', path: ['args'] } };
+    repeat.input = { type: 'reference', path: ['result', 'main'] };
+    repeat.until = { type: 'equal', left: { type: 'reference', path: ['result', 'before'] }, right: { type: 'literal', value: 'wanted' } };
+    repeat.carry = { type: 'reference', path: ['result'] };
+    document = setNodePresentation(document, [], 'result', { title: 'Actual result producer' });
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'result_title.yaml'), JSON.stringify(document));
+    await openLibrary(page, fixture); await page.getByRole('button', { name: 'result_title', exact: true }).click();
+    await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
+    await activate(page, 'Return node done');
+    const selected = panel(page).getByRole('button', { name: 'Choose a variable', exact: true });
+    await expect(selected).toHaveText('Actual result producer / main / before'); await selected.click();
+    await expect(panel(page).getByRole('dialog', { name: 'Choose a variable' }).locator('legend').filter({ hasText: 'Actual result producer' })).toBeVisible();
+    await page.screenshot({ path: info.outputPath('actual-result-producer.png') });
+    await panel(page).getByRole('button', { name: 'Close variable picker', exact: true }).click();
+    await activate(page, 'Loop node repeat');
+    await expect(panel(page).getByRole('group', { name: 'Initial input', exact: true }).getByRole('button', { name: 'Choose a variable', exact: true })).toHaveText('Actual result producer / main');
+    await expect(panel(page).getByRole('group', { name: 'Until', exact: true }).getByRole('button', { name: 'Choose a variable', exact: true })).toHaveText('Committed body result / before');
+    await expect(panel(page).getByRole('group', { name: 'Carry', exact: true }).getByRole('button', { name: 'Choose a variable', exact: true })).toHaveText('Committed body result');
+    await page.screenshot({ path: info.outputPath('loop-result-scope.png') });
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    expect(errors).toEqual([]); expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally { await fixture.stop(false); }
 });
 

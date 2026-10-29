@@ -11,18 +11,18 @@ import { renameBranchOutput, renameProducer, rewriteBlockReferences } from './re
 export type RejectionCode =
   | 'invalid_identifier' | 'reserved_identifier' | 'duplicate_identifier' | 'missing_node' | 'missing_branch'
   | 'missing_edge' | 'last_branch' | 'return_has_no_successor' | 'invalid_port' | 'port_occupied' | 'self_edge'
-  | 'last_node' | 'missing_field' | 'invalid_fragment' | 'cross_scope' | 'limit_exceeded' | 'invalid_geometry' | 'unsupported_insertion' | 'pending_input';
+  | 'last_node' | 'missing_field' | 'invalid_fragment' | 'cross_scope' | 'limit_exceeded' | 'invalid_geometry' | 'unsupported_insertion' | 'unsupported_schema_rename' | 'pending_input';
 
 export class CommandRejected extends Error {
   constructor(readonly code: RejectionCode) { super(code); this.name = 'CommandRejected'; }
 }
 
-/** Native local identity rule of node ids and Parallel branch keys. */
-const IDENTIFIER = /^[A-Za-z0-9_-]{1,64}$/;
-export function validIdentifier(value: string): RejectionCode | undefined {
-  if (!IDENTIFIER.test(value)) return 'invalid_identifier';
-  if (value === 'args') return 'reserved_identifier';
-  return undefined;
+/** Native local keys include Parallel branches; only node IDs reserve args. */
+export function validLocalKey(value: string): RejectionCode | undefined {
+  return !value.length || value.length > 64 || /[^A-Za-z0-9_-]/.test(value) ? 'invalid_identifier' : undefined;
+}
+export function validNodeId(value: string): RejectionCode | undefined {
+  return validLocalKey(value) ?? (value === 'args' ? 'reserved_identifier' : undefined);
 }
 
 const EMPTY_OBJECT = { type: 'object', properties: {}, additionalProperties: false } as const;
@@ -91,7 +91,7 @@ export interface Connection { readonly from: string; readonly port: ControlPort 
 /** Add one node, optionally connected from an eligible free port. */
 export function addNode(document: WorkflowDocument, path: BlockPath, kind: NodeKind, id: string, from?: Connection): WorkflowDocument {
   const block = require(blockAt(document, path));
-  const invalid = validIdentifier(id);
+  const invalid = validNodeId(id);
   if (invalid) throw new CommandRejected(invalid);
   if (nodeAt(block, id)) throw new CommandRejected('duplicate_identifier');
   requireVacantNodePresentation(document, path, id);
@@ -133,7 +133,7 @@ export function renameNode(document: WorkflowDocument, path: BlockPath, from: st
   const block = require(blockAt(document, path));
   if (!nodeAt(block, from)) throw new CommandRejected('missing_node');
   if (from === to) return document;
-  const invalid = validIdentifier(to);
+  const invalid = validNodeId(to);
   if (invalid) throw new CommandRejected(invalid);
   if (nodeAt(block, to)) throw new CommandRejected('duplicate_identifier');
   requireVacantNodePresentation(document, path, to);
@@ -200,7 +200,7 @@ function parallel(block: Block, id: string) {
 
 export function addBranch(document: WorkflowDocument, path: BlockPath, id: string, key: string): WorkflowDocument {
   const node = parallel(require(blockAt(document, path)), id);
-  const invalid = validIdentifier(key);
+  const invalid = validLocalKey(key);
   if (invalid) throw new CommandRejected(invalid);
   if (branchAt(node.branches, key)) throw new CommandRejected('duplicate_identifier');
   requireVacantBranchPresentation(document, path, id, key);
@@ -213,7 +213,7 @@ export function renameBranch(document: WorkflowDocument, path: BlockPath, id: st
   const node = parallel(require(blockAt(document, path)), id);
   if (!branchAt(node.branches, from)) throw new CommandRejected('missing_branch');
   if (from === to) return document;
-  const invalid = validIdentifier(to);
+  const invalid = validLocalKey(to);
   if (invalid) throw new CommandRejected(invalid);
   if (branchAt(node.branches, to)) throw new CommandRejected('duplicate_identifier');
   requireVacantBranchPresentation(document, path, id, to);

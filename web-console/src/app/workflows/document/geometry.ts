@@ -1,5 +1,5 @@
 import type { WorkflowBranchPresentation, WorkflowDimensions, WorkflowNodePresentation, WorkflowNote, WorkflowOrderTarget, WorkflowPosition } from '../../../../../protocol/app-server/v62';
-import { CommandRejected } from './commands';
+import { CommandRejected, validLocalKey } from './commands';
 import { blockAt, nodeAt, sameBlockPath, sameDocument, type BlockPath, type WorkflowDocument } from './model';
 import { emptyPresentation } from './presentation';
 
@@ -56,7 +56,7 @@ export function freshNote(document: WorkflowDocument, base = 'note'): string {
 }
 export function putNote(document: WorkflowDocument, note: WorkflowNote): WorkflowDocument {
   if (!blockAt(document, note.block)) throw new CommandRejected('missing_node');
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(note.id)) throw new CommandRejected('invalid_identifier');
+  if (validLocalKey(note.id)) throw new CommandRejected('invalid_identifier');
   if (utf8Length(note.text) > 16 * 1024) throw new CommandRejected('limit_exceeded');
   position(note.position); dimensions(note.dimensions);
   return presentationEdit(document, editor => ({ ...editor, notes: [...(editor.notes ?? []).filter(entry => entry.id !== note.id), note] }));

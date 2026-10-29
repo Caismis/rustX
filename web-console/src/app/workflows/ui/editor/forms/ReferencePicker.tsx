@@ -39,7 +39,8 @@ export function ReferencePicker({ address, path, edit }: { address: FieldAddress
     group.push(choice); groups.set(key, group);
   }
   const close = () => { setOpen(false); trigger.current?.focus(); };
-  const producer = path[0], currentTitle = producer === 'args' ? tx('workflows:value.block-inputs') : producer === 'result' ? tx('workflows:value.result') : document ? nodePresentation(document, address.block, producer)?.title || producer : producer;
+  const resultScope = query?.consumer.field.kind === 'loop_until' || query?.consumer.field.kind === 'loop_carry';
+  const producer = path[0], currentTitle = producer === 'args' ? tx('workflows:value.block-inputs') : producer === 'result' && resultScope ? tx('workflows:value.result') : document ? nodePresentation(document, address.block, producer)?.title || producer : producer;
   return <div ref={root} className={css.referencePicker}>
     <button ref={trigger} data-workflow-field={field} type="button" className={css.referenceTrigger} aria-label={tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
       <span>{currentTitle || tx('workflows:value.pick')}{path.length > 1 ? ` / ${path.slice(1).join(' / ')}` : ''}</span>

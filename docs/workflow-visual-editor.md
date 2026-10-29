@@ -100,6 +100,9 @@ explicitly show truncation; model catalogs retain their existing page bounds.
 The original search term matches reference paths or every matching display title
 in the native service before catalog admission. Titles use full lexical producer
 addresses; they cannot confer scope/type validity or label synthetic args/result.
+The selected-value trigger uses that same consumer distinction: `result` is
+synthetic only in Loop until/carry. An ordinary producer named `result`, including
+one inside a private Block or used by Loop initial input, keeps its own title.
 
 | Scope | Native reference |
 | --- | --- |
@@ -139,12 +142,24 @@ same construction keys through rename and Undo/Redo. Literal and
 instruction text, array element selectors and whole-value references are not
 inferred or rewritten. A rename cannot adopt retained orphan order fields or
 descendant targets; rejection preserves the complete executable/metadata edit.
+Occupied keys in owned Object constructions or Literal objects also reject the
+whole transaction, including destination-only extra properties. Open contracts
+can validate both values, so Check cannot prevent a downstream read switching
+from the intended source to an unrelated extra property. A whole-value Reference
+encountered along the exact construction path refuses automatic renaming with an
+explicit message: first map that value with Object fields. This includes a Loop
+carry that forwards the complete result. Field values inside the Object may
+still be References; moving their explicit owning key preserves their meaning.
 
 Clipboard export includes selected definitions, internal edges and owned metadata
 only. A decoder rejects unknown transport/runtime fields, unsafe JSON numbers,
 malformed geometry, duplicate metadata identities, excessive depth/count/bytes
 and unsupported AST variants before mutation. Nodes receive deterministic fresh
-IDs, internal references and structured metadata follow, and private local IDs
+IDs. Native local-key validation allows `args` in Parallel branches and retained
+presentation addresses/Block paths; only executable IDs in a nodes map reserve
+`args`. Copying a container retains its legal orphan presentation as well.
+Internal references and structured metadata follow,
+and private local IDs
 stay local. Notes get fresh global IDs; only geometry directly in the copied
 Block receives the paste offset. Private notes and other child geometry keep
 their positions relative to the moved container. Inspector, canvas menus and
@@ -204,6 +219,9 @@ have keyboard controls.
 | Atomic insertion, strict untrusted fragments, cross-scope refusal and deterministic remapping | Same unit suite, insertion/clipboard tests |
 | Schema field renames, args/Return/Loop-result/aggregate references and pending construction draft Undo/Redo | Same unit suite, schema contract tests |
 | Finite const/enum rename, ancestor property/items paths, conflict rejection and native accepted new input | `test/workflow-review-regressions.test.tsx`, shared `tests/fixtures/workflow/schema-rename.json` and `schema-rename-collisions.json`, `editor_schema_renames_preserve_native_finite_input_contracts` and `editor_rejected_schema_renames_keep_destination_only_finite_inputs_valid`; real Settings collision/browser cases |
+| Owned Object/Literal collisions and opaque Reference refusal; unchanged nonempty Undo/Redo, downstream selectors and field drafts | Review regression suite; real Settings construction cases; shared `tests/fixtures/workflow/schema-construction-collision.json` and native `editor_construction_collision_fixture_keeps_data_and_legal_args_branches` execute distinct wanted/unrelated values to establish why Check is insufficient |
+| Legal args branch/container/private-node clipboard, Duplicate entry points, orphan presentation preservation and executable args refusal | Review regression suite; real clipboard/Inspector/context-menu/keyboard browser case; the shared construction fixture also executes with a native args branch and canonical orphan metadata |
+| Real result producer versus Loop post-body label, including private Return and initial input | Review regression consumer cases and native-backed variable-picker browser case |
 | Organize → add alpha/grow first branch → Organize, disjoint lanes and one metadata-only Undo/Redo | Review regression suite, saved Parallel lane growth cases |
 | Shared visible duplicate, private geometry, repeated offsets, returned identities and real Ctrl+D focus/viewport/hit testing | Review regression suite and real Inspector/canvas duplicate browser case |
 | Optional items create/edit/omit and retained detached drafts; all titles OR original paths before bounded results | Review regression suite, Settings/title browser cases and native `title_search_unions_qualified_producers_with_original_paths_before_catalog_limits` |

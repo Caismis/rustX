@@ -1,6 +1,6 @@
 import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v62';
 import { readJson } from '../../../../shared/json-numbers';
-import { boundedDocument, CommandRejected, freshIdentifier, validIdentifier } from './commands';
+import { boundedDocument, CommandRejected, freshIdentifier, validLocalKey, validNodeId } from './commands';
 import { blockAt, deepNodeCount, edgesOf, sameBlockPath, sameDocument, updateBlock, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from './model';
 import type { FieldAddress } from './fields';
 import { MAX_COORDINATE, dimensions, freshNote, position, presentationEdit, utf8Length } from './geometry';
@@ -57,8 +57,8 @@ function unique(values: unknown[], identity: (value: unknown) => unknown): void 
   const identities = values.map(identity);
   if (identities.some((value, index) => identities.slice(0, index).some(other => sameDocument(value, other)))) fail();
 }
-function path(value: unknown): void { const steps = array(value); if (steps.length > 8) fail(); for (const step of steps) { const part = keys(step, ['node', 'branch']); text(part.node); if (validIdentifier(part.node)) fail(); if (part.branch !== undefined) { text(part.branch); if (validIdentifier(part.branch)) fail(); } } }
-function address(value: unknown): void { const at = keys(value, ['block', 'node']); path(at.block); text(at.node); if (validIdentifier(at.node)) fail(); }
+function path(value: unknown): void { const steps = array(value); if (steps.length > 8) fail(); for (const step of steps) { const part = keys(step, ['node', 'branch']); text(part.node); if (validLocalKey(part.node)) fail(); if (part.branch !== undefined) { text(part.branch); if (validLocalKey(part.branch)) fail(); } } }
+function address(value: unknown): void { const at = keys(value, ['block', 'node']); path(at.block); text(at.node); if (validLocalKey(at.node)) fail(); }
 function unsigned(value: unknown): void { if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 4294967295) fail(); }
 function flag(value: unknown): void { if (value !== undefined && typeof value !== 'boolean') fail(); }
 function override(value: unknown): void {
@@ -132,12 +132,12 @@ function node(input: unknown): void {
       keys(record, ['type', 'subject', 'context']); const subject = keys(record.subject, ['type', 'value']); if (subject.type !== 'plan') fail(); value(subject.value); array(record.context).forEach(value); return;
     }
     case 'loop': keys(record, ['type', 'input', 'body', 'until', 'carry', 'max_iterations']); value(record.input); block(record.body); predicate(record.until); value(record.carry); unsigned(record.max_iterations); return;
-    case 'parallel': keys(record, ['type', 'branches']); for (const [id, entry] of Object.entries(object(record.branches))) { if (validIdentifier(id)) fail(); const branch = keys(entry, ['input', 'block']); value(branch.input); block(branch.block); } return;
+    case 'parallel': keys(record, ['type', 'branches']); for (const [id, entry] of Object.entries(object(record.branches))) { if (validLocalKey(id)) fail(); const branch = keys(entry, ['input', 'block']); value(branch.input); block(branch.block); } return;
     default: fail();
   }
 }
 function edges(input: unknown): void { for (const item of array(input ?? [])) { const edge = keys(item, ['from', 'to', 'port']); text(edge.from); text(edge.to); if (edge.port != null && !['next', 'true', 'false', 'satisfied', 'exhausted', true, false].includes(edge.port as never)) fail(); } }
-function nodes(input: unknown): void { for (const [id, item] of Object.entries(object(input))) { if (validIdentifier(id)) fail(); node(item); } }
+function nodes(input: unknown): void { for (const [id, item] of Object.entries(object(input))) { if (validNodeId(id)) fail(); node(item); } }
 function block(input: unknown): void { const record = keys(input, ['input', 'output', 'entry', 'nodes', 'edges']); object(record.input); object(record.output); text(record.entry); nodes(record.nodes); edges(record.edges); }
 
 /** This is a bounded transport-shape decoder, not a reachability/type proof.
@@ -164,9 +164,9 @@ export function parseFragment(source: string): Fragment {
     if (entry.position != null) point(entry.position); if (entry.dimensions != null) size(entry.dimensions);
   }
   for (const item of array(metadata.entries ?? [])) { const entry = keys(item, ['block', 'position']); path(entry.block); point(entry.position); }
-  for (const item of array(metadata.branches ?? [])) { const entry = keys(item, ['address', 'branch', 'position', 'dimensions']); address(entry.address); text(entry.branch); if (validIdentifier(entry.branch)) fail(); point(entry.position); size(entry.dimensions); }
+  for (const item of array(metadata.branches ?? [])) { const entry = keys(item, ['address', 'branch', 'position', 'dimensions']); address(entry.address); text(entry.branch); if (validLocalKey(entry.branch)) fail(); point(entry.position); size(entry.dimensions); }
   for (const item of array(metadata.notes ?? [])) {
-    const note = keys(item, ['id', 'block', 'text', 'theme', 'position', 'dimensions']); text(note.id); text(note.text); if (!/^[A-Za-z0-9_-]{1,64}$/.test(note.id) || utf8Length(note.text) > 16384 || !['neutral', 'blue', 'green', 'amber', 'rose'].includes(note.theme as string)) fail();
+    const note = keys(item, ['id', 'block', 'text', 'theme', 'position', 'dimensions']); text(note.id); text(note.text); if (validLocalKey(note.id) || utf8Length(note.text) > 16384 || !['neutral', 'blue', 'green', 'amber', 'rose'].includes(note.theme as string)) fail();
     path(note.block); point(note.position); size(note.dimensions);
   }
   for (const item of array(metadata.orders ?? [])) {
