@@ -1444,11 +1444,16 @@ fn translate_inputs(
                 )?);
             }
             ModelMessageView::RequestOnly(carryover) => {
+                let (role, kind) = if carryover.is_assistant() {
+                    ("assistant", "output_text")
+                } else {
+                    ("user", "input_text")
+                };
                 input_items.push(serde_json::json!({
                     "type": "message",
-                    "role": "user",
+                    "role": role,
                     "content": [{
-                        "type": "input_text",
+                        "type": kind,
                         "text": carryover.render(),
                     }]
                 }));

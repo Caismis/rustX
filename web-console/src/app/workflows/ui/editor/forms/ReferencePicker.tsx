@@ -7,7 +7,7 @@ import { useTranslation } from '../../../../../locale/react';
 import { consumerAddress } from '../../../document/analysis';
 import { encodeField, setField, type FieldAddress } from '../../../document/fields';
 import { nodePresentation } from '../../../document/geometry';
-import { blockAt, nodeAt, type WorkflowDocument } from '../../../document/model';
+import { blockAt, nodeAt, startOf, type WorkflowDocument } from '../../../document/model';
 import { IconEntry, KindIcon } from '../../icons';
 import { DraftOwner } from './drafts';
 import { useCandidateAnalysis } from './analysis';
@@ -17,9 +17,9 @@ import css from '../Editor.module.css';
  * decide availability, compatibility or lexical reference paths. `token`
  * shows Dify's variable token and floating popup, listing only usable
  * choices; a condition's token asks for the condition-variable scope. */
-export function ReferencePicker({ address, path, edit, initiallyOpen = false, onChoose, placeholder, token = false }: {
+export function ReferencePicker({ address, path, edit, initiallyOpen = false, onChoose, onClose, placeholder, token = false }: {
   address: FieldAddress; path: readonly string[]; edit: (apply: (document: WorkflowDocument) => WorkflowDocument) => void;
-  token?: boolean; initiallyOpen?: boolean; onChoose?: (choice: WorkflowReferenceChoice) => void; placeholder?: string;
+  token?: boolean; initiallyOpen?: boolean; onChoose?: (choice: WorkflowReferenceChoice) => void; onClose?: () => void; placeholder?: string;
 }) {
   const tx = useTranslation(), owner = useContext(DraftOwner)!;
   const document = useSelector(owner.editor, snapshot => snapshot.context.document);
@@ -29,6 +29,8 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const root = useRef<HTMLDivElement>(null), trigger = useRef<HTMLButtonElement>(null), searchInput = useRef<HTMLInputElement>(null), id = useId();
   const field = encodeField(address);
   useEffect(() => { setOpen(initiallyOpen); setSearch(''); }, [field, initiallyOpen]);
+  const wasOpen = useRef(open);
+  useEffect(() => { if (wasOpen.current && !open) onClose?.(); wasOpen.current = open; }, [open]);
   useEffect(() => {
     if (!open) return;
     searchInput.current?.focus();
@@ -56,7 +58,9 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   }
   const close = () => { setOpen(false); trigger.current?.focus(); };
   const resultScope = query?.consumer.field.kind === 'loop_until' || query?.consumer.field.kind === 'loop_carry';
-  const producer = path[0], currentTitle = producer === 'args' ? tx('workflows:value.block-inputs') : producer === 'result' && resultScope ? tx('workflows:value.result') : document ? nodePresentation(document, address.block, producer)?.title || producer : producer;
+  // A token names the block inputs by their Start, as the canvas cards do.
+  const startTitle = () => { const owner = document && blockAt(document, address.block), start = owner && startOf(owner); return (start && document && nodePresentation(document, address.block, start)?.title) || tx(address.block.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title'); };
+  const producer = path[0], currentTitle = producer === 'args' ? token ? startTitle() : tx('workflows:value.block-inputs') : producer === 'result' && resultScope ? tx('workflows:value.result') : document ? nodePresentation(document, address.block, producer)?.title || producer : producer;
   const currentBlock = document && blockAt(document, address.block);
   const currentNode = currentBlock && producer ? nodeAt(currentBlock, producer) : undefined;
   const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx(currentNode?.type === 'model' && currentNode.output.type === 'text' ? 'workflows:value.full-text' : 'workflows:value.whole');

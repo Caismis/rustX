@@ -41,7 +41,7 @@ fn reference(path: &[&str]) -> Value {
     json!({"type":"reference", "path":path})
 }
 fn model() -> Value {
-    json!({"type":"model", "instruction":"", "output":{"type":"text"}})
+    json!({"type":"model", "messages":[{"role":"system","content":[]}], "output":{"type":"text"}})
 }
 fn done(output: Value) -> Value {
     field(json!({"type":"return"}), "output", output)
@@ -114,7 +114,7 @@ fn declarations_and_lexical_proofs_do_not_require_a_valid_program() {
             candidate.clone()
         )
         .is_err(),
-        "unfinished instruction"
+        "unfinished messages"
     );
     let mut query = query("done", WorkflowConsumerField::ReturnOutput, &["text"]);
     query.consumer.path.push(WorkflowExpressionStep::Field {
@@ -145,10 +145,10 @@ fn declarations_and_lexical_proofs_do_not_require_a_valid_program() {
 fn a_real_node_named_result_retains_its_producer_identity() {
     let mut candidate = text_candidate();
     let mut node = candidate.block.nodes.remove("text").unwrap();
-    let WorkflowNodeDefinition::Model { instruction, .. } = &mut node else {
+    let WorkflowNodeDefinition::Model { messages, .. } = &mut node else {
         panic!("Model")
     };
-    *instruction = "Return text".into();
+    *messages = serde_json::from_value(json!([{"role":"system","content":[{"type":"literal","value":"Return text"}]},{"role":"user","content":[{"type":"literal","value":"Go."}]}])).unwrap();
     candidate.block.nodes.insert("result".into(), node);
     for edge in &mut candidate.block.edges {
         if edge.from == "text" {
@@ -196,10 +196,8 @@ fn actual_editor_unselected_identities_are_analyzable_but_never_compiled() {
             },
         ),
         (
-            json!({"type":"model","model":{"mode":"explicit","model":"","request_params":{}},"instruction":"","input":{"value":reference(&["args"])},"output":{"type":"text"}}),
-            WorkflowConsumerField::Input {
-                binding: "value".into(),
-            },
+            json!({"type":"model","model":{"mode":"explicit","model":"","request_params":{}},"messages":[{"role":"system","content":[]},{"role":"user","content":[reference(&["args"])]}],"output":{"type":"text"}}),
+            WorkflowConsumerField::Message { index: 1 },
         ),
         (
             json!({"type":"tool","selector":{"origin":"source","source_id":"","name":"read"},"arguments":reference(&["args"]),"result":{"type":"text","part":0}}),
@@ -282,7 +280,11 @@ fn finite_join_candidate(
         nodes["gate"] = json!({"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean",
             "value":{"type":"literal","value":true}}}]});
         for side in ["left", "right"] {
-            nodes[side] = field(model(), "instruction", json!("Return text"));
+            nodes[side] = field(
+                model(),
+                "messages",
+                json!([{"role":"system","content":[{"type":"literal","value":"Return text"}]},{"role":"user","content":[{"type":"literal","value":"Go."}]}]),
+            );
             edges.push(json!({"from":"gate","to":side,
                 "port":if side == "left" { "true" } else { "false" }}));
             edges.push(json!({"from":side,"to":"sink"}));
@@ -526,7 +528,11 @@ fn unknown_output_contracts_preserve_producer_scope_facts() {
                 "arguments":reference(&["args"]),
                 "result":{"type":"json","part":0,"schema":schema}})
         };
-        let first = field(model(), "input", json!({"value":reference(&["broken"])}));
+        let first = field(
+            model(),
+            "messages",
+            json!([{"role":"system","content":[]},{"role":"user","content":[reference(&["broken"])]}]),
+        );
         let linear = definition(json!({
             "input":object(json!({}), &[]), "output":object(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},"first":first, "broken":tool(),
                 "done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"broken"},{"from":"broken","to":"done"}],}));
@@ -548,9 +554,7 @@ fn unknown_output_contracts_preserve_producer_scope_facts() {
                 &linear,
                 query(
                     "first",
-                    WorkflowConsumerField::Input {
-                        binding: "value".into(),
-                    },
+                    WorkflowConsumerField::Message { index: 1 },
                     &["broken"],
                 ),
                 Unavailable,

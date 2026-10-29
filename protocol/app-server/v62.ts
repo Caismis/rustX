@@ -1891,10 +1891,10 @@ export type WorkflowNodeDefinition =
     }
   | {
       model?: WorkflowModelPolicy;
-      instruction: string;
-      input?: {
-        [k: string]: WorkflowValue;
-      };
+      /**
+       * The prompt: a system message, then user and assistant turns.
+       */
+      messages: WorkflowModelMessage[];
       output: WorkflowModelOutput;
       type: 'model';
     }
@@ -1987,6 +1987,13 @@ export type WorkflowModelPolicy =
       max_output_tokens?: number | null;
       mode: 'explicit';
     };
+/**
+ * Who speaks a Model prompt message.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelRole".
+ */
+export type WorkflowModelRole = 'system' | 'user' | 'assistant';
 /**
  * Closed, explicitly tagged value syntax; no evaluation of expression strings.
  *
@@ -2199,6 +2206,10 @@ export type WorkflowConsumerField =
   | {
       binding: string;
       kind: 'input';
+    }
+  | {
+      index: number;
+      kind: 'message';
     }
   | {
       kind: 'arguments';
@@ -9240,6 +9251,19 @@ export interface WorkflowBlock {
    * Ordinary sequential control-flow edges.
    */
   edges?: WorkflowEdgeDefinition[];
+}
+/**
+ * One prompt message of a Model node. The first message is the system
+ * prompt and every later one a user or assistant turn. Its content is fixed
+ * text (string literals) and explicit references, rendered in order: a
+ * string value as itself, any other value as its JSON text.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelMessage".
+ */
+export interface WorkflowModelMessage {
+  role: WorkflowModelRole;
+  content?: WorkflowValue[];
 }
 /**
  * A fixed lexical graph shared by the root and Loop bodies.

@@ -1,14 +1,13 @@
 import { useId, useState } from 'react';
-import clsx from 'clsx';
-import { IconQuestionOutline14, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
+import { Menu } from '@base-ui/react/menu';
+import { IconChevronDownOutline14, IconQuestionOutline14 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';
 import { Tooltip } from '../../../../../presentation/primitives/Tooltip';
 import { CommandRejected, replaceNode } from '../../../document/commands';
-import { blockAt, nodeAt } from '../../../document/model';
-import { orderedKeys } from '../../../document/presentation';
-import { AddKey, ValueEditor } from '../forms/ValueEditor';
+import { blockAt, nodeAt, type NodeDefinition } from '../../../document/model';
+import { IconPlus } from '../../icons';
 import { PromptCard } from '../forms/PromptCard';
-import { ReferencePicker } from '../forms/ReferencePicker';
+import { PromptEditor, promptText, useInsertVariable } from '../forms/PromptEditor';
 import { useTranslation } from '../../../../../locale/react';
 import { encodeField } from '../../../document/fields';
 import { ModelSelection } from '../forms/ModelSelection';
@@ -19,41 +18,18 @@ import css from '../Editor.module.css';
 
 export function ModelPanel(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'model');
-  const [session, setSession] = useState(0), [expanded, setExpanded] = useState(false);
-  const field = encodeField(at('instruction')), input = node.input ?? {};
-  const keys = orderedKeys(props.document, { kind: 'node_input', address: { block: [...props.block], node: props.id } }, Object.keys(input));
   const structured = node.output.type === 'json_schema';
   return <>
     {/* As Dify's LLM panel: the model and its prompt messages form one block. */}
     <section className={css.group}>
       <ModelSelection key={encodeField(at('model'))} policy={node.model ?? { mode: 'session' }} address={at('model')} port={props.port} onChange={(model, field) => update(current => ({ ...current, model }), at('model', ...field))} />
-      {/* As Dify's prompt messages: the instruction is the system prompt, and
-          the bound variables are sent as the user message. */}
       <div className={css.promptMessages}>
-        <PromptCard role={/* i18n-raw: model message role, as Dify shows it */ 'SYSTEM'} hint={tx('workflows:prompt.system-hint')} text={node.instruction} expanded={expanded} onExpand={() => setExpanded(value => !value)}>
-          <textarea data-workflow-field={field} aria-label={tx('workflows:inspector.model-instruction')} aria-invalid={!node.instruction.trim() || undefined}
-            className={clsx(css.promptInput, expanded && css.promptInputExpanded)} value={node.instruction} placeholder={tx('workflows:prompt.system-placeholder')}
-            onFocus={() => setSession(value => value + 1)} onChange={event => { const instruction = event.target.value; update(current => ({ ...current, instruction }), at('instruction'), undefined, `${field}:${session}`); }} />
-        </PromptCard>
-        <PromptCard role={/* i18n-raw: model message role, as Dify shows it */ 'USER'} hint={tx('workflows:prompt.user-hint')}>
-          {keys.map(key => {
-            const value = input[key], address = at('input', { key });
-            return <div key={key} className={css.promptBinding} role="group" aria-label={key}>
-              <span className={css.promptBindingKey}>{key}</span>
-              <div className={css.promptBindingValue}>{value.type === 'reference'
-                ? <ReferencePicker address={address} path={value.path} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />
-                : <ValueEditor label={key} address={address} value={value} edit={props.edit} />}</div>
-              <button type="button" className={css.promptBindingRemove} aria-label={tx('workflows:inspector.remove', { p0: key })} title={tx('workflows:inspector.remove', { p0: key })}
-                onClick={() => update(current => ({ ...current, input: Object.fromEntries(Object.entries(current.input ?? {}).filter(([name]) => name !== key)) }), at('input'))}><IconTrashOutline16 /></button>
-            </div>;
-          })}
-          <AddKey existing={keys} address={at()} label={tx('workflows:prompt.variable-name')} action={tx('workflows:prompt.add-variable')} add={(document, key) => {
-            const current = nodeAt(blockAt(document, props.block)!, props.id);
-            if (current?.type !== 'model') throw new CommandRejected('missing_node');
-            if (Object.hasOwn(current.input ?? {}, key)) throw new CommandRejected('duplicate_identifier');
-            return replaceNode(document, props.block, props.id, { ...current, input: { ...current.input, [key]: { type: 'reference', path: ['args'] } } });
-          }} />
-        </PromptCard>
+        {node.messages.map((message, index) => <PromptMessage key={index} {...props} index={index} message={message} />)}
+        <button type="button" className={css.promptAddMessage} disabled={node.messages.length >= 32} onClick={() => update(current => {
+          // As Dify: a new turn answers the last one.
+          const last = current.messages.at(-1);
+          return { ...current, messages: [...current.messages, { role: last?.role === 'user' ? 'assistant' : 'user', content: [] }] };
+        }, at('messages'), { array: at('messages'), inserted: node.messages.length })}><IconPlus size={13} />{tx('workflows:prompt.add-message')}</button>
       </div>
     </section>
     {/* As Dify's output variables: the structured output switch heads them. */}
@@ -67,6 +43,46 @@ export function ModelPanel(props: PanelProps) {
     </Section>
     <OutputDeclaration {...props} />
   </>;
+}
+
+type Message = Extract<NodeDefinition, { type: 'model' }>['messages'][number];
+
+/** One prompt message as Dify's message editor: SYSTEM first, then turns
+ * whose role switches between USER and ASSISTANT. */
+function PromptMessage(props: PanelProps & { index: number; message: Message }) {
+  const tx = useTranslation(), { at, update } = useNode(props, 'model'), { index, message } = props;
+  const [expanded, setExpanded] = useState(false), [session, setSession] = useState(0);
+  const content = message.content ?? [], address = at('messages', index, 'content'), field = encodeField(address);
+  const role = /* i18n-raw: model message role, as Dify shows it */ message.role.toUpperCase();
+  const messages = (change: (messages: Message[]) => Message[], field = at('messages', index)) => update(current => ({ ...current, messages: change(current.messages) }), field);
+  const setRole = (next: 'user' | 'assistant') => { if (next !== message.role) messages(all => all.map((item, at) => at === index ? { ...item, role: next } : item), at('messages', index, 'role')); };
+  return <PromptEditor parts={content} address={address} edit={props.edit} label={role} expanded={expanded} invalid={index > 0 && !content.length}
+    placeholder={tx(index ? 'workflows:prompt.message-placeholder' : 'workflows:prompt.system-placeholder')} variablePlaceholder={tx('workflows:branch.select-variable')}
+    onChange={parts => update(current => ({ ...current, messages: current.messages.map((item, at) => at === index ? { ...item, content: parts } : item) }), address, undefined, `${field}:${session}`)}>
+    {editable => <PromptCard label={role} hint={tx(`workflows:prompt.${message.role}-hint`)} text={promptText(content)} expanded={expanded} onExpand={() => setExpanded(value => !value)}
+      role={index ? <Menu.Root modal={false}>
+        <Menu.Trigger className={css.promptRole} aria-label={tx('workflows:prompt.role')}>{role}<IconChevronDownOutline14 /></Menu.Trigger>
+        <Menu.Portal><Menu.Positioner side="bottom" align="start" sideOffset={4} className={css.branchOperatorPositioner}>
+          <Menu.Popup className={css.branchOperatorPopup}>
+            {(['user', 'assistant'] as const).map(value => <Menu.Item key={value} className={css.branchOperatorItem} onClick={() => setRole(value)}>{/* i18n-raw: model message role, as Dify shows it */ value.toUpperCase()}</Menu.Item>)}
+          </Menu.Popup>
+        </Menu.Positioner></Menu.Portal>
+      </Menu.Root> : <b className={css.promptRoleFixed}>{role}</b>}
+      tools={<InsertVariable />}
+      onRemove={index ? () => props.edit(document => {
+        const owner = blockAt(document, props.block), current = owner && nodeAt(owner, props.id);
+        if (current?.type !== 'model') throw new CommandRejected('missing_node');
+        return replaceNode(document, props.block, props.id, { ...current, messages: current.messages.filter((_, at) => at !== index) });
+      }, undefined, { array: at('messages'), removed: index }) : undefined}>
+      <div onFocus={() => setSession(value => value + 1)}>{editable}</div>
+    </PromptCard>}
+  </PromptEditor>;
+}
+
+function InsertVariable() {
+  const tx = useTranslation(), insert = useInsertVariable();
+  return <button type="button" className={css.promptTool} aria-label={tx('workflows:prompt.insert-variable')} title={tx('workflows:prompt.insert-variable')}
+    onMouseDown={event => event.preventDefault()} onClick={insert}><span aria-hidden className={css.promptVariableIcon}>{'{x}'}</span></button>;
 }
 
 export function AgentPanel(props: PanelProps) {

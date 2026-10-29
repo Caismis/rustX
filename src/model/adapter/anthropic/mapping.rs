@@ -481,7 +481,11 @@ fn translate_messages(
             ModelMessageView::RequestOnly(carryover) => {
                 flush_tool_results(&mut pending_tool_results, &mut messages);
                 messages.push(WireRequestMessage {
-                    role: "user",
+                    role: if carryover.is_assistant() {
+                        "assistant"
+                    } else {
+                        "user"
+                    },
                     content: vec![serde_json::json!({
                         "type": "text",
                         "text": carryover.render(),

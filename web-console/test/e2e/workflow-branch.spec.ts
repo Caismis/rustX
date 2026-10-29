@@ -114,7 +114,7 @@ test('branch variable picker shows upstream outputs and excludes parallel siblin
   try {
     const document: WorkflowDocument = { description: 'Parallel variable scope', block: emptyBlock() };
     document.block.input = { type: 'object', properties: { status: { type: 'string' } }, required: ['status'], additionalProperties: false };
-    const model = { type: 'model' as const, model: { mode: 'session' as const }, instruction: 'Return text.', input: {}, output: { type: 'text' as const } };
+    const model = { type: 'model' as const, model: { mode: 'session' as const }, messages: [{ role: 'system' as const, content: [{ type: 'literal' as const, value: 'Return text.' }] }, { role: 'user' as const, content: [{ type: 'literal' as const, value: 'Go.' }] }], output: { type: 'text' as const } };
     document.block.nodes.before = model;
     document.block.nodes.later = model;
     document.block.nodes.choose = { type: 'branch', cases: [{ id: 'true', condition: { type: 'and', predicates: [] } }] };

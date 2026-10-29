@@ -70,10 +70,11 @@ export function NextStep({ document, block, source, edit, onSelect }: {
       return next.length === current.length && next.every((value, index) => value === current[index]) ? current : next;
     });
     measure();
+    // Size changes move the ports; measure only then, never on every render.
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  });
+  }, [ports.length]);
   const close = (restoreFocus = false) => { setOpenPort(undefined); if (restoreFocus) trigger.current?.focus(); };
   useEffect(() => {
     if (!openPort) return;

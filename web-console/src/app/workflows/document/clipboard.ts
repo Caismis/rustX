@@ -109,14 +109,18 @@ function node(input: unknown): void {
       if (record.override !== undefined) override(record.override);
       if (record.input !== undefined) Object.values(object(record.input)).forEach(value); return;
     case 'model': {
-      keys(record, ['type', 'model', 'instruction', 'input', 'output']); text(record.instruction);
+      keys(record, ['type', 'model', 'messages', 'output']);
+      for (const message of array(record.messages)) {
+        const entry = keys(message, ['role', 'content']);
+        if (entry.role !== 'system' && entry.role !== 'user' && entry.role !== 'assistant') fail();
+        if (entry.content !== undefined) array(entry.content).forEach(value);
+      }
       if (record.model !== undefined) {
         const policy = object(record.model);
         if (policy.mode === 'session') keys(policy, ['mode']);
         else if (policy.mode === 'explicit') { keys(policy, ['mode', 'model', 'profile', 'request_params', 'max_output_tokens']); text(policy.model); if (policy.profile != null) text(policy.profile); if (policy.request_params !== undefined) object(policy.request_params); if (policy.max_output_tokens != null) unsigned(policy.max_output_tokens); }
         else fail();
       }
-      if (record.input !== undefined) Object.values(object(record.input)).forEach(value);
       const output = object(record.output);
       if (output.type === 'text') keys(output, ['type']); else if (output.type === 'json_schema') { keys(output, ['type', 'schema']); object(output.schema); } else fail(); return;
     }

@@ -231,14 +231,9 @@ impl WorkflowProgram {
                 ("steps".into(), MAX_WORKFLOW_STEPS),
                 ("agent_runs".into(), MAX_WORKFLOW_AGENTS),
                 ("model_calls".into(), MAX_WORKFLOW_MODEL_CALLS),
-                (
-                    "model_input_bindings".into(),
-                    super::MAX_MODEL_INPUT_BINDINGS,
-                ),
-                (
-                    "model_instruction_bytes".into(),
-                    super::MAX_MODEL_INSTRUCTION_BYTES,
-                ),
+                ("model_messages".into(), super::MAX_MODEL_MESSAGES),
+                ("model_message_bytes".into(), super::MAX_MODEL_MESSAGE_BYTES),
+                ("model_message_parts".into(), super::MAX_MODEL_MESSAGE_PARTS),
                 ("nodes".into(), MAX_WORKFLOW_NODES),
                 ("loop_iterations".into(), MAX_LOOP_ITERATIONS as usize),
                 ("block_depth".into(), MAX_BLOCK_DEPTH),
@@ -399,12 +394,28 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                     super::WorkflowModelOutput::Text {} => "text".into(),
                     super::WorkflowModelOutput::JsonSchema { .. } => "json_schema".into(),
                 });
-                view.bindings.extend(
-                    model
-                        .input
-                        .iter()
-                        .map(|(key, value)| (format!("input.{key}"), binding(value))),
-                );
+                view.bindings
+                    .extend(
+                        model
+                            .messages
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(index, message)| {
+                                message
+                                    .content
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, part)| {
+                                        matches!(part, super::WorkflowValue::Reference { .. })
+                                    })
+                                    .map(move |(position, part)| {
+                                        (
+                                            format!("messages.{index}.content.{position}"),
+                                            binding(part),
+                                        )
+                                    })
+                            }),
+                    );
             }
             WorkflowNodeProgram::Agent(agent) => {
                 result.runtime_requirements.insert("provider_execution");

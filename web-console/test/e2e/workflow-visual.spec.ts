@@ -55,9 +55,8 @@ async function propertyIn(page: Page, editor: Locator, name: string, type = 'str
   await item.getByRole('checkbox', { name: 'Required', exact: true }).check();
   return item;
 }
-async function addBinding(group: Locator, name: string, field = 'Field name', action = 'Add field') { await group.getByPlaceholder(field, { exact: true }).last().fill(name); await group.getByRole('button', { name: action, exact: true }).last().click(); }
+async function addBinding(group: Locator, name: string) { await group.getByPlaceholder('Field name', { exact: true }).last().fill(name); await group.getByRole('button', { name: 'Add field', exact: true }).last().click(); }
 async function reference(page: Page, group: Locator, path: string) {
-  // A Model's USER bindings are always references, picked from a floating token.
   const radio = group.getByRole('radio', { name: 'Reference', exact: true }).first();
   if (await radio.count() && await radio.getAttribute('aria-checked') !== 'true') await radio.click();
   await group.getByRole('button', { name: 'Choose a variable', exact: true }).first().click();
@@ -111,7 +110,7 @@ test('adds parallel next nodes from the inspector and keeps every existing conne
     let document: WorkflowDocument = { description: 'Implicit parallel next steps', block: emptyBlock() };
     document.block.input = { type: 'object', properties: { flag: { type: 'boolean' } }, required: ['flag'], additionalProperties: false };
     document = addNode(document, [], 'model', 'model'); document = connectStart(document, [], 'model');
-    document.block.nodes.model = { ...document.block.nodes.model, instruction: 'Return a short string.' } as typeof document.block.nodes.model;
+    document.block.nodes.model = { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Return a short string.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } };
     document = setNodePresentation(document, [], 'model', { position: { x: 380, y: 80 } });
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
     const file = join(directory, 'next_step.yaml'); writeFileSync(file, JSON.stringify(document));
@@ -333,7 +332,8 @@ test('authors structured required output, nested contracts and repeated downstre
     const dialog = page.getByRole('dialog', { name: 'New Workflow', exact: true });
     await dialog.getByLabel('Workflow ID').fill('structured_authoring'); await dialog.getByRole('textbox', { name: /^Name/ }).fill('Declare and reuse structured model output.'); await dialog.getByLabel('Model description').fill('Declare and reuse structured model output.');
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
-    await add(page, 'Model'); await panel(page).getByLabel('Instruction', { exact: true }).fill('Classify input and return the declared object.');
+    await add(page, 'Model'); await panel(page).getByRole('textbox', { name: 'SYSTEM', exact: true }).fill('Classify input and return the declared object.');
+    await panel(page).getByRole('textbox', { name: 'USER', exact: true }).fill('Classify.');
     await panel(page).getByRole('switch', { name: 'Structured output' }).click();
     const risk = await property(page, 'Output JSON Schema', 'risk');
     await risk.getByLabel('Model-facing description').fill('Risk classification.'); await risk.getByLabel('Model-facing description').blur();
@@ -346,9 +346,13 @@ test('authors structured required output, nested contracts and repeated downstre
     await capture(page, info, '18-structured-schema');
     await activate(page, 'Workflow Start'); await chooseExistingNext(page, 'model');
     await activate(page, 'Model node model'); await add(page, 'Model', { node: 'model', port: 'next' });
-    await panel(page).getByLabel('Instruction', { exact: true }).fill('Compare two bindings of the same producer.');
-    const bindings = panel(page).getByRole('region', { name: 'USER', exact: true });
-    for (const name of ['first', 'second']) { await addBinding(bindings, name, 'Variable name', 'Add variable'); await reference(page, bindings.getByRole('group', { name, exact: true }), 'model / risk'); }
+    await panel(page).getByRole('textbox', { name: 'SYSTEM', exact: true }).fill('Compare two references to the same producer.');
+    // Two {x} tokens in the USER message reference the same producer.
+    const user = panel(page).getByRole('region', { name: 'USER', exact: true });
+    for (let count = 0; count < 2; count++) {
+      await user.getByRole('button', { name: 'Insert variable', exact: true }).click();
+      await page.getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: /^model \/ risk ·/ }).click();
+    }
     await chooseExistingNext(page, 'done');
     await capture(page, info, '19-structured-reuse');
     await activate(page, 'Return node done');

@@ -305,7 +305,7 @@ fn unselected_authored_identities_round_trip_for_analysis_but_cannot_replace_a_f
         json!({"type":"agent", "profile":"", "task":"Review", "input":{},
             "output":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}}),
         json!({"type":"model", "model":{"mode":"explicit","model":"","request_params":{}},
-            "instruction":"Review", "output":{"type":"text"}}),
+            "messages":[{"role":"system","content":[{"type":"literal","value":"Review"}]}], "output":{"type":"text"}}),
         json!({"type":"tool", "selector":{"origin":"source","source_id":"","name":"read"},
             "arguments":{"type":"reference","path":["args"]}, "result":{"type":"text","part":0}}),
     ];
@@ -2405,7 +2405,7 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     use serde_json::json;
     let roots = Roots::new();
     let empty = json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
-    let model = json!({"type":"model","instruction":"Draft","output":{"type":"text"}});
+    let model = json!({"type":"model","messages":[{"role":"system","content":[{"type":"literal","value":"Draft"}]},{"role":"user","content":[{"type":"literal","value":"Go."}]}],"output":{"type":"text"}});
     let done = json!({"type":"return","output":{"type":"object","fields":{}}});
     let private = json!({"input":empty,"output":empty,"nodes": {"workflow_start":{"type":"start"},"first":model,"second":model,"done":done},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"second"},{"from":"second","to":"done"}],});
     let mut input = empty.clone();

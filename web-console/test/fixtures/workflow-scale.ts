@@ -17,6 +17,6 @@ export function scaleWorkflow(): WorkflowFileDocument {
   return { description: 'Native 256-node editor capacity fixture.', block: { input: empty, output: empty, nodes: {
     start: { type: 'start' },
     repeat: { type: 'loop', input: { type: 'literal', value: {} }, body: branchTree(), until: { type: 'boolean', value: { type: 'literal', value: true } }, carry: { type: 'reference', path: ['result'] }, max_iterations: 1 },
-    model: { type: 'model', model: { mode: 'session' }, instruction: 'Return text.', input: {}, output: { type: 'text' } }, done: returned,
+    model: { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Return text.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } }, done: returned,
   }, edges: [{ from: 'start', to: 'repeat' }, { from: 'start', to: 'model' }, { from: 'model', to: 'done' }, { from: 'repeat', to: 'done', port: 'satisfied' }, { from: 'repeat', to: 'done', port: 'exhausted' }] }, editor: { notes: [{ id: 'manual', block: [], text: 'Manual note: organize preserves this position.', theme: 'neutral', position: { x: -120, y: 300 }, dimensions: { width: 280, height: 120 } }] } };
 }

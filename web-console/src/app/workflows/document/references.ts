@@ -39,8 +39,8 @@ function predicate(input: Predicate, rewrite: PathRewrite): Predicate {
 function node(input: NodeDefinition, rewrite: PathRewrite): NodeDefinition {
   switch (input.type) {
     case 'start': return input;
-    case 'agent':
-    case 'model': return { ...input, input: Object.fromEntries(Object.entries(input.input ?? {}).map(([key, binding]) => [key, value(binding, rewrite)])) };
+    case 'agent': return { ...input, input: Object.fromEntries(Object.entries(input.input ?? {}).map(([key, binding]) => [key, value(binding, rewrite)])) };
+    case 'model': return { ...input, messages: input.messages.map(message => ({ ...message, content: message.content?.map(part => value(part, rewrite)) })) };
     case 'tool': return { ...input, arguments: value(input.arguments, rewrite) };
     case 'branch': return { ...input, cases: input.cases.map(item => ({ ...item, condition: predicate(item.condition, rewrite) })) };
     case 'review': return { ...input, subject: { ...input.subject, value: value(input.subject.value, rewrite) }, context: input.context.map(item => value(item, rewrite)) };

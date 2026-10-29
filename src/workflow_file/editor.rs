@@ -337,8 +337,7 @@ fn order_fields(
     let schema = match target {
         NodeInput { address } => {
             return match node_at(definition, address)? {
-                WorkflowNodeDefinition::Agent { input, .. }
-                | WorkflowNodeDefinition::Model { input, .. } => {
+                WorkflowNodeDefinition::Agent { input, .. } => {
                     Some(input.keys().cloned().collect())
                 }
                 _ => None,

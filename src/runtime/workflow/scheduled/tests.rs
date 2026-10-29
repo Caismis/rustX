@@ -95,8 +95,8 @@ fn program(input: &Inputs<'_>) -> WorkflowProgram {
     let work = match input.kind {
         NodeKind::PureReturn => unreachable!("pure definition returned above"),
         NodeKind::Model => {
-            json!({"type":"model", "model":{"mode":"session"}, "instruction":"Review the task",
-            "input":{}, "output":{"type":"text"}})
+            json!({"type":"model", "model":{"mode":"session"}, "messages":[{"role":"system","content":[{"type":"literal","value":"Review the task"}]},{"role":"user","content":[{"type":"literal","value":"Go."}]}],
+            "output":{"type":"text"}})
         }
         NodeKind::Agent => {
             json!({"type":"agent", "profile":"reviewer", "task":"Review this", "output":empty})

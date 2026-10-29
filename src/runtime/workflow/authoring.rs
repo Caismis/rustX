@@ -42,6 +42,11 @@ pub enum WorkflowConsumerField {
     Input {
         binding: String,
     },
+    /// A variable in one Model prompt message. Every part of a message shares
+    /// its scope, so this also answers for a variable not inserted yet.
+    Message {
+        index: u32,
+    },
     Arguments,
     ReviewSubject,
     ReviewContext {
@@ -260,6 +265,9 @@ pub fn validate_candidate(definition: &WorkflowDefinition) -> Result<(), &'stati
     walk(&definition.block, 0, &mut 0)
 }
 
+/// The position of a Model message variable, whichever one is selected.
+static UNSET_REFERENCE: WorkflowValue = WorkflowValue::Reference { path: Vec::new() };
+
 #[derive(Clone, Copy)]
 enum Expression<'a> {
     Value(&'a WorkflowValue),
@@ -317,8 +325,12 @@ fn consumer<'a>(
     use WorkflowNodeDefinition as N;
     let node = block.nodes.get(&address.address.node)?;
     let (expression, expected, result_scope) = match (node, &address.field) {
-        (N::Model { input, .. } | N::Agent { input, .. }, F::Input { binding }) => {
+        (N::Agent { input, .. }, F::Input { binding }) => {
             (Expression::Value(input.get(binding)?), None, false)
+        }
+        (N::Model { messages, .. }, F::Message { index }) => {
+            messages.get(*index as usize)?;
+            (Expression::Value(&UNSET_REFERENCE), None, false)
         }
         (N::Tool { arguments, .. }, F::Arguments) => (Expression::Value(arguments), None, false),
         (N::Review { subject, .. }, F::ReviewSubject) => (

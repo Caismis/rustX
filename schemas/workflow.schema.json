@@ -356,6 +356,26 @@
       ],
       "type": "object"
     },
+    "WorkflowModelMessage": {
+      "additionalProperties": false,
+      "description": "One prompt message of a Model node. The first message is the system\nprompt and every later one a user or assistant turn. Its content is fixed\ntext (string literals) and explicit references, rendered in order: a\nstring value as itself, any other value as its JSON text.",
+      "properties": {
+        "content": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkflowValue"
+          },
+          "type": "array"
+        },
+        "role": {
+          "$ref": "#/$defs/WorkflowModelRole"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "type": "object"
+    },
     "WorkflowModelOutput": {
       "description": "The single authored output contract of a Workflow Model node.",
       "oneOf": [
@@ -444,6 +464,15 @@
         }
       ]
     },
+    "WorkflowModelRole": {
+      "description": "Who speaks a Model prompt message.",
+      "enum": [
+        "system",
+        "user",
+        "assistant"
+      ],
+      "type": "string"
+    },
     "WorkflowNodeAddress": {
       "additionalProperties": false,
       "properties": {
@@ -484,15 +513,12 @@
           "additionalProperties": false,
           "description": "One tool-free logical Auxiliary Call using the invoking Attempt's authority.",
           "properties": {
-            "input": {
-              "additionalProperties": {
-                "$ref": "#/$defs/WorkflowValue"
+            "messages": {
+              "description": "The prompt: a system message, then user and assistant turns.",
+              "items": {
+                "$ref": "#/$defs/WorkflowModelMessage"
               },
-              "default": {},
-              "type": "object"
-            },
-            "instruction": {
-              "type": "string"
+              "type": "array"
             },
             "model": {
               "$ref": "#/$defs/WorkflowModelPolicy",
@@ -510,7 +536,7 @@
           },
           "required": [
             "type",
-            "instruction",
+            "messages",
             "output"
           ],
           "type": "object"
@@ -966,6 +992,126 @@
             "type",
             "left",
             "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "String containment, without coercion.",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "contains",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "not_contains",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "starts_with",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "ends_with",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Whether a string is empty.",
+          "properties": {
+            "type": {
+              "const": "empty",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/WorkflowValue"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "not_empty",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/WorkflowValue"
+            }
+          },
+          "required": [
+            "type",
+            "value"
           ],
           "type": "object"
         },

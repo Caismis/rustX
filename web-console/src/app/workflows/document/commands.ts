@@ -52,7 +52,8 @@ export function emptyBlock(): Block {
 export function nodeTemplate(kind: NodeKind): NodeDefinition {
   switch (kind) {
     case 'agent': return { type: 'agent', profile: '', task: '', input: {}, output: { ...EMPTY_OBJECT } };
-    case 'model': return { type: 'model', model: { mode: 'session' }, instruction: '', input: {}, output: { type: 'text' } };
+    // As Dify's LLM node: an empty system prompt, then an empty user turn.
+    case 'model': return { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [] }, { role: 'user', content: [] }], output: { type: 'text' } };
     case 'tool': return { type: 'tool', selector: { origin: 'builtin', name: '' }, arguments: { type: 'literal', value: {} }, result: { type: 'text', part: 0 } };
     case 'branch': return { type: 'branch', cases: [{ id: 'true', condition: { type: 'and', predicates: [] } }] };
     case 'review': return { type: 'review', subject: { type: 'plan', value: { type: 'reference', path: ['args'] } }, context: [] };

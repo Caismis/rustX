@@ -31,10 +31,10 @@ export function Bindings(props: PanelProps) {
   const tx = useTranslation();
   const { document, block, id, edit } = props;
   const node = nodeAt(blockAt(document, block)!, id)!;
-  if (node.type !== 'agent' && node.type !== 'model') return null;
+  if (node.type !== 'agent') return null;
   const update = (change: (input: Record<string, Value>) => Record<string, Value>) => edit(document => {
     const current = nodeAt(blockAt(document, block)!, id)!;
-    if (current.type !== 'agent' && current.type !== 'model') throw new CommandRejected('missing_node');
+    if (current.type !== 'agent') throw new CommandRejected('missing_node');
     return replaceNode(document, block, id, { ...current, input: change(current.input ?? {}) });
   });
   return <Section title={tx('workflows:inspector.agent-input')}>
@@ -44,7 +44,7 @@ export function Bindings(props: PanelProps) {
     </div>)}
     <AddKey existing={Object.keys(node.input ?? {})} address={nodeField(block, id)} add={(document, key) => {
       const current = nodeAt(blockAt(document, block)!, id)!;
-      if (current.type !== 'agent' && current.type !== 'model') throw new CommandRejected('missing_node');
+      if (current.type !== 'agent') throw new CommandRejected('missing_node');
       if (Object.hasOwn(current.input ?? {}, key)) throw new CommandRejected('duplicate_identifier');
       return replaceNode(document, block, id, { ...current, input: { ...current.input, [key]: { type: 'reference', path: ['args'] } } });
     }} />

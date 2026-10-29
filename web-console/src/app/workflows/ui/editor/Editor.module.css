@@ -664,7 +664,6 @@
 .promptCard { border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
 .promptCard:focus-within { box-shadow: inset 0 0 0 1px var(--dsw-alias-state-business-primary); }
 .promptHead { display: flex; align-items: center; gap: 4px; min-height: 30px; padding: 4px 6px 0 12px; }
-.promptHead > b { font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--dsw-alias-label-secondary); }
 .promptHint { display: inline-flex; color: var(--dsw-alias-label-tertiary); cursor: help; }
 .promptHint:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); border-radius: 4px; }
 .promptTools { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
@@ -675,16 +674,22 @@
 .promptTool:hover:not(:disabled), .promptTool[aria-pressed='true'] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .promptTool:disabled { opacity: .45; cursor: default; }
 .promptBody { display: flex; flex-direction: column; gap: 6px; padding: 2px 12px 10px; }
-.promptInput { width: 100%; min-height: calc(3lh + 4px); max-height: calc(14lh + 4px); box-sizing: border-box; padding: 2px 0; border: 0; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 1.6; resize: none; field-sizing: content; outline: none; }
-.promptInput::placeholder { color: var(--dsw-alias-label-tertiary); }
+.promptEditor { position: relative; }
+.promptInput { min-height: calc(2lh + 4px); max-height: calc(14lh + 4px); overflow-y: auto; box-sizing: border-box; padding: 2px 0; color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; outline: none; }
+.promptInput p { margin: 0; }
 .promptInputExpanded { min-height: calc(20lh + 4px); max-height: none; }
-.promptBinding { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
-.promptBindingKey { flex: none; max-width: 38%; padding-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--dsw-alias-label-primary); }
-.promptBindingKey::after { content: ':'; color: var(--dsw-alias-label-tertiary); }
-.promptBindingValue { flex: 1; min-width: 0; }
-.promptBindingValue .referenceTrigger { width: auto; max-width: 100%; min-height: 28px; }
-.promptBindingRemove { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; opacity: 0; }
-.promptBinding:hover .promptBindingRemove, .promptBindingRemove:focus-visible { opacity: 1; }
-.promptBindingRemove:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-state-error-primary); }
+.promptPlaceholder { position: absolute; top: 2px; left: 0; color: var(--dsw-alias-label-tertiary); font-size: 13px; line-height: 1.7; pointer-events: none; user-select: none; }
+/* A variable token sits in the text like Dify's variable block. */
+.promptVariable { display: inline-block; margin: 0 1px; vertical-align: middle; }
+.promptVariable .referenceTrigger { width: auto; min-height: 22px; padding: 0 2px; border: 0; background: transparent; }
+.promptVariable .branchVariableToken { padding: 1px 5px; font-size: 12px; line-height: 18px; }
+.promptVariableIcon { font-family: var(--ds-font-family-code); font-size: 11px; font-weight: 600; }
+.promptRole { display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 4px; margin-left: -4px; border: 0; border-radius: 5px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .02em; cursor: pointer; }
+.promptRole:hover, .promptRole[data-popup-open] { background: var(--dsw-alias-interactive-bg-hover); }
+.promptRole svg { width: 12px; height: 12px; }
+.promptRoleFixed { font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--dsw-alias-label-secondary); }
+.promptAddMessage { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 32px; border: 0; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--dsw-alias-label-secondary); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
+.promptAddMessage:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.promptAddMessage:disabled { opacity: .5; cursor: default; }
 .structuredToggle { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500; color: var(--dsw-alias-label-tertiary); }
 .structuredToggle > button[role='switch'] { margin-left: 4px; }

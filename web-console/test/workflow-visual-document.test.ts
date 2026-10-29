@@ -103,10 +103,10 @@ describe('schema contract identity', () => {
   it('renames root arguments, required/order metadata and only corresponding structured paths', () => {
     const document = fixture();
     document.block.input = { type: 'object', properties: { question: { type: 'string', description: 'User question' } }, required: ['question'], additionalProperties: false };
-    document.block.nodes = { model: { type: 'model', instruction: 'Keep question in literal text.', input: { value: { type: 'reference', path: ['args', 'question'] } }, output: { type: 'text' } }, done: { type: 'return', output: { type: 'reference', path: ['args'] } } };
+    document.block.nodes = { model: { type: 'model', messages: [{ role: 'system', content: [{ type: 'literal', value: 'Keep question in literal text.' }] }, { role: 'user', content: [{ type: 'reference', path: ['args', 'question'] }] }], output: { type: 'text' } }, done: { type: 'return', output: { type: 'reference', path: ['args'] } } };
     const next = renameSchemaField(document, blockField([], ['input']), 'question', 'prompt');
     expect(next.block.input).toMatchObject({ properties: { prompt: { description: 'User question' } }, required: ['prompt'] });
-    expect(next.block.nodes.model).toMatchObject({ instruction: 'Keep question in literal text.', input: { value: { path: ['args', 'prompt'] } } });
+    expect(next.block.nodes.model).toMatchObject({ messages: [{ content: [{ value: 'Keep question in literal text.' }] }, { content: [{ path: ['args', 'prompt'] }] }] });
     expect(next.block.nodes.done).toMatchObject({ output: { path: ['args'] } });
     expect(next.editor?.orders?.[0].fields).toEqual(['prompt']);
     expect(schemaConsumers(next, blockField([], ['input'])).map(use => use.node).sort()).toEqual(['done', 'model']);

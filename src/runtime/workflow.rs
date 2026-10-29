@@ -211,10 +211,12 @@ pub const MAX_WORKFLOW_STEPS: usize = 4096;
 pub const MAX_WORKFLOW_AGENTS: usize = 256;
 /// Logical Auxiliary Model Calls across the entire run, separate from Agents.
 pub const MAX_WORKFLOW_MODEL_CALLS: usize = 256;
-/// Fixed instruction bytes accepted by a Model node.
-pub const MAX_MODEL_INSTRUCTION_BYTES: usize = 32 * 1024;
-/// Bound intermediate named input materialization before its total byte check.
-pub const MAX_MODEL_INPUT_BINDINGS: usize = 32;
+/// Prompt messages accepted by a Model node, the system message included.
+pub const MAX_MODEL_MESSAGES: usize = 32;
+/// Fixed text bytes accepted in one Model prompt message.
+pub const MAX_MODEL_MESSAGE_BYTES: usize = 32 * 1024;
+/// Text and reference parts accepted in one Model prompt message.
+pub const MAX_MODEL_MESSAGE_PARTS: usize = 64;
 /// Trusted ceiling for a single Loop's finite allowance.
 pub const MAX_LOOP_ITERATIONS: u32 = 256;
 /// The maximum number of discovered workflow definitions in one generation.
@@ -376,9 +378,8 @@ pub enum WorkflowNodeDefinition {
     Model {
         #[serde(default)]
         model: WorkflowModelPolicy,
-        instruction: String,
-        #[serde(default, deserialize_with = "deserialize_unique_map")]
-        input: BTreeMap<String, WorkflowValue>,
+        /// The prompt: a system message, then user and assistant turns.
+        messages: Vec<WorkflowModelMessage>,
         output: WorkflowModelOutput,
     },
     /// Repeat one fixed typed body until its committed result satisfies `until`.
@@ -466,6 +467,27 @@ impl WorkflowModelOutput {
             Self::JsonSchema { schema } => schema.clone(),
         }
     }
+}
+
+/// One prompt message of a Model node. The first message is the system
+/// prompt and every later one a user or assistant turn. Its content is fixed
+/// text (string literals) and explicit references, rendered in order: a
+/// string value as itself, any other value as its JSON text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowModelMessage {
+    pub role: WorkflowModelRole,
+    #[serde(default)]
+    pub content: Vec<WorkflowValue>,
+}
+
+/// Who speaks a Model prompt message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkflowModelRole {
+    System,
+    User,
+    Assistant,
 }
 
 /// Closed, explicitly tagged value syntax; no evaluation of expression strings.
@@ -788,8 +810,7 @@ pub enum WorkflowNodeProgram {
 #[derive(Debug, Clone)]
 pub struct WorkflowModelProgram {
     pub model: crate::model::session::AuxiliaryModelPolicy,
-    pub instruction: String,
-    pub input: BTreeMap<String, WorkflowValue>,
+    pub messages: Vec<WorkflowModelMessage>,
     pub output: WorkflowModelOutput,
 }
 
@@ -1199,17 +1220,16 @@ fn compile_block(
                 available_after.insert(node_id.clone(), available_before.clone());
                 WorkflowNodeProgram::Start
             }
-            WorkflowNodeDefinition::Model { model, instruction, input, output } => {
+            WorkflowNodeDefinition::Model { model, messages, output } => {
                 let model = model.lower().map_err(|error| error.at("model"))?;
-                validate_model(&model, instruction, input, output, &available_before, &node_id)?;
+                validate_model(&model, messages, output, &available_before, &node_id)?;
                 available_after.insert(
                     node_id.clone(),
                     available_before.with_prefix(&node_id, &output.schema()),
                 );
                 WorkflowNodeProgram::Model(WorkflowModelProgram {
                     model,
-                    instruction: instruction.clone(),
-                    input: input.clone(),
+                    messages: messages.clone(),
                     output: output.clone(),
                 })
             }
@@ -1963,43 +1983,84 @@ fn validate_agent(
 
 fn validate_model(
     model: &crate::model::session::AuxiliaryModelPolicy,
-    instruction: &str,
-    input: &BTreeMap<String, WorkflowValue>,
+    messages: &[WorkflowModelMessage],
     output: &WorkflowModelOutput,
     available: &SchemaMap,
     node: &str,
 ) -> Result<(), WorkflowCompileError> {
     validate_model_policy(model).map_err(|error| error.at("model"))?;
-    if instruction.trim().is_empty() || instruction.len() > MAX_MODEL_INSTRUCTION_BYTES {
+    if messages.is_empty() || messages.len() > MAX_MODEL_MESSAGES {
         return Err(WorkflowCompileError::InvalidField(format!(
-            "Model {node:?} instruction must be a fixed non-empty string of at most {MAX_MODEL_INSTRUCTION_BYTES} bytes"
-        )).at("instruction"));
-    }
-    if instruction.contains("${") || instruction.contains("{{") {
-        return Err(WorkflowCompileError::InvalidField(format!(
-            "Model {node:?} instruction cannot contain interpolation syntax"
+            "Model {node:?} needs a system message and at most {MAX_MODEL_MESSAGES} messages"
         ))
-        .at("instruction"));
+        .at("messages"));
     }
-    if input.len() > MAX_MODEL_INPUT_BINDINGS {
-        return Err(WorkflowCompileError::InvalidField(format!(
-            "Model {node:?} input exceeds {MAX_MODEL_INPUT_BINDINGS} named bindings"
-        ))
-        .at("input"));
-    }
-    for (name, binding) in input {
-        if !valid_local_key(name) {
+    for (index, message) in messages.iter().enumerate() {
+        let at = format!("messages.{index}");
+        if (index == 0) != (message.role == WorkflowModelRole::System) {
             return Err(WorkflowCompileError::InvalidField(format!(
-                "Model {node:?} input binding name {name:?} must be a non-empty bounded local key"
+                "Model {node:?} message {index} must be {}",
+                if index == 0 {
+                    "the system message"
+                } else {
+                    "a user or assistant message"
+                }
             ))
-            .at(format!("input.{name}")));
+            .at(format!("{at}.role")));
         }
-        value_schema(binding, available, node, 0).map_err(|e| e.at(format!("input.{name}")))?;
+        if message.content.len() > MAX_MODEL_MESSAGE_PARTS {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "Model {node:?} message {index} exceeds {MAX_MODEL_MESSAGE_PARTS} parts"
+            ))
+            .at(format!("{at}.content")));
+        }
+        let mut text = 0usize;
+        for (position, part) in message.content.iter().enumerate() {
+            match part {
+                WorkflowValue::Literal {
+                    value: Value::String(fixed),
+                } => text += fixed.len(),
+                WorkflowValue::Reference { .. } => {
+                    value_schema(part, available, node, 0)
+                        .map_err(|e| e.at(format!("{at}.content.{position}")))?;
+                }
+                _ => {
+                    return Err(WorkflowCompileError::InvalidField(format!(
+                        "Model {node:?} message {index} content is text or references only"
+                    ))
+                    .at(format!("{at}.content.{position}")));
+                }
+            }
+        }
+        if text > MAX_MODEL_MESSAGE_BYTES {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "Model {node:?} message {index} text exceeds {MAX_MODEL_MESSAGE_BYTES} bytes"
+            ))
+            .at(format!("{at}.content")));
+        }
+        let empty = message.content.iter().all(|part| {
+            matches!(part, WorkflowValue::Literal { value: Value::String(fixed) } if fixed.trim().is_empty())
+        });
+        if index > 0 && empty {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "Model {node:?} message {index} is empty"
+            ))
+            .at(format!("{at}.content")));
+        }
+    }
+    if !messages
+        .iter()
+        .any(|message| message.role == WorkflowModelRole::User)
+    {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "Model {node:?} needs at least one user message"
+        ))
+        .at("messages"));
     }
     validate_model_output(output, node)
 }
 
-/// Shared output-contract proof, independent of unfinished instruction/bindings.
+/// Shared output-contract proof, independent of unfinished messages.
 fn validate_model_output(
     output: &WorkflowModelOutput,
     node: &str,
@@ -3566,6 +3627,26 @@ mod tests {
     fn reference(path: &str) -> WorkflowValue {
         WorkflowValue::Reference {
             path: path.split('.').map(str::to_owned).collect(),
+        }
+    }
+
+    /// A Model prompt: one fixed system message, then one user turn.
+    fn prompt(system: &str, user: Vec<WorkflowValue>) -> Vec<WorkflowModelMessage> {
+        vec![
+            WorkflowModelMessage {
+                role: WorkflowModelRole::System,
+                content: vec![text(system)],
+            },
+            WorkflowModelMessage {
+                role: WorkflowModelRole::User,
+                content: user,
+            },
+        ]
+    }
+
+    fn text(fixed: &str) -> WorkflowValue {
+        WorkflowValue::Literal {
+            value: Value::String(fixed.to_owned()),
         }
     }
 

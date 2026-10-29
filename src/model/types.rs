@@ -303,7 +303,7 @@ pub(crate) fn append_semantic_message(digest: &mut sha2::Sha256, message: &Model
             }
         }
         crate::model::projected::ModelMessageView::RequestOnly(context) => {
-            serde_json::json!({"role":"user", "text":context.render()})
+            serde_json::json!({"role": if context.is_assistant() { "assistant" } else { "user" }, "text":context.render()})
         }
     };
     serde_json::to_writer(SemanticWriter(&mut *digest), &value).expect("semantic input serializes");

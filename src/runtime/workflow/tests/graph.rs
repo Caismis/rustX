@@ -70,8 +70,7 @@ fn real_start_and_every_port_allow_distinct_targets_but_never_duplicate_edges() 
 fn join_sees_both_parallel_producers_but_not_an_optional_conditional_producer() {
     let model = WorkflowNodeDefinition::Model {
         model: WorkflowModelPolicy::Session,
-        instruction: "Return text".into(),
-        input: BTreeMap::new(),
+        messages: prompt("Return text", vec![text("Go.")]),
         output: WorkflowModelOutput::Text {},
     };
     let mut definition = sibling_graph();

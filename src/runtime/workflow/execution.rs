@@ -615,10 +615,8 @@ impl WorkflowRuntime {
                 }
 
                 WorkflowNodeProgram::Model(model) => {
-                    let bindings = model.input.iter().map(|(key, expression)| {
-                        evaluate_value(expression, &input, &values).map(|value| (key.clone(), value))
-                    }).collect::<Result<serde_json::Map<String, Value>, _>>()?;
-                    let value = self.invoke_model(run, context, &node_instance, model, Value::Object(bindings), cancellation).await?;
+                    let prompt = super::model::render_prompt(&model.messages, |part| evaluate_value(part, &input, &values))?;
+                    let value = self.invoke_model(run, context, &node_instance, model, prompt, cancellation).await?;
                     validate_commit(&model.output.schema(), &value)?;
                     reservation.retain(&value)?;
                     #[cfg(test)]

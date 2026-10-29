@@ -17,9 +17,45 @@ use crate::runtime::subagent::NativeExecutionContext;
 use crate::tools::types::ToolExecutionStatus;
 
 use super::{
-    MAX_VALUE_BYTES, Value, WorkflowModelOutput, WorkflowModelProgram, WorkflowNodeInstance,
-    WorkflowRun, WorkflowRunError, WorkflowRuntime,
+    MAX_VALUE_BYTES, Value, WorkflowModelMessage, WorkflowModelOutput, WorkflowModelProgram,
+    WorkflowModelRole, WorkflowNodeInstance, WorkflowRun, WorkflowRunError, WorkflowRuntime,
+    WorkflowValue,
 };
+
+/// A Model prompt with its references resolved: the system text, then the
+/// user and assistant turns in authored order.
+pub(super) struct RenderedPrompt {
+    system: String,
+    turns: Vec<(WorkflowModelRole, String)>,
+}
+
+/// Render each message's parts in order. Fixed text stays as written; a
+/// referenced string is inserted as itself and any other value as JSON text.
+pub(super) fn render_prompt(
+    messages: &[WorkflowModelMessage],
+    mut resolve: impl FnMut(&WorkflowValue) -> Result<Value, WorkflowRunError>,
+) -> Result<RenderedPrompt, WorkflowRunError> {
+    let mut rendered = messages
+        .iter()
+        .map(|message| {
+            let mut text = String::new();
+            for part in &message.content {
+                match resolve(part)? {
+                    Value::String(value) => text.push_str(&value),
+                    value => text
+                        .push_str(&serde_json::to_string(&value).expect("JSON value serializes")),
+                }
+            }
+            Ok((message.role, text))
+        })
+        .collect::<Result<Vec<_>, WorkflowRunError>>()?;
+    // The compiler admits exactly one leading system message.
+    let (_, system) = rendered.remove(0);
+    Ok(RenderedPrompt {
+        system,
+        turns: rendered,
+    })
+}
 
 /// Only Workflow knows how to turn trusted compiled intent into a model Call.
 /// This capability retains the Conversation's existing owner, never a new one.
@@ -169,7 +205,7 @@ impl WorkflowRuntime {
         context: &NativeExecutionContext,
         node: &WorkflowNodeInstance,
         program: &WorkflowModelProgram,
-        input: Value,
+        prompt: RenderedPrompt,
         cancellation: &ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
         let capability = context.workflow_model.as_ref().ok_or_else(|| {
@@ -182,7 +218,6 @@ impl WorkflowRuntime {
                 "Model invocation was not frozen at Workflow admission".into(),
             )
         })?;
-        super::expressions::bounded_value_bytes(&input)?;
         let format = match &program.output {
             WorkflowModelOutput::Text {} => AuxiliaryOutputFormat::Text,
             WorkflowModelOutput::JsonSchema { schema } => AuxiliaryOutputFormat::JsonSchema(
@@ -202,14 +237,21 @@ impl WorkflowRuntime {
                 ),
                 images: super::BTreeMap::default(),
                 invocation: invocation.invocation_config(),
-                messages: vec![crate::model::ModelInputMessage::RequestOnly(
-                    crate::model::RequestOnlyModelContext::AuxiliaryQuestion {
-                        text: serde_json::to_string(&input).expect("bounded JSON bindings"),
-                    },
-                )]
-                .into(),
+                messages: prompt
+                    .turns
+                    .into_iter()
+                    .map(|(role, text)| {
+                        crate::model::ModelInputMessage::RequestOnly(match role {
+                            WorkflowModelRole::Assistant => {
+                                crate::model::RequestOnlyModelContext::AuxiliaryAnswer { text }
+                            }
+                            _ => crate::model::RequestOnlyModelContext::AuxiliaryQuestion { text },
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
                 tools: Vec::new(),
-                effective_system_prompt: program.instruction.clone(),
+                effective_system_prompt: prompt.system,
                 continuation: None,
                 continuation_source: None,
             })

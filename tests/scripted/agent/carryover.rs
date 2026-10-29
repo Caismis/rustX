@@ -220,9 +220,10 @@ fn carryover_from(request: &rustx::model::ModelRequest) -> &RenderedUnresolvedOu
             )) => Some(carryover),
             ModelInputMessage::Canonical(_)
             | ModelInputMessage::Derived(_)
-            | ModelInputMessage::RequestOnly(RequestOnlyModelContext::AuxiliaryQuestion {
-                ..
-            }) => None,
+            | ModelInputMessage::RequestOnly(
+                RequestOnlyModelContext::AuxiliaryQuestion { .. }
+                | RequestOnlyModelContext::AuxiliaryAnswer { .. },
+            ) => None,
         })
         .expect("request contains carryover")
 }
