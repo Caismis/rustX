@@ -48,11 +48,26 @@ impl UserConfigManager {
         let bytes = document
             .canonical_bytes()
             .map_err(|error| invalid(presentation_diagnostic(&error)))?;
-        let analysis =
-            crate::runtime::workflow::authoring::analyze(&document.definition, query.as_ref())
-                .map_err(|reason| {
-                    invalid(WorkflowDiagnostic::new("$", "analysis_capacity", reason))
-                })?;
+        let search = query.as_ref().map(|query| query.search.to_lowercase());
+        let title_matches = document
+            .editor
+            .iter()
+            .flat_map(|editor| &editor.nodes)
+            .filter(|node| {
+                search.as_ref().is_some_and(|search| {
+                    node.title
+                        .as_ref()
+                        .is_some_and(|title| title.to_lowercase().contains(search))
+                })
+            })
+            .map(|node| node.address.clone())
+            .collect();
+        let analysis = crate::runtime::workflow::authoring::analyze(
+            &document.definition,
+            query.as_ref(),
+            &title_matches,
+        )
+        .map_err(|reason| invalid(WorkflowDiagnostic::new("$", "analysis_capacity", reason)))?;
         let report = WorkflowAnalysisReport {
             target: target.clone(),
             id: id.clone(),

@@ -1,4 +1,6 @@
-import { resetPositions } from '../../document/presentation';
+import { CommandRejected } from '../../document/commands';
+import { duplicateFragment, fragmentOwnsField, type PastedFragment } from '../../document/clipboard';
+import { projectScene } from './scene';
 import '@xyflow/react/dist/base.css';
 import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -12,31 +14,28 @@ import { Modal } from '../../../../presentation/primitives/Modal';
 import { IconCheckOutline16, IconEllipsisOutline16 } from '../../../../presentation/primitives/icons';
 import type { WorkspaceAuthority } from '../../../../workspaces/authority';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
-import { describeField, type ArrayEdit, type FieldAddress } from '../../document/fields';
-import { blockAt, blockKey, nodeAt, sameBlockPath, type BlockPath, type WorkflowDocument } from '../../document/model';
-import { isDirty, type EditorNotice, type FieldDraft, type NodePositions, type WorkflowEditorActor } from '../../machines/editor';
+import { describeField, renameAddress, type ArrayEdit, type FieldAddress } from '../../document/fields';
+import { blockAt, nodeAt, sameBlockPath, type BlockPath, type WorkflowDocument } from '../../document/model';
+import { isDirty, type EditorNotice, type FieldDraft, type WorkflowEditorActor } from '../../machines/editor';
 import { editorHolds, type WorkflowSurfaceActor } from '../../machines/surface';
 import { scopeKey } from '../../port';
 import { IconArrowLeft, IconExplain, IconFile, IconFolder, IconRedo, IconUndo } from '../icons';
 import { FailureText, shortRevision } from '../notices';
-import { Canvas, type Problems, type Selection } from './Canvas';
+import { Canvas, keyboardOwned, type Problems, type Selection } from './Canvas';
+import { viewId } from './selection';
 import { CheckResults, Inspector } from './Inspector';
 import { DraftOwner, FieldCommits } from './forms/drafts';
-import { tabOfField } from './forms/NodeForms';
-import { renameViews, viewKey } from './view-store';
+import { viewKey } from './view-store';
 import css from './Editor.module.css';
-
-const editableTarget = (target: EventTarget | null) => !!(target as Element | null)?.closest?.('input, textarea, select, [contenteditable="true"]');
 
 /** Problems a native diagnostic marks in the block being edited: its own
  * node or edge, or the node owning the nested block it is in. */
-function problemsIn(block: BlockPath, located: { location: DiagnosticLocation; severity: 'error' | 'warning' }[]): Problems {
-  const nodes = new Map<string, 'error' | 'warning' | 'nested'>(), edges = new Set<number>();
+function problemsIn(located: { location: DiagnosticLocation; severity: 'error' | 'warning' }[]): Problems {
+  const nodes = new Map<string, 'error' | 'warning' | 'nested'>(), edges = new Set<string>();
   for (const { location, severity } of located) {
-    if (!sameBlockPath(location.block.slice(0, block.length), block)) continue;
-    if (location.block.length > block.length) { nodes.set(location.block[block.length].node, nodes.get(location.block[block.length].node) ?? 'nested'); continue; }
-    if (location.node) nodes.set(location.node, severity === 'error' ? 'error' : nodes.get(location.node) ?? 'warning');
-    if (location.edge !== undefined) edges.add(location.edge);
+    for (let index = 0; index < location.block.length; index++) nodes.set(viewId(location.block.slice(0, index), 'node', location.block[index].node), 'nested');
+    if (location.node) nodes.set(viewId(location.block, 'node', location.node), severity);
+    if (location.edge !== undefined) edges.add(viewId(location.block, 'edge', String(location.edge)));
   }
   return { nodes, edges };
 }
@@ -50,8 +49,17 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   const { target, document, base, block, check, generation, notice } = context;
   const catalog = useSyncExternalStore(authority.subscribe, authority.getCatalog);
   const [selection, choose] = useState<Selection>();
+  const [fieldFocus, setFieldFocus] = useState<{ address?: FieldAddress; field?: string; epoch: number }>();
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const toggleContainer = useCallback((path: BlockPath, id: string) => setCollapsed(current => {
+    const next = new Set(current), key = viewId(path, 'node', id);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  }), []);
   // Another selection ends the current edit session (one undo step each).
-  const setSelection = useCallback((next: Selection | ((current: Selection) => Selection)) => {
+  const setSelection = useCallback((next: Selection) => {
+    if (next && 'path' in next && next.path) editor.send({ type: 'NAVIGATE', block: next.path });
+    setFieldFocus(undefined);
     choose(next);
     editor.send({ type: 'BOUNDARY' });
   }, [editor]);
@@ -68,27 +76,44 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   const checking = snapshot.matches({ ready: 'checking' });
   const key = useMemo(() => viewKey(target.endpoint, scopeKey(target.scope), target.id), [target]);
   const edit = useCallback((apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => editor.send({ type: 'EDIT', apply, coalesce, array }), [editor]);
-  // The inspector follows a node the editor accepted renaming.
-  const onRenamed = useCallback((from: string, to: string) => {
-    choose(current => current?.kind === 'node' && current.id === from ? { kind: 'node', id: to } : current);
-  }, []);
-  const navigate = useCallback((next: BlockPath) => { editor.send({ type: 'NAVIGATE', block: next }); setSelection(undefined); }, [editor]);
+  const duplicate = useCallback((path: BlockPath, ids: readonly string[], notes: readonly string[]): PastedFragment | undefined => {
+    let result: PastedFragment | undefined;
+    edit(current => {
+      if (Object.values(editor.getSnapshot().context.drafts).some(draft => fragmentOwnsField(path, ids, notes, draft.address))) throw new CommandRejected('pending_input');
+      // Accepted selection reveals a private owner. Measure that same scene,
+      // retaining every unrelated collapsed container and leaving rejected edits alone.
+      const visible = new Set(collapsed);
+      for (let index = 0; index < path.length; index++) visible.delete(viewId(path.slice(0, index), 'node', path[index].node));
+      const positions = new Map(projectScene(current, visible).nodes.filter(node => node.data.view === 'node' && sameBlockPath(node.data.path, path)).map(node => [node.data.local, node.position]));
+      result = duplicateFragment(current, path, ids, notes, positions);
+      return result.document;
+    });
+    if (!result || editor.getSnapshot().context.document !== result.document) return;
+    const first = result.nodes[0] ? { kind: 'node' as const, id: result.nodes[0], path } : result.notes[0] ? { kind: 'note' as const, id: result.notes[0], path } : undefined;
+    if (first) setSelection(first);
+    return result;
+  }, [edit, editor, setSelection, collapsed]);
+  const currentState = useCallback(() => editor.getSnapshot().context, [editor]);
+  const navigate = useCallback((next: BlockPath) => setSelection({ kind: 'start', path: next }), [setSelection]);
   // Save and Check act on what the author sees: every shown field's valid
   // unapplied text is applied first; text that cannot be applied refuses.
   const runCheck = useCallback((explain = false) => { commits.flush(); editor.send({ type: 'CHECK', explain, context: target.scope.kind === 'user' ? dependencyContext : undefined }); }, [editor, commits, target.scope.kind, dependencyContext]);
   const save = useCallback(() => { commits.flush(); editor.send({ type: 'SAVE' }); }, [editor, commits]);
-  const move = useCallback((positions: NodePositions) => editor.send({ type: 'MOVE', path: editor.getSnapshot().context.block, positions }), [editor]);
   // Accepted view changes are delivered in order, including several renames
   // or undo steps in one render batch; no snapshot effect drops an intermediate
   // identity change or replays an old position restoration on remount.
   const [viewEpoch, setViewEpoch] = useState(0);
   useEffect(() => {
     const renamed = editor.on('view.rename', ({ rename }) => {
-      renameViews(key, rename);
-      if (rename.from.path.length === 0 && sameBlockPath(block, rename.from.block)) {
-        choose(current => current?.kind === 'node' && current.id === rename.from.node ? { ...current, id: rename.to.node! } : current);
+      if (rename.from.path.length === 0 || rename.from.path[0] === 'branches') {
+        choose(current => {
+          if (!current || !('path' in current)) return current;
+          const name = rename.to.path.length ? (rename.to.path.at(-1) as { key: string }).key : rename.to.node!;
+          const address = renameAddress({ block: current.path ?? block, node: current.kind === 'node' ? current.id : undefined, path: [], role: 'value' }, rename.from, name);
+          return current.kind === 'node' ? { ...current, path: address.block, id: address.node! } : { ...current, path: address.block };
+        });
+        setViewEpoch(value => value + 1);
       }
-      setViewEpoch(value => value + 1);
     });
     return () => { renamed.unsubscribe(); };
   }, [editor, key, block]);
@@ -102,8 +127,12 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   // A selection that no longer exists in the edited block closes.
   const owner = document ? blockAt(document, block) : undefined;
   useEffect(() => {
-    if (selection?.kind === 'node' && !(owner && nodeAt(owner, selection.id))) choose(current => current?.kind === 'node' && !(owner && nodeAt(owner, current.id)) ? undefined : current);
-  }, [owner, selection]);
+    if (selection?.kind === 'node' && document) {
+      const selectedBlock = blockAt(document, selection.path ?? block);
+      if (!selectedBlock || !nodeAt(selectedBlock, selection.id)) choose(undefined);
+    }
+    if (selection?.kind === 'note' && !document?.editor?.notes?.some(note => note.id === selection.id)) choose(undefined);
+  }, [document, block, selection]);
 
   const located = useMemo(() => {
     const items: { location: DiagnosticLocation; severity: 'error' | 'warning' }[] = [];
@@ -114,18 +143,20 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
     if (notice?.kind === 'incomplete') for (const item of notice.identities) items.push({ location: { block: item.block, node: item.node, field: item.field }, severity: 'error' });
     return items;
   }, [check, generation, notice, dependencyContext, target.scope.kind]);
-  const problems = useMemo(() => problemsIn(block, located), [block, located]);
+  const problems = useMemo(() => problemsIn(located), [located]);
   const go = useCallback((location: DiagnosticLocation) => {
     navigate(location.block);
-    setSelection(location.node ? { kind: 'node', id: location.node } : location.edge !== undefined ? { kind: 'edge', index: location.edge } : { kind: 'block' });
+    setSelection(location.node ? { kind: 'node', id: location.node, path: location.block } : location.edge !== undefined ? { kind: 'edge', index: location.edge, path: location.block } : { kind: 'block', path: location.block });
+    setFieldFocus(current => ({ field: location.field, epoch: (current?.epoch ?? 0) + 1 }));
   }, [navigate]);
-  /** Show the field holding unapplied text, on the tab it is on. */
+  /** Expand the owning view and disclosure, then focus its exact draft field. */
   const show = useCallback((address: FieldAddress) => {
     const current = editor.getSnapshot().context.document;
     const container = current && blockAt(current, address.block);
     const node = container && address.node !== undefined ? nodeAt(container, address.node) : undefined;
     navigate(address.block);
-    setSelection(node ? { kind: 'node', id: address.node!, tab: tabOfField(node.type, address) } : { kind: 'block' });
+    setSelection(address.domain?.kind === 'note' ? { kind: 'note', id: address.domain.id, path: address.block } : node ? { kind: 'node', id: address.node!, path: address.block } : { kind: 'block', path: address.block });
+    setFieldFocus(current => ({ address, epoch: (current?.epoch ?? 0) + 1 }));
   }, [editor, navigate]);
 
   const blockLabel = block.length ? block.map(step => `${step.node} / ${step.branch ?? 'body'}`).join(' › ') : tx('workflows:canvas.root');
@@ -137,10 +168,10 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
-      if (!mod || (event.target as Element | null)?.closest?.('[role="dialog"], [role="alertdialog"]')) return;
+      if (!mod || event.isComposing || (event.target as Element | null)?.closest?.('[role="dialog"], [role="alertdialog"]')) return;
       const key = event.key.toLowerCase();
       if (key === 's') { event.preventDefault(); save(); return; }
-      if (editableTarget(event.target)) return;
+      if (keyboardOwned(event.target)) return;
       if (key === 'z') { event.preventDefault(); editor.send({ type: event.shiftKey ? 'REDO' : 'UNDO' }); }
       else if (key === 'y') { event.preventDefault(); editor.send({ type: 'REDO' }); }
     };
@@ -172,11 +203,11 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
           </span>)}
           {block.length === 0 && <><span aria-hidden>/</span><span className={css.crumbFile}>{target.id}</span></>}
         </nav>
-        <Canvas document={document} key={`${blockKey(block)}:${layoutEpoch}`} block={owner} path={block} blockKey={blockKey(block)} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection}
-          problems={problems} edit={edit} onMove={move} editable={editable && !saving} blockLabel={blockLabel} />
+        <Canvas document={document} path={block} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection} currentState={currentState} organizeEpoch={layoutEpoch} collapsed={collapsed} setCollapsed={setCollapsed}
+          problems={problems} edit={edit} editable={editable && !saving} blockLabel={blockLabel} drafts={context.drafts} onDuplicate={duplicate} />
       </div>
     </ReactFlowProvider>
-    {selection && <DraftOwner.Provider value={owner$}><Inspector port={context.port} document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} onRenamed={onRenamed} navigate={navigate}
+    {selection && <DraftOwner.Provider value={owner$}><Inspector port={context.port} document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} navigate={navigate} collapsed={collapsed} toggleContainer={toggleContainer} focus={fieldFocus} onDuplicate={duplicate}
       vocabulary={base.source.vocabulary} check={check} generation={generation} rejection={context.rejection ? tx(`workflows:rejection.${context.rejection}`) : undefined}
       checks={<CheckResults check={check} generation={generation} global={target.scope.kind === 'user'} workspaces={workspaces} context={dependencyContext} setContext={setDependencyContext} run={() => runCheck()} go={go} />} /></DraftOwner.Provider>}
   </div>;
@@ -195,19 +226,17 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
       </div>
       <div className={css.actions}>
         <span className={css.saved} role="status"><b className={clsx(css.dot, dirty && css.dotDirty)} />{dirty ? tx('workflows:editor.dirty') : tx('workflows:editor.clean')}</span>
+        <button type="button" className={css.iconButton} aria-label={tx('workflows:editor.undo')} title={tx('workflows:editor.undo')} disabled={!context.past.length} onClick={() => editor.send({ type: 'UNDO' })}><IconUndo /></button>
+        <button type="button" className={css.iconButton} aria-label={tx('workflows:editor.redo')} title={tx('workflows:editor.redo')} disabled={!context.future.length} onClick={() => editor.send({ type: 'REDO' })}><IconRedo /></button>
         <Button variant="outline" size="sm" icon={<IconCheckOutline16 />} disabled={!editable || checking} onClick={() => { runCheck(); setSelection({ kind: 'check' }); }}>{checking ? tx('workflows:editor.checking') : tx('workflows:editor.check')}</Button>
         <Button variant="outline" size="sm" icon={<IconExplain />} disabled={!editable} onClick={() => { runCheck(true); setExplaining(true); }}>{tx('workflows:editor.explain')}</Button>
         <Button variant="primary" size="sm" icon={<IconFile />} disabled={!editable || saving || !dirty || !!context.uncertain} onClick={save}>{saving ? tx('workflows:editor.saving') : tx('workflows:editor.save')}</Button>
         <Menu open={menu} onClose={() => setMenu(false)} align="end" autoFocus onSelect={id => {
           setMenu(false);
-          if (id === 'undo') editor.send({ type: 'UNDO' });
-          else if (id === 'redo') editor.send({ type: 'REDO' });
-          else if (id === 'settings') setSelection({ kind: 'block' });
-          else if (id === 'layout') { edit(resetPositions); setLayoutEpoch(value => value + 1); }
+          if (id === 'settings') setSelection({ kind: 'block' });
+          else if (id === 'layout') setLayoutEpoch(value => value + 1);
           else if (id === 'reload') { if (dirty) setReloading(true); else editor.send({ type: 'RELOAD' }); }
         }} items={[
-          { id: 'undo', label: tx('workflows:editor.undo'), icon: <IconUndo />, disabled: !context.past.length },
-          { id: 'redo', label: tx('workflows:editor.redo'), icon: <IconRedo />, disabled: !context.future.length },
           { id: 'settings', label: tx('workflows:editor.workflow-settings'), disabled: !editable },
           { id: 'layout', label: tx('workflows:editor.reset-layout') },
           { type: 'separator', id: 'separator' },

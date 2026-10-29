@@ -3,13 +3,14 @@ import { useTranslation } from '../../../../../locale/react';
 import { setEntry, setWorkflow } from '../../../document/commands';
 import { blockField, workflowField } from '../../../document/fields';
 import { blockAt, nodeAt, type BlockPath, type WorkflowDocument } from '../../../document/model';
-import { JsonField, Section, SelectField, TextField } from './fields';
+import { Section, SelectField, TextField } from './fields';
+import { SchemaEditor } from './SchemaEditor';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
 /** The Workflow's own fields (root only) and one block's contract: entry,
  * input schema and output schema. */
-export function BlockForm({ document, block, edit }: { document: WorkflowDocument; block: BlockPath; edit: Edit }) {
+export function BlockForm({ document, block, edit, start = false }: { document: WorkflowDocument; block: BlockPath; edit: Edit; start?: boolean }) {
   const tx = useTranslation();
   const owner = blockAt(document, block)!;
   const timeout = document.timeout_ms ?? '';
@@ -24,8 +25,8 @@ export function BlockForm({ document, block, edit }: { document: WorkflowDocumen
       <SelectField label={tx('workflows:inspector.block-entry')} value={nodeAt(owner, owner.entry) ? owner.entry : ''}
         options={[...(nodeAt(owner, owner.entry) ? [] : [{ value: '', label: owner.entry || '—' }]), ...Object.keys(owner.nodes).sort().map(id => ({ value: id, label: id }))]}
         onChange={id => { if (id) edit(current => setEntry(current, block, id)); }} />
-      <JsonField label={tx('workflows:inspector.block-input')} hint={tx('workflows:inspector.schema-hint')} value={owner.input} rows={8} address={blockField(block, ['input'])} />
-      <JsonField label={tx('workflows:inspector.block-output')} hint={tx('workflows:inspector.schema-hint')} value={owner.output} rows={8} address={blockField(block, ['output'])} />
+      <SchemaEditor label={tx('workflows:inspector.block-input')} value={owner.input} address={blockField(block, ['input'])} edit={edit} />
+      {!start && <SchemaEditor label={tx('workflows:inspector.block-output')} value={owner.output} address={blockField(block, ['output'])} edit={edit} />}
     </Section>
   </>;
 }

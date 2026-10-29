@@ -9,7 +9,8 @@ import {
   blockAt, blockKey, childSteps, existingPath, nativeBlockPath, sameDocument, ROOT, type BlockPath, type WorkflowDocument,
 } from '../src/app/workflows/document/model';
 import { blockField, encodeField, fieldText, nodeField, renameAddress, setField } from '../src/app/workflows/document/fields';
-import { after, defaultLayout, layout } from '../src/app/workflows/ui/editor/layout';
+import { projectScene } from '../src/app/workflows/ui/editor/scene';
+import { viewId } from '../src/app/workflows/ui/editor/selection';
 import { edgePort } from '../src/app/workflows/document/ports';
 import { blockReferences } from '../src/app/workflows/document/references';
 import { readJson } from '../shared/json-numbers';
@@ -209,22 +210,15 @@ describe('authored maps and the browser number contract', () => {
     for (const text of ['9007199254740992', '-9007199254740992', '1.0', '1e3', 'NaN', '1e400']) expect(readJson(text).ok, text).toBe(false);
   });
 
-  it('places a node named like an inherited property from its own cache entry or its default', () => {
+  it('projects inherited-looking identities from own native entries with finite geometry', () => {
     const document = addNode(example('parallel_review'), ROOT, 'return', 'constructor');
-    const block = blockAt(document, ROOT)!;
-    // A cache written before the node existed holds other nodes only.
-    const stored = { ready: { x: 900, y: 40 } };
-    const positions = layout(block, stored);
-    expect(positions.ready).toEqual({ x: 900, y: 40 });
-    for (const id of ['constructor', ...Object.keys(block.nodes)]) {
-      expect(Object.hasOwn(positions, id), id).toBe(true);
-      expect(Number.isFinite(positions[id].x) && Number.isFinite(positions[id].y), id).toBe(true);
+    const scene = projectScene(document);
+    const own = scene.nodes.find(node => node.id === viewId([], 'node', 'constructor'));
+    expect(own?.data.local).toBe('constructor');
+    for (const node of scene.nodes) {
+      expect(Number.isFinite(node.position.x) && Number.isFinite(node.position.y)).toBe(true);
     }
-    const own = positions['constructor' as string];
-    expect(own).toEqual(defaultLayout(block)['constructor' as string]);
-    const next = after(block, positions, 'constructor', 'next');
-    expect(next.x).toBe(own.x + 320);
-    expect(Number.isFinite(next.y)).toBe(true);
+    expect(new Set(scene.nodes.map(node => node.id)).size).toBe(scene.nodes.length);
   });
 });
 

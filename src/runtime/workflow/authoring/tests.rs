@@ -3,6 +3,21 @@ use WorkflowReferenceAvailability::{Available, Pending, Unavailable};
 use WorkflowReferenceCompatibility::{Compatible, Incompatible, Unknown};
 use serde_json::json;
 
+// Metadata-free fixtures exercise the same production analysis entry point.
+fn analyze(
+    definition: &WorkflowDefinition,
+    query: Option<&WorkflowAnalysisQuery>,
+) -> Result<WorkflowCandidateAnalysis, &'static str> {
+    super::analyze(definition, query, &BTreeSet::new())
+}
+fn analyze_with_schema_budget(
+    definition: &WorkflowDefinition,
+    query: Option<&WorkflowAnalysisQuery>,
+    budget: SchemaBudget,
+) -> Result<WorkflowCandidateAnalysis, &'static str> {
+    super::analyze_with_schema_budget(definition, query, &BTreeSet::new(), budget)
+}
+
 fn object(properties: Value, required: &[&str]) -> Value {
     field(
         json!({"type":"object", "required":required, "additionalProperties":false}),

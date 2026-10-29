@@ -1,0 +1,32 @@
+{
+  "description": "A successful schema rename must never switch a downstream read to an unrelated extra property",
+  "block": {
+    "input": { "type": "object", "properties": {}, "additionalProperties": false },
+    "output": { "type": "object", "properties": { "value": { "type": "string" } }, "required": ["value"], "additionalProperties": false },
+    "entry": "fork",
+    "nodes": {
+      "fork": {
+        "type": "parallel",
+        "branches": {
+          "main": {
+            "input": { "type": "object", "fields": {} },
+            "block": {
+              "input": { "type": "object", "properties": {}, "additionalProperties": false },
+              "output": { "type": "object", "properties": { "before": { "type": "string" } }, "required": ["before"], "additionalProperties": true },
+              "entry": "done",
+              "nodes": {
+                "done": {
+                  "type": "return",
+                  "output": { "type": "object", "fields": { "before": { "type": "literal", "value": "wanted" }, "after": { "type": "literal", "value": "unrelated" } } }
+                }
+              },
+              "edges": []
+            }
+          }
+        }
+      },
+      "done": { "type": "return", "output": { "type": "object", "fields": { "value": { "type": "reference", "path": ["fork", "main", "before"] } } } }
+    },
+    "edges": [{ "from": "fork", "to": "done" }]
+  }
+}

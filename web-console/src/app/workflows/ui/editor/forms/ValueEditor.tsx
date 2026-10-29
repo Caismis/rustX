@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../../locale/react';
 import { encodeField, fieldValue, setField, updateField, within, type ArrayEdit, type FieldAddress } from '../../../document/fields';
@@ -50,7 +49,7 @@ export function ValueEditor({ label, address, value, edit }: { label: string; ad
       {VALUE_KINDS.map(kind => <button key={kind} type="button" role="radio" aria-checked={value.type === kind} className={clsx(css.chip, value.type === kind && css.chipActive)}
         onClick={() => { if (value.type !== kind) edit(document => setField(document, address, template(kind))); }}>{tx(`workflows:value.${kind}`)}</button>)}
     </div>
-    {value.type === 'reference' && <><ReferencePicker address={address} path={value.path} edit={edit} /><PathEditor address={within(address, ['path'])} path={value.path} edit={edit} /></>}
+    {value.type === 'reference' && <><ReferencePicker address={address} path={value.path} edit={edit} /><details className={css.advanced}><summary>{tx('workflows:value.manual')}</summary><PathEditor address={within(address, ['path'])} path={value.path} edit={edit} /></details></>}
     {value.type === 'literal' && <JsonField label={tx('workflows:value.literal-json')} value={value.value} rows={3} address={within(address, ['value'])} />}
     {value.type === 'object' && <div className={css.nested}>
       {Object.entries(value.fields).map(([key, entry]) => <div key={key} className={css.nestedRow}>
@@ -58,7 +57,7 @@ export function ValueEditor({ label, address, value, edit }: { label: string; ad
         <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: key })}
           onClick={() => change(['object'], current => ({ ...current, fields: Object.fromEntries(Object.entries(current.fields).filter(([name]) => name !== key)) }))}>×</button>
       </div>)}
-      <AddKey existing={Object.keys(value.fields)} onAdd={key => change(['object'], current => Object.hasOwn(current.fields, key) ? current : { ...current, fields: { ...current.fields, [key]: template('reference') } })} />
+      <AddKey existing={Object.keys(value.fields)} address={address} add={(document, key) => updateKind<'object', Value>(document, address, ['object'], current => Object.hasOwn(current.fields, key) ? current : { ...current, fields: { ...current.fields, [key]: template('reference') } })} />
     </div>}
     {value.type === 'array' && <div className={css.nested}>
       {value.items.map((item, index) => <div key={index} className={css.nestedRow}>
@@ -94,21 +93,24 @@ function PathEditor({ address, path, edit }: { address: FieldAddress; path: read
         size={Math.max(4, component.length)} onChange={event => { const text = event.target.value; set(current => current.map((value, at) => at === index ? text : value), encodeField(within(address, [index]))); }} />
       <button type="button" className={css.pathRemove} aria-label={tx('workflows:inspector.remove', { p0: component })} onClick={() => set(current => current.filter((_, at) => at !== index))}>×</button>
     </span>)}
-    <input className={clsx(css.input, css.mono, css.pathInput)} value={adding.text} placeholder="+" aria-label={tx('workflows:value.path-add')} aria-invalid={!!adding.error || undefined} spellCheck={false} size={6}
-      onChange={event => adding.change(event.target.value)} onBlur={adding.apply} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); adding.apply(); } else if (event.key === 'Escape') adding.reset(); }} />
+    <input data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(css.input, css.mono, css.pathInput)} value={adding.text} placeholder="+" aria-label={tx('workflows:value.path-add')} aria-invalid={!!adding.error || undefined} spellCheck={false} size={6}
+      onChange={event => adding.change(event.target.value)} onBlur={adding.apply} onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); adding.apply(); } else if (event.key === 'Escape') adding.reset(); }} />
     <small className={css.hint}>{tx('workflows:value.path-hint')}</small>
   </div>;
 }
 
-export function AddKey({ existing, onAdd, label, action }: { existing: readonly string[]; onAdd: (key: string) => void; label?: string; action?: string }) {
+export function AddKey({ existing, address, add, label, action }: { existing: readonly string[]; address: FieldAddress; add: (document: WorkflowDocument, key: string) => WorkflowDocument; label?: string; action?: string }) {
   const tx = useTranslation();
-  const [key, setKey] = useState('');
-  const valid = key !== '' && !existing.includes(key);
-  const add = () => { if (valid) { onAdd(key); setKey(''); } };
+  const field = useFieldDraft({ address: { ...address, role: 'append' }, canonical: '', command: (document, key) => {
+    if (!key) return { status: 'unchanged' };
+    if (existing.includes(key)) return { status: 'rejected', error: { kind: 'rejected', code: 'duplicate_identifier' } };
+    return { status: 'applied', document: add(document, key) };
+  } });
+  const valid = field.text !== '' && !existing.includes(field.text);
   return <div className={css.inline}>
-    <input className={clsx(css.input, css.mono)} value={key} placeholder={label ?? tx('workflows:inspector.field-key')} aria-label={label ?? tx('workflows:inspector.field-key')} spellCheck={false}
-      onChange={event => setKey(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); add(); } }} />
-    <button type="button" className={css.smallButton} disabled={!valid} onClick={add}>{action ?? tx('workflows:inspector.add-field')}</button>
+    <input data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(css.input, css.mono)} value={field.text} placeholder={label ?? tx('workflows:inspector.field-key')} aria-label={label ?? tx('workflows:inspector.field-key')} spellCheck={false} aria-invalid={!!field.error || undefined}
+      onChange={event => field.change(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); field.apply(); } }} />
+    <button type="button" className={css.smallButton} disabled={!valid} onClick={field.apply}>{action ?? tx('workflows:inspector.add-field')}</button>
   </div>;
 }
 

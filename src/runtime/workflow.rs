@@ -4594,6 +4594,228 @@ chat_reasoning_replay = "omit"
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    async fn editor_authored_nested_file_executes_keyed_results_and_both_loop_exits() {
+        let source = include_str!("../../tests/fixtures/workflow/visual-authoring.json");
+        let document: crate::workflow_file::WorkflowFileDocument =
+            serde_json::from_str(source).expect("editor file document");
+        document.canonical_bytes().expect("bounded native metadata");
+        for satisfied in [true, false] {
+            let plane = workflow_test_plane(1);
+            let runtime = workflow_runtime(&plane);
+            let native = runtime.read_model.clone();
+            let mut definition = document.definition.clone();
+            let WorkflowNodeDefinition::Loop { until, .. } =
+                definition.block.nodes.get_mut("repeat").expect("Loop")
+            else {
+                panic!("editor fixture owns a Loop");
+            };
+            **until = WorkflowPredicate::Boolean {
+                value: WorkflowValue::Literal {
+                    value: json!(satisfied),
+                },
+            };
+            let program = Arc::new(compile_test(definition).expect("editor-authored program"));
+            let (_, cancellation) = workflow_cancellation();
+            let result = runtime
+                .run_test_foreground(
+                    program,
+                    ToolCallId::new("editor-nested"),
+                    workflow_test_context(&plane),
+                    json!({"message": "verified"}),
+                    cancellation,
+                )
+                .await
+                .expect("native execution settles");
+            assert_eq!(
+                result,
+                json!({
+                    "parallel": {"left": {"echo": "verified"}, "right": {"echo": "verified"}},
+                    "loop": {"status": if satisfied {"satisfied"} else {"exhausted"},
+                        "iterations": if satisfied {1} else {3}, "result": {"echo": "verified"}}
+                })
+            );
+            assert!(plane.registry.all_snapshots().is_empty());
+            let snapshot = native.snapshot();
+            assert!(
+                snapshot.runs[0]
+                    .instances
+                    .iter()
+                    .all(|node| node.child.is_none())
+            );
+            assert!(
+                !serde_json::to_string(&snapshot)
+                    .unwrap()
+                    .contains("Author-only")
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn editor_schema_renames_preserve_native_finite_input_contracts() {
+        let cases: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/workflow/schema-rename.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let empty =
+                json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
+            let definition: WorkflowDefinition = serde_json::from_value(json!({"description":"Renamed finite contract","block":{
+                "input":case["after"],"output":empty,"entry":"done","nodes":{"done":{"type":"return","output":{"type":"object","fields":{}}}},"edges":[]
+            }})).unwrap();
+            let program = Arc::new(compile_test(definition).expect("renamed contract compiles"));
+            let plane = workflow_test_plane(1);
+            let runtime = workflow_runtime(&plane);
+            let (_, cancellation) = workflow_cancellation();
+            assert_eq!(
+                runtime
+                    .run_test_foreground(
+                        program.clone(),
+                        ToolCallId::new("renamed-input"),
+                        workflow_test_context(&plane),
+                        case["input"].clone(),
+                        cancellation
+                    )
+                    .await
+                    .unwrap(),
+                json!({}),
+                "{}",
+                case["name"]
+            );
+            let (_, cancellation) = workflow_cancellation();
+            assert!(
+                runtime
+                    .run_test_foreground(
+                        program,
+                        ToolCallId::new("old-input"),
+                        workflow_test_context(&plane),
+                        case["oldInput"].clone(),
+                        cancellation
+                    )
+                    .await
+                    .is_err(),
+                "old key rejected: {}",
+                case["name"]
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn editor_rejected_schema_renames_keep_destination_only_finite_inputs_valid() {
+        let cases: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/workflow/schema-rename-collisions.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let empty =
+                json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
+            let definition: WorkflowDefinition = serde_json::from_value(json!({"description":"Preserved finite contract","block":{
+                "input":case["schema"],"output":empty,"entry":"done","nodes":{"done":{"type":"return","output":{"type":"object","fields":{}}}},"edges":[]
+            }})).unwrap();
+            let program = Arc::new(compile_test(definition).expect("preserved contract compiles"));
+            let plane = workflow_test_plane(1);
+            let runtime = workflow_runtime(&plane);
+            let (_, cancellation) = workflow_cancellation();
+            assert_eq!(
+                runtime
+                    .run_test_foreground(
+                        program,
+                        ToolCallId::new("preserved-input"),
+                        workflow_test_context(&plane),
+                        case["input"].clone(),
+                        cancellation
+                    )
+                    .await
+                    .unwrap(),
+                json!({}),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn editor_construction_collision_fixture_keeps_data_and_legal_args_branches() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/workflow/schema-construction-collision.json"
+        ))
+        .unwrap();
+        for form in ["object", "literal", "reference"] {
+            for branch in ["main", "args"] {
+                for rebound in [false, true] {
+                    let mut file = fixture.clone();
+                    let branches = file["block"]["nodes"]["fork"]["branches"]
+                        .as_object_mut()
+                        .unwrap();
+                    let mut owned = branches.remove("main").unwrap();
+                    if form == "literal" {
+                        owned["block"]["nodes"]["done"]["output"] = json!({"type":"literal","value":{"before":"wanted","after":"unrelated"}});
+                    } else if form == "reference" {
+                        owned["input"] = owned["block"]["nodes"]["done"]["output"].clone();
+                        owned["block"]["input"] = json!({"type":"object","properties":{"before":{"type":"string"},"after":{"type":"string"}},"required":["before","after"],"additionalProperties":false});
+                        owned["block"]["nodes"]["done"]["output"] =
+                            json!({"type":"reference","path":["args"]});
+                    }
+                    if rebound {
+                        let contract = &mut owned["block"]["output"];
+                        let properties = contract["properties"].as_object_mut().unwrap();
+                        let schema = properties.remove("before").unwrap();
+                        properties.insert("after".into(), schema);
+                        contract["required"] = json!(["after"]);
+                    }
+                    branches.insert(branch.into(), owned);
+                    file["block"]["nodes"]["done"]["output"]["fields"]["value"]["path"] =
+                        json!(["fork", branch, if rebound { "after" } else { "before" }]);
+                    // Presentation addresses retain orphan local keys, including
+                    // args; only actual executable node IDs reserve that word.
+                    let private_block = json!([{"node":"fork","branch":branch}]);
+                    let orphan_block =
+                        json!([{"node":"fork","branch":branch},{"node":"args","branch":"args"}]);
+                    file["editor"] = json!({
+                        "nodes":[{"address":{"block":private_block,"node":"args"},"title":"Retained orphan"}],
+                        "entries":[{"block":orphan_block,"position":{"x":24,"y":80}}],
+                        "branches":[{"address":{"block":private_block,"node":"args"},"branch":"args","position":{"x":24,"y":72},"dimensions":{"width":640,"height":256}}],
+                        "notes":[{"id":"orphan","block":orphan_block,"text":"Retained","theme":"blue","position":{"x":24,"y":80},"dimensions":{"width":200,"height":100}}],
+                        "orders":[{"target":{"kind":"block_output","block":orphan_block,"path":[]},"fields":["keep"]}]
+                    });
+                    let document: crate::workflow_file::WorkflowFileDocument =
+                        serde_json::from_value(file).unwrap();
+                    document
+                        .canonical_bytes()
+                        .expect("legal args branch and orphan metadata");
+                    // Both programs pass native Check: open output contracts
+                    // cannot detect rebinding to unrelated extra data. The UI
+                    // must preserve the wanted program by rejecting that edit.
+                    let program = Arc::new(
+                        compile_test(document.definition).expect("valid open object contract"),
+                    );
+                    let plane = workflow_test_plane(1);
+                    let runtime = workflow_runtime(&plane);
+                    let (_, cancellation) = workflow_cancellation();
+                    assert_eq!(
+                        runtime
+                            .run_test_foreground(
+                                program,
+                                ToolCallId::new("construction-collision"),
+                                workflow_test_context(&plane),
+                                json!({}),
+                                cancellation,
+                            )
+                            .await
+                            .unwrap(),
+                        json!({"value": if rebound {"unrelated"} else {"wanted"}}),
+                        "form {form}, branch {branch}, rebound {rebound}"
+                    );
+                    assert!(plane.registry.all_snapshots().is_empty());
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
     fn workflow_runtime(plane: &WorkflowTestPlane) -> WorkflowRuntime {
         WorkflowRuntime::new(
             plane.registry.clone(),

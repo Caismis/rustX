@@ -140,7 +140,14 @@ fn annotations_are_bounded_and_do_not_change_structural_compatibility() {
         document.definition.clone(),
     )
     .unwrap();
-    assert!(analyze(&document.definition, None).is_ok());
+    assert!(
+        analyze(
+            &document.definition,
+            None,
+            &std::collections::BTreeSet::default()
+        )
+        .is_ok()
+    );
     document.block.input["description"] = json!("界".repeat(1366));
     assert!(
         WorkflowProgram::compile(WorkflowId::parse("review").unwrap(), document.definition)

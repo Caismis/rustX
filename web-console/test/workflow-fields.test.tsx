@@ -1,3 +1,4 @@
+import { showSchemaJson } from './workflow-editor-actions';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createActor } from 'xstate';
@@ -35,7 +36,7 @@ async function openBlockSettings() {
   await act(async () => { await Promise.resolve(); });
   render(<WorkflowEditor surface={surface} editor={editor} authority={authority} scopeLabel="Global" />);
   fireEvent.click(screen.getByRole('button', { name: 'Block settings' }));
-  const field = screen.getByLabelText('Input schema') as HTMLTextAreaElement;
+  const field = showSchemaJson('Input schema');
   field.focus();
   return { editor, field };
 }

@@ -4591,3 +4591,30 @@ states that only the latest trigger is retained.
 becomes a direct dependency for wall-time/DST conversion. No external date
 service or client-owned timer execution is introduced. New task starts an Agent
 conversation; completed native creates produce a task card after the response.
+
+## Workflow visual editor (Issue #511)
+
+Read-only interaction study: langgenius/dify at
+`80265fcfe110f0aea056fcb3566d322986014b78`, checked out outside rustX. Exact
+inspected source files, adopted interactions and exclusions are recorded in
+[the visual editor reference table](../docs/workflow-visual-editor.md#reference-and-design-decisions).
+Dify's modified Apache terms, frontend branding/multitenant restrictions and
+appearance patent statement were inspected; no Dify source, CSS, assets,
+branding or runtime is copied, vendored or used as a build dependency. Existing
+Harness-derived primitives and their notices remain authoritative for the shell.
+The image-generated concept is private design exploration, not upstream artwork
+or a shipped asset. Real browser captures are repository-authored test evidence.
+
+The only new production dependency is **elkjs 0.12.1**, exact-pinned in
+`package.json`/`pnpm-lock.yaml`, unmodified and dynamically imported by explicit
+Organize. Its published package declares `EPL-2.0 OR GPL-3.0-or-later`; this
+integration elects **EPL-2.0**. The tarball's `LICENSE.md` and copyright headers
+were inspected before adding it. The generated production notice includes the
+complete EPL-2.0 text and package attribution. Corresponding unmodified source:
+[kieler/elkjs at `624ae90aa37110033a8af59c5ccbb292708b4317`](https://github.com/kieler/elkjs/tree/624ae90aa37110033a8af59c5ccbb292708b4317),
+the publisher's `gitHead`; release package `elkjs-0.12.1.tgz`, SHA-512 integrity
+`sha512-IhMYKHE4S2vtx0QrhBP3lYOIKDeIiJXBrdq9MGYkuB8ZHqhrBnHNfSUndjXFewrX1CPK8chwq+2NA0K0hliYuw==`.
+The exact release is the pnpm minimum-release-age exclusion, not a range or an
+unrestricted package exemption. `scripts/notices.ts --write` regenerates the
+production closure (309 packages); `check:provenance` and the built-artifact
+inspection verify it. No upstream source modifications or patches are applied.

@@ -1,5 +1,7 @@
 import { CommandRejected, replaceNode } from './commands';
 import { blockAt, nodeAt, sameBlockPath, updateBlock, type BlockPath, type WorkflowDocument } from './model';
+import { nodePresentation, putNote, setNodePresentation } from './geometry';
+import type { WorkflowNodePresentation, WorkflowNote } from '../../../../../protocol/app-server/v62';
 
 /** One component of a field path inside a node or block. A string is a
  * structural property of the native authoring type, `{ key }` an authored
@@ -10,8 +12,9 @@ export type FieldStep = string | number | { readonly key: string };
 
 /** What a field's text edits at its location: the JSON `value` there, the
  * authored `key` the path ends in (the node id itself when the path is
- * empty), or one component to `append` to the path array there. */
-export type FieldRole = 'value' | 'key' | 'append';
+ * empty), one component to `append` to the collection there, or an explicitly
+ * `optional` field that may be absent. */
+export type FieldRole = 'value' | 'key' | 'append' | 'optional';
 
 /** The editor-internal identity of one editable field: its lexical block,
  * its owning node (none for a block's own contract) and its path. It owns
@@ -22,6 +25,7 @@ export interface FieldAddress {
   readonly node?: string;
   readonly path: readonly FieldStep[];
   readonly role: FieldRole;
+  readonly domain?: { readonly kind: 'node_presentation' } | { readonly kind: 'note'; readonly id: string };
 }
 
 export function nodeField(block: BlockPath, node: string, path: readonly FieldStep[] = [], role: FieldRole = 'value'): FieldAddress {
@@ -40,7 +44,9 @@ export function within(address: FieldAddress, steps: readonly FieldStep[], role:
 /** The canonical key of an address: a JSON tuple of its components, so
  * `fields → "a.fields.b"` and `fields → a → fields → b` never collide. */
 export function encodeField(address: FieldAddress): string {
-  return JSON.stringify([address.block.map(step => step.branch === undefined ? [step.node] : [step.node, step.branch]), address.node ?? null, address.path, address.role]);
+  const parts: unknown[] = [address.block.map(step => step.branch === undefined ? [step.node] : [step.node, step.branch]), address.node ?? null, address.path, address.role];
+  if (address.domain) parts.push(address.domain);
+  return JSON.stringify(parts);
 }
 
 /** The identity of one of the Workflow's own fields (description,
@@ -61,6 +67,11 @@ function step(at: unknown, component: FieldStep): unknown {
 function root(document: WorkflowDocument, address: FieldAddress): unknown {
   const block = blockAt(document, address.block);
   if (!block) return MISSING;
+  if (address.domain?.kind === 'note') { const id = address.domain.id; return document.editor?.notes?.find(note => note.id === id && sameBlockPath(note.block, address.block)) ?? MISSING; }
+  if (address.domain?.kind === 'node_presentation') {
+    if (!address.node || !nodeAt(block, address.node)) return MISSING;
+    return { ...nodePresentation(document, address.block, address.node), title: nodePresentation(document, address.block, address.node)?.title ?? address.node, description: nodePresentation(document, address.block, address.node)?.description ?? '' };
+  }
   if (address.node === undefined) return block;
   return nodeAt(block, address.node) ?? MISSING;
 }
@@ -70,10 +81,12 @@ function root(document: WorkflowDocument, address: FieldAddress): unknown {
 function shape(document: WorkflowDocument, address: FieldAddress): number[] | undefined {
   let at = root(document, address);
   const lengths: number[] = [];
-  for (const component of address.path) {
+  for (const [index, component] of address.path.entries()) {
     if (at === MISSING) return undefined;
     if (typeof component === 'number' && Array.isArray(at)) lengths.push(at.length);
-    at = step(at, component);
+    const next = step(at, component);
+    if (next === MISSING && index === address.path.length - 1 && address.role === 'optional') return lengths;
+    at = next;
   }
   return at === MISSING ? undefined : lengths;
 }
@@ -81,7 +94,11 @@ function shape(document: WorkflowDocument, address: FieldAddress): number[] | un
 /** The value at an address; `undefined` when the field no longer exists. */
 export function fieldValue(document: WorkflowDocument, address: FieldAddress): { value: unknown } | undefined {
   let at = root(document, address);
-  for (const component of address.path) at = at === MISSING ? MISSING : step(at, component);
+  for (const [index, component] of address.path.entries()) {
+    if (at === MISSING) return undefined;
+    at = step(at, component);
+    if (at === MISSING && index === address.path.length - 1 && address.role === 'optional') return { value: undefined };
+  }
   return at === MISSING ? undefined : { value: at };
 }
 
@@ -91,13 +108,14 @@ export function fieldText(document: WorkflowDocument, address: FieldAddress): st
   const found = fieldValue(document, address);
   if (!found) return undefined;
   switch (address.role) {
+    case 'optional': return found.value === undefined ? '' : JSON.stringify(found.value, null, 2) ?? 'null';
     case 'value': return JSON.stringify(found.value, null, 2) ?? 'null';
     case 'key': {
       const last = address.path.at(-1);
       if (last === undefined) return address.node;
       return typeof last === 'object' ? last.key : undefined;
     }
-    case 'append': return Array.isArray(found.value) ? '' : undefined;
+    case 'append': return found.value !== null && typeof found.value === 'object' ? '' : undefined;
   }
 }
 
@@ -108,14 +126,14 @@ export function sameField(before: WorkflowDocument, after: WorkflowDocument, add
   return !!old && !!current && old.length === current.length && old.every((length, index) => length === current[index]);
 }
 
-function setIn(at: unknown, path: readonly FieldStep[], value: unknown): unknown {
+function setIn(at: unknown, path: readonly FieldStep[], value: unknown, optional = false): unknown {
   if (!path.length) return value;
   const [head, ...rest] = path;
   const next = step(at, head);
-  if (next === MISSING) throw new CommandRejected('missing_field');
-  if (typeof head === 'number') return (at as unknown[]).map((item, index) => index === head ? setIn(item, rest, value) : item);
+  if (next === MISSING && !(optional && !rest.length && typeof head !== 'number' && at !== null && typeof at === 'object')) throw new CommandRejected('missing_field');
+  if (typeof head === 'number') return (at as unknown[]).map((item, index) => index === head ? setIn(item, rest, value, optional) : item);
   const name = typeof head === 'string' ? head : head.key;
-  return { ...(at as Record<string, unknown>), [name]: setIn(next, rest, value) };
+  return { ...(at as Record<string, unknown>), [name]: setIn(next, rest, value, optional) };
 }
 
 /** Write `value` at a `value` address of the current document, through
@@ -123,10 +141,12 @@ function setIn(at: unknown, path: readonly FieldStep[], value: unknown): unknown
 export function setField(document: WorkflowDocument, address: FieldAddress, value: unknown): WorkflowDocument {
   const block = blockAt(document, address.block);
   if (!block) throw new CommandRejected('missing_node');
-  if (address.node === undefined) return updateBlock(document, address.block, current => setIn(current, address.path, value) as typeof current);
+  if (address.domain?.kind === 'node_presentation' && address.node) return setNodePresentation(document, address.block, address.node, setIn(root(document, address), address.path, value) as WorkflowNodePresentation);
+  if (address.domain?.kind === 'note') return putNote(document, setIn(root(document, address), address.path, value) as WorkflowNote);
+  if (address.node === undefined) return updateBlock(document, address.block, current => setIn(current, address.path, value, address.role === 'optional') as typeof current);
   const node = nodeAt(block, address.node);
   if (!node) throw new CommandRejected('missing_node');
-  return replaceNode(document, address.block, address.node, setIn(node, address.path, value) as typeof node);
+  return replaceNode(document, address.block, address.node, setIn(node, address.path, value, address.role === 'optional') as typeof node);
 }
 
 /** Replace the value at an address from its current value. */
@@ -142,12 +162,20 @@ export function updateField<T>(document: WorkflowDocument, address: FieldAddress
 export function renameAddress(address: FieldAddress, renamed: FieldAddress, to: string): FieldAddress {
   const depth = renamed.block.length;
   const inside = address.block.length >= depth && sameBlockPath(address.block.slice(0, depth), renamed.block);
-  if (!inside || renamed.node === undefined) return address;
+  if (!inside) return address;
   if (renamed.path.length === 0) {
+    if (renamed.node === undefined) return address;
     if (address.block.length === depth) return address.node === renamed.node ? { ...address, node: to } : address;
     const owner = address.block[depth];
     if (owner.node !== renamed.node) return address;
     return { ...address, block: [...renamed.block, { ...owner, node: to }, ...address.block.slice(depth + 1)] };
+  }
+  // Schema-property drafts follow their contract's explicit key rename.
+  const property = renamed.path.at(-1);
+  if (renamed.path.at(-2) === 'properties' && typeof property === 'object'
+    && address.block.length === depth && address.node === renamed.node
+    && address.path.length >= renamed.path.length && renamed.path.every((part, index) => sameStep(part, address.path[index]))) {
+    return { ...address, path: [...renamed.path.slice(0, -1), { key: to }, ...address.path.slice(renamed.path.length)] };
   }
   const branch = renamed.path[1];
   if (renamed.path.length !== 2 || renamed.path[0] !== 'branches' || typeof branch !== 'object') return address;
@@ -164,7 +192,7 @@ export function renameAddress(address: FieldAddress, renamed: FieldAddress, to: 
 /** A readable location of a field for the author, e.g.
  * `reviews / quality › done · output.fields["a.fields.b"].value`. */
 export function describeField(address: FieldAddress): string {
-  const place = [...address.block.map(step => `${step.node} / ${step.branch ?? 'body'}`), ...(address.node === undefined ? [] : [address.node])].join(' › ');
+  const place = [...address.block.map(step => `${step.node} / ${step.branch ?? 'body'}`), ...(address.domain?.kind === 'note' ? [address.domain.id] : address.node === undefined ? [] : [address.node])].join(' › ');
   const path = address.path.map((component, index) => typeof component === 'number' ? `[${component}]`
     : typeof component === 'object' ? `[${JSON.stringify(component.key)}]` : `${index ? '.' : ''}${component}`).join('');
   return [place, path].filter(Boolean).join(' · ');

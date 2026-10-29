@@ -984,6 +984,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
                     analysis: crate::runtime::workflow::authoring::analyze(
                         &definition.definition,
                         None,
+                        &std::collections::BTreeSet::default(),
                     )
                     .expect("bounded candidate"),
                     presentation: Vec::new(),
@@ -1036,6 +1037,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
                     analysis: crate::runtime::workflow::authoring::analyze(
                         &incomplete.definition,
                         None,
+                        &std::collections::BTreeSet::default(),
                     )
                     .expect("bounded incomplete candidate"),
                     presentation: Vec::new(),

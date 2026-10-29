@@ -365,7 +365,9 @@ but do not change structural compatibility. Model JSON output also retains the
 existing strict Auxiliary schema profile, 16 KiB aggregate schema bound and depth
 8; the shared annotation ceiling does not weaken that profile. Unknown keywords,
 assertions outside the closed vocabulary, defaults and coercion remain rejected.
-Editor titles/author notes/layout/order are separate file presentation and never
+The [visual editor](workflow-visual-editor.md) authors these same native schemas
+and nested Blocks. Its synthetic Start edits a Block input/entry; lanes and notes
+are presentation only. Editor titles/author notes/layout/order are separate file presentation and never
 enter Tool contracts, trusted Model/Agent instructions or execution state. See
 [the complete file and authoring analysis contract](workflow-authoring.md#complete-native-file-document).
 

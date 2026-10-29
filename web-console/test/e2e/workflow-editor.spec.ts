@@ -2,12 +2,12 @@
  * Flow editor over the real native App Server and Product Host, with
  * isolated User and Workspace roots. No model request is ever made. */
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Locator } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startDogfood } from './dogfood-server';
-import { expectStableScreenshot } from './screenshot';
+import { captureEvidence, expectStableScreenshot } from './screenshot';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { parse } from 'yaml';
@@ -42,6 +42,21 @@ async function accessible(page: Page, scope: string) {
 const editor = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 const card = (page: Page, id: string) => page.getByRole('listitem').filter({ has: page.getByRole('button', { name: id, exact: true }) });
 
+async function showIdentity(inspector: Locator) {
+  const details = inspector.locator('details').filter({ has: inspector.page().getByText('Native identity and rename', { exact: true }) });
+  if (!(await details.evaluate(element => (element as HTMLDetailsElement).open))) await details.locator('summary').click();
+}
+async function showSchemaJson(inspector: Locator, label: string) {
+  const section = inspector.locator(`[data-schema-label="${label}"]`).first();
+  const button = section.locator(':scope > h3').getByRole('button', { name: 'Advanced JSON', exact: true });
+  if (await button.count()) await button.click();
+}
+async function showAdvanced(inspector: Locator) {
+  const summary = inspector.locator('summary').filter({ hasText: /^Advanced settings$/ });
+  if (await summary.count() && !(await summary.evaluate(element => (element.parentElement as HTMLDetailsElement).open))) await summary.click();
+}
+
+
 test('unknown output contracts preserve native scope violations and pending upstream choices', async ({ page }, testInfo) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -68,14 +83,12 @@ test('unknown output contracts preserve native scope violations and pending upst
     await card(page, 'scope_facts').getByRole('button', { name: 'scope_facts', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
-    await editor(page).getByLabel('Model node common', { exact: true }).click();
-    await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
+    await editor(page).getByLabel('Model node common', { exact: true }).focus(); await editor(page).getByLabel('Model node common', { exact: true }).press('Enter');
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
     for (const producer of ['common', 'broken']) {
       await expect(inspector.getByRole('button', { name: new RegExp(`^${producer} ·`) })).toBeDisabled();
     }
-    await editor(page).getByLabel('Tool node join', { exact: true }).click();
-    await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
+    await editor(page).getByLabel('Tool node join', { exact: true }).focus(); await editor(page).getByLabel('Tool node join', { exact: true }).press('Enter');
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
     await expect(inspector.getByRole('button', { name: /^broken ·/ })).toBeDisabled();
     const pending = inspector.getByRole('button', { name: /^common ·/ });
@@ -83,12 +96,10 @@ test('unknown output contracts preserve native scope violations and pending upst
     await pending.click();
     await expect(inspector.getByRole('button', { name: 'Choose a variable', exact: true })).toHaveAttribute('aria-expanded', 'false');
     await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
-    await editor(page).getByLabel('Model node common', { exact: true }).click();
-    await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
+    await editor(page).getByLabel('Model node common', { exact: true }).focus(); await editor(page).getByLabel('Model node common', { exact: true }).press('Enter');
     await expect(inspector.getByRole('status')).toHaveText('The output declaration is incomplete or violates the Workflow schema contract.');
     await page.screenshot({ path: testInfo.outputPath('incomplete-output.png') });
-    await editor(page).getByLabel('Model node skip', { exact: true }).click();
-    await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
+    await editor(page).getByLabel('Model node skip', { exact: true }).focus(); await editor(page).getByLabel('Model node skip', { exact: true }).press('Enter');
     await expect(inspector).toContainText('Declared or derived by native candidate analysis.');
     await expect(inspector.locator('pre')).toContainText('"type": "string"');
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
@@ -114,12 +125,10 @@ test('unfinished input schemas retain native self, forward and join scope facts'
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'unfinished_input').getByRole('button', { name: 'unfinished_input', exact: true }).click();
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
-    await editor(page).getByLabel('Tool node common', { exact: true }).click();
-    await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
+    await editor(page).getByLabel('Tool node common', { exact: true }).focus(); await editor(page).getByLabel('Tool node common', { exact: true }).press('Enter');
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
     for (const producer of ['common', 'left']) await expect(inspector.getByRole('button', { name: new RegExp(`^${producer} ·`) })).toBeDisabled();
-    await editor(page).getByLabel('Tool node join', { exact: true }).click();
-    await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
+    await editor(page).getByLabel('Tool node join', { exact: true }).focus(); await editor(page).getByLabel('Tool node join', { exact: true }).press('Enter');
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
     await expect(inspector.getByRole('button', { name: /^left ·/ })).toBeDisabled();
     await expect(inspector.getByRole('button', { name: /^common ·/ })).toBeEnabled();
@@ -143,7 +152,7 @@ test('equality picker rejects numeric operands and admits a matching string bind
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'equality_types').getByRole('button', { name: 'equality_types', exact: true }).click();
-    await editor(page).getByLabel('Branch node gate', { exact: true }).click();
+    await editor(page).getByLabel('Branch node gate', { exact: true }).focus(); await editor(page).getByLabel('Branch node gate', { exact: true }).press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' }), pick = inspector.getByRole('button', { name: 'Choose a variable', exact: true });
     await pick.click();
     await expect(inspector.getByRole('button', { name: /^args \/ count ·/ })).toBeDisabled();
@@ -176,10 +185,10 @@ test('native array item choices preserve a common element contract and admit bro
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'array_contract').getByRole('button', { name: 'array_contract', exact: true }).click();
-    await editor(page).getByLabel('Return node done', { exact: true }).click();
+    await editor(page).getByLabel('Return node done', { exact: true }).focus(); await editor(page).getByLabel('Return node done', { exact: true }).press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(inspector).toContainText('Structure check passed');
-    await editor(page).getByLabel('Return node done', { exact: true }).click();
+    await editor(page).getByLabel('Return node done', { exact: true }).focus(); await editor(page).getByLabel('Return node done', { exact: true }).press('Enter');
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).nth(1).click();
     await expect(inspector.getByRole('button', { name: /^args \/ a ·/ })).toBeEnabled();
     const incompatible = inspector.getByRole('button', { name: /^args \/ b ·/ });
@@ -202,13 +211,15 @@ test('node rename cannot adopt a lone orphan title when the source has no metada
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'orphan_node').getByRole('button', { name: 'orphan_node', exact: true }).click();
-    await editor(page).getByLabel('Return node done', { exact: true }).click();
+    await editor(page).getByLabel('Return node done', { exact: true }).focus(); await editor(page).getByLabel('Return node done', { exact: true }).press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await showIdentity(inspector);
     await inspector.getByLabel('Node ID', { exact: true }).fill('renamed'); await inspector.getByLabel('Node ID', { exact: true }).press('Enter');
     await expect(inspector.getByText('That ID is already used in this block.', { exact: true }).first()).toBeVisible();
     await expect(editor(page).getByLabel('Return node done', { exact: true })).toBeVisible();
     await expect(editor(page).getByLabel('Return node renamed', { exact: true })).toHaveCount(0);
     await expect(editor(page).getByText('old deleted node title', { exact: true })).toHaveCount(0);
+    await showIdentity(inspector);
     await inspector.getByLabel('Node ID', { exact: true }).fill('done'); await inspector.getByLabel('Node ID', { exact: true }).press('Enter');
     await page.getByRole('button', { name: 'Check', exact: true }).first().click();
     await expect(inspector).toContainText('Structure check passed');
@@ -235,7 +246,7 @@ test('closed, open and declared native destination fields keep distinct picker s
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     for (const { kind, id, file, bytes } of files) {
       await card(page, id).getByRole('button', { name: id, exact: true }).click();
-      await editor(page).getByLabel('Return node done', { exact: true }).click();
+      await editor(page).getByLabel('Return node done', { exact: true }).focus(); await editor(page).getByLabel('Return node done', { exact: true }).press('Enter');
       const inspector = page.getByRole('complementary', { name: 'Inspector' });
       await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
       const choice = inspector.getByRole('button', { name: /^args \/ x ·/ });
@@ -269,14 +280,13 @@ test('branch rename collisions with retained orphan order fields preserve the na
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'orphan_order').getByRole('button', { name: 'orphan_order', exact: true }).click();
-    await editor(page).getByLabel('Parallel node fork', { exact: true }).click();
+    await editor(page).getByLabel('Parallel node fork', { exact: true }).focus(); await editor(page).getByLabel('Parallel node fork', { exact: true }).press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     const key = inspector.getByRole('textbox', { name: 'Rename branch old', exact: true });
     await key.fill('new'); await key.press('Enter');
     await expect(inspector.getByText('That ID is already used in this block.', { exact: true }).first()).toBeVisible();
     await expect(inspector.getByRole('textbox', { name: 'Rename branch old', exact: true })).toHaveCount(1);
     await expect(inspector.getByRole('button', { name: /^Edit subgraph/ })).toHaveCount(1);
-    await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
     await expect(inspector).toContainText('Declared or derived by native candidate analysis.');
     const schema = JSON.parse((await inspector.locator('pre').textContent())!);
     expect(Object.keys(schema.properties)).toEqual(['old']);
@@ -305,7 +315,7 @@ test('incomplete candidate variable picking and file-owned keyboard positions pr
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'metadata_flow').getByRole('button', { name: 'metadata_flow', exact: true }).click();
-    await editor(page).getByLabel('Return node done', { exact: true }).click();
+    await editor(page).getByLabel('Return node done', { exact: true }).focus(); await editor(page).getByLabel('Return node done', { exact: true }).press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
     await inspector.getByRole('textbox', { name: 'Search reference paths…' }).fill('text');
@@ -314,6 +324,9 @@ test('incomplete candidate variable picking and file-owned keyboard positions pr
     // Declarations and lexical proof were usable before the Model instruction
     // was complete. Save still requires the ordinary native compiler rules.
     const text = editor(page).getByLabel('Model node text', { exact: true });
+    // The Return inspector pans that card into view. Locate the Model through
+    // keyboard focus before proving its ordinary pointer interaction again.
+    await text.focus(); await text.press('Enter');
     await text.click(); await inspector.getByLabel('Instruction', { exact: true }).fill('Produce the summary.');
     await text.focus(); await page.keyboard.press('ArrowRight');
     await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
@@ -388,7 +401,7 @@ test('library → new → nested editor → check → save → reopen → copy �
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
     // The exact new file opens in the editor.
     await expect(page.getByRole('heading', { name: 'triage', exact: true })).toBeVisible();
-    await expect(editor(page).locator('.react-flow__node')).toHaveCount(1);
+    await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(1);
     expect(readFileSync(join(fixture.workspaceA, '.agents/workflows/triage.yaml'), 'utf8')).toContain('Triage one issue.');
 
     // Keyboard: the contextual palette adds a Parallel node.
@@ -396,16 +409,16 @@ test('library → new → nested editor → check → save → reopen → copy �
     await page.keyboard.press('Enter');
     await page.getByLabel('Search nodes').fill('par');
     await page.keyboard.press('Enter');
-    await expect(editor(page).locator('.react-flow__node')).toHaveCount(2);
+    await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(3);
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await expect(inspector).toContainText('parallel');
-    // Nested lexical block: edit one block at a time, keep the parent.
+    // Focus a private lexical Block while keeping the parent and siblings in one scene.
     await inspector.getByRole('button', { name: /Edit subgraph/ }).click();
     const crumbs = page.getByRole('navigation', { name: 'Block path' });
     await expect(crumbs).toContainText('parallel / main');
-    await expect(editor(page).locator('.react-flow__node')).toHaveCount(1);
+    await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(3);
     await crumbs.getByRole('button', { name: 'Root block', exact: true }).click();
-    await expect(editor(page).locator('.react-flow__node')).toHaveCount(2);
+    await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(3);
 
     // Native check reports the unconnected node; nothing is rewired.
     await page.getByRole('button', { name: 'Check', exact: true }).click();
@@ -413,9 +426,9 @@ test('library → new → nested editor → check → save → reopen → copy �
     // Undo the addition, edit the description, check, save.
     await page.locator('section[aria-labelledby="workflow-editor-title"] .react-flow__pane').click();
     await page.keyboard.press('Control+z');
-    await expect(editor(page).locator('.react-flow__node')).toHaveCount(1);
+    await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(1);
     await page.getByRole('button', { name: 'Block settings', exact: true }).click();
-    await page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Description').fill('Triage one incoming issue.');
+    await page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Description', { exact: true }).fill('Triage one incoming issue.');
     await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
     await page.getByRole('button', { name: 'Check', exact: true }).click();
     await expect(page.getByRole('complementary', { name: 'Inspector' })).toContainText('Structure check passed');
@@ -428,7 +441,7 @@ test('library → new → nested editor → check → save → reopen → copy �
     await expect(card(page, 'triage')).toContainText('Triage one incoming issue.');
     await card(page, 'triage').getByRole('button', { name: 'triage', exact: true }).click();
     await page.getByRole('button', { name: 'Block settings', exact: true }).click();
-    await expect(page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Description')).toHaveValue('Triage one incoming issue.');
+    await expect(page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Description', { exact: true })).toHaveValue('Triage one incoming issue.');
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
 
     // Copy File: same scope, new ID, source revision guarded.
@@ -472,7 +485,7 @@ test('library → new → nested editor → check → save → reopen → copy �
   } finally { await fixture.stop(false); }
 });
 
-test('conflicts keep edits, invalid files stay preserved, and leaving asks first', async ({ page }) => {
+test('conflicts keep edits, invalid files stay preserved, and leaving asks first', async ({ page }, info) => {
   const fixture = await startDogfood('web_console_dogfood');
   try {
     await seed(fixture);
@@ -488,11 +501,12 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await expect(page.getByText('This file is preserved as is and cannot be edited here.')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();
     expect(readFileSync(broken, 'utf8')).toBe('description: [');
+    await captureEvidence(page, '20-preserved-invalid-file', info);
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
 
     // The approved editor screen: parallel_review, Parallel node selected.
     await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
-    await editor(page).getByLabel('Parallel node reviews').click();
+    await editor(page).getByLabel('Parallel node reviews').focus(); await editor(page).getByLabel('Parallel node reviews').press('Enter');
     await expect(page.getByRole('complementary', { name: 'Inspector' })).toContainText('Parallel branches');
     await expectStableScreenshot(page.locator('[data-workflows-level="editor"]'), 'workflow-editor.png');
     await accessible(page, '[data-workflows-level="editor"] header');
@@ -510,6 +524,7 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await expect(page.getByRole('alert').filter({ hasText: 'The file changed on disk since it was opened' })).toBeVisible();
     await expect(editor(page).getByLabel('Branch node decision')).toContainText('reviews.clarity.acceptable');
     expect(readFileSync(path, 'utf8')).toContain('# external edit');
+    await captureEvidence(page, '21-source-conflict', info);
 
     // Leaving with unsaved edits asks first; Keep editing stays on the file.
     await page.getByRole('button', { name: 'New Conversation', exact: true }).first().click();
@@ -532,9 +547,10 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     // Narrow viewport: the inspector becomes a bottom sheet over the canvas.
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
-    await editor(page).getByLabel('Branch node decision').click();
+    await editor(page).getByLabel('Branch node decision').focus(); await editor(page).getByLabel('Branch node decision').press('Enter');
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.getByRole('complementary', { name: 'Inspector' })).toBeVisible();
+    await expect(page.getByRole('complementary', { name: 'Inspector' })).toHaveCSS('position', 'absolute');
     await expectStableScreenshot(page, 'workflow-editor-narrow.png');
   } finally { await fixture.stop(false); }
 });
@@ -578,6 +594,7 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     await ready.focus();
     await page.keyboard.press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await showIdentity(inspector);
     await expect(inspector.getByLabel('Node ID')).toHaveValue('ready');
     // Move before renaming: the new identity must keep the authored layout,
     // and Undo/Redo must carry it back and forward instead of relaying out.
@@ -588,7 +605,9 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     await page.mouse.up();
     const authored = (await ready.boundingBox())!;
     expect(Math.round(authored.y - initial.y)).toBeGreaterThan(40);
+    await showIdentity(inspector);
     await inspector.getByLabel('Node ID').fill('accepted');
+    await showIdentity(inspector);
     await inspector.getByLabel('Node ID').press('Enter');
     await expect(editor(page).getByLabel('Return node accepted')).toBeVisible();
     await expect.poll(async () => Math.round((await editor(page).getByLabel('Return node accepted').boundingBox())!.y)).toBe(Math.round(authored.y));
@@ -614,7 +633,7 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     await expect.poll(async () => Math.round((await editor(page).getByLabel('Return node accepted').boundingBox())!.y)).toBe(Math.round(authored.y));
     await page.keyboard.press('Control+Shift+z');
     await expect.poll(async () => Math.round((await decision.boundingBox())!.y)).toBe(Math.round(moved.y));
-    await editor(page).getByRole('group', { name: 'Canvas tools' }).getByRole('button', { name: 'Fit view', exact: true }).click();
+    await editor(page).getByRole('toolbar', { name: 'Canvas tools' }).getByRole('button', { name: 'Fit view', exact: true }).click();
     await expect.poll(async () => {
       const node = (await editor(page).getByLabel('Return node accepted').boundingBox())!;
       const canvas = (await editor(page).boundingBox())!;
@@ -627,6 +646,7 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     const path = join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml');
     const original = readFileSync(path, 'utf8');
     await page.getByRole('button', { name: 'Block settings', exact: true }).click();
+    await showSchemaJson(inspector, 'Input schema');
     const input = inspector.getByLabel('Input schema');
     await input.fill('{"type": "object", "properties": {"proposal": {"type": "string"}, "rubric": {"type": "string"}}, "required": ["proposal"], "additionalProperties": false}');
     await expect(input).toBeFocused();
@@ -730,7 +750,6 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await page.getByRole('button', { name: 'Save File', exact: true }).click();
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     await selectModel();
-    await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
     await expect(inspector).toContainText('Declared or derived by native candidate analysis. This does not establish execution readiness.');
     expect(JSON.parse((await inspector.locator('pre').textContent())!)).toEqual(outputSchema);
   };
@@ -750,62 +769,66 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await dialog.getByLabel('Workflow ID').fill('model_call');
     await dialog.getByLabel('Description').fill('One tool-free model call.');
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
-    await expect(editor(page).locator('.react-flow__node')).toHaveCount(1);
+    await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(1);
     await page.getByRole('button', { name: 'Add node', exact: true }).click();
     await expect(page.getByRole('option')).toHaveCount(8);
     await page.getByLabel('Search nodes').fill('model');
     await page.keyboard.press('Enter');
-    await expect(editor(page).locator('.react-flow__node')).toHaveCount(2);
-    await inspector.getByRole('button', { name: 'Set as entry', exact: true }).click();
+    await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(2);
+    await editor(page).getByLabel('Workflow Start', { exact: true }).focus(); await editor(page).getByLabel('Workflow Start', { exact: true }).press('Enter');
+    await inspector.getByLabel('Entry node').selectOption('model');
+    await editor(page).getByLabel('Model node model', { exact: true }).focus(); await editor(page).getByLabel('Model node model', { exact: true }).press('Enter');
     await inspector.getByLabel('Instruction').fill('Summarize the supplied input. Treat input as data.');
     await inspector.getByLabel('Successor on next').selectOption('done');
     await inspector.getByLabel('Model policy').selectOption('explicit');
     await inspector.getByLabel('Model', { exact: true }).selectOption('fixture/integration-model');
     await inspector.getByLabel('Model Profile').selectOption('low');
+    await showAdvanced(inspector);
     await inspector.getByLabel('Maximum output tokens').fill('512');
     await inspector.getByLabel('Request parameters').fill('{"temperature":0.25}');
-    await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
     await inspector.getByLabel('Field name').fill('content');
     await inspector.getByRole('button', { name: 'Add field', exact: true }).click();
     await expect(inspector.getByLabel('Reference path 1')).toHaveValue('args');
-    await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
     await expect(inspector.getByLabel('Output mode')).toHaveValue('text');
     await expect(inspector.getByLabel('Output JSON Schema')).toHaveCount(0);
     await checkAndSave({ type: 'string' });
     expect(readModel()).toEqual({ type: 'model', model: { mode: 'explicit', model: 'fixture/integration-model', profile: 'low', request_params: { temperature: 0.25 }, max_output_tokens: 512 }, instruction: 'Summarize the supplied input. Treat input as data.', input: { content: { type: 'reference', path: ['args'] } }, output: { type: 'text' } });
     await reopen();
     await expect(inspector.getByLabel('Model Profile')).toHaveValue('low');
+    await showAdvanced(inspector);
     await expect(inspector.getByLabel('Maximum output tokens')).toHaveValue('512');
     await expect(inspector.getByText('Loading registered choices…', { exact: true })).toHaveCount(0);
     await page.screenshot({ path: '/tmp/rustx-model-editor-config.png', fullPage: false, animations: 'disabled' });
-    await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
     await expect(inspector.getByLabel('Output mode')).toHaveValue('text');
     await page.screenshot({ path: '/tmp/rustx-model-editor-text.png', fullPage: false, animations: 'disabled' });
     await inspector.getByLabel('Output mode').selectOption('json_schema');
     // The untouched default must pass the same native strict schema check as
     // an authored schema; the downstream Return accepts either Model output.
     const defaultSchema = { type: 'object', properties: {}, required: [], additionalProperties: false };
+    await showSchemaJson(inspector, 'Output JSON Schema');
     await expect(inspector.getByLabel('Output JSON Schema')).toHaveValue(JSON.stringify(defaultSchema, null, 2));
     await checkAndSave(defaultSchema);
     expect(readModel().output).toEqual({ type: 'json_schema', schema: defaultSchema });
     await page.screenshot({ path: '/tmp/rustx-model-editor-default-json-schema.png', fullPage: false, animations: 'disabled' });
     await reopen();
-    await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
+    await showSchemaJson(inspector, 'Output JSON Schema');
     await expect(inspector.getByLabel('Output JSON Schema')).toHaveValue(JSON.stringify(defaultSchema, null, 2));
     const schema = { type: 'object', properties: { risk: { type: 'string', enum: ['low', 'high'] } }, required: ['risk'], additionalProperties: false };
+    await showSchemaJson(inspector, 'Output JSON Schema');
     await inspector.getByLabel('Output JSON Schema').fill(JSON.stringify(schema, null, 2));
     // Check commits the focused JSON draft before dispatching its exact
     // candidate; save/reopen must preserve that same declared output type.
     await checkAndSave(schema);
     expect(readModel().output).toEqual({ type: 'json_schema', schema });
     await reopen();
-    await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
     await expect(inspector.getByLabel('Output mode')).toHaveValue('json_schema');
+    await showSchemaJson(inspector, 'Output JSON Schema');
     await expect(inspector.getByLabel('Output JSON Schema')).toHaveValue(JSON.stringify(schema, null, 2));
     await accessible(page, '[data-workflows-level="editor"]');
     await page.screenshot({ path: '/tmp/rustx-model-editor-json-schema.png', fullPage: false, animations: 'disabled' });
     await page.setViewportSize({ width: 900, height: 900 });
     await expect(inspector.getByLabel('Output mode')).toBeVisible();
+    await showSchemaJson(inspector, 'Output JSON Schema');
     await expect(inspector.getByLabel('Output JSON Schema')).toBeVisible();
     await page.screenshot({ path: '/tmp/rustx-model-editor-narrow.png', fullPage: false, animations: 'disabled' });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);

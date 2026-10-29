@@ -4,6 +4,7 @@ pmOnFail: warn
 
 minimumReleaseAgeExclude:
   - pdfjs-dist@6.4.299
+  - elkjs@0.12.1
 
 allowBuilds:
   node-pty: true

@@ -1,3 +1,4 @@
+import { setPositions } from '../src/app/workflows/document/presentation';
 import { describe, expect, it } from 'vitest';
 import { createActor } from 'xstate';
 import { exampleSource } from './workflow-fixtures';
@@ -289,7 +290,7 @@ describe('Workflow editor races', () => {
     editor.send({ type: 'EDIT', apply: describeAs('semantic') });
     const semantic = editor.getSnapshot().context.document!;
     const after = { decision: { x: 240, y: 80 } };
-    editor.send({ type: 'MOVE', path: ROOT, positions: after });
+    editor.send({ type: 'EDIT', apply: document => setPositions(document, ROOT, after) });
     // A completed drag is a full-file edit and advances the generation.
     const generation = editor.getSnapshot().context.generation;
     editor.send({ type: 'UNDO' });

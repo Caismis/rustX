@@ -1,6 +1,6 @@
-import { branchPresentation, copyNodePresentation, deleteNodePresentation, renameNodePresentation, requireVacantBranchPresentation, requireVacantNodePresentation } from './presentation';
+import { branchPresentation, deleteNodePresentation, renameNodePresentation, requireVacantBranchPresentation, requireVacantNodePresentation } from './presentation';
 import {
-  blockAt, branchAt, edgesOf, nodeAt, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
+  blockAt, branchAt, childSteps, edgesOf, nodeAt, sameBlockPath, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
   type WorkflowDocument,
 } from './model';
 import { authoredEdge, edgePort, outputPorts, type ControlPort } from './ports';
@@ -11,21 +11,35 @@ import { renameBranchOutput, renameProducer, rewriteBlockReferences } from './re
 export type RejectionCode =
   | 'invalid_identifier' | 'reserved_identifier' | 'duplicate_identifier' | 'missing_node' | 'missing_branch'
   | 'missing_edge' | 'last_branch' | 'return_has_no_successor' | 'invalid_port' | 'port_occupied' | 'self_edge'
-  | 'last_node' | 'missing_field';
+  | 'last_node' | 'missing_field' | 'invalid_fragment' | 'cross_scope' | 'limit_exceeded' | 'invalid_geometry' | 'unsupported_insertion' | 'unsupported_schema_rename' | 'pending_input';
 
 export class CommandRejected extends Error {
   constructor(readonly code: RejectionCode) { super(code); this.name = 'CommandRejected'; }
 }
 
-/** Native local identity rule of node ids and Parallel branch keys. */
-const IDENTIFIER = /^[A-Za-z0-9_-]{1,64}$/;
-export function validIdentifier(value: string): RejectionCode | undefined {
-  if (!IDENTIFIER.test(value)) return 'invalid_identifier';
-  if (value === 'args') return 'reserved_identifier';
-  return undefined;
+/** Native local keys include Parallel branches; only node IDs reserve args. */
+export function validLocalKey(value: string): RejectionCode | undefined {
+  return !value.length || value.length > 64 || /[^A-Za-z0-9_-]/.test(value) ? 'invalid_identifier' : undefined;
+}
+export function validNodeId(value: string): RejectionCode | undefined {
+  return validLocalKey(value) ?? (value === 'args' ? 'reserved_identifier' : undefined);
 }
 
 const EMPTY_OBJECT = { type: 'object', properties: {}, additionalProperties: false } as const;
+
+/** Native aggregate bounds, enforced before accepting structural growth. */
+export function boundedDocument(document: WorkflowDocument): WorkflowDocument {
+  let count = 0;
+  const visit = (block: Block, depth: number) => {
+    if (depth > 8) throw new CommandRejected('limit_exceeded');
+    for (const [id, node] of Object.entries(block.nodes)) {
+      if (++count > 256 || node.type === 'parallel' && Object.keys(node.branches).length > 32) throw new CommandRejected('limit_exceeded');
+      for (const step of childSteps(id, node)) visit(step.branch === undefined ? (node as Extract<NodeDefinition, { type: 'loop' }>).body : (node as Extract<NodeDefinition, { type: 'parallel' }>).branches[step.branch].block, depth + 1);
+    }
+  };
+  visit(document.block, 0);
+  return document;
+}
 
 /** A private nested block that returns an empty object. */
 export function emptyBlock(): Block {
@@ -77,12 +91,24 @@ export interface Connection { readonly from: string; readonly port: ControlPort 
 /** Add one node, optionally connected from an eligible free port. */
 export function addNode(document: WorkflowDocument, path: BlockPath, kind: NodeKind, id: string, from?: Connection): WorkflowDocument {
   const block = require(blockAt(document, path));
-  const invalid = validIdentifier(id);
+  const invalid = validNodeId(id);
   if (invalid) throw new CommandRejected(invalid);
   if (nodeAt(block, id)) throw new CommandRejected('duplicate_identifier');
+  requireVacantNodePresentation(document, path, id);
   const added = { ...block, nodes: { ...block.nodes, [id]: nodeTemplate(kind) } };
   if (from) checkConnection(added, from.from, from.port, id);
-  return updateBlock(document, path, () => from ? withEdges(added, [...edgesOf(added), authoredEdge(from.from, from.port, id)]) : added);
+  return boundedDocument(updateBlock(document, path, () => from ? withEdges(added, [...edgesOf(added), authoredEdge(from.from, from.port, id)]) : added));
+}
+
+/** Inserting into an edge is a single transaction. A single-exit node can
+ * preserve the existing continuation; multi-exit and terminal nodes cannot. */
+export function insertNode(document: WorkflowDocument, path: BlockPath, index: number, kind: NodeKind, id: string): WorkflowDocument {
+  const block = require(blockAt(document, path)), edge = edgesOf(block)[index];
+  if (!edge) throw new CommandRejected('missing_edge');
+  if (outputPorts(kind).length !== 1 || outputPorts(kind)[0] !== 'next') throw new CommandRejected('unsupported_insertion');
+  let next = disconnect(document, path, [index]);
+  next = addNode(next, path, kind, id, { from: edge.from, port: edgePort(edge) });
+  return connect(next, path, id, 'next', edge.to);
 }
 
 /** Delete nodes and the edges that touch them. The entry marker and any
@@ -107,7 +133,7 @@ export function renameNode(document: WorkflowDocument, path: BlockPath, from: st
   const block = require(blockAt(document, path));
   if (!nodeAt(block, from)) throw new CommandRejected('missing_node');
   if (from === to) return document;
-  const invalid = validIdentifier(to);
+  const invalid = validNodeId(to);
   if (invalid) throw new CommandRejected(invalid);
   if (nodeAt(block, to)) throw new CommandRejected('duplicate_identifier');
   requireVacantNodePresentation(document, path, to);
@@ -133,6 +159,13 @@ export function connect(document: WorkflowDocument, path: BlockPath, from: strin
   const block = require(blockAt(document, path));
   checkConnection(block, from, port, to);
   return updateBlock(document, path, current => withEdges(current, [...edgesOf(current), authoredEdge(from, port, to)]));
+}
+
+/** Addressed endpoints cannot bind across private native Blocks, even when
+ * both scopes contain the same local id or the same renderer parent. */
+export function connectAddressed(document: WorkflowDocument, from: { block: BlockPath; node: string; port: ControlPort }, to: { block: BlockPath; node: string }): WorkflowDocument {
+  if (!sameBlockPath(from.block, to.block)) throw new CommandRejected('cross_scope');
+  return connect(document, from.block, from.node, from.port, to.node);
 }
 
 export function disconnect(document: WorkflowDocument, path: BlockPath, indexes: readonly number[]): WorkflowDocument {
@@ -167,10 +200,11 @@ function parallel(block: Block, id: string) {
 
 export function addBranch(document: WorkflowDocument, path: BlockPath, id: string, key: string): WorkflowDocument {
   const node = parallel(require(blockAt(document, path)), id);
-  const invalid = validIdentifier(key);
+  const invalid = validLocalKey(key);
   if (invalid) throw new CommandRejected(invalid);
   if (branchAt(node.branches, key)) throw new CommandRejected('duplicate_identifier');
-  return updateBlock(document, path, block => ({ ...block, nodes: { ...block.nodes, [id]: { ...node, branches: { ...node.branches, [key]: { input: { type: 'literal', value: {} }, block: emptyBlock() } } } } }));
+  requireVacantBranchPresentation(document, path, id, key);
+  return boundedDocument(updateBlock(document, path, block => ({ ...block, nodes: { ...block.nodes, [id]: { ...node, branches: { ...node.branches, [key]: { input: { type: 'literal', value: {} }, block: emptyBlock() } } } } })));
 }
 
 /** Rename a branch key and every reference into its keyed output in the
@@ -179,7 +213,7 @@ export function renameBranch(document: WorkflowDocument, path: BlockPath, id: st
   const node = parallel(require(blockAt(document, path)), id);
   if (!branchAt(node.branches, from)) throw new CommandRejected('missing_branch');
   if (from === to) return document;
-  const invalid = validIdentifier(to);
+  const invalid = validLocalKey(to);
   if (invalid) throw new CommandRejected(invalid);
   if (branchAt(node.branches, to)) throw new CommandRejected('duplicate_identifier');
   requireVacantBranchPresentation(document, path, id, to);
@@ -204,17 +238,4 @@ export function removeBranch(document: WorkflowDocument, path: BlockPath, id: st
 export function setWorkflow(document: WorkflowDocument, fields: { description: string; timeout_ms?: string }): WorkflowDocument {
   const { timeout_ms: _previous, ...rest } = document;
   return fields.timeout_ms === undefined ? { ...rest, description: fields.description } : { ...rest, description: fields.description, timeout_ms: fields.timeout_ms };
-}
-
-/** Copy an executable node and all metadata it owns as one atomic document edit.
- * Its parent edges remain for the author to connect explicitly. */
-export function duplicateNode(document: WorkflowDocument, path: BlockPath, from: string, to: string): WorkflowDocument {
-  const block = require(blockAt(document, path)), original = nodeAt(block, from);
-  if (!original) throw new CommandRejected('missing_node');
-  const invalid = validIdentifier(to);
-  if (invalid) throw new CommandRejected(invalid);
-  if (nodeAt(block, to)) throw new CommandRejected('duplicate_identifier');
-  requireVacantNodePresentation(document, path, to);
-  const next = updateBlock(document, path, block => ({ ...block, nodes: { ...block.nodes, [to]: structuredClone(original) } }));
-  return copyNodePresentation(next, path, from, to);
 }

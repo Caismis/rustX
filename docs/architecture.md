@@ -6200,8 +6200,27 @@ CAS candidates; only the executable definition enters `WorkflowProgram` and its
 digest. Rust authoring analysis shares the compiler's lexical and type routines
 without producing an executable program. Web owns the editing document, field
 drafts, interaction and stale-result fencing. Positions persist in file metadata;
-viewport preferences remain local. #511 owns the complete companion editor.
-See [Workflow file authoring](workflow-authoring.md).
+viewport preferences remain local.
+
+The Web editor projects the whole nested document in one React Flow scene.
+Synthetic Start anchors, Parallel lanes, notes and boundary connectors are
+presentation identities derived from structured lexical paths, view kind and
+local identity; only the eight native node kinds and Block-owned executable
+edges reach compilation. Parent-relative geometry never authorizes lexical
+reparenting. Shared inspector chrome delegates to per-kind panels, typed schema
+and value controls. The editor machine alone owns the complete document,
+versioned drafts, rename identities, history and CAS/uncertainty state. Native
+candidate analysis owns availability, compatibility and field consumer scope;
+labels and title search decorate those facts without manufacturing validity.
+
+ELK is imported only for explicit Organize. Bottom-up child layouts and measured
+container sizes produce one metadata transaction; target/document identity and
+request cancellation discard obsolete results, including results overtaken by a
+drag. Viewport, collapse and inspector preferences have no execution meaning.
+Bounded clipboard decoding admits only typed authored fragments; deterministic
+identity/reference/metadata remapping never implicitly rebinds external variables
+across files or Blocks. See [Workflow file authoring](workflow-authoring.md) and
+[the visual editor contract](workflow-visual-editor.md).
 
 ## 3. Dependency rule
 

@@ -65,7 +65,7 @@ continue to derive from the authoritative Rust authoring types.
 
 ## File authoring (App Server and Web)
 
-The Web **Workflows** area (Issue #491) authors the same native YAML files that
+The Web **Workflows** area authors the same native YAML files that
 `check` and `explain` inspect. One Workflow is one file,
 `.agents/workflows/<id>.yaml`, in exactly one scope: **User** (shown as
 "Global", under the User configuration directory) or one registered
@@ -139,7 +139,7 @@ Missing metadata is ordinary valid input. The current canvas derives the same
 deterministic default positions every time and writes an authored position only
 when the author moves/adds a node. Renderer measurements, React Flow graphs,
 callbacks, selection, results, credentials, cached catalogs and analysis replies
-are never file metadata. The companion editor's complete visual design is #511.
+are never file metadata. See the [visual authoring guide and acceptance record](workflow-visual-editor.md) for the delivered interaction and ownership contract.
 
 ### File and presentation limits and repair
 
@@ -343,7 +343,7 @@ programs retain the native identity types. Saving still requires compilation.
 An optional query names one exact consumer: structured node address, typed field
 (Model/Agent named input, Tool arguments, Review subject/context, Branch
 condition, Return output, Parallel branch input, Loop initial input/`until`/`carry`)
-and structured steps within a construction or predicate. It can search paths,
+and structured steps within a construction or predicate. It can search paths or all matching qualified producer titles,
 limit results and classify one existing/manual `reference`. It does not construct
 a Cartesian product of all fields and consumers.
 
@@ -577,11 +577,13 @@ renames, so a file is never observed half-written.
 Authored node positions are stored only in the YAML `editor` metadata. Completed
 node drags and node additions change the complete working document, mark it dirty
 and enter its undo history. Save commits executable and presentation changes in
-one CAS transaction. Reset Layout removes authored node positions as a document
-edit, preserving notes, titles, other geometry and orders. The old browser-local
-coordinate authority and its storage key are removed; no coordinate migration or
-dual write path exists. Personal viewport pan/zoom remains browser-local and
-follows accepted node/branch identity renames independently of file content.
+one CAS transaction. **Organize layout** lazily runs ELK, placing child Blocks
+before their containers with measured dimensions and stable control ports. It
+changes metadata in one undo step and preserves manual notes. A result from an
+older document, target, layout request or drag is discarded. Personal viewport
+pan/zoom belongs to the exact file; inspector width is another bounded personal
+preference. Neither enters file content. The obsolete per-Block layout cache and
+reset-to-default engine are removed without migrations or parallel layout paths.
 
 Unsaved edits live in memory: leaving a dirty editor asks for confirmation, and
 there are no persisted drafts.
@@ -599,12 +601,15 @@ structural properties and array indices. Its canonical key is the JSON encoding
 of that tuple, so a direct field `a.fields.b` and the nested field `a → b` are
 two fields, and every key the native format allows stays editable. One address
 owns a field's unapplied text, its error, its commit registration and its edit
-session. Human-readable labels and native diagnostic paths are separate from it.
+session. A typed domain distinguishes executable fields from node presentation
+and note fields; optional numeric fields and pending new keys have explicit
+roles. Human-readable labels and native diagnostic paths are separate from it.
 
 The editor machine owns every piece of unapplied field text (a JSON schema or
-literal being typed, a node or branch rename, a path component being added) as a
+literal being typed, bounded title/description/note text, incomplete numbers,
+node/branch/schema-field renames or a new mapping key) as a
 versioned draft under its address. A draft is dirty for leaving and unloading
-and survives selection, block navigation, tab changes and component remounts or
+and survives selection, container focus, disclosure changes and component remounts or
 reuse; only a successful application, an explicit discard, or a confirmed reload
 clears it. Blur, Enter, Save and Check request an application (`APPLY_DRAFT`)
 of one exact draft version. In one context update the editor runs the field's
@@ -620,8 +625,9 @@ document and history unchanged. The draft outcomes are:
   refused structured command (for example `duplicate_identifier`) keeps the text
   with its error and changes nothing.
 
-A renamed node or branch takes the drafts of its other fields along to their new
-addresses. When another change (undo or redo, for instance) changes a field that
+A renamed node, branch or schema property takes the drafts of its owned fields
+along to their new addresses. Rename Undo/Redo carries attached drafts back and
+forward through the accepted identity change. When another change (undo or redo, for instance) changes a field that
 holds a draft, the text is kept and marked as changed: it is neither dropped nor
 reapplied, until the author keeps it over the current value or uses the current
 value. Changes to other fields do not affect a draft. Attachment and conflict are
@@ -662,7 +668,10 @@ Save and Check, by button or by Ctrl/Cmd+S from a focused field, first request t
 application of every shown field, renames last, and then pass the editor's
 pending-field gate. While any draft remains (invalid, rejected, conflicting, or in
 a field not shown), nothing is sent, and the notice lists each such field with
-Show (it opens the node and tab that hold it) and Discard.
+Show (it expands the owning container and disclosure, then focuses the exact
+field) and Discard. Copy and Duplicate refuse to export an owned subtree with
+unapplied input; resolving or discarding the listed input makes the operation
+available.
 
 Undo and redo share one bounded timeline of complete-document edits. One
 completed node drag is one metadata edit: undo restores the previous complete

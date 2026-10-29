@@ -47,6 +47,7 @@
     "crc-32": "1.2.2",
     "diff": "9.0.0",
     "dompurify": "3.4.16",
+    "elkjs": "0.12.1",
     "exceljs": "4.4.0",
     "fast-xml-parser": "5.11.1",
     "fflate": "0.8.3",

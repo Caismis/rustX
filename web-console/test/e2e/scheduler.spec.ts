@@ -43,6 +43,9 @@ test('structured time controls preserve the selected IANA zone and submit the ex
   await page.getByRole('menuitem', { name: 'Once', exact: true }).click();
   await page.getByRole('button', { name: 'Date', exact: true }).click();
   await page.getByRole('dialog', { name: 'Date', exact: true }).getByRole('gridcell', { name: '28', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Date', exact: true })).toHaveText('2026/10/28');
+  await page.getByRole('dialog', { name: 'Date', exact: true }).press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Date', exact: true })).toBeHidden();
   await page.getByRole('button', { name: 'Time', exact: true }).click();
   await page.getByRole('listbox', { name: 'Hour', exact: true }).getByRole('option', { name: '14', exact: true }).click();
   await page.getByRole('dialog', { name: 'Time', exact: true }).press('Escape');

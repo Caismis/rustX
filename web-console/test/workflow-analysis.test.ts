@@ -1,9 +1,10 @@
+import { duplicateFragment } from '../src/app/workflows/document/clipboard';
 import { expect, it } from 'vitest';
 import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowEditorMetadata, WorkflowOrderTarget } from '../../protocol/app-server/v62';
 import { WorkflowAnalysisSession, consumerAddress, type AnalysisInput } from '../src/app/workflows/document/analysis';
 import { nodeField } from '../src/app/workflows/document/fields';
-import { addNode, CommandRejected, deleteNodes, duplicateNode, removeBranch, renameBranch, renameNode } from '../src/app/workflows/document/commands';
-import { copyNodePresentation, orderedKeys, positionsIn, renameNodePresentation, setPositions } from '../src/app/workflows/document/presentation';
+import { addNode, CommandRejected, deleteNodes, removeBranch, renameBranch, renameNode } from '../src/app/workflows/document/commands';
+import { orderedKeys, positionsIn, renameNodePresentation, setPositions } from '../src/app/workflows/document/presentation';
 import { createActor, waitFor } from 'xstate';
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import type { Block, BlockPath, WorkflowDocument } from '../src/app/workflows/document/model';
@@ -119,11 +120,11 @@ it('moves metadata by structured identity on node/branch renames and keeps paren
 });
 
 it('copies a node and its private presentation in one document edit, with fresh stable note IDs', () => {
-  const original = presentationDocument(), copied = duplicateNode(original, [], 'reviews', 'checks');
-  expect(copied.block.nodes.checks).toEqual(original.block.nodes.reviews);
-  expect(positionsIn(copied, []).checks).toEqual({ x: 200, y: 100 });
+  const original = presentationDocument(), copied = duplicateFragment(original, [], ['reviews'], [], new Map([['reviews', { x: 200, y: 100 }]])).document;
+  expect(copied.block.nodes.reviews_copy).toEqual(original.block.nodes.reviews);
+  expect(positionsIn(copied, []).reviews_copy).toEqual({ x: 232, y: 132 });
   expect(copied.editor?.notes).toHaveLength(3);
-  expect(copied.editor?.notes?.[2]).toMatchObject({ id: 'child_note_copy_2', block: [{ node: 'checks', branch: 'quality' }], text: '# Private note' });
+  expect(copied.editor?.notes?.[2]).toMatchObject({ id: 'child_note_2', block: [{ node: 'reviews_copy', branch: 'quality' }], text: '# Private note' });
   expect(original.editor?.notes).toHaveLength(2);
 });
 
@@ -194,24 +195,30 @@ const orphanDestinations = ([[], [{ node: 'repeat' }]] satisfies BlockPath[]).fl
     ['private note', { notes: [{ id: 'old', block: privateBlock, text: 'Preserve me', theme: 'blue', position, dimensions }] }],
     ['private order', { orders: [{ target: { kind: 'block_output', block: privateBlock, path: [] }, fields: ['x'] }] }],
   ];
-  return kinds.flatMap(([kind, metadata]) => (['rename', 'copy'] as const).map(operation => ({ parent, kind, metadata, operation, nested: parent.length > 0 })));
+  return kinds.map(([kind, metadata]) => ({ parent, kind, metadata, nested: parent.length > 0 }));
 });
 
-it.each(orphanDestinations)('rejects $operation into a lone orphan $kind, nested=$nested, without changing history', async ({ parent, metadata, operation }) => {
+it.each(orphanDestinations)('rejects rename into a lone orphan $kind, nested=$nested, without changing history', async ({ parent, metadata }) => {
   const document = orphanNodeDocument(parent, metadata);
-  const helper = operation === 'rename' ? renameNodePresentation : copyNodePresentation;
-  expect(() => helper(document, parent, 'done', 'renamed')).toThrowError(CommandRejected);
-  await rejectedEdit(document, current => operation === 'rename' ? renameNode(current, parent, 'done', 'renamed') : duplicateNode(current, parent, 'done', 'renamed'));
+  expect(() => renameNodePresentation(document, parent, 'done', 'renamed')).toThrowError(CommandRejected);
+  await rejectedEdit(document, current => renameNode(current, parent, 'done', 'renamed'));
+});
+
+it.each(orphanDestinations)('allocates a copy beside an orphan $kind, nested=$nested, without adopting its presentation', async ({ parent, metadata }) => {
+  const orphan = JSON.parse(JSON.stringify(metadata).replaceAll('"renamed"', '"done_copy"')) as WorkflowEditorMetadata;
+  const before = orphanNodeDocument(parent, orphan);
+  const result = duplicateFragment(before, parent, ['done'], [], new Map([['done', { x: 360, y: 80 }]]));
+  expect(result.nodes).toEqual(['done_copy_2']);
+  for (const key of ['nodes', 'entries', 'branches', 'notes', 'orders'] as const) for (const entry of orphan[key] ?? []) expect(result.document.editor?.[key]).toContainEqual(entry);
+  expect(before.editor).toEqual(orphan);
 });
 
 it('keeps identically named orphan destinations in other Blocks separate', () => {
   const parent = [{ node: 'repeat' }];
   const metadata: WorkflowEditorMetadata = { nodes: [{ address: { block: [], node: 'renamed' }, title: 'Root orphan' }, { address: { block: parent, node: 'renamed_long' }, title: 'Different ID' }] };
-  for (const apply of [renameNode, duplicateNode]) {
-    const result = apply(orphanNodeDocument(parent, metadata), parent, 'done', 'renamed');
-    expect(result.editor?.nodes).toEqual(metadata.nodes);
-    expect(result.block.nodes.repeat.type).toBe('loop');
-  }
+  const result = renameNode(orphanNodeDocument(parent, metadata), parent, 'done', 'renamed');
+  expect(result.editor?.nodes).toEqual(metadata.nodes);
+  expect(result.block.nodes.repeat.type).toBe('loop');
 });
 
 it.each(['lane', 'entry', 'note', 'branches order', 'output order', 'output path'] as const)('rejects branch rename into a lone orphan %s without a source metadata entry', async kind => {
