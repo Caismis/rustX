@@ -5,14 +5,14 @@ import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../p
 import { useTranslation } from '../../../../locale/react';
 import { IconCheckOutline14, IconCloseOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
 import { disconnect, deleteNodes, renameNode } from '../../document/commands';
-import { nodePresentation, putNote, removeNotes } from '../../document/geometry';
+import { entryPresentation, nodePresentation, putNote, removeNotes } from '../../document/geometry';
 import { nodeField } from '../../document/fields';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
 import { blockAt, edgesOf, nodeAt, type BlockPath, type WorkflowDocument } from '../../document/model';
 import { edgePort } from '../../document/ports';
 import type { WorkflowScopePort } from '../../port';
 import type { CheckResult } from '../../machines/editor';
-import { IconBlock, KindIcon } from '../icons';
+import { IconBlock, IconEntry, KindIcon } from '../icons';
 import type { Duplicate, Selection } from './selection';
 import { BlockForm } from './forms/BlockForm';
 import { NodePanel } from './panels/NodePanel';
@@ -103,8 +103,19 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
         <button type="button" className={css.smallButton} onClick={() => { edit(document => removeNotes(document, [note.id])); onSelect(undefined); }}>{tx('workflows:note.delete')}</button></div>
     </>;
   } else {
-    head = <div className={css.inspectTitle}><span className={css.nodeIcon}><IconBlock size={17} /></span><span className={css.nodeText}><span className={css.nodeTitle}>{selection.kind === 'start' ? tx(path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start') : tx(path.length ? 'workflows:inspector.block-title' : 'workflows:inspector.workflow-title')}</span></span></div>;
-    body = owner && <BlockForm document={document} block={path} edit={edit} start={selection.kind === 'start'} />;
+    const entry = selection.kind === 'start' ? entryPresentation(document, path) : undefined;
+    const startTitle = tx(path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start');
+    const entryField = (field: 'title' | 'description'): FieldAddress => ({ block: path, path: [field], role: 'value', domain: { kind: 'entry_presentation' } });
+    head = selection.kind === 'start'
+      // As a node: the title is an inline heading that reverts to its default when cleared.
+      ? <div className={css.inspectTitle}><span className={clsx(css.nodeIcon, css.startIcon)}><IconEntry size={17} /></span><span className={css.nodeText}>
+        <DraftTextField compact label={tx('workflows:panel.title')} placeholder={startTitle} value={entry?.title || startTitle} address={entryField('title')} />
+        <span className={css.nodeType}>{tx(path.length ? 'workflows:panel.body-input' : 'workflows:panel.arguments')}</span></span></div>
+      : <div className={css.inspectTitle}><span className={css.nodeIcon}><IconBlock size={17} /></span><span className={css.nodeText}><span className={css.nodeTitle}>{tx(path.length ? 'workflows:inspector.block-title' : 'workflows:inspector.workflow-title')}</span></span></div>;
+    body = owner && <>
+      {selection.kind === 'start' && <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={entry?.description ?? ''} multiline address={entryField('description')} />}
+      <BlockForm document={document} block={path} edit={edit} start={selection.kind === 'start'} />
+    </>;
   }
   return <aside ref={root} className={css.inspector} style={{ '--inspector-width': `${width}px` } as CSSProperties} aria-label={tx('workflows:inspector.label')} onWheel={event => event.stopPropagation()}
     onKeyDown={event => { if (event.key === 'Escape' && !event.isDefaultPrevented() && !(event.target as Element).closest('textarea, input, select, [role="dialog"], [role="listbox"]')) { event.stopPropagation(); onSelect(undefined); } }}>

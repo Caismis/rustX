@@ -37,7 +37,7 @@ export function Palette({ at, onChoose, onClose, insertion = false }: { at: { x:
     <p className={css.paletteTitle}>{tx('workflows:palette.available')}</p>
     <ul id="workflow-palette" role="listbox" aria-label={tx('workflows:palette.available')}>
       {kinds.map((kind, index) => <li key={kind} id={`workflow-palette-${kind}`} role="option" aria-selected={index === active}
-        className={clsx(css.paletteOption, index === active && css.paletteActive)} onMouseEnter={() => setActive(index)} onClick={() => onChoose(kind)}>
+        className={clsx(css.paletteOption, index === active && css.paletteActive)} title={tx(`workflows:kind-about.${kind}`)} onMouseEnter={() => setActive(index)} onClick={() => onChoose(kind)}>
         <KindIcon kind={kind} size={15} />{tx(`workflows:kind.${kind}`)}
       </li>)}
       {!kinds.length && <li className={css.note}>{tx('workflows:palette.none')}</li>}

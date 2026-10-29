@@ -394,8 +394,21 @@
           },
           "type": "array"
         },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "position": {
           "$ref": "#/$defs/WorkflowPosition"
+        },
+        "title": {
+          "description": "The Start node's author-facing title and description, bounded as a\nnode's; models never see them.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

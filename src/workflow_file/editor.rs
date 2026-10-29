@@ -65,6 +65,12 @@ pub struct WorkflowNodePresentation {
 pub struct WorkflowEntryPresentation {
     pub block: Vec<WorkflowBlockStep>,
     pub position: WorkflowPosition,
+    /// The Start node's author-facing title and description, bounded as a
+    /// node's; models never see them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -261,24 +267,23 @@ impl WorkflowEditorMetadata {
                 || node.description.as_ref().is_some_and(|s| s.len() > 4096)
                 || node.position.is_some_and(|p| !position_valid(p))
                 || node.dimensions.is_some_and(|d| !dimensions_valid(d))
-        }) || self
-            .entries
-            .iter()
-            .any(|entry| !block_valid(&entry.block) || !position_valid(entry.position))
-            || self.branches.iter().any(|lane| {
-                !address_valid(&lane.address)
-                    || !key(&lane.branch)
-                    || !position_valid(lane.position)
-                    || !dimensions_valid(lane.dimensions)
-            })
-            || self.notes.iter().any(|note| {
-                !block_valid(&note.block)
-                    || !key(&note.id)
-                    || note.text.len() > 16 * 1024
-                    || !position_valid(note.position)
-                    || !dimensions_valid(note.dimensions)
-            })
-        {
+        }) || self.entries.iter().any(|entry| {
+            !block_valid(&entry.block)
+                || !position_valid(entry.position)
+                || entry.title.as_ref().is_some_and(|s| s.len() > 256)
+                || entry.description.as_ref().is_some_and(|s| s.len() > 4096)
+        }) || self.branches.iter().any(|lane| {
+            !address_valid(&lane.address)
+                || !key(&lane.branch)
+                || !position_valid(lane.position)
+                || !dimensions_valid(lane.dimensions)
+        }) || self.notes.iter().any(|note| {
+            !block_valid(&note.block)
+                || !key(&note.id)
+                || note.text.len() > 16 * 1024
+                || !position_valid(note.position)
+                || !dimensions_valid(note.dimensions)
+        }) {
             return Err(invalid(
                 "invalid editor address, UTF-8 text bound or finite geometry (coordinates ±1000000; dimensions 16..8192)",
             ));

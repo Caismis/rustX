@@ -112,3 +112,17 @@ it('adds an optional input field through the dialog, validating it before one na
   expect(input.properties.tone).toEqual({ type: 'string', maxLength: 8, enum: ['formal', 'casual'], default: 'casual' });
   expect(input.required).not.toContain('tone');
 });
+
+it('titles a new node by its kind, numbered after the first, with the kind\'s description', async () => {
+  const editor = await mountSettings();
+  const add = () => {
+    fireEvent.click(within(screen.getByRole('toolbar')).getByRole('button', { name: 'Add node' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Model' }));
+  };
+  add(); add();
+  const nodes = (editor.getSnapshot().context.document!.editor!.nodes ?? []).filter(node => node.title?.startsWith('Model'));
+  expect(nodes.map(node => [node.title, node.description])).toEqual([
+    ['Model', 'Call a language model once to answer, summarize or extract from the input.'],
+    ['Model 2', 'Call a language model once to answer, summarize or extract from the input.'],
+  ]);
+});

@@ -9563,6 +9563,12 @@ export interface WorkflowDimensions {
 export interface WorkflowEntryPresentation {
   block: WorkflowBlockStep[];
   position: WorkflowPosition;
+  /**
+   * The Start node's author-facing title and description, bounded as a
+   * node's; models never see them.
+   */
+  title?: string | null;
+  description?: string | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

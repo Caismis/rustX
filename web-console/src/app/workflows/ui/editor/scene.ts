@@ -1,7 +1,7 @@
 import type { Node, Edge } from '@xyflow/react';
 import type { WorkflowNote } from '../../../../../../protocol/app-server/v62';
-import { nodePresentation } from '../../document/geometry';
-import { blockKey, edgesOf, nodeAt, sameBlockPath, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../../document/model';
+import { nodePresentation, START_POSITION } from '../../document/geometry';
+import { edgesOf, nodeAt, sameBlockPath, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../../document/model';
 import { edgePort } from '../../document/ports';
 import { schemaObject } from '../../document/schema';
 import { orderedKeys } from '../../document/presentation';
@@ -45,8 +45,8 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
     const entryId = viewId(path, 'start');
     const start = document.editor?.entries?.find(entry => sameBlockPath(entry.block, path));
     const fields = schemaFields(block.input, keys => orderedKeys(document, { kind: 'block_input', block: [...path], path: [] }, keys));
-    local.push({ id: entryId, type: 'workflow', parentId, position: start?.position ?? { x: 32, y: 80 }, width: NODE_WIDTH, height: Math.max(112, 76 + fields.length * 26), deletable: false,
-      data: { view: 'start', path, local: '', title: path.length ? blockKey(path) : '', fields, minSize: { width: NODE_WIDTH, height: 112 } } });
+    local.push({ id: entryId, type: 'workflow', parentId, position: start?.position ?? START_POSITION, width: NODE_WIDTH, height: Math.max(112, 76 + fields.length * 26) + (start?.description?.trim() ? DESCRIPTION_HEIGHT : 0), deletable: false,
+      data: { view: 'start', path, local: '', title: start?.title ?? '', description: start?.description ?? undefined, fields, minSize: { width: NODE_WIDTH, height: 112 + (start?.description?.trim() ? DESCRIPTION_HEIGHT : 0) } } });
     let x = 360;
     const ids = [...new Set([block.entry, ...edgesOf(block).flatMap(edge => [edge.from, edge.to]), ...Object.keys(block.nodes).sort()])].filter(id => nodeAt(block, id));
     for (const id of ids) {

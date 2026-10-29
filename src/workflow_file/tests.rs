@@ -13,7 +13,7 @@ fn annotated() -> WorkflowFileDocument {
     document.editor=Some(serde_json::from_value(json!({
         "nodes":[{"address":{"block":[],"node":"reviews"},"title":"Review lanes","description":"Author-only guidance","position":{"x":0.5,"y":-40.0},"dimensions":{"width":900.0,"height":600.0}},
             {"address":{"block":[{"node":"reviews","branch":"quality"}],"node":"done"},"position":{"x":200.0,"y":300.0}}],
-        "entries":[{"block":[],"position":{"x":-200.0,"y":0.0}}],
+        "entries":[{"block":[],"position":{"x":-200.0,"y":0.0},"title":"User input","description":"Where the user uploads files"}],
         "branches":[{"address":{"block":[],"node":"reviews"},"branch":"quality","position":{"x":0.0,"y":0.0},"dimensions":{"width":450.0,"height":600.0}}],
         "notes":[{"id":"note_1","block":[{"node":"reviews","branch":"quality"}],"text":"# Review\n\n**Markdown** and 中文 🦀\n","theme":"blue","position":{"x":-100.0,"y":200.0},"dimensions":{"width":240.0,"height":180.0}}],
         "orders":[{"target":{"kind":"branches","address":{"block":[],"node":"reviews"}},"fields":["security","quality"]}]
@@ -127,6 +127,9 @@ fn metadata_bounds_and_stale_references_have_distinct_non_destructive_outcomes()
     let mut invalid = before.clone();
     invalid.editor.as_mut().unwrap().notes[0].dimensions.width = 0.0;
     assert!(invalid.validate().is_err());
+    let mut invalid = before.clone();
+    invalid.editor.as_mut().unwrap().entries[0].title = Some("界".repeat(86));
+    assert!(invalid.validate().is_err(), "Start title UTF-8 byte bound");
 }
 
 #[test]

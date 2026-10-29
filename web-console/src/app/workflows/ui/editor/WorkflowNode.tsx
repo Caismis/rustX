@@ -36,7 +36,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected }: N
     {node && <Handle type="target" position={Position.Left} id="in" className={css.handle} style={container ? { top: 28 } : undefined} aria-hidden="true" />}
     <div className={clsx(css.nodeHead, container && css.containerHead)}>
       <span className={clsx(css.nodeIcon, node ? css[`kind_${node.type}`] : css.startIcon)}>{node ? <KindIcon kind={node.type} size={17} /> : <IconEntry size={17} />}</span>
-      <span className={css.nodeText}><span className={css.nodeTitle}>{data.view === 'start' ? tx(data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start') : data.title}</span><span className={css.nodeType}>{node ? tx(`workflows:kind.${node.type}`) : tx(data.path.length ? 'workflows:panel.body-input' : 'workflows:panel.arguments')}</span></span>
+      <span className={css.nodeText}><span className={css.nodeTitle}>{data.view === 'start' ? data.title || tx(data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start') : data.title}</span><span className={css.nodeType}>{node ? tx(`workflows:kind.${node.type}`) : tx(data.path.length ? 'workflows:panel.body-input' : 'workflows:panel.arguments')}</span></span>
       {node && (node.type === 'loop' || node.type === 'parallel') && <button type="button" className={clsx(css.iconButton, 'nodrag nopan')} aria-label={tx(data.expanded ? 'workflows:canvas.collapse' : 'workflows:canvas.expand', { p0: data.title })} onClick={event => { event.stopPropagation(); actions.collapse(id); }}>{data.expanded ? '−' : '+'}</button>}
       <button type="button" className={clsx(css.iconButton, css.nodeMenu, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local || tx('workflows:canvas.start') })} onClick={event => { event.stopPropagation(); data.view === 'start' ? actions.addIn(id, event.currentTarget) : actions.menu(id, event.currentTarget); }}><IconEllipsisOutline16 /></button>
     </div>
@@ -45,7 +45,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected }: N
       {node?.type === 'branch' && <div className={css.branchConditions}><div><strong>{tx('workflows:canvas.if')}</strong><span>{nodeSummary(tx, node)}</span></div><div><strong>{tx('workflows:canvas.else')}</strong></div></div>}
       {!!data.fields?.length && <div className={css.nodeFields}>{data.fields.map(field => <div key={field.name}><b aria-hidden>{'{x}'}</b><span>{field.name}</span>{data.view === 'start' && field.required && <small>{tx('workflows:schema.required')}</small>}<code>{field.type}</code></div>)}</div>}
       {/* As Dify's NodeDescription: after the body, so ports keep their places. */}
-      {node && data.description?.trim() && <p className={css.nodeDescription}>{data.description}</p>}
+      {(node || data.view === 'start') && data.description?.trim() && <p className={css.nodeDescription}>{data.description}</p>}
     </>}
     {ports.map((port, index) => {
       const top = container ? 28 + index * 30 : node?.type === 'branch' ? 94 + index * 46 : ports.length > 1 ? 52 + index * 36 : '50%';

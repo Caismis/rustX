@@ -1,4 +1,4 @@
-import type { WorkflowBranchPresentation, WorkflowDimensions, WorkflowNodePresentation, WorkflowNote, WorkflowOrderTarget, WorkflowPosition } from '../../../../../protocol/app-server/v62';
+import type { WorkflowBranchPresentation, WorkflowDimensions, WorkflowEntryPresentation, WorkflowNodePresentation, WorkflowNote, WorkflowOrderTarget, WorkflowPosition } from '../../../../../protocol/app-server/v62';
 import { CommandRejected, validLocalKey } from './commands';
 import { blockAt, nodeAt, sameBlockPath, sameDocument, type BlockPath, type WorkflowDocument } from './model';
 import { emptyPresentation } from './presentation';
@@ -36,11 +36,27 @@ export function setNodePresentation(document: WorkflowDocument, block: BlockPath
     return { ...editor, nodes };
   });
 }
-export function setEntryPosition(document: WorkflowDocument, block: BlockPath, point: WorkflowPosition): WorkflowDocument {
-  if (!blockAt(document, block)) throw new CommandRejected('missing_node');
-  position(point);
-  return presentationEdit(document, editor => ({ ...editor, entries: [...(editor.entries ?? []).filter(entry => !sameBlockPath(entry.block, block)), { block: [...block], position: point }] }));
+export function entryPresentation(document: WorkflowDocument, block: BlockPath): WorkflowEntryPresentation | undefined {
+  return document.editor?.entries?.find(entry => sameBlockPath(entry.block, block));
 }
+/** A block's Start node: its position, title and description. Its default
+ * position is the scene's until one is authored. */
+export function setEntryPresentation(document: WorkflowDocument, block: BlockPath, changes: Partial<Omit<WorkflowEntryPresentation, 'block'>>): WorkflowDocument {
+  if (!blockAt(document, block)) throw new CommandRejected('missing_node');
+  if (changes.title != null && utf8Length(changes.title) > 256 || changes.description != null && utf8Length(changes.description) > 4096) throw new CommandRejected('limit_exceeded');
+  if (changes.position) position(changes.position);
+  const current = entryPresentation(document, block);
+  const value: WorkflowEntryPresentation = { ...current, ...changes, block: [...block], position: changes.position ?? current?.position ?? START_POSITION };
+  // An empty title or description is the default, not authored text.
+  if (!value.title) delete value.title;
+  if (!value.description) delete value.description;
+  return presentationEdit(document, editor => ({ ...editor, entries: [...(editor.entries ?? []).filter(entry => !sameBlockPath(entry.block, block)), value] }));
+}
+export function setEntryPosition(document: WorkflowDocument, block: BlockPath, point: WorkflowPosition): WorkflowDocument {
+  return setEntryPresentation(document, block, { position: point });
+}
+/** Where the scene draws a Start node without an authored position. */
+export const START_POSITION: WorkflowPosition = { x: 32, y: 80 };
 export function setLane(document: WorkflowDocument, value: WorkflowBranchPresentation): WorkflowDocument {
   const owner = blockAt(document, value.address.block), node = owner && nodeAt(owner, value.address.node);
   if (node?.type !== 'parallel' || !Object.hasOwn(node.branches, value.branch)) throw new CommandRejected('missing_branch');

@@ -232,7 +232,10 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       if (chosen.edge && !sameDocument(edgesOf(block)[chosen.edge.index], chosen.edge.value)) throw new CommandRejected('missing_edge');
       const next = chosen.edge ? insertNode(document, chosen.path, chosen.edge.index, kind, id) : addNode(document, chosen.path, kind, id, chosen.from && { from: chosen.from.node, port: chosen.from.port });
       if (deepNodeCount(next.block) > 256) throw new CommandRejected('limit_exceeded');
-      return setNodePresentation(next, chosen.path, id, { position: chosen.position });
+      // As Dify: a new node is titled by its kind, numbered after the first
+      // of that kind in its block, and starts with the kind's description.
+      const name = tx(`workflows:kind.${kind}`), same = Object.values(block.nodes).filter(node => node.type === kind).length;
+      return setNodePresentation(next, chosen.path, id, { position: chosen.position, title: same ? `${name} ${same + 1}` : name, description: tx(`workflows:kind-about.${kind}`) });
     });
     setPalette(undefined); if (added) onSelect({ kind: 'node', id: added, path: chosen.path });
   };

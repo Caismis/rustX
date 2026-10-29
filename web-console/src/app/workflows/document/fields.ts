@@ -1,7 +1,7 @@
 import { CommandRejected, replaceNode } from './commands';
 import { blockAt, nodeAt, sameBlockPath, updateBlock, type BlockPath, type WorkflowDocument } from './model';
-import { nodePresentation, putNote, setNodePresentation } from './geometry';
-import type { WorkflowNodePresentation, WorkflowNote } from '../../../../../protocol/app-server/v62';
+import { entryPresentation, nodePresentation, putNote, setEntryPresentation, setNodePresentation } from './geometry';
+import type { WorkflowEntryPresentation, WorkflowNodePresentation, WorkflowNote } from '../../../../../protocol/app-server/v62';
 
 /** One component of a field path inside a node or block. A string is a
  * structural property of the native authoring type, `{ key }` an authored
@@ -25,7 +25,7 @@ export interface FieldAddress {
   readonly node?: string;
   readonly path: readonly FieldStep[];
   readonly role: FieldRole;
-  readonly domain?: { readonly kind: 'node_presentation' } | { readonly kind: 'note'; readonly id: string };
+  readonly domain?: { readonly kind: 'node_presentation' } | { readonly kind: 'entry_presentation' } | { readonly kind: 'note'; readonly id: string };
 }
 
 export function nodeField(block: BlockPath, node: string, path: readonly FieldStep[] = [], role: FieldRole = 'value'): FieldAddress {
@@ -73,6 +73,7 @@ function root(document: WorkflowDocument, address: FieldAddress): unknown {
     if (!address.node || !nodeAt(block, address.node)) return MISSING;
     return { ...nodePresentation(document, address.block, address.node), title: nodePresentation(document, address.block, address.node)?.title ?? address.node, description: nodePresentation(document, address.block, address.node)?.description ?? '' };
   }
+  if (address.domain?.kind === 'entry_presentation') { const entry = entryPresentation(document, address.block); return { ...entry, title: entry?.title ?? '', description: entry?.description ?? '' }; }
   if (address.node === undefined) return block;
   return nodeAt(block, address.node) ?? MISSING;
 }
@@ -143,6 +144,7 @@ export function setField(document: WorkflowDocument, address: FieldAddress, valu
   const block = blockAt(document, address.block);
   if (!block) throw new CommandRejected('missing_node');
   if (address.domain?.kind === 'node_presentation' && address.node) return setNodePresentation(document, address.block, address.node, setIn(root(document, address), address.path, value) as WorkflowNodePresentation);
+  if (address.domain?.kind === 'entry_presentation') { const { block: _block, ...changes } = setIn(root(document, address), address.path, value) as WorkflowEntryPresentation; return setEntryPresentation(document, address.block, changes); }
   if (address.domain?.kind === 'note') return putNote(document, setIn(root(document, address), address.path, value) as WorkflowNote);
   if (address.node === undefined) return updateBlock(document, address.block, current => setIn(current, address.path, value, address.role === 'optional') as typeof current);
   const node = nodeAt(block, address.node);
