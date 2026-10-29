@@ -1,6 +1,6 @@
 import { branchPortLabel } from '../../document/branch';
 import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react-dom';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
@@ -16,6 +16,25 @@ import type { Edit } from './panels/shared';
 import css from './Editor.module.css';
 
 type Port = ControlPort;
+/** The vertical middle of the 34px source tile. */
+const SOURCE_MIDDLE = 17;
+
+/** Dify's Line: straight to the first port, then curving down to each later
+ * one, with a short tick where each line meets a port. */
+function NextLine({ anchors }: { anchors: readonly number[] }) {
+  const y = SOURCE_MIDDLE;
+  return <svg className={css.nextLine} width={24} height={(anchors.at(-1) ?? y) + 4} aria-hidden="true">
+    <rect x={0} y={y - 2} width={1} height={4} />
+    {anchors.map((anchor, index) => {
+      const end = index ? anchor : y;
+      return <g key={index}>
+        <path d={index ? `M0,${y} Q12,${y} 12,${y + 10} L12,${end - 10} Q12,${end} 24,${end}` : `M0,${y} L24,${y}`} />
+        <rect x={23} y={end - 2} width={1} height={4} />
+      </g>;
+    })}
+  </svg>;
+}
+
 type Tab = 'nodes' | 'tools' | 'existing';
 type Choice = { kind: NodeKind; group: string } | { id: string };
 
@@ -36,6 +55,24 @@ export function NextStep({ document, block, source, edit, onSelect }: {
   const { refs, floatingStyles, isPositioned } = useFloating({
     open: !!openPort, placement: 'left-start', strategy: 'fixed', whileElementsMounted: autoUpdate,
     middleware: [offset(8), flip({ fallbackPlacements: ['right-start'], crossAxis: false }), shift({ padding: 12 })],
+  });
+  // As Dify's next-step Line: one SVG connector from the source tile to each
+  // port, meeting a labelled port at its label, as Dify's branch rows do.
+  const portList = useRef<HTMLDivElement>(null), [anchors, setAnchors] = useState<number[]>([]);
+  useLayoutEffect(() => {
+    const element = portList.current;
+    if (!element) return;
+    const measure = () => setAnchors(current => {
+      const next = [...element.children].map(child => {
+        const label = child.querySelector<HTMLElement>('[data-port-label]');
+        return Math.round(label ? label.offsetTop + label.offsetHeight / 2 : (child as HTMLElement).offsetTop + SOURCE_MIDDLE);
+      });
+      return next.length === current.length && next.every((value, index) => value === current[index]) ? current : next;
+    });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
   });
   const close = (restoreFocus = false) => { setOpenPort(undefined); if (restoreFocus) trigger.current?.focus(); };
   useEffect(() => {
@@ -114,12 +151,12 @@ export function NextStep({ document, block, source, edit, onSelect }: {
       <span className={clsx(css.nextSource, sourceNode?.type === 'start' ? css.startIcon : css[`kind_${sourceNode!.type}`])}>
         {sourceNode?.type === 'start' ? <IconEntry size={18} /> : <KindIcon kind={sourceNode!.type} size={18} />}
       </span>
-      <span className={css.nextConnector} aria-hidden="true" />
-      <div className={css.nextPorts}>
+      <NextLine anchors={anchors} />
+      <div ref={portList} className={css.nextPorts}>
         {ports.map(port => {
           const targets = targetsFor(port);
           return <div key={port} className={css.nextPort}>
-            {ports.length > 1 && <span className={css.nextPortLabel}>{portLabel(port)}</span>}
+            {ports.length > 1 && <span className={css.nextPortLabel} data-port-label>{portLabel(port)}</span>}
             {targets.map(target => { const targetNode = nodeAt(owner, target); return <div key={target} className={css.nextConnected}>
               <button type="button" className={css.nextTarget} title={nodeTitle(target)} onClick={() => onSelect({ kind: 'node', id: target, path: block })}>
                 <span className={clsx(css.nextTargetIcon, targetNode && css[`kind_${targetNode.type}`])}>{targetNode ? <KindIcon kind={targetNode.type} size={15} /> : <IconBlock size={15} />}</span>

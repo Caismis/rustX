@@ -202,8 +202,10 @@
 .nextFlow { display: flex; align-items: flex-start; min-width: 0; }
 .nextSource { display: flex; flex: none; align-items: center; justify-content: center; width: 34px; height: 34px; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-1); }
 .nextSource svg { padding: 2px; border-radius: 5px; background: var(--node-kind-color); color: #fff; }
-.nextConnector { flex: none; width: 22px; height: 17px; border-bottom: 1px solid var(--dsw-alias-border-l3); }
-.nextPorts { flex: 1; min-width: 0; display: grid; gap: 8px; }
+.nextLine { flex: none; overflow: visible; }
+.nextLine path { fill: none; stroke: var(--dsw-alias-border-l2); stroke-width: 1; }
+.nextLine rect { fill: var(--dsw-alias-label-tertiary); }
+.nextPorts { position: relative; flex: 1; min-width: 0; display: grid; gap: 8px; }
 .nextPort { min-width: 0; padding: 2px; border-radius: 9px; background: var(--dsw-alias-bg-layer-2); }
 .nextPortLabel { display: block; padding: 2px 8px 5px; color: var(--dsw-alias-label-tertiary); font-size: 10.5px; font-weight: 600; }
 .nextConnected { display: flex; align-items: center; gap: 2px; min-height: 34px; margin-bottom: 2px; padding: 0 4px 0 1px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; background: var(--dsw-alias-bg-layer-1); }
@@ -627,11 +629,7 @@
 .branchConditionValue .input { width: 100%; min-height: 25px; padding: 2px 0; border: 0; background: transparent; box-shadow: none; font-size: 12px; }
 .branchRemoveCondition { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 22px; width: 22px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 .branchNull { padding: 6px; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
-.branchNextFlow .nextPorts { position: relative; gap: 8px; }
-.branchNextFlow .nextPort { position: relative; padding: 6px 6px 6px 10px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
-.branchNextFlow .nextPort::before { content: ''; position: absolute; left: -25px; top: -8px; width: 23px; height: 25px; border-left: 1px solid var(--dsw-alias-border-l3); border-bottom: 1px solid var(--dsw-alias-border-l3); border-bottom-left-radius: 10px; }
-.branchNextFlow .nextPort:first-child::before { top: 0; height: 17px; border-left: 0; border-bottom-left-radius: 0; }
-.branchNextFlow .nextPort:not(:last-child)::after { content: ''; position: absolute; left: -25px; top: 17px; bottom: -8px; border-left: 1px solid var(--dsw-alias-border-l3); }
+.branchNextFlow .nextPort { padding: 6px 6px 6px 10px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
 .branchNextFlow .nextPortLabel { margin: 0 0 4px; font-size: 10px; }
 
 .branchVariablePopup { z-index: 100; width: 328px; max-width: calc(100vw - 24px); max-height: min(380px, calc(100vh - 24px)); box-sizing: border-box; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 10px 28px rgba(0,0,0,.14); }
