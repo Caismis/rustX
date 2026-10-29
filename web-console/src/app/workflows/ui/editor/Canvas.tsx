@@ -6,7 +6,7 @@ import { useTranslation } from '../../../../locale/react';
 import { IconSearchOutline16 } from '../../../../presentation/primitives/icons';
 import { writeClipboard } from '../../../../presentation/primitives/clipboard';
 import type { FieldDraft } from '../../machines/editor';
-import { CommandRejected, addBefore, addNode, deleteNodes, disconnect, freshIdentifier, insertEntry, insertNode } from '../../document/commands';
+import { CommandRejected, addBefore, addNode, clearEntry, deleteNodes, disconnect, freshIdentifier, insertEntry, insertNode } from '../../document/commands';
 import { copyFragment, fragmentOwnsField, parseFragment, pasteFragment } from '../../document/clipboard';
 import { freshNote, putNote, removeNotes, setEntryPosition, setLane, setNodePresentation } from '../../document/geometry';
 import { blockAt, blockKey as keyOfBlock, deepNodeCount, edgesOf, nodeAt, sameBlockPath, sameDocument, type Block, type BlockPath, type NodeKind, type WorkflowDocument } from '../../document/model';
@@ -105,7 +105,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         ? { ...node, measured: old.measured } : node;
     });
   }), [projected]);
-  const edges = useMemo(() => scene.edges.map(edge => ({ ...edge, reconnectable: editable, selected: selection?.kind === 'edge' && sameBlockPath(scope, edge.data!.path) && selection.index === edge.data!.index,
+  const edges = useMemo(() => scene.edges.map(edge => ({ ...edge, reconnectable: editable, selected: selection?.kind === 'edge' ? sameBlockPath(scope, edge.data!.path) && selection.index === edge.data!.index : selection?.kind === 'entry' && !!edge.data!.entry && sameBlockPath(selection.path, edge.data!.path),
     className: clsx(css.edge, edge.data?.entry && css.entryEdge, problems.edges.has(edge.id) && css.edgeError) })), [scene, editable, selection, scope, problems]);
   const byId = useMemo(() => new Map(scene.nodes.map(node => [node.id, node])), [scene]);
   const choose = useCallback((node: SceneNode, multiple = false) => {
@@ -145,7 +145,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     if (!dragged.current) persist(changes.flatMap(change => { if (change.type !== 'position') return []; const node = byId.get(change.id); return change.dragging === false && change.position && node ? [{ ...node, position: change.position }] : []; }));
   }, [byId, choose, persist]);
   const onEdgesChange = useCallback((changes: EdgeChange<SceneEdge>[]) => {
-    for (const change of changes) if (change.type === 'select' && change.selected) { const edge = scene.edges.find(edge => edge.id === change.id); if (edge?.data?.index !== undefined) onSelect({ kind: 'edge', index: edge.data.index, path: edge.data.path }); }
+    for (const change of changes) if (change.type === 'select' && change.selected) { const edge = scene.edges.find(edge => edge.id === change.id); if (edge?.data) onSelect(edge.data.index !== undefined ? { kind: 'edge', index: edge.data.index, path: edge.data.path } : { kind: 'entry', path: edge.data.path }); }
   }, [scene.edges, onSelect]);
 
   const connectionCommand = useCallback((current: WorkflowDocument, connection: Connection, old?: SceneEdge) =>
@@ -243,6 +243,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       for (const group of [...groups.values()].sort((a, b) => b.path.length - a.path.length)) next = deleteNodes(next, group.path, group.ids);
       const notes = chosen.filter(node => node.data.view === 'note').map(node => node.data.local); if (notes.length) next = removeNotes(next, notes);
       if (!chosen.length && selection?.kind === 'edge') next = disconnect(next, scope, [selection.index]);
+      if (!chosen.length && selection?.kind === 'entry') next = clearEntry(next, selection.path);
       return next;
     });
     setSelected(new Set()); onSelect(undefined);
@@ -339,7 +340,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         onReconnectStart={(_, edge) => { reconnecting.current = edge; }} onReconnectEnd={() => { reconnecting.current = undefined; }}
         isValidConnection={isValidConnection} edgesReconnectable={editable} nodesConnectable={editable} deleteKeyCode={null} nodesDraggable={editable}
         onNodeClick={(event, node) => choose(node, event.metaKey || event.ctrlKey || event.shiftKey)}
-        onEdgeClick={(_, edge) => { container.current?.focus({ preventScroll: true }); if (edge.data?.index !== undefined) { setSelected(new Set()); onSelect({ kind: 'edge', index: edge.data.index, path: edge.data.path }); } else if (edge.data?.entry) onSelect({ kind: 'start', path: edge.data.path }); }}
+        onEdgeClick={(_, edge) => { container.current?.focus({ preventScroll: true }); if (!edge.data) return; setSelected(new Set()); onSelect(edge.data.index !== undefined ? { kind: 'edge', index: edge.data.index, path: edge.data.path } : { kind: 'entry', path: edge.data.path }); }}
         onNodeContextMenu={(event, node) => { event.preventDefault(); const bounds = container.current!.getBoundingClientRect(); setMenu({ id: node.id, at: { x: Math.min(event.clientX - bounds.left, bounds.width - 205), y: Math.min(event.clientY - bounds.top, bounds.height - 180) } }); }}
         onPaneClick={() => { setPalette(undefined); setMenu(undefined); onSelect(undefined); setSelected(new Set()); container.current?.focus({ preventScroll: true }); }}
         onPaneContextMenu={event => { if (!editable) return; event.preventDefault(); openAt({ x: event.clientX, y: event.clientY }, flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }), []); }}

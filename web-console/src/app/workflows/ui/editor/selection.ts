@@ -5,6 +5,7 @@ import type { BlockPath } from '../../document/model';
 export type Selection =
   | { kind: 'node'; id: string; path?: BlockPath }
   | { kind: 'edge'; index: number; path?: BlockPath }
+  | { kind: 'entry'; path: BlockPath }
   | { kind: 'start'; path: BlockPath }
   | { kind: 'note'; id: string; path: BlockPath }
   | { kind: 'block'; path?: BlockPath }

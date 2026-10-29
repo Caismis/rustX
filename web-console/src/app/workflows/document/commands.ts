@@ -175,6 +175,13 @@ export function setEntry(document: WorkflowDocument, path: BlockPath, id: string
   return updateBlock(document, path, current => ({ ...current, entry: id }));
 }
 
+/** Remove the Start → entry connection. The empty entry is left for the
+ * native check to report, as a deleted entry node is. */
+export function clearEntry(document: WorkflowDocument, path: BlockPath): WorkflowDocument {
+  require(blockAt(document, path));
+  return updateBlock(document, path, current => ({ ...current, entry: '' }));
+}
+
 export function connect(document: WorkflowDocument, path: BlockPath, from: string, port: ControlPort, to: string): WorkflowDocument {
   const block = require(blockAt(document, path));
   checkConnection(block, from, port, to);

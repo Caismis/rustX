@@ -4,12 +4,11 @@ import clsx from 'clsx';
 import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../locale/react';
 import { IconCheckOutline14, IconCloseOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
-import { disconnect, deleteNodes, renameNode } from '../../document/commands';
+import { deleteNodes, renameNode } from '../../document/commands';
 import { entryPresentation, nodePresentation, putNote, removeNotes } from '../../document/geometry';
 import { nodeField } from '../../document/fields';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
-import { blockAt, edgesOf, nodeAt, type BlockPath, type WorkflowDocument } from '../../document/model';
-import { edgePort } from '../../document/ports';
+import { blockAt, nodeAt, type BlockPath, type WorkflowDocument } from '../../document/model';
 import type { WorkflowScopePort } from '../../port';
 import type { CheckResult } from '../../machines/editor';
 import { IconBlock, IconEntry, KindIcon } from '../icons';
@@ -86,10 +85,6 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
       <div className={css.row}><button type="button" className={css.smallButton} onClick={() => onDuplicate(path, [id], [])}>{tx('workflows:canvas.duplicate')}</button>
         <button type="button" className={clsx(css.smallButton, css.dangerText)} onClick={() => edit(document => deleteNodes(document, path, [id]))}>{tx('workflows:inspector.delete-node')}</button></div>
     </>;
-  } else if (selection.kind === 'edge' && owner && edgesOf(owner)[selection.index]) {
-    const edge = edgesOf(owner)[selection.index];
-    head = <div className={css.nodeText}><span className={css.nodeTitle}>{edge.from} → {edge.to}</span><span className={css.nodeType}>{tx(`workflows:port.${edgePort(edge)}`)}</span></div>;
-    body = <button type="button" className={clsx(css.smallButton, css.dangerText)} onClick={() => { edit(document => disconnect(document, path, [selection.index])); onSelect(undefined); }}>{tx('workflows:inspector.remove', { p0: `${edge.from} → ${edge.to}` })}</button>;
   } else if (selection.kind === 'check') {
     head = <span className={css.nodeTitle}>{tx('workflows:check.problems')}</span>; body = checks;
   } else if (selection.kind === 'note') {

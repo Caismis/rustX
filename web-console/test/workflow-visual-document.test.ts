@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createActor } from 'xstate';
-import { addBefore, addBranch, addNode, boundedDocument, connect, connectAddressed, emptyBlock, insertEntry, insertNode, nodeTemplate, renameBranch, replaceNode, renameNode, setEntry } from '../src/app/workflows/document/commands';
+import { addBefore, addBranch, addNode, boundedDocument, clearEntry, connect, connectAddressed, emptyBlock, insertEntry, insertNode, nodeTemplate, renameBranch, replaceNode, renameNode, setEntry } from '../src/app/workflows/document/commands';
 import { copyFragment, fragmentOwnsField, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
 import { blockField, encodeField, fieldValue, nodeField, renameAddress, setField } from '../src/app/workflows/document/fields';
 import { nodePresentation, putNote, setNodePresentation } from '../src/app/workflows/document/geometry';
@@ -147,6 +147,8 @@ describe('atomic insertion and bounded clipboard', () => {
     expect(() => insertEntry(document, [], 'return', 'stop')).toThrow('unsupported_insertion');
     const empty = fixture(); empty.block.nodes = {}; empty.block.entry = 'gone';
     expect(insertEntry(empty, [], 'return', 'stop').block).toMatchObject({ entry: 'stop', nodes: { stop: { type: 'return' } } });
+    expect(clearEntry(document, []).block).toMatchObject({ entry: '', edges: [{ from: 'read', to: 'done' }] });
+    expect(projectScene(clearEntry(document, [])).edges.some(edge => edge.data?.entry)).toBe(false);
   });
 
   it('remaps selected producers and owned metadata deterministically while preserving private locals', () => {
