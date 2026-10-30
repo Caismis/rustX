@@ -393,9 +393,9 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
             "block.nodes.repeat.body.nodes.check_text_clarity_assess_clarity.task.2",
         ),
         (
-            "/block/nodes/repeat/body/nodes/check_text_clarity_assess_clarity/output/properties/passed",
+            "/block/nodes/repeat/body/nodes/check_text_clarity_assess_clarity/output/schema/properties/passed",
             json!({"type":"boolean","pattern":"SECRET_SCHEMA"}),
-            "block.nodes.repeat.body.nodes.check_text_clarity_assess_clarity.output.properties.passed",
+            "block.nodes.repeat.body.nodes.check_text_clarity_assess_clarity.output.schema.properties.passed",
         ),
         (
             "/block/nodes/repeat/body/nodes/return_checks/output",
@@ -1022,7 +1022,7 @@ fn cfg235_all_example_layers_use_real_resolver_and_workflow_compiler() {
         ("minimal", 0),
         ("workflow-basic", 1),
         ("", 2),
-        ("workflow-templates", 5),
+        ("workflow-templates", 6),
     ] {
         let f = Fixture::new();
         let mut host = f.host.clone();

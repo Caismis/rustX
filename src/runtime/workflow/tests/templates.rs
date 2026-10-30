@@ -29,6 +29,7 @@ fn cfg237_templates_use_native_loader_compiler_and_editor_schema() {
     let validator = jsonschema::Validator::new(&editor).unwrap();
     for id in [
         "typed_agent",
+        "agent_text",
         "parallel_checks",
         "human_plan",
         "model_text",
@@ -154,6 +155,46 @@ fn cfg237_compiled_explanation_ignores_yaml_map_insertion_order() {
         serde_json::to_value(second.inspect()).unwrap()
     );
     assert_eq!(first.outgoing("start"), second.outgoing("start"));
+}
+
+/// As Dify's Agent: without a declared schema the child's final reply is
+/// the node's `text` variable, and later nodes read it like any value.
+#[cfg(unix)]
+#[tokio::test]
+async fn agent_text_template_returns_the_final_reply_as_text() {
+    let plane = workflow_test_plane(1);
+    let mut child = stage_workflow_child(&plane);
+    let runtime = workflow_runtime(&plane);
+    let context = workflow_test_context(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let program = template("agent_text");
+    assert_eq!(
+        program.node_outputs()["block.nodes.answer"],
+        json!({"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false})
+    );
+    let task = tokio::spawn(async move {
+        runtime
+            .run_test_foreground(
+                program,
+                ToolCallId::new("template-agent-text"),
+                context,
+                json!({"question":"What owns the workflow?"}),
+                cancellation,
+            )
+            .await
+    });
+    child.expect_delegate().await;
+    // A reply that merely looks like JSON stays text.
+    child
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some(r#"{"owner":"the runtime"}"#),
+        )
+        .await;
+    assert_eq!(
+        task.await.unwrap().unwrap(),
+        json!({"answer":r#"{"owner":"the runtime"}"#})
+    );
 }
 
 #[cfg(unix)]

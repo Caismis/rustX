@@ -57,18 +57,20 @@ block:
       - type: literal
         value: "\n\ncontract: {\"requirement\": \"greeting(\\\"Ada\\\") == \\\"Hello, Ada!\\\"; greeting(\\\"\\\") == \\\"Hello, friend!\\\"\"}"
       output:
-        type: object
-        properties:
-          summary:
-            type: string
-          steps:
-            type: array
-            items:
+        type: json_schema
+        schema:
+          type: object
+          properties:
+            summary:
               type: string
-        required:
-        - summary
-        - steps
-        additionalProperties: false
+            steps:
+              type: array
+              items:
+                type: string
+          required:
+          - summary
+          - steps
+          additionalProperties: false
     review_plan:
       type: review
       subject:
@@ -197,12 +199,14 @@ block:
             - type: reference
               path: ["args", "feedback"]
             output:
-              type: object
-              properties:
-                plan: *id001
-              required:
-              - plan
-              additionalProperties: false
+              type: json_schema
+              schema:
+                type: object
+                properties:
+                  plan: *id001
+                required:
+                - plan
+                additionalProperties: false
           check:
             type: tool
             selector:

@@ -212,7 +212,7 @@ impl Driver {
                     "input": {"type":"object", "properties":{"task":{"type":"string"}}, "required":["task"], "additionalProperties":false},
                     "output": {"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false},"nodes": {"workflow_start":{"type":"start"},
                         "review": {"type":"agent", "profile":"image_reviewer", "task":[{"type":"literal","value":"Review the delegated text.\n\n"},{"type":"reference","path":["args","task"]}],
-                            "output":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}},
+                            "output":{"type":"json_schema","schema":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}}},
                         "done": {"type":"return","output":{"type":"reference","path":["review"]}}
                     },"edges": [{"from":"workflow_start","to":"review"},{"from":"review","to":"done"}],}
             });

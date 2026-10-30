@@ -19,7 +19,7 @@ export function putProperty(parent: FieldAddress, oldName: string | undefined, n
     let next = oldName !== undefined && oldName !== name ? renameSchemaField(document, parent, oldName, name) : document;
     const object = schemaAt(next, parent), properties = schemaObject(object.properties) ?? {};
     if (oldName === undefined && Object.hasOwn(properties, name)) throw new CommandRejected('duplicate_identifier');
-    const target = schemaTarget(parent), keys = target ? orderedKeys(next, target, Object.keys(properties)) : Object.keys(properties);
+    const target = schemaTarget(parent, next), keys = target ? orderedKeys(next, target, Object.keys(properties)) : Object.keys(properties);
     const requiredFields = (Array.isArray(object.required) ? object.required : []).filter(field => field !== name);
     next = setField(next, parent, { ...object, properties: { ...properties, [name]: schema }, required: required ? [...requiredFields, name] : requiredFields });
     return target ? setOrder(next, target, oldName === undefined ? [...keys, name] : keys) : next;
@@ -33,7 +33,7 @@ export function removeProperty(parent: FieldAddress, name: string): SchemaEdit {
       properties: Object.fromEntries(Object.entries(properties).filter(([key]) => key !== name)),
       required: (Array.isArray(object.required) ? object.required : []).filter(key => key !== name),
     });
-    const target = schemaTarget(parent);
+    const target = schemaTarget(parent, document);
     return target ? setOrder(next, target, orderedKeys(document, target, Object.keys(properties)).filter(key => key !== name)) : next;
   };
 }
@@ -45,7 +45,7 @@ export function replaceSchema(address: FieldAddress, schema: Schema): SchemaEdit
     let next = setField(document, address, schema);
     const order = (at: FieldAddress, value: Schema, depth: number) => {
       if (depth > 16) return;
-      const properties = schemaObject(value.properties), target = schemaTarget(at);
+      const properties = schemaObject(value.properties), target = schemaTarget(at, document);
       if (properties) {
         if (target) next = setOrder(next, target, Object.keys(properties));
         for (const [key, child] of Object.entries(properties)) if (schemaObject(child)) order(within(at, ['properties', { key }]), child as Schema, depth + 1);

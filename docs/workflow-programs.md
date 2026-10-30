@@ -655,9 +655,14 @@ existing native owners and bounds.
 The registered Tool captures an immutable program. The invoking attempt
 supplies frozen resource, profile, capability and model authority. Later file
 edits or resource publication affect future attempts only. Entering a child
-block neither reloads files nor widens authority. Child success still requires
-the sole native `workflow_output` protocol; WorkflowRuntime makes no model
-requests and orchestration stays outside ToolExecutor.
+block neither reloads files nor widens authority. As Dify's Agent node, an
+Agent's `output` picks how its child succeeds. `{type: text}` installs no
+terminal Tool: the child's final reply is the node's value `{text}`, and the
+child is told that later steps see only that reply. `{type: json_schema,
+schema}` requires the sole native `workflow_output` protocol with that root
+object schema, and the committed object is the node's value, its fields read
+as `[agent, field]`. WorkflowRuntime makes no model requests and orchestration
+stays outside ToolExecutor.
 
 Canonical history remains main ToolCall → native Workflow/child execution →
 one main Tool result. Private values and child transcripts are never appended

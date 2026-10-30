@@ -1947,11 +1947,17 @@ export type WorkflowNodeDefinition =
        */
       task: WorkflowValue[];
       /**
-       * The frozen `AgentRun` output contract.
+       * What the `AgentRun` returns: its final reply text, or a
+       * structured value committed through `workflow_output`.
        */
-      output: {
-        [k: string]: unknown;
-      };
+      output:
+        | {
+            type: 'text';
+          }
+        | {
+            schema: unknown;
+            type: 'json_schema';
+          };
       type: 'agent';
     }
   | {
@@ -7150,6 +7156,22 @@ export type WorkflowModelErrorStrategy =
     }
   | {
       type: 'fail_branch';
+    };
+/**
+ * The authored output contract of a Workflow Agent node, as Dify's Agent:
+ * the final reply is the `text` variable, or a declared schema adds the
+ * reserved `workflow_output` terminal and its fields are the variables.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAgentOutput".
+ */
+export type WorkflowAgentOutput =
+  | {
+      type: 'text';
+    }
+  | {
+      schema: unknown;
+      type: 'json_schema';
     };
 /**
  * The configurable execution-ownership policy of one tool.

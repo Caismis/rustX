@@ -19,16 +19,23 @@ describe('structured output editing transactions', () => {
     original.block.nodes.done = { type: 'return', output: { type: 'reference', path: ['model', 'structured_output', 'details', 'accepted'] } };
     const parent = within(address, ['properties', { key: 'details' }]);
     const edited = putProperty(parent, 'accepted', 'approved', { type: 'boolean', description: 'Approval.' }, true)(original);
-    expect(schemaTarget(parent)).toEqual({ kind: 'node_output', address: { block: [], node: 'model' }, path: [{ kind: 'property', name: 'structured_output' }, { kind: 'property', name: 'details' }] });
+    expect(schemaTarget(parent, original)).toEqual({ kind: 'node_output', address: { block: [], node: 'model' }, path: [{ kind: 'property', name: 'structured_output' }, { kind: 'property', name: 'details' }] });
     expect(edited.block.nodes.done).toMatchObject({ output: { path: ['model', 'structured_output', 'details', 'approved'] } });
     expect(original.block.nodes.done).toMatchObject({ output: { path: ['model', 'structured_output', 'details', 'accepted'] } });
     expect(schemaAt(edited, parent)).toMatchObject({ required: ['approved'], properties: { approved: { description: 'Approval.' } } });
   });
 
+  it('orders an Agent\'s declared fields as its own variables, as Dify\'s Agent', () => {
+    const doc = document();
+    doc.block.nodes.agent = { type: 'agent', profile: 'reviewer', task: [{ type: 'literal', value: 'Review.' }], output: { type: 'json_schema', schema: emptySchema() } };
+    const field = within(nodeField([], 'agent', ['output', 'schema']), ['properties', { key: 'details' }]);
+    expect(schemaTarget(field, doc)).toEqual({ kind: 'node_output', address: { block: [], node: 'agent' }, path: [{ kind: 'property', name: 'details' }] });
+  });
+
   it('preserves imported and added field order and removes required entries with deleted fields', () => {
     let edited = replaceSchema(address, schemaFromExample({ z: 'text', a: { flag: true }, tags: ['a', 'b'] }))(document());
     edited = putProperty(address, undefined, 'middle', { type: 'string' }, true)(edited);
-    expect(orderedKeys(edited, schemaTarget(address)!, Object.keys(schemaAt(edited, address).properties as object))).toEqual(['z', 'a', 'tags', 'middle']);
+    expect(orderedKeys(edited, schemaTarget(address, edited)!, Object.keys(schemaAt(edited, address).properties as object))).toEqual(['z', 'a', 'tags', 'middle']);
     edited = removeProperty(address, 'tags')(edited);
     expect(schemaAt(edited, address).required).toEqual(['z', 'a', 'middle']);
     expect(() => putProperty(address, undefined, 'z', { type: 'string' }, false)(edited)).toThrow();

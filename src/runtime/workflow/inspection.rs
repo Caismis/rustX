@@ -55,7 +55,7 @@ impl WorkflowProgram {
                 let path = format!("{path}.nodes.{id}");
                 let output = match node {
                     WorkflowNodeProgram::Model(model) => Some(model.output.schema()),
-                    WorkflowNodeProgram::Agent(agent) => Some(agent.output_schema.clone()),
+                    WorkflowNodeProgram::Agent(agent) => Some(agent.output.schema()),
                     WorkflowNodeProgram::Tool { result, .. } => Some(result.schema()),
                     WorkflowNodeProgram::Review { .. } => Some(super::review::result_schema()),
                     WorkflowNodeProgram::Loop {
@@ -354,7 +354,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 view.kind = "agent".into();
                 view.profile = Some(agent.profile.clone());
                 result.profiles.insert(agent.profile.clone());
-                view.output_schema = Some(schema(&agent.output_schema));
+                view.output_schema = Some(schema(&agent.output.schema()));
                 view.bindings.extend(
                     agent
                         .task

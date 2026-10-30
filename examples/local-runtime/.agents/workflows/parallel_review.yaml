@@ -104,16 +104,18 @@ block:
       - type: reference
         path: ["args", "proposal"]
       output:
-        type: object
-        properties:
-          summary:
-            type: string
-          acceptable:
-            type: boolean
-        required:
-        - summary
-        - acceptable
-        additionalProperties: false
+        type: json_schema
+        schema:
+          type: object
+          properties:
+            summary:
+              type: string
+            acceptable:
+              type: boolean
+          required:
+          - summary
+          - acceptable
+          additionalProperties: false
     reviews_quality_refine:
       type: agent
       profile: reviewer
@@ -125,16 +127,18 @@ block:
       - type: reference
         path: ["reviews_quality_review"]
       output:
-        type: object
-        properties:
-          summary:
-            type: string
-          acceptable:
-            type: boolean
-        required:
-        - summary
-        - acceptable
-        additionalProperties: false
+        type: json_schema
+        schema:
+          type: object
+          properties:
+            summary:
+              type: string
+            acceptable:
+              type: boolean
+          required:
+          - summary
+          - acceptable
+          additionalProperties: false
     reviews_security_review:
       type: agent
       profile: reviewer
@@ -146,16 +150,18 @@ block:
       - type: reference
         path: ["args", "proposal"]
       output:
-        type: object
-        properties:
-          summary:
-            type: string
-          acceptable:
-            type: boolean
-        required:
-        - summary
-        - acceptable
-        additionalProperties: false
+        type: json_schema
+        schema:
+          type: object
+          properties:
+            summary:
+              type: string
+            acceptable:
+              type: boolean
+          required:
+          - summary
+          - acceptable
+          additionalProperties: false
   edges:
   - from: decision
     to: ready

@@ -27,7 +27,7 @@ export function InputFields({ label, value, address, edit }: { label: string; va
   const [editing, setEditing] = useState<string | null>();
   const [dragging, setDragging] = useState<string>();
   const schema = schemaObject(value), properties = schemaObject(schema?.properties);
-  const target = schemaTarget(address);
+  const target = schemaTarget(address, document);
   // A schema the list cannot show (or a JSON edit still pending) stays JSON.
   const visual = !pending && schema?.type === 'object' && !!properties;
   const keys = properties ? (document && target ? orderedKeys(document, target, Object.keys(properties)) : Object.keys(properties).sort()) : [];

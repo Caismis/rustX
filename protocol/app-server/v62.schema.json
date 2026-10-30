@@ -12064,7 +12064,8 @@
               }
             },
             "output": {
-              "description": "The frozen `AgentRun` output contract."
+              "description": "What the `AgentRun` returns: its final reply text, or a\nstructured value committed through `workflow_output`.",
+              "$ref": "#/$defs/WorkflowAgentOutput"
             },
             "type": {
               "type": "string",
@@ -12753,6 +12754,41 @@
           "required": [
             "type",
             "part"
+          ]
+        }
+      ]
+    },
+    "WorkflowAgentOutput": {
+      "description": "The authored output contract of a Workflow Agent node, as Dify's Agent:\nthe final reply is the `text` variable, or a declared schema adds the\nreserved `workflow_output` terminal and its fields are the variables.",
+      "oneOf": [
+        {
+          "description": "The child's final reply is the result.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The child commits one value matching this schema.",
+          "type": "object",
+          "properties": {
+            "schema": true,
+            "type": {
+              "type": "string",
+              "const": "json_schema"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "schema"
           ]
         }
       ]

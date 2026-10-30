@@ -99,7 +99,7 @@ fn program(input: &Inputs<'_>) -> WorkflowProgram {
             "output":{"type":"text"}})
         }
         NodeKind::Agent => {
-            json!({"type":"agent", "profile":"reviewer", "task":[{"type":"literal","value":"Review this"}], "output":empty})
+            json!({"type":"agent", "profile":"reviewer", "task":[{"type":"literal","value":"Review this"}], "output":{"type":"json_schema","schema":empty}})
         }
         NodeKind::Tool => {
             json!({"type":"tool", "selector":{"origin":"builtin","name":"check"},

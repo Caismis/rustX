@@ -179,8 +179,10 @@ pub fn declared_output(
             output.schema()
         }
         WorkflowNodeDefinition::Agent { output, .. } => {
-            validate_root_schema(output, "output")?;
-            output.clone()
+            if let Some(schema) = output.structured() {
+                validate_root_schema(schema, "output.schema")?;
+            }
+            output.schema()
         }
         WorkflowNodeDefinition::Tool { result, .. } => {
             let schema = result.schema();

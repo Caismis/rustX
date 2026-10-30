@@ -2260,7 +2260,7 @@ async fn finish_finite_workflow_child(
                 node_id: Box::new(node.clone()),
             },
             terminal: SubagentTerminalMode::WorkflowOutput {
-                output_schema: serde_json::json!({"type":"object"}),
+                output_schema: Some(serde_json::json!({"type":"object"})),
                 workflow_id: crate::runtime::workflow::WorkflowId::parse("finite_recovery")
                     .unwrap(),
                 run_id: node.block.run.clone(),

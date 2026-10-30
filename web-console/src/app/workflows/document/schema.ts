@@ -16,14 +16,20 @@ export function schemaTemplate(type: string): Schema {
 }
 
 /** The metadata target of exactly this schema, independent of JSON map order. */
-export function schemaTarget(address: FieldAddress): Extract<WorkflowOrderTarget, { path: WorkflowSchemaStep[] }> | undefined {
+/** A Model's declared schema is its `structured_output`; an Agent's fields
+ * are its own variables, as in Dify. */
+export function schemaTarget(address: FieldAddress, document?: WorkflowDocument): Extract<WorkflowOrderTarget, { path: WorkflowSchemaStep[] }> | undefined {
   const parts = [...address.path], first = parts.shift();
   const path: WorkflowSchemaStep[] = [];
   let kind: 'block_input' | 'block_output' | 'node_output';
   if (!address.node && (first === 'input' || first === 'output')) kind = first === 'input' ? 'block_input' : 'block_output';
   else if (address.node && first === 'output') {
     kind = 'node_output';
-    if (parts[0] === 'schema') { parts.shift(); path.push({ kind: 'property', name: 'structured_output' }); }
+    if (parts[0] === 'schema') {
+      parts.shift();
+      const block = document && blockAt(document, address.block);
+      if (block && nodeAt(block, address.node)?.type === 'model') path.push({ kind: 'property', name: 'structured_output' });
+    }
   }
   else if (address.node && first === 'result' && parts.shift() === 'schema') kind = 'node_output';
   else return undefined;
@@ -143,7 +149,7 @@ function schemaConstructions(document: WorkflowDocument, target: NonNullable<Ret
 export function renameSchemaConsumerAddress(document: WorkflowDocument, field: FieldAddress, renamed: FieldAddress, to: string): FieldAddress {
   const property = renamed.path.at(-1);
   if (field.domain || renamed.path.at(-2) !== 'properties' || typeof property !== 'object') return field;
-  const target = schemaTarget({ ...renamed, path: renamed.path.slice(0, -2), role: 'value' });
+  const target = schemaTarget({ ...renamed, path: renamed.path.slice(0, -2), role: 'value' }, document);
   if (!target || target.path.some(step => step.kind === 'items')) return field;
   const path = target.path.flatMap(step => ['fields', { key: (step as { name: string }).name }] satisfies FieldStep[]);
   for (const construction of schemaConstructions(document, target)) {
@@ -167,7 +173,7 @@ export function renameSchemaField(document: WorkflowDocument, address: FieldAddr
   if (!to || new TextEncoder().encode(to).length > 64) throw new CommandRejected('invalid_identifier');
   if (from === to) return document;
   if (Object.hasOwn(properties, to)) throw new CommandRejected('duplicate_identifier');
-  const target = schemaTarget(address);
+  const target = schemaTarget(address, document);
   if (target && document.editor?.orders?.some(order => {
     const candidate = order.target;
     const sameOwner = candidate.kind === target.kind && ('address' in candidate && 'address' in target ? sameDocument(candidate.address, target.address) : 'block' in candidate && 'block' in target && sameDocument(candidate.block, target.block));
@@ -219,7 +225,7 @@ export function schemaPropertyAddress(address: FieldAddress, key: string): Field
 /** Structural usage only, never a type/availability verdict. Keep affected
  * operations visible after a deletion or type change; native decides validity. */
 export function schemaConsumers(document: WorkflowDocument, address: FieldAddress): { block: BlockPath; node: string }[] {
-  const target = schemaTarget(address);
+  const target = schemaTarget(address, document);
   if (!target || target.path.some(step => step.kind === 'items')) return [];
   const property = target.path.map(step => (step as { name: string }).name), found = new Map<string, { block: BlockPath; node: string }>();
   const add = (block: BlockPath, node: string) => found.set(JSON.stringify([block, node]), { block, node });

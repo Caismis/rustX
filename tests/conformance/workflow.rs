@@ -359,16 +359,18 @@ block:
         - args
         - task
       output:
-        type: object
-        properties:
-          passed:
-            type: boolean
-          summary:
-            type: string
-        required:
-        - passed
-        - summary
-        additionalProperties: false
+        type: json_schema
+        schema:
+          type: object
+          properties:
+            passed:
+              type: boolean
+            summary:
+              type: string
+          required:
+          - passed
+          - summary
+          additionalProperties: false
     decision:
       type: branch
       cases:

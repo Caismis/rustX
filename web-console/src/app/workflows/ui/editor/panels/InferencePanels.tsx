@@ -16,7 +16,7 @@ import { KindIcon } from '../../icons';
 import { useTranslation } from '../../../../../locale/react';
 import { encodeField, within, type FieldAddress } from '../../../document/fields';
 import { ModelSelection } from '../forms/ModelSelection';
-import { DraftTextField, JsonField, Section } from '../forms/fields';
+import { DraftTextField, JsonField } from '../forms/fields';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 
@@ -147,7 +147,7 @@ function RetryField({ label, unit, min, max, step, value, onChange }: { label: s
 function SchemaTree({ schema, document, address }: { schema: unknown; document: WorkflowDocument; address: FieldAddress }) {
   const tx = useTranslation(), object = schemaObject(schema), properties = schemaObject(object?.properties) ?? {};
   const required = Array.isArray(object?.required) ? object.required : [];
-  const target = schemaTarget(address), keys = target ? orderedKeys(document, target, Object.keys(properties)) : Object.keys(properties);
+  const target = schemaTarget(address, document), keys = target ? orderedKeys(document, target, Object.keys(properties)) : Object.keys(properties);
   return <ul className={css.schemaTree}>{keys.map(name => {
     const value = schemaObject(properties[name]), type = typeof value?.type === 'string' ? value.type : '?';
     return <li key={name}>
@@ -200,26 +200,44 @@ function InsertVariable() {
 export function AgentPanel(props: PanelProps) {
   const tx = useTranslation();
   return <>
-    {/* As Dify's Agent panel: the strategy is picked from a list, then the
-        instruction is written in the same prompt editor as the LLM node. */}
-    <Section title={tx('workflows:panel.agent-config')}>
+    {/* As Dify's Agent panel: the Agent is picked from a list, its task is
+        written in the LLM node's prompt editor, then its output variables. */}
+    <section className={css.group}>
+      <h3 className={css.groupHeading}>
+        <span className={css.headingText}>{tx('workflows:panel.agent-config')}
+          <Tooltip label={tx('workflows:inspector.agent-profile-hint')} side="bottom" maxWidth={240}><span className={css.promptHint} tabIndex={0} aria-label={tx('workflows:inspector.agent-profile-hint')}><IconQuestionOutline14 /></span></Tooltip></span>
+      </h3>
       <ProfileSelection {...props} />
-      <AgentTask {...props} />
-    </Section>
+    </section>
+    <section className={css.group}><AgentTask {...props} /></section>
     <AgentOutputs {...props} />
   </>;
 }
 
-/** An Agent always returns structured output: its declared fields, edited in
- * the same dialog as a Model's structured output. */
+/** As Dify's Agent output variables: the final reply is `text`; with
+ * structured output on, the declared fields are the node's variables. */
 function AgentOutputs(props: PanelProps) {
-  const tx = useTranslation(), { node, at } = useNode(props, 'agent');
-  const [configuring, setConfiguring] = useState(false);
+  const tx = useTranslation(), { node, at, update } = useNode(props, 'agent');
+  const [open, setOpen] = useState(true), [configuring, setConfiguring] = useState(false);
+  const schema = node.output.type === 'json_schema' ? node.output.schema : undefined;
   return <section className={css.group} aria-label={tx('workflows:prompt.output-variables')}>
-    <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:prompt.output-variables')}</span>
-      <button type="button" className={css.smallButton} onClick={() => setConfiguring(true)}><IconEditOutline16 />{tx('workflows:prompt.configure')}</button></h3>
-    <StructuredFields schema={node.output} document={props.document} address={at('output')} />
-    {configuring && <Suspense fallback={null}><StructuredOutputDialog document={props.document} address={at('output')} root={props.id} edit={props.edit} onClose={() => setConfiguring(false)} /></Suspense>}
+    <h3 className={css.groupHeading}>
+      <button type="button" className={css.outputToggle} aria-expanded={open} onClick={() => setOpen(value => !value)}>{tx('workflows:prompt.output-variables')}<IconChevronDownOutline14 /></button>
+      <span className={css.structuredToggle}>
+        {tx('workflows:prompt.structured')}
+        <Tooltip label={tx('workflows:prompt.agent-structured-hint')} side="bottom" maxWidth={240}><span className={css.promptHint} tabIndex={0} aria-label={tx('workflows:prompt.agent-structured-hint')}><IconQuestionOutline14 /></span></Tooltip>
+        <Switch checked={!!schema} label={tx('workflows:prompt.structured')} onChange={on => update(current => ({ ...current, output: on ? { type: 'json_schema', schema: { type: 'object', properties: {}, required: [], additionalProperties: false } } : { type: 'text' } }), at('output'))} />
+      </span>
+    </h3>
+    {open && (schema === undefined
+      ? <dl className={css.outputVars}><div><dt><b>{/* i18n-raw: native output field name */ 'text'}</b><code>{/* i18n-raw: JSON Schema type name */ 'string'}</code></dt><dd>{tx('workflows:prompt.agent-text')}</dd></div></dl>
+      : <div className={css.agentStructured}>
+        <div className={css.structuredHead}><b>{props.id}</b><code>{/* i18n-raw: JSON Schema type name */ 'object'}</code>
+          <button type="button" className={css.smallButton} onClick={() => setConfiguring(true)}><IconEditOutline16 />{tx('workflows:prompt.configure')}</button>
+        </div>
+        <StructuredFields schema={schema} document={props.document} address={at('output', 'schema')} />
+      </div>)}
+    {configuring && schema !== undefined && <Suspense fallback={null}><StructuredOutputDialog document={props.document} address={at('output', 'schema')} root={props.id} edit={props.edit} onClose={() => setConfiguring(false)} /></Suspense>}
   </section>;
 }
 

@@ -1,7 +1,7 @@
 # Small Workflow authoring templates
 
-These six independent starting points use the same native loader, compiler,
-and foreground Tool boundary as the complete reference workflows. All six
+These seven independent starting points use the same native loader, compiler,
+and foreground Tool boundary as the complete reference workflows. All seven
 work in a **non-Git workspace**: every Workflow Agent runs in the shared Session
 workspace, and no Workflow allocates a worktree or copy. Inputs and retained values are
 bounded by the native Workflow value limits (64 KiB per value, 4 MiB aggregate);
@@ -21,10 +21,11 @@ your configured model for execution. The role inherits that selected model.
 Offline commands never read credential values or verify a provider. Exit 3 is
 expected even for valid templates: runtime readiness remains unresolved.
 
-The included `rustx.toml` registers all six for convenience. To start with
+The included `rustx.toml` registers all seven for convenience. To start with
 only one, use the minimum configuration in its guide:
 
 - [Typed Agent → Return](typed-agent.md): explicit input, one named role, typed output.
+- [Agent text](.agents/workflows/agent_text.yaml): one named role whose final reply is its `text` variable; no `workflow_output` terminal.
 - [Fixed keyed parallel checks](parallel-checks.md): two concurrent graph paths and a deterministic join.
 - [Human plan Review](human-plan.md): existing Review rendezvous returning `{accepted, feedback}`, no Agent required.
 - [Model text](.agents/workflows/model_text.yaml): one tool-free Call following the invoking Attempt's frozen model, returning an exact string inside an object.

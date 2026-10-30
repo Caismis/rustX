@@ -414,8 +414,9 @@ pub enum WorkflowNodeDefinition {
         /// The task instruction for this `AgentRun`: fixed text and explicit
         /// references, as a Model message's content.
         task: Vec<WorkflowValue>,
-        /// The frozen `AgentRun` output contract.
-        output: Value,
+        /// What the `AgentRun` returns: its final reply text, or a
+        /// structured value committed through `workflow_output`.
+        output: WorkflowAgentOutput,
     },
     /// Ordered IF / ELIF cases, followed by the false (ELSE) port.
     Branch { cases: Vec<WorkflowBranchCase> },
@@ -472,6 +473,55 @@ impl WorkflowModelOutput {
             "required": required,
             "additionalProperties": false,
         })
+    }
+}
+
+/// The authored output contract of a Workflow Agent node, as Dify's Agent:
+/// the final reply is the `text` variable, or a declared schema adds the
+/// reserved `workflow_output` terminal and its fields are the variables.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowAgentOutput {
+    /// The child's final reply is the result.
+    Text {},
+    /// The child commits one value matching this schema.
+    JsonSchema { schema: Value },
+}
+
+impl WorkflowAgentOutput {
+    /// The schema the child's `workflow_output` terminal must satisfy, when
+    /// one is declared.
+    #[must_use]
+    pub fn structured(&self) -> Option<&Value> {
+        match self {
+            Self::Text {} => None,
+            Self::JsonSchema { schema } => Some(schema),
+        }
+    }
+
+    /// The derived static node value contract: `{text}`, or the declared
+    /// schema itself.
+    #[must_use]
+    pub fn schema(&self) -> Value {
+        match self {
+            Self::Text {} => serde_json::json!({
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+                "additionalProperties": false,
+            }),
+            Self::JsonSchema { schema } => schema.clone(),
+        }
+    }
+
+    /// The node value of one settled child: its reply text, or its
+    /// committed value.
+    fn value(&self, settled: Value) -> Option<Value> {
+        match (self, settled) {
+            (Self::Text {}, Value::String(text)) => Some(serde_json::json!({"text": text})),
+            (Self::JsonSchema { .. }, value) if !value.is_string() => Some(value),
+            _ => None,
+        }
     }
 }
 
@@ -887,7 +937,7 @@ pub struct WorkflowAgentProgram {
     /// The task's fixed text and references.
     pub task: Vec<WorkflowValue>,
     /// Frozen output contract.
-    pub output_schema: Value,
+    pub output: WorkflowAgentOutput,
 }
 
 /// A compiled edge.
@@ -1424,11 +1474,11 @@ fn compile_block(
                     resolved: None,
                     profile,
                     task: task.clone(),
-                    output_schema: output.clone(),
+                    output: output.clone(),
                 };
                 available_after.insert(
                     node_id.clone(),
-                    available_before.with_prefix(&node_id, output),
+                    available_before.with_prefix(&node_id, &output.schema()),
                 );
                 WorkflowNodeProgram::Agent(agent)
             }
@@ -2006,7 +2056,7 @@ fn validate_workflow_schema_at(
 
 fn validate_agent(
     task: &[WorkflowValue],
-    output: &Value,
+    output: &WorkflowAgentOutput,
     available: &SchemaMap,
     node: &str,
 ) -> Result<(), WorkflowCompileError> {
@@ -2021,7 +2071,11 @@ fn validate_agent(
             WorkflowCompileError::InvalidField(format!("Agent {node:?} task is empty")).at("task"),
         );
     }
-    validate_root_schema(output, &format!("Agent {node} output")).map_err(|e| e.at("output"))
+    match output.structured() {
+        Some(schema) => validate_root_schema(schema, &format!("Agent {node} output"))
+            .map_err(|e| e.at("output.schema")),
+        None => Ok(()),
+    }
 }
 
 /// Check one prompt's parts, fixed text or references, against its bounds and
@@ -2570,6 +2624,23 @@ enum WorkflowOutputState {
     Pending,
     Committed(Value),
     Cancelled(crate::runtime::types::CancellationReason),
+}
+
+/// How one Workflow-owned child `AgentRun` settles: its final reply is the
+/// result, or its committed `workflow_output` value is.
+#[derive(Clone)]
+pub(crate) enum WorkflowChildTerminal {
+    Text,
+    Output(Arc<WorkflowOutputLatch>),
+}
+
+impl WorkflowChildTerminal {
+    pub(crate) fn latch(&self) -> Option<&Arc<WorkflowOutputLatch>> {
+        match self {
+            Self::Text => None,
+            Self::Output(latch) => Some(latch),
+        }
+    }
 }
 
 /// A thread-safe, frozen-schema terminal latch used by one child `AgentRun`.
@@ -3145,7 +3216,7 @@ impl WorkflowRuntime {
                     node_id: Box::new(node_id.clone()),
                 },
                 terminal: crate::runtime::subagent::SubagentTerminalMode::WorkflowOutput {
-                    output_schema: agent.output_schema.clone(),
+                    output_schema: agent.output.structured().cloned(),
                     workflow_id: run.program.id().clone(),
                     run_id: run.run_id.clone(),
                     node_id: Box::new(node_id.clone()),
@@ -3253,7 +3324,7 @@ impl WorkflowRuntime {
         run: &WorkflowRun,
         subagent_id: crate::runtime::identity::SubagentId,
         node_id: &WorkflowNodeInstance,
-        output_schema: &Value,
+        output: &WorkflowAgentOutput,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
         let mut wait = Box::pin(self.subagents.wait_until_settled(&subagent_id));
@@ -3278,7 +3349,7 @@ impl WorkflowRuntime {
                             run, snapshot,
                             &subagent_id,
                             node_id,
-                            output_schema,
+                            output,
                             cancellation,
                         );
                 }
@@ -3292,14 +3363,7 @@ impl WorkflowRuntime {
                 detail: "the native SubagentRegistry lost the child record".to_owned(),
             },
         })?;
-        self.settled_agent_value(
-            run,
-            snapshot,
-            &subagent_id,
-            node_id,
-            output_schema,
-            cancellation,
-        )
+        self.settled_agent_value(run, snapshot, &subagent_id, node_id, output, cancellation)
     }
 
     fn settled_agent_value(
@@ -3308,7 +3372,7 @@ impl WorkflowRuntime {
         snapshot: crate::runtime::subagent::SubagentSnapshot,
         subagent_id: &crate::runtime::identity::SubagentId,
         node_id: &WorkflowNodeInstance,
-        output_schema: &Value,
+        output: &WorkflowAgentOutput,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
         use crate::runtime::subagent::{SubagentPhysicalSettlement, SubagentPublication};
@@ -3360,22 +3424,30 @@ impl WorkflowRuntime {
                 // `validate_workflow_candidate` in the registry: the registry
                 // revalidates the untrusted cross-process child wire frame
                 // before its durable commit, while this validates the run's
-                // result against the node's own frozen `output_schema`
-                // authority at consumption time. The two checks guard
-                // different trust boundaries; both stay.
-                let validator = jsonschema::Validator::new(output_schema).map_err(|error| {
-                    WorkflowRunError::ChildFailed {
-                        node: node_id.to_string(),
-                        detail: format!("workflow Agent output schema became invalid: {error}"),
+                // result against the node's own frozen output authority at
+                // consumption time. The two checks guard different trust
+                // boundaries; both stay.
+                if let Some(schema) = output.structured() {
+                    let validator = jsonschema::Validator::new(schema).map_err(|error| {
+                        WorkflowRunError::ChildFailed {
+                            node: node_id.to_string(),
+                            detail: format!("workflow Agent output schema became invalid: {error}"),
+                        }
+                    })?;
+                    if !validator.is_valid(&value) {
+                        return Err(WorkflowRunError::ChildFailed {
+                            node: node_id.to_string(),
+                            detail: "workflow Agent output violated its frozen output schema"
+                                .to_owned(),
+                        });
                     }
-                })?;
-                if !validator.is_valid(&value) {
-                    return Err(WorkflowRunError::ChildFailed {
-                        node: node_id.to_string(),
-                        detail: "workflow Agent output violated its frozen output schema"
-                            .to_owned(),
-                    });
                 }
+                let value = output
+                    .value(value)
+                    .ok_or_else(|| WorkflowRunError::ChildFailed {
+                        node: node_id.to_string(),
+                        detail: "workflow Agent output does not match its output mode".to_owned(),
+                    })?;
                 // The native SubagentRegistry already committed the value
                 // fact atomically with the child's terminal lifecycle fact.
                 // Do not append a second observability event here: the
@@ -3744,7 +3816,7 @@ mod tests {
         WorkflowNodeDefinition::Agent {
             profile: "reviewer".into(),
             task: vec![text("Review the input."), reference("args.task")],
-            output,
+            output: WorkflowAgentOutput::JsonSchema { schema: output },
         }
     }
 
@@ -4088,7 +4160,9 @@ chat_reasoning_replay = "omit"
                 WorkflowNodeDefinition::Agent {
                     profile: "reviewer".into(),
                     task: vec![text(&format!("Run the {key} workflow branch."))],
-                    output: output.clone(),
+                    output: WorkflowAgentOutput::JsonSchema {
+                        schema: output.clone(),
+                    },
                 },
             );
             edges.extend([edge("workflow_start", key), edge(key, "done")]);
@@ -4122,7 +4196,9 @@ chat_reasoning_replay = "omit"
                     WorkflowNodeDefinition::Agent {
                         profile: "reviewer".into(),
                         task: vec![text(&format!("Run the {description} branch."))],
-                        output: output.clone(),
+                        output: WorkflowAgentOutput::JsonSchema {
+                            schema: output.clone(),
+                        },
                     },
                 ),
                 (
@@ -5429,7 +5505,9 @@ block:
                     WorkflowNodeDefinition::Agent {
                         profile: "reviewer".into(),
                         task: vec![text("Review the input."), reference("later.summary")],
-                        output: output.clone(),
+                        output: WorkflowAgentOutput::JsonSchema {
+                            schema: output.clone(),
+                        },
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),
@@ -5493,7 +5571,9 @@ block:
                     WorkflowNodeDefinition::Agent {
                         profile: "reviewer".into(),
                         task: vec![text("Join the committed facts."), reference("yes.summary")],
-                        output: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
+                        output: WorkflowAgentOutput::JsonSchema {
+                            schema: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
+                        },
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),
@@ -5608,7 +5688,9 @@ block:
                                     text("Review the input."),
                                     reference("args.task.detail"),
                                 ],
-                                output: schema(json!({}), &[]),
+                                output: WorkflowAgentOutput::JsonSchema {
+                                    schema: schema(json!({}), &[]),
+                                },
                             },
                         ),
                         ("done".to_owned(), return_node(BTreeMap::new())),

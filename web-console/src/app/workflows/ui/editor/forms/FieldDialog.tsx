@@ -57,7 +57,7 @@ export function FieldDialog({ document, address, keys, original, schema, require
       if (!(failure instanceof FieldFormError)) throw failure;
       return fail(PROBLEM_FIELD[failure.problem], tx(`workflows:fields.problem.${failure.problem}`));
     }
-    const target = schemaTarget(address);
+    const target = schemaTarget(address, document);
     const apply = (current: WorkflowDocument) => {
       let next = original && key !== original ? renameSchemaField(current, address, original, key) : current;
       next = updateField<Schema>(next, address, previous => {

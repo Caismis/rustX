@@ -120,7 +120,7 @@ use crate::runtime::conversation_runtime::{
 };
 use crate::runtime::identity::ConversationId;
 use crate::runtime::resources::{PreparedRuntimeResources, RuntimeResourceSnapshot};
-use crate::runtime::workflow::{WorkflowOutputLatch, WorkflowRuntime};
+use crate::runtime::workflow::{WorkflowChildTerminal, WorkflowRuntime};
 use crate::runtime_client::host::{
     HostConstructionError, RuntimeClientHost, RuntimeClientHostConfig,
 };
@@ -375,7 +375,7 @@ pub struct LocalConversationCore {
     runtime: ConversationRuntime,
     tool_runtime: ConversationToolRuntime,
     capability: CapabilityCoordinator,
-    workflow_output: Option<Arc<WorkflowOutputLatch>>,
+    workflow_terminal: Option<WorkflowChildTerminal>,
     /// The configuration-owner resource preparation of a root Session
     /// composition. A subagent child's generation is frozen by its parent and
     /// is never prepared again, so it has none.
@@ -944,7 +944,7 @@ impl LocalConversationCore {
                     runtime,
                     tool_runtime,
                     capability,
-                    workflow_output: None,
+                    workflow_terminal: None,
                     resource_loader: Some(resource_loader),
                 })
             }
@@ -986,10 +986,10 @@ impl LocalConversationCore {
         &self.capability
     }
 
-    /// The child-local Workflow terminal latch, when this core was composed
-    /// for a Workflow-owned `AgentRun`.
-    pub(crate) fn workflow_output(&self) -> Option<Arc<WorkflowOutputLatch>> {
-        self.workflow_output.clone()
+    /// How this core settles, when it was composed for a Workflow-owned
+    /// `AgentRun`.
+    pub(crate) fn workflow_terminal(&self) -> Option<WorkflowChildTerminal> {
+        self.workflow_terminal.clone()
     }
 
     /// Finishes the composition as an **interactive** runtime: the Runtime

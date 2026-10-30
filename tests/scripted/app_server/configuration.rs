@@ -339,7 +339,7 @@ fn issue459_reviewer_sources(fixture: &Fixture) {
         "description": "Review",
         "block": {
             "input": schema, "output": schema,"nodes": {"workflow_start":{"type":"start"},
-                "agent": {"type": "agent", "profile": "reviewer", "task": [{"type":"literal","value":"Review"}], "output": schema},
+                "agent": {"type": "agent", "profile": "reviewer", "task": [{"type":"literal","value":"Review"}], "output": {"type":"json_schema","schema":schema}},
                 "done": {"type": "return", "output": {"type": "literal", "value": {}}}
             },"edges": [{"from":"workflow_start","to":"agent"},{"from": "agent", "to": "done"}],}
     });

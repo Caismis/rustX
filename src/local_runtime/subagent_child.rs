@@ -365,7 +365,7 @@ async fn run_child_inner(
         // those before publishing proof for the parent's settlement.
         return Ok(());
     };
-    let workflow_output = core.workflow_output();
+    let workflow_output = core.workflow_terminal();
     // The child is a real live Runtime Client owner. Its host receives the
     // primary projection queue, while the bounded parent activity projector
     // receives a separate fan-out queue; both are installed before the
@@ -479,7 +479,7 @@ pub(crate) async fn serve_child_delegation(
     handle: &ChildControlHandle,
     parent_agent_id: crate::runtime::identity::AgentId,
     runtime: crate::runtime::conversation_runtime::ConversationRuntime,
-    workflow_output: Option<Arc<crate::runtime::workflow::WorkflowOutputLatch>>,
+    workflow_output: Option<crate::runtime::workflow::WorkflowChildTerminal>,
 ) -> Result<(), ChildExit> {
     // The start gate: no semantic work before the delegation arrives.
     // Provider updates may already be queued because the root attachment can
@@ -703,15 +703,16 @@ pub(crate) async fn serve_child_delegation(
     };
     let frame = match terminal {
         AttemptTerminal::Completed(attempt_id) => {
-            let answer = workflow_output.as_ref().and_then(|latch| {
-                latch
+            // A Workflow child with a schema settles on its committed
+            // value; every other child on its final reply.
+            let latch = workflow_output
+                .as_ref()
+                .and_then(crate::runtime::workflow::WorkflowChildTerminal::latch);
+            let answer = match latch {
+                Some(latch) => latch
                     .committed_value()
-                    .and_then(|value| serde_json::to_string(&value).ok())
-            });
-            let answer = if workflow_output.is_none() {
-                final_answer(&runtime, &attempt_id)
-            } else {
-                answer
+                    .and_then(|value| serde_json::to_string(&value).ok()),
+                None => final_answer(&runtime, &attempt_id),
             };
             match answer {
                 Some(answer) => ResultFrame {
@@ -722,7 +723,7 @@ pub(crate) async fn serve_child_delegation(
                 None => ResultFrame {
                     status: ChildResultStatus::Failed,
                     content: None,
-                    diagnostic: Some(if workflow_output.is_some() {
+                    diagnostic: Some(if latch.is_some() {
                         "the Workflow Agent completed without a valid workflow_output commit"
                             .to_owned()
                     } else {
@@ -2114,7 +2115,7 @@ pub(crate) mod tests {
         // constructing a ConversationRuntime. The retained preparation owner
         // must drain even though no runtime exists to perform shutdown.
         spec.terminal = crate::runtime::subagent::ipc::ChildTerminalMode::WorkflowOutput {
-            output_schema: serde_json::json!({"type": "invalid-schema-type"}),
+            output_schema: Some(serde_json::json!({"type": "invalid-schema-type"})),
         };
         let activation = spec.subagent_id.clone();
         let conversation = spec.child_conversation_id.clone();
@@ -2426,7 +2427,7 @@ pub(crate) mod tests {
                 &handle,
                 AgentId::new("agent-parent"),
                 child_runtime,
-                workflow_output,
+                workflow_output.map(crate::runtime::workflow::WorkflowChildTerminal::Output),
             )
             .await;
             dispatcher.shutdown().await;
@@ -3734,7 +3735,9 @@ pub(crate) mod tests {
                         &handle,
                         AgentId::new("agent-parent"),
                         runtime,
-                        Some(latch),
+                        Some(crate::runtime::workflow::WorkflowChildTerminal::Output(
+                            latch,
+                        )),
                     )
                     .await;
                     dispatcher.shutdown().await;

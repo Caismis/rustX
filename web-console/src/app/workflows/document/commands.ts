@@ -51,7 +51,8 @@ export function emptyBlock(): Block {
  * by the native check; nothing is invented to make a graph pass. */
 export function nodeTemplate(kind: NodeKind): NodeDefinition {
   switch (kind) {
-    case 'agent': return { type: 'agent', profile: '', task: [], output: { ...EMPTY_OBJECT } };
+    // As Dify's Agent: the final reply is its `text` until outputs are declared.
+    case 'agent': return { type: 'agent', profile: '', task: [], output: { type: 'text' } };
     // As Dify's LLM node: an empty system prompt, then an empty user turn.
     case 'model': return { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [] }, { role: 'user', content: [] }], output: { type: 'text' } };
     case 'tool': return { type: 'tool', selector: { origin: 'builtin', name: '' }, arguments: { type: 'literal', value: {} }, result: { type: 'text', part: 0 } };

@@ -267,10 +267,11 @@ impl SubagentChildSpec {
 pub(crate) enum ChildTerminalMode {
     /// Publish an ordinary named-subagent answer candidate.
     Normal,
-    /// Require the reserved Workflow Agent output protocol.
+    /// A Workflow-owned `AgentRun`: its final reply, or, with a schema, the
+    /// reserved Workflow Agent output protocol.
     WorkflowOutput {
-        /// The frozen JSON Schema shown to the child model.
-        output_schema: serde_json::Value,
+        /// The frozen JSON Schema shown to the child model, when declared.
+        output_schema: Option<serde_json::Value>,
     },
 }
 

@@ -1301,8 +1301,8 @@ export const fixtures = [
             "file_name": "typed_agent.yaml",
             "id": "typed_agent",
             "relative_path": ".agents/workflows/typed_agent.yaml",
-            "revision": "sha256:4aebaa2ea8f3f8e4253b8f4cee8d135bab96fefdb73d0f395029ad5de3449d41",
-            "byte_length": "888",
+            "revision": "sha256:08e13f3dac91afc6e2c279b376b2b5ca21d31404a985deb334998b7485de523a",
+            "byte_length": "917",
             "modified_ms": 1790000000000,
             "description": "Summarize a topic with one typed Agent result.",
             "display": null,
@@ -1314,8 +1314,8 @@ export const fixtures = [
             "file_name": "parallel_checks.yaml",
             "id": "parallel_checks",
             "relative_path": ".agents/workflows/parallel_checks.yaml",
-            "revision": "sha256:797d4d14876f82a0c330c62e02e655925f673710c0c731e1e6de93eb0b570de1",
-            "byte_length": "2085",
+            "revision": "sha256:f6899cf527b9a874b8c772228ae117a8d9149a8f3058396773c2fc2ca5f234d6",
+            "byte_length": "2197",
             "modified_ms": 1790000000000,
             "description": "Run two fixed keyed text checks and return both results.",
             "display": null,
@@ -1340,8 +1340,8 @@ export const fixtures = [
             "file_name": "parallel_review.yaml",
             "id": "parallel_review",
             "relative_path": ".agents/workflows/parallel_review.yaml",
-            "revision": "sha256:5cf7863ee806a58f32fa43516a77eb4bd6a4db7deb4797e94e5883a54278ab6b",
-            "byte_length": "4171",
+            "revision": "sha256:066fdcf4d4d4a8cd216019572bab35699b028128e9e24f373953c6f61af48bfe",
+            "byte_length": "4357",
             "modified_ms": 1790000000000,
             "description": "Two scoped proposal reviews, including a fixed second quality pass; no Git required.",
             "display": null,
@@ -1353,8 +1353,8 @@ export const fixtures = [
             "file_name": "implement_and_review.yaml",
             "id": "implement_and_review",
             "relative_path": ".agents/workflows/implement_and_review.yaml",
-            "revision": "sha256:fce5d386b83a4e86c601840bf9095876282398759861b1414a6072210c9e9a1a",
-            "byte_length": "14352",
+            "revision": "sha256:68f65a99d1a896f96812e41d067c9ed9ce5bbb1dd388b00da1870410de932143",
+            "byte_length": "14484",
             "modified_ms": 1790000000000,
             "description": "Plan greeting.py, gate implementation on human plan acceptance, then implement and run real checks in the shared Session workspace up to three times.",
             "display": null,
@@ -1406,7 +1406,7 @@ export const fixtures = [
         "id": "typed_agent",
         "path": "/workspace/fixture/.agents/workflows/typed_agent.yaml",
         "relative_path": ".agents/workflows/typed_agent.yaml",
-        "revision": "sha256:4aebaa2ea8f3f8e4253b8f4cee8d135bab96fefdb73d0f395029ad5de3449d41",
+        "revision": "sha256:08e13f3dac91afc6e2c279b376b2b5ca21d31404a985deb334998b7485de523a",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -1471,16 +1471,19 @@ export const fixtures = [
                   }
                 ],
                 "output": {
-                  "type": "object",
-                  "properties": {
-                    "summary": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "summary"
-                  ],
-                  "additionalProperties": false
+                  "type": "json_schema",
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "summary": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "summary"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               }
             },
@@ -1531,7 +1534,7 @@ export const fixtures = [
         "id": "parallel_checks",
         "path": "/workspace/fixture/.agents/workflows/parallel_checks.yaml",
         "relative_path": ".agents/workflows/parallel_checks.yaml",
-        "revision": "sha256:797d4d14876f82a0c330c62e02e655925f673710c0c731e1e6de93eb0b570de1",
+        "revision": "sha256:f6899cf527b9a874b8c772228ae117a8d9149a8f3058396773c2fc2ca5f234d6",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -1606,16 +1609,19 @@ export const fixtures = [
                   }
                 ],
                 "output": {
-                  "type": "object",
-                  "properties": {
-                    "passed": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "passed"
-                  ],
-                  "additionalProperties": false
+                  "type": "json_schema",
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "passed": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "passed"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "check_text_clarity_assess_clarity": {
@@ -1639,16 +1645,19 @@ export const fixtures = [
                   }
                 ],
                 "output": {
-                  "type": "object",
-                  "properties": {
-                    "passed": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "passed"
-                  ],
-                  "additionalProperties": false
+                  "type": "json_schema",
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "passed": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "passed"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "return_checks": {
@@ -1851,7 +1860,7 @@ export const fixtures = [
         "id": "parallel_review",
         "path": "/workspace/fixture/.agents/workflows/parallel_review.yaml",
         "relative_path": ".agents/workflows/parallel_review.yaml",
-        "revision": "sha256:5cf7863ee806a58f32fa43516a77eb4bd6a4db7deb4797e94e5883a54278ab6b",
+        "revision": "sha256:066fdcf4d4d4a8cd216019572bab35699b028128e9e24f373953c6f61af48bfe",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2012,20 +2021,23 @@ export const fixtures = [
                   }
                 ],
                 "output": {
-                  "type": "object",
-                  "properties": {
-                    "summary": {
-                      "type": "string"
+                  "type": "json_schema",
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "summary": {
+                        "type": "string"
+                      },
+                      "acceptable": {
+                        "type": "boolean"
+                      }
                     },
-                    "acceptable": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "summary",
-                    "acceptable"
-                  ],
-                  "additionalProperties": false
+                    "required": [
+                      "summary",
+                      "acceptable"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "reviews_quality_review": {
@@ -2049,20 +2061,23 @@ export const fixtures = [
                   }
                 ],
                 "output": {
-                  "type": "object",
-                  "properties": {
-                    "summary": {
-                      "type": "string"
+                  "type": "json_schema",
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "summary": {
+                        "type": "string"
+                      },
+                      "acceptable": {
+                        "type": "boolean"
+                      }
                     },
-                    "acceptable": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "summary",
-                    "acceptable"
-                  ],
-                  "additionalProperties": false
+                    "required": [
+                      "summary",
+                      "acceptable"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "reviews_security_review": {
@@ -2086,20 +2101,23 @@ export const fixtures = [
                   }
                 ],
                 "output": {
-                  "type": "object",
-                  "properties": {
-                    "summary": {
-                      "type": "string"
+                  "type": "json_schema",
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "summary": {
+                        "type": "string"
+                      },
+                      "acceptable": {
+                        "type": "boolean"
+                      }
                     },
-                    "acceptable": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "summary",
-                    "acceptable"
-                  ],
-                  "additionalProperties": false
+                    "required": [
+                      "summary",
+                      "acceptable"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "revise": {
@@ -2207,7 +2225,7 @@ export const fixtures = [
         "id": "implement_and_review",
         "path": "/workspace/fixture/.agents/workflows/implement_and_review.yaml",
         "relative_path": ".agents/workflows/implement_and_review.yaml",
-        "revision": "sha256:fce5d386b83a4e86c601840bf9095876282398759861b1414a6072210c9e9a1a",
+        "revision": "sha256:68f65a99d1a896f96812e41d067c9ed9ce5bbb1dd388b00da1870410de932143",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2574,23 +2592,26 @@ export const fixtures = [
                   }
                 ],
                 "output": {
-                  "type": "object",
-                  "properties": {
-                    "summary": {
-                      "type": "string"
-                    },
-                    "steps": {
-                      "type": "array",
-                      "items": {
+                  "type": "json_schema",
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "summary": {
                         "type": "string"
+                      },
+                      "steps": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
                       }
-                    }
-                  },
-                  "required": [
-                    "summary",
-                    "steps"
-                  ],
-                  "additionalProperties": false
+                    },
+                    "required": [
+                      "summary",
+                      "steps"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "plan_accepted": {
@@ -2823,32 +2844,35 @@ export const fixtures = [
                         }
                       ],
                       "output": {
-                        "type": "object",
-                        "properties": {
-                          "plan": {
-                            "type": "object",
-                            "properties": {
-                              "summary": {
-                                "type": "string"
-                              },
-                              "steps": {
-                                "type": "array",
-                                "items": {
+                        "type": "json_schema",
+                        "schema": {
+                          "type": "object",
+                          "properties": {
+                            "plan": {
+                              "type": "object",
+                              "properties": {
+                                "summary": {
                                   "type": "string"
+                                },
+                                "steps": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
                                 }
-                              }
-                            },
-                            "required": [
-                              "summary",
-                              "steps"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "required": [
-                          "plan"
-                        ],
-                        "additionalProperties": false
+                              },
+                              "required": [
+                                "summary",
+                                "steps"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "plan"
+                          ],
+                          "additionalProperties": false
+                        }
                       }
                     },
                     "passed": {
@@ -3591,20 +3615,23 @@ export const fixtures = [
                 }
               ],
               "output": {
-                "type": "object",
-                "properties": {
-                  "summary": {
-                    "type": "string"
+                "type": "json_schema",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string"
+                    },
+                    "acceptable": {
+                      "type": "boolean"
+                    }
                   },
-                  "acceptable": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "summary",
-                  "acceptable"
-                ],
-                "additionalProperties": false
+                  "required": [
+                    "summary",
+                    "acceptable"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "reviews_quality_review": {
@@ -3628,20 +3655,23 @@ export const fixtures = [
                 }
               ],
               "output": {
-                "type": "object",
-                "properties": {
-                  "summary": {
-                    "type": "string"
+                "type": "json_schema",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string"
+                    },
+                    "acceptable": {
+                      "type": "boolean"
+                    }
                   },
-                  "acceptable": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "summary",
-                  "acceptable"
-                ],
-                "additionalProperties": false
+                  "required": [
+                    "summary",
+                    "acceptable"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "reviews_security_review": {
@@ -3665,20 +3695,23 @@ export const fixtures = [
                 }
               ],
               "output": {
-                "type": "object",
-                "properties": {
-                  "summary": {
-                    "type": "string"
+                "type": "json_schema",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string"
+                    },
+                    "acceptable": {
+                      "type": "boolean"
+                    }
                   },
-                  "acceptable": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "summary",
-                  "acceptable"
-                ],
-                "additionalProperties": false
+                  "required": [
+                    "summary",
+                    "acceptable"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "revise": {
@@ -3925,20 +3958,23 @@ export const fixtures = [
                 }
               ],
               "output": {
-                "type": "object",
-                "properties": {
-                  "summary": {
-                    "type": "string"
+                "type": "json_schema",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string"
+                    },
+                    "acceptable": {
+                      "type": "boolean"
+                    }
                   },
-                  "acceptable": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "summary",
-                  "acceptable"
-                ],
-                "additionalProperties": false
+                  "required": [
+                    "summary",
+                    "acceptable"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "reviews_quality_review": {
@@ -3962,20 +3998,23 @@ export const fixtures = [
                 }
               ],
               "output": {
-                "type": "object",
-                "properties": {
-                  "summary": {
-                    "type": "string"
+                "type": "json_schema",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string"
+                    },
+                    "acceptable": {
+                      "type": "boolean"
+                    }
                   },
-                  "acceptable": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "summary",
-                  "acceptable"
-                ],
-                "additionalProperties": false
+                  "required": [
+                    "summary",
+                    "acceptable"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "reviews_security_review": {
@@ -3999,20 +4038,23 @@ export const fixtures = [
                 }
               ],
               "output": {
-                "type": "object",
-                "properties": {
-                  "summary": {
-                    "type": "string"
+                "type": "json_schema",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string"
+                    },
+                    "acceptable": {
+                      "type": "boolean"
+                    }
                   },
-                  "acceptable": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "summary",
-                  "acceptable"
-                ],
-                "additionalProperties": false
+                  "required": [
+                    "summary",
+                    "acceptable"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "revise": {
@@ -4102,7 +4144,7 @@ export const fixtures = [
           "directory": "/workspace/fixture"
         },
         "id": "parallel_review",
-        "candidate_revision": "sha256:7a1fd76db703e3855f82edcecb9d8badef0cdd9442e55212a476d3c2408d185b",
+        "candidate_revision": "sha256:66bb679eda9ba4cc2265b26663ffa2cf73e1c6e4aae9fd6d18093b240cd4bdd8",
         "generation": "7",
         "query": null,
         "analysis": {
@@ -4393,7 +4435,7 @@ export const fixtures = [
               "additionalProperties": false
             }
           },
-          "revision": "sha256:5cf7863ee806a58f32fa43516a77eb4bd6a4db7deb4797e94e5883a54278ab6b"
+          "revision": "sha256:066fdcf4d4d4a8cd216019572bab35699b028128e9e24f373953c6f61af48bfe"
         },
         "dependencies": {
           "status": "admitted",
@@ -4402,7 +4444,7 @@ export const fixtures = [
         "explanation": {
           "identity": {
             "workflow_id": "parallel_review",
-            "program_digest": "24afc8d0ec1d20afd7198d8ab6cb5d04c056206b6ed20763e4dd2ade1abffeed"
+            "program_digest": "47c38a87652855680d4ed0cda805a1c16965026ca78ca61f8827d90b36d737ab"
           },
           "stage": "statically_compiled_online_admission_unresolved",
           "input_schema": {
@@ -4864,7 +4906,7 @@ export const fixtures = [
         "kind": "workspace",
         "directory": "/workspace/fixture"
       },
-      "expected_revision": "sha256:5cf7863ee806a58f32fa43516a77eb4bd6a4db7deb4797e94e5883a54278ab6b",
+      "expected_revision": "sha256:066fdcf4d4d4a8cd216019572bab35699b028128e9e24f373953c6f61af48bfe",
       "mutation": {
         "kind": "workflow",
         "id": "parallel_review",
@@ -5028,20 +5070,23 @@ export const fixtures = [
                     }
                   ],
                   "output": {
-                    "type": "object",
-                    "properties": {
-                      "summary": {
-                        "type": "string"
+                    "type": "json_schema",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "summary": {
+                          "type": "string"
+                        },
+                        "acceptable": {
+                          "type": "boolean"
+                        }
                       },
-                      "acceptable": {
-                        "type": "boolean"
-                      }
-                    },
-                    "required": [
-                      "summary",
-                      "acceptable"
-                    ],
-                    "additionalProperties": false
+                      "required": [
+                        "summary",
+                        "acceptable"
+                      ],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "reviews_quality_review": {
@@ -5065,20 +5110,23 @@ export const fixtures = [
                     }
                   ],
                   "output": {
-                    "type": "object",
-                    "properties": {
-                      "summary": {
-                        "type": "string"
+                    "type": "json_schema",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "summary": {
+                          "type": "string"
+                        },
+                        "acceptable": {
+                          "type": "boolean"
+                        }
                       },
-                      "acceptable": {
-                        "type": "boolean"
-                      }
-                    },
-                    "required": [
-                      "summary",
-                      "acceptable"
-                    ],
-                    "additionalProperties": false
+                      "required": [
+                        "summary",
+                        "acceptable"
+                      ],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "reviews_security_review": {
@@ -5102,20 +5150,23 @@ export const fixtures = [
                     }
                   ],
                   "output": {
-                    "type": "object",
-                    "properties": {
-                      "summary": {
-                        "type": "string"
+                    "type": "json_schema",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "summary": {
+                          "type": "string"
+                        },
+                        "acceptable": {
+                          "type": "boolean"
+                        }
                       },
-                      "acceptable": {
-                        "type": "boolean"
-                      }
-                    },
-                    "required": [
-                      "summary",
-                      "acceptable"
-                    ],
-                    "additionalProperties": false
+                      "required": [
+                        "summary",
+                        "acceptable"
+                      ],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "revise": {

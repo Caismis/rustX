@@ -1,5 +1,40 @@
 {
   "$defs": {
+    "WorkflowAgentOutput": {
+      "description": "The authored output contract of a Workflow Agent node, as Dify's Agent:\nthe final reply is the `text` variable, or a declared schema adds the\nreserved `workflow_output` terminal and its fields are the variables.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The child's final reply is the result.",
+          "properties": {
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The child commits one value matching this schema.",
+          "properties": {
+            "schema": true,
+            "type": {
+              "const": "json_schema",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "schema"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "WorkflowBlock": {
       "additionalProperties": false,
       "description": "A fixed lexical graph shared by the root and Loop bodies.",
@@ -559,7 +594,8 @@
           "description": "One execution of an admitted named Subagent profile.",
           "properties": {
             "output": {
-              "description": "The frozen `AgentRun` output contract."
+              "$ref": "#/$defs/WorkflowAgentOutput",
+              "description": "What the `AgentRun` returns: its final reply text, or a\nstructured value committed through `workflow_output`."
             },
             "profile": {
               "description": "The native named profile to resolve at `AgentRun` admission.",

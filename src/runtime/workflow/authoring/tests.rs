@@ -201,7 +201,7 @@ fn a_real_node_named_result_retains_its_producer_identity() {
 fn actual_editor_unselected_identities_are_analyzable_but_never_compiled() {
     let cases = [
         (
-            json!({"type":"agent","profile":"","task":[reference(&["args"])],"output":object(json!({}),&[])}),
+            json!({"type":"agent","profile":"","task":[reference(&["args"])],"output":{"type":"json_schema","schema":object(json!({}),&[])}}),
             WorkflowConsumerField::Task,
         ),
         (

@@ -52,13 +52,15 @@ block:
       - type: reference
         path: ["args", "text"]
       output:
-        type: object
-        properties:
-          passed:
-            type: boolean
-        required:
-        - passed
-        additionalProperties: false
+        type: json_schema
+        schema:
+          type: object
+          properties:
+            passed:
+              type: boolean
+          required:
+          - passed
+          additionalProperties: false
     check_text_brevity_assess_brevity:
       type: agent
       profile: reviewer
@@ -70,13 +72,15 @@ block:
       - type: reference
         path: ["args", "text"]
       output:
-        type: object
-        properties:
-          passed:
-            type: boolean
-        required:
-        - passed
-        additionalProperties: false
+        type: json_schema
+        schema:
+          type: object
+          properties:
+            passed:
+              type: boolean
+          required:
+          - passed
+          additionalProperties: false
   edges:
   - from: start
     to: check_text_clarity_assess_clarity

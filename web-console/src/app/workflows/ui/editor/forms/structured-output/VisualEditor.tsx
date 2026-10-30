@@ -34,7 +34,7 @@ function SchemaNode(props: NodeProps) {
   const schema = schemaAt(document, address), type = fieldType(schema);
   const objectAddress = schema.type === 'object' ? address : schema.type === 'array' && schemaObject(schema.items)?.type === 'object' ? within(address, ['items']) : undefined;
   const object = objectAddress ? schemaAt(document, objectAddress) : undefined;
-  const properties = schemaObject(object?.properties) ?? {}, target = objectAddress && schemaTarget(objectAddress);
+  const properties = schemaObject(object?.properties) ?? {}, target = objectAddress && schemaTarget(objectAddress, document);
   const keys = target ? orderedKeys(document, target, Object.keys(properties)) : Object.keys(properties);
   const active = !!parent && editing?.name === name && encodeField(editing.parent) === encodeField(parent);
   const adding = objectAddress && editing?.name === undefined && editing && encodeField(editing.parent) === encodeField(objectAddress);

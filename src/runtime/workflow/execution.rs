@@ -146,7 +146,7 @@ pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
         schema_value_bound(&block.input_schema) + schema_value_bound(&block.output_schema);
     for node in block.nodes.values() {
         bytes = bytes.saturating_add(match node {
-            WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.output_schema),
+            WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.output.schema()),
             WorkflowNodeProgram::Model(model) => schema_value_bound(&model.output.schema()),
             WorkflowNodeProgram::Tool { result, .. } => schema_value_bound(&result.schema()),
             WorkflowNodeProgram::Start | WorkflowNodeProgram::Branch { .. } => 0,
@@ -730,7 +730,7 @@ impl WorkflowRuntime {
                         )
                         .await?;
                     let value = self
-                        .settle_agent(run, child, &node_instance, &agent.output_schema, cancellation)
+                        .settle_agent(run, child, &node_instance, &agent.output, cancellation)
                         .await?;
                     reservation.retain(&value)?;
                     values.insert(node_id.to_owned(), value);

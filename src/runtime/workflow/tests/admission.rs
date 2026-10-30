@@ -3,7 +3,7 @@ use super::*;
 use crate::durable::JournalStore;
 
 fn cfg274_agent_source() -> WorkflowProgram {
-    let agent = json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],"output":schema(json!({}), &[])});
+    let agent = json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],"output":{"type":"json_schema","schema":schema(json!({}), &[])}});
     WorkflowProgram::compile(WorkflowId::parse("review").unwrap(), serde_json::from_value(json!({
         "description":"Static review", "block": {
             "input":schema(json!({}), &[]), "output":schema(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},"agent":agent,"done":{"type":"return","output":{"type":"literal","value":{}}}},"edges": [{"from":"workflow_start","to":"agent"},{"from":"agent","to":"done"}],}
@@ -240,7 +240,7 @@ async fn cfg274_disabled_direct_start_runs_zero_nodes_tools_and_children() {
     }
     .into();
     // A child is the entry node; the unavailable Tool occurs later.
-    source.block.nodes.insert("first_child".into(), serde_json::from_value(json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],"output":schema(json!({}), &[])})).unwrap());
+    source.block.nodes.insert("first_child".into(), serde_json::from_value(json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],"output":{"type":"json_schema","schema":schema(json!({}), &[])}})).unwrap());
     source.block.edges.push(WorkflowEdgeDefinition {
         from: "first_child".into(),
         to: "check".into(),

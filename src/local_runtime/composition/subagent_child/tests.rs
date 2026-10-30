@@ -890,7 +890,7 @@ async fn the_final_report_rule_is_runtime_owned_and_terminal_mode_aware() {
 
     let mut workflow_spec = spec(dir.path(), vec![builtin("read")], Vec::new(), Vec::new());
     workflow_spec.terminal = crate::runtime::subagent::ipc::ChildTerminalMode::WorkflowOutput {
-        output_schema: serde_json::json!({"type": "object"}),
+        output_schema: Some(serde_json::json!({"type": "object"})),
     };
     let workflow = LocalConversationCore::compose_subagent_child(
         &workflow_spec,
@@ -903,6 +903,41 @@ async fn the_final_report_rule_is_runtime_owned_and_terminal_mode_aware() {
         workflow.runtime().runtime_resources().agent_profile(),
         Some("frozen child instructions"),
         "a Workflow-owned child keeps its structured terminal protocol, unamended"
+    );
+    assert!(
+        workflow
+            .workflow_terminal()
+            .and_then(|t| t.latch().cloned())
+            .is_some()
+    );
+
+    let mut text_spec = spec(dir.path(), vec![builtin("read")], Vec::new(), Vec::new());
+    text_spec.terminal = crate::runtime::subagent::ipc::ChildTerminalMode::WorkflowOutput {
+        output_schema: None,
+    };
+    let text = LocalConversationCore::compose_subagent_child(
+        &text_spec,
+        &dependencies(),
+        &ChildPreparation::detached(),
+    )
+    .await
+    .expect("the Workflow text child composes");
+    let profile = text
+        .runtime()
+        .runtime_resources()
+        .agent_profile()
+        .expect("agent profile")
+        .to_owned();
+    assert!(
+        profile.contains("Your final response is the complete result of this workflow step."),
+        "a Workflow child whose reply is its result is told so: {profile}"
+    );
+    assert!(
+        matches!(
+            text.workflow_terminal(),
+            Some(crate::runtime::workflow::WorkflowChildTerminal::Text)
+        ),
+        "without a schema no workflow_output terminal is installed"
     );
 }
 

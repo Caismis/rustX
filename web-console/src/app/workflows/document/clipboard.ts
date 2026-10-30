@@ -60,6 +60,11 @@ function unique(values: unknown[], identity: (value: unknown) => unknown): void 
 function path(value: unknown): void { const steps = array(value); if (steps.length > 8) fail(); for (const step of steps) { const part = keys(step, ['node']); text(part.node); if (validLocalKey(part.node)) fail(); } }
 function address(value: unknown): void { const at = keys(value, ['block', 'node']); path(at.block); text(at.node); if (validLocalKey(at.node)) fail(); }
 function unsigned(value: unknown): void { if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 4294967295) fail(); }
+/** A Model or Agent output: text, or one declared object schema. */
+function output(value: unknown): void {
+  const record = object(value);
+  if (record.type === 'text') keys(record, ['type']); else if (record.type === 'json_schema') { keys(record, ['type', 'schema']); object(record.schema); } else fail();
+}
 function value(input: unknown): void {
   const record = object(input);
   switch (record.type) {
@@ -86,7 +91,7 @@ function node(input: unknown): void {
   switch (record.type) {
     case 'start': keys(record, ['type']); return;
     case 'agent':
-      keys(record, ['type', 'profile', 'task', 'output']); text(record.profile); array(record.task).forEach(value); object(record.output); return;
+      keys(record, ['type', 'profile', 'task', 'output']); text(record.profile); array(record.task).forEach(value); output(record.output); return;
     case 'model': {
       keys(record, ['type', 'model', 'messages', 'output', 'retry', 'on_error']);
       if (record.retry !== undefined) { const retry = keys(record.retry, ['max_retries', 'interval_ms']); unsigned(retry.max_retries); unsigned(retry.interval_ms); }
@@ -107,8 +112,7 @@ function node(input: unknown): void {
         else if (policy.mode === 'explicit') { keys(policy, ['mode', 'model', 'profile', 'request_params', 'max_output_tokens']); text(policy.model); if (policy.profile != null) text(policy.profile); if (policy.request_params !== undefined) object(policy.request_params); if (policy.max_output_tokens != null) unsigned(policy.max_output_tokens); }
         else fail();
       }
-      const output = object(record.output);
-      if (output.type === 'text') keys(output, ['type']); else if (output.type === 'json_schema') { keys(output, ['type', 'schema']); object(output.schema); } else fail(); return;
+      output(record.output); return;
     }
     case 'tool': {
       keys(record, ['type', 'selector', 'arguments', 'result']); value(record.arguments);

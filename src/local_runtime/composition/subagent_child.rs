@@ -20,7 +20,7 @@ use crate::runtime::interaction::InteractionRoute;
 use crate::runtime::resources::RuntimeResourceSnapshot;
 use crate::runtime::subagent::ResolvedSubagentTool;
 use crate::runtime::subagent::child_conversation_store_path;
-use crate::runtime::workflow::WorkflowOutputLatch;
+use crate::runtime::workflow::{WorkflowChildTerminal, WorkflowOutputLatch};
 use crate::runtime_client::host::RuntimeClientHost;
 use crate::runtime_client::host::RuntimeClientHostConfig;
 use crate::skills::SkillDiscoveryConfig;
@@ -826,18 +826,26 @@ impl LocalConversationCore {
                 )
                 .with_capability_availability(capability.availability()),
             );
-            let workflow_output_latch = match &spec.terminal {
+            let workflow_terminal = match &spec.terminal {
                 crate::runtime::subagent::ipc::ChildTerminalMode::Normal => None,
                 crate::runtime::subagent::ipc::ChildTerminalMode::WorkflowOutput {
-                    output_schema,
-                } => Some(Arc::new(
+                    output_schema: None,
+                } => Some(WorkflowChildTerminal::Text),
+                crate::runtime::subagent::ipc::ChildTerminalMode::WorkflowOutput {
+                    output_schema: Some(output_schema),
+                } => Some(WorkflowChildTerminal::Output(Arc::new(
                     WorkflowOutputLatch::new(output_schema.clone())
                         .map_err(|detail| LocalRuntimeError::Capability { detail })?,
-                )),
+                ))),
             };
-            let workflow_output = workflow_output_latch.clone().map(
-                |latch| -> Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal> { latch },
-            );
+            // Only a declared schema installs the reserved terminal tool.
+            let workflow_output = workflow_terminal
+                .as_ref()
+                .and_then(WorkflowChildTerminal::latch)
+                .cloned()
+                .map(
+                    |latch| -> Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal> { latch },
+                );
             // 12-13. The one child conversation runtime. The definition's
             // instructions enter the request-time AgentProfile System section,
             // never canonical history.
@@ -875,7 +883,7 @@ impl LocalConversationCore {
                 runtime,
                 tool_runtime,
                 capability,
-                workflow_output: workflow_output_latch,
+                workflow_terminal,
                 resource_loader: None,
             })
         })

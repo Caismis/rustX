@@ -737,7 +737,9 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
         WorkflowNodeDefinition::Agent {
             profile: "reviewer".into(),
             task: vec![text("Return machine-compatible findings")],
-            output: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
+            output: WorkflowAgentOutput::JsonSchema {
+                schema: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
+            },
         },
     );
     if let WorkflowNodeDefinition::Tool {

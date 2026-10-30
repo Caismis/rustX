@@ -303,7 +303,7 @@ fn unselected_authored_identities_round_trip_for_analysis_but_cannot_replace_a_f
     let roots = Roots::new();
     let nodes = [
         json!({"type":"agent", "profile":"", "task":[{"type":"literal","value":"Review"}], 
-            "output":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}}),
+            "output":{"type":"json_schema","schema":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}}}),
         json!({"type":"model", "model":{"mode":"explicit","model":"","request_params":{}},
             "messages":[{"role":"system","content":[{"type":"literal","value":"Review"}]}], "output":{"type":"text"}}),
         json!({"type":"tool", "selector":{"origin":"source","source_id":"","name":"read"},
@@ -426,7 +426,7 @@ block:
       - type: literal
         value: 'Review it.'
       - {type: reference, path: [args, proposal]}
-      output: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}
+      output: {type: json_schema, schema: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}}
     done:
       type: return
       output: {type: reference, path: [review]}

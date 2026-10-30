@@ -287,8 +287,8 @@ describe('Model native editing document', () => {
   });
 
   it('writes an Agent task in the prompt editor, its variables as tokens, and lists the scope\'s profiles', async () => {
-    const agent: NodeDefinition = { type: 'agent', profile: '', task: [{ type: 'literal', value: 'Review ' }, { type: 'reference', path: ['args'] }], output: object };
-    await open(undefined, agent);
+    const agent: NodeDefinition = { type: 'agent', profile: '', task: [{ type: 'literal', value: 'Review ' }, { type: 'reference', path: ['args'] }], output: { type: 'text' } };
+    const actor = await open(undefined, agent);
     const task = inspector().getByRole('textbox', { name: 'Task' });
     expect(task.textContent).toContain('Review ');
     expect(within(task).getByRole('button', { name: 'Choose a variable' }).textContent).toContain('Whole value');
@@ -298,7 +298,13 @@ describe('Model native editing document', () => {
     await act(async () => fireEvent.click(trigger));
     expect(await screen.findByText('No Agent profiles in this scope')).toBeTruthy();
     fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    // As Dify's Agent: the final reply is `text` until structured output is on.
     const outputs = within(inspector().getByRole('region', { name: 'Output variables' }));
+    expect(outputs.getByText('text')).toBeTruthy();
+    expect(outputs.queryByRole('button', { name: 'Configure' })).toBeNull();
+    await act(async () => fireEvent.click(outputs.getByRole('switch', { name: 'Structured output' })));
+    expect(actor.getSnapshot().context.document!.block.nodes.model).toMatchObject({ output: { type: 'json_schema', schema: { type: 'object', properties: {} } } });
+    expect(outputs.queryByText('text')).toBeNull();
     expect(outputs.getByText('Structured output is not configured')).toBeTruthy();
     await act(async () => fireEvent.click(outputs.getByRole('button', { name: 'Configure' })));
     expect(await screen.findByRole('dialog')).toBeTruthy();

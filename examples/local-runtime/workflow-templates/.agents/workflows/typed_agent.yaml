@@ -30,7 +30,7 @@ block:
         value: "\n\ntopic: "
       - type: reference
         path: ["args", "topic"]
-      output: *id001
+      output: {type: json_schema, schema: *id001}
     return_summary:
       type: return
       output:
