@@ -222,8 +222,8 @@ fn transient_response_facts_move_without_sharing_and_completed_owners_stay_ident
     let running_cut = store.observation_read_cut().unwrap();
     super::super::observation_response::ownership_work();
     let running = response_read_with_owners(&store, &running_cut);
-    assert_eq!(running.page.items.len(), 1);
-    assert!(running.owners[0].is_none());
+    assert_eq!(running.items.len(), 1);
+    assert!(running.items[0].owner.is_none());
     assert_eq!(super::super::observation_response::ownership_work(), (0, 0, 1));
     assert_eq!(store.conn.response.len(), 0);
     assert_response_page_oracle(&store, &running_cut);
@@ -232,12 +232,13 @@ fn transient_response_facts_move_without_sharing_and_completed_owners_stay_ident
     let completed_cut = store.observation_read_cut().unwrap();
     super::super::observation_response::ownership_work();
     let completed = response_read_with_owners(&store, &completed_cut);
-    assert!(completed.page.items[0].response.is_some());
-    let owner = completed.owners[0].as_ref().unwrap();
+    assert!(completed.items[0].value().response.is_some());
+    let owner = completed.items[0].owner.as_ref().unwrap();
     assert_eq!(super::super::observation_response::ownership_work(), (1, 1, 0));
     let repeated = response_read_with_owners(&store, &completed_cut);
-    assert!(std::sync::Arc::ptr_eq(owner, repeated.owners[0].as_ref().unwrap()));
-    assert_eq!(super::super::observation_response::ownership_work(), (0, 1, 0));
+    assert!(std::sync::Arc::ptr_eq(owner, repeated.items[0].owner.as_ref().unwrap()));
+    assert_eq!(super::super::observation_response::ownership_work(), (0, 0, 0),
+        "internal cache hits retain their owner without cloning the whole response item");
     assert_response_page_oracle(&store, &completed_cut);
 
     // Even a complete owner is not admitted by a fresh historical proof after
@@ -246,8 +247,8 @@ fn transient_response_facts_move_without_sharing_and_completed_owners_stay_ident
     store.conn.response.invalidate();
     super::super::observation_response::ownership_work();
     let historical = response_read_with_owners(&store, &completed_cut);
-    assert!(historical.page.items[0].response.is_some());
-    assert!(historical.owners[0].is_none());
+    assert!(historical.items[0].value().response.is_some());
+    assert!(historical.items[0].owner.is_none());
     assert_eq!(super::super::observation_response::ownership_work(), (0, 0, 1));
     assert_eq!(store.conn.response.len(), 0);
     assert_response_page_oracle(&store, &completed_cut);

@@ -164,7 +164,9 @@ pub(in crate::durable::sqlite) fn assert_variants(
     message: &ModelInputMessage,
     frozen: &FrozenModelInput,
 ) {
-    let leaf = fragments::capture(connection, scope, message, frozen).unwrap();
+    let leaf = fragments::capture(connection, scope, message, frozen)
+        .unwrap()
+        .leaf;
     let (mut view, header) = super::super::input_view(connection, scope, message, frozen).unwrap();
 
     assert_eq!(leaf.variants.len(), 80);

@@ -342,7 +342,8 @@ fn count_conversation_store_open() {
 /// Version 82 shares two sparse event head indexes across four independent read domains.
 /// Version 83 stores compact independent event evidence and prefix-compressed request pages.
 /// Version 84 merges chronological attempt reads through the shared attempt-kind index.
-pub const SQLITE_SCHEMA_VERSION: i64 = 84;
+/// Version 85 stores immutable first content chunks alongside their exact frontier.
+pub const SQLITE_SCHEMA_VERSION: i64 = 85;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -8539,6 +8540,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE TABLE IF NOT EXISTS content_frontiers (
                 source_kind TEXT NOT NULL, source_id TEXT NOT NULL, block_index INTEGER NOT NULL,
                 representation TEXT NOT NULL, revision INTEGER NOT NULL, readable_end INTEGER NOT NULL,
+                bytes BLOB CHECK(bytes IS NULL OR length(bytes)<=65536),
                 PRIMARY KEY(source_kind,source_id,block_index,representation,revision)
             ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS publication_metadata_segments (
@@ -9289,6 +9291,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "representation",
                 "revision",
                 "readable_end",
+                "bytes",
             ],
         ),
         (
@@ -19771,7 +19774,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 84);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 85);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19840,7 +19843,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 84);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 85);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -20310,7 +20313,7 @@ mod tests {
                 },
             ))
             .unwrap();
-        store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER refuse_display_body BEFORE INSERT ON content_segments WHEN NEW.source_kind='observation_journal' BEGIN SELECT RAISE(ABORT,'derived source unavailable'); END").unwrap();
+        store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER refuse_display_body BEFORE INSERT ON content_frontiers WHEN NEW.source_kind='observation_journal' BEGIN SELECT RAISE(ABORT,'derived source unavailable'); END").unwrap();
         let event = store
             .append_event(envelope(
                 &id,

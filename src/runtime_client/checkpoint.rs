@@ -485,7 +485,11 @@ fn bounded_item_admitted(
             _ => true,
         }
     }
+    #[cfg(test)]
+    record_item_work(0);
     let bytes = encode_admitted_bytes(value, limit)?;
+    #[cfg(test)]
+    record_item_work(1);
     let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     bounded(&value).then_some((bytes, value))
 }
@@ -505,7 +509,10 @@ pub(super) fn prepare_capture_item<T: Serialize + DeserializeOwned>(
 }
 
 pub(crate) fn bounded_clone<T: Serialize + DeserializeOwned>(value: &T, limit: usize) -> Option<T> {
-    serde_json::from_slice(&bounded_item_bytes(value, limit)?).ok()
+    let bytes = bounded_item_bytes(value, limit)?;
+    #[cfg(test)]
+    record_item_work(2);
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// Opaque JSON is never rewritten with the typed protocol's integer codec.
@@ -602,6 +609,20 @@ fn bounded_inbound_kind(
 #[cfg(test)]
 thread_local! {
     static CAPTURE_WORK: std::cell::Cell<[u64; 6]> = const { std::cell::Cell::new([0; 6]) };
+    // Capped JSON encodes, structural byte parses, typed byte parses.
+    static ITEM_WORK: std::cell::Cell<[u64; 3]> = const { std::cell::Cell::new([0; 3]) };
+}
+#[cfg(test)]
+fn record_item_work(index: usize) {
+    ITEM_WORK.with(|counts| {
+        let mut value = counts.get();
+        value[index] += 1;
+        counts.set(value);
+    });
+}
+#[cfg(test)]
+pub(super) fn take_item_work() -> [u64; 3] {
+    ITEM_WORK.with(|counts| counts.replace([0; 3]))
 }
 #[cfg(test)]
 pub(super) fn record_capture_work(index: usize) {
@@ -713,6 +734,17 @@ impl Capture {
         }
         self.remaining -= encoded;
         true
+    }
+    /// Live blocks are finite DTOs: arguments are strings, never lexical JSON
+    /// carriers. Their normalized form has the same admission charge, so one
+    /// capped encoding supplies both item admission and the shared-body debit.
+    /// A first-stage rejection still leaves shared eviction state untouched.
+    pub(super) fn live_block(
+        &mut self,
+        block: &super::snapshot::InFlightBlock,
+    ) -> Option<super::snapshot::InFlightBlock> {
+        let (value, encoded, required) = prepare_capture_item(block)?;
+        self.admit_prepared(encoded, required).then_some(value)
     }
     pub fn reserve(&mut self, item: &impl Serialize) -> bool {
         let Some(bytes) = bounded_item_bytes(item, self.item_budget()) else {
@@ -2402,6 +2434,9 @@ mod prepared_trace_tests;
 
 #[cfg(test)]
 mod incremental_capture_tests;
+
+#[cfg(test)]
+mod live_capture_tests;
 
 #[cfg(test)]
 mod metadata_fragment_tests;

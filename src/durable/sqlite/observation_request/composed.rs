@@ -59,11 +59,15 @@ pub(crate) struct Work {
     pub scalar_reuses: usize,
     pub header_decodes: usize,
     pub template_loads: usize,
+    pub template_decodes: usize,
+    pub template_reuses: usize,
+    pub node_decodes: usize,
+    pub node_reuses: usize,
     pub leaf_width_calls: usize,
     pub width_hole_encodes: usize,
 }
 #[cfg(test)]
-thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,scalar_captures:0,scalar_reuses:0,header_decodes:0,template_loads:0,leaf_width_calls:0,width_hole_encodes:0})};}
+thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,scalar_captures:0,scalar_reuses:0,header_decodes:0,template_loads:0,template_decodes:0,template_reuses:0,node_decodes:0,node_reuses:0,leaf_width_calls:0,width_hole_encodes:0})};}
 #[cfg(test)]
 pub(in crate::durable::sqlite) fn take_work() -> Work {
     WORK.with(|work| work.replace(Work::default()))
@@ -300,7 +304,7 @@ pub(super) fn index_selection(
         .map_err(|error| storage(error.to_string()))?;
     connection
         .execute_cached(
-            "INSERT INTO content_frontiers VALUES('trace_request',?1,0,'canonical_json_v1',1,?2)",
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('trace_request',?1,0,'canonical_json_v1',1,?2)",
             params![sequence.to_string(), length],
         )
         .map_err(|error| storage(error.to_string()))?;
@@ -421,7 +425,7 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
         .map_err(|error| storage(error.to_string()))?;
     connection
         .execute_cached(
-            "INSERT INTO content_frontiers VALUES('trace_request',?1,0,'canonical_json_v1',1,?2)",
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('trace_request',?1,0,'canonical_json_v1',1,?2)",
             params![sequence.to_string(), root.length],
         )
         .map_err(|error| storage(error.to_string()))?;

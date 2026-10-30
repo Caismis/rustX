@@ -710,7 +710,7 @@ fn t10_t14_t19_trace_raw_refresh_fault_keeps_native_commit_and_never_falls_back(
         .lock()
         .unwrap()
         .execute(
-            "INSERT INTO content_frontiers VALUES('canonical','ledger:1',0,'raw_json_utf8',1,?1)",
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical','ledger:1',0,'raw_json_utf8',1,?1)",
             [u64::try_from(raw.len()).unwrap()],
         )
         .unwrap();

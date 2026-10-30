@@ -14,7 +14,8 @@ pub(super) fn read(
     limit: usize,
 ) -> Result<CheckpointHead, ConversationStoreError> {
     let validated = super::observation::ValidatedCut::new(transaction, conversation, cut)?;
-    let (headers, mut row_proofs) = super::observation::transcript_validated(&validated, limit)?;
+    let (headers, mut row_proofs) =
+        super::observation::transcript_validated(&validated, limit, response_owner)?;
     let mut transcript = snapshot::transcript_header_view(headers);
     // Keep the original validation/error order: transcript/cut, response, occupancy,
     // trace total, projection head. All subsequent reads retain this snapshot.
@@ -22,9 +23,14 @@ pub(super) fn read(
     #[cfg(test)]
     after_transcript();
     let selections = response::response_page_selections(&transcript);
-    let facts =
+    let mut facts =
         super::observation_response::read_validated(&validated, response_owner, &selections)?;
-    response::apply_page_facts(&mut transcript, through, facts.page)?;
+    response::apply_page_items(
+        &mut transcript,
+        through,
+        facts.statistics,
+        facts.items.iter_mut().map(|item| item.take_value()),
+    )?;
     let connection = validated.connection()?;
     let occupancy = super::observation_occupancy::read(connection, through)?;
     let trace_total = super::observation_statistics::trace_total(connection, through)?;
@@ -32,13 +38,13 @@ pub(super) fn read(
     let transcript_rows = transcript
         .entries
         .iter()
-        .zip(&facts.owners)
+        .zip(&facts.items)
         .map(|(entry, response)| {
             let header = row_proofs
                 .iter()
                 .position(|proof| proof.cursor() == entry.cursor.get())
                 .map(|index| row_proofs.swap_remove(index));
-            response_owner.transcript_row(conversation, entry, header, response.as_ref())
+            response_owner.transcript_row(conversation, entry, header, response.owner.as_ref())
         })
         .collect::<Result<_, _>>()?;
     Ok(CheckpointHead {

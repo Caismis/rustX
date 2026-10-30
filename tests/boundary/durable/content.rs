@@ -1752,7 +1752,7 @@ fn t08_t12_t15_t20_giant_canonical_identity_uses_finite_native_ledger_locator() 
     let connection = rusqlite::Connection::open(&path).unwrap();
     let maximum: u64 = connection
         .query_row(
-            "SELECT MAX(length(source_id)) FROM content_segments WHERE source_kind='canonical'",
+            "SELECT MAX(length(source_id)) FROM content_frontiers WHERE source_kind='canonical'",
             [],
             |row| row.get(0),
         )

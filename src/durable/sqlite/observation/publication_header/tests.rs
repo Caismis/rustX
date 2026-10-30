@@ -154,7 +154,7 @@ fn publication_header_pretrim_draft_restores_display_after_shorter_original_raw_
         .unwrap();
     connection
         .execute(
-            "INSERT INTO content_frontiers VALUES('canonical','ledger:1',8,'raw_json_utf8',1,?1)",
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical','ledger:1',8,'raw_json_utf8',1,?1)",
             [raw.len()],
         )
         .unwrap();

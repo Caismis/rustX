@@ -27,10 +27,33 @@ fn find_stored_hash(
         .transpose()
 }
 
+/// A construction proof is owned by one recursive result, not the `created`
+/// map. At most one completed sibling per native tree level retains its bytes.
+struct CapturedNode {
+    digest: index::Hash,
+    prepared: Option<(Augmentation, Vec<u8>)>,
+}
+impl CapturedNode {
+    fn into_node(
+        self,
+        connection: &Connection,
+        native: manifest::NodeRef,
+    ) -> Result<Augmentation, ConversationStoreError> {
+        load_reusing(connection, native, self.digest, self.prepared)
+    }
+}
 pub(super) fn load(
     connection: &Connection,
     native: manifest::NodeRef,
     expected: index::Hash,
+) -> Result<Augmentation, ConversationStoreError> {
+    load_reusing(connection, native, expected, None)
+}
+fn load_reusing(
+    connection: &Connection,
+    native: manifest::NodeRef,
+    expected: index::Hash,
+    prepared: Option<(Augmentation, Vec<u8>)>,
 ) -> Result<Augmentation, ConversationStoreError> {
     #[cfg(feature = "issue-387-profile")]
     super::profile::source_node_load();
@@ -45,10 +68,29 @@ pub(super) fn load(
     let bytes = bytes.ok_or_else(|| storage("captured Source augmentation unavailable"))?;
     #[cfg(test)]
     super::record_metadata(bytes.len());
-    if hash(&bytes) != expected {
-        return Err(storage("captured Source node digest differs"));
-    }
-    let node: Augmentation = super::record::decode(&bytes)?;
+    let node: Augmentation = match prepared {
+        Some((node, encoded)) if bytes == encoded => {
+            #[cfg(test)]
+            super::WORK.with(|work| {
+                let mut value = work.get();
+                value.node_reuses += 1;
+                work.set(value);
+            });
+            node
+        }
+        _ => {
+            if hash(&bytes) != expected {
+                return Err(storage("captured Source node digest differs"));
+            }
+            #[cfg(test)]
+            super::WORK.with(|work| {
+                let mut value = work.get();
+                value.node_decodes += 1;
+                work.set(value);
+            });
+            super::record::decode(&bytes)?
+        }
+    };
     node.widths.validate(native.count)?;
     if node.native != native {
         return Err(storage("captured Source node geometry differs"));
@@ -77,9 +119,17 @@ pub(super) fn load(
     }
     Ok(node)
 }
+#[cfg(test)]
 fn leaf_geometry(
     connection: &Connection,
     leaf: &Leaf,
+) -> Result<(WidthTable, u64, u64), ConversationStoreError> {
+    leaf_geometry_reusing(connection, leaf, Vec::new())
+}
+fn leaf_geometry_reusing(
+    connection: &Connection,
+    leaf: &Leaf,
+    captured: Vec<fragments::CapturedTemplate>,
 ) -> Result<(WidthTable, u64, u64), ConversationStoreError> {
     if leaf.variants.len() != weights::CLASSES
         || leaf.templates.is_empty()
@@ -98,8 +148,9 @@ fn leaf_geometry(
     let mut bases = Vec::with_capacity(leaf.templates.len());
     let mut max_path = 0;
     let mut max_key_path = 0;
+    let mut captured = captured.into_iter();
     for digest in &leaf.templates {
-        let template = fragments::load_template(connection, *digest)?;
+        let template = fragments::load_template_reusing(connection, *digest, captured.next())?;
         let hole = hole(1, 0, template.provenance_bytes)?;
         #[cfg(test)]
         super::WORK.with(|work| {
@@ -146,18 +197,21 @@ pub(super) fn hole(
 }
 fn store(
     connection: &Connection,
-    node: &Augmentation,
-) -> Result<index::Hash, ConversationStoreError> {
+    node: Augmentation,
+) -> Result<CapturedNode, ConversationStoreError> {
     #[cfg(test)]
     super::WORK.with(|work| {
         let mut value = work.get();
         value.new_nodes += 1;
         work.set(value);
     });
-    let bytes = super::record::encode(node, 65536)?;
+    let bytes = super::record::encode(&node, 65536)?;
     let digest = hash(&bytes);
     connection.prepare_cached("INSERT INTO request_source_nodes(native_id,native_digest,hash,metadata) VALUES(?1,?2,?3,?4)").map_err(|error|storage(error.to_string()))?.execute(params![node.native.id,node.native.digest.as_slice(),digest.as_slice(),bytes]).map_err(|error|storage(error.to_string()))?;
-    Ok(digest)
+    Ok(CapturedNode {
+        digest,
+        prepared: Some((node, bytes)),
+    })
 }
 struct Capture<'a> {
     connection: &'a Connection,
@@ -171,15 +225,21 @@ impl Capture<'_> {
         &mut self,
         native: manifest::NodeRef,
         rank: u64,
-    ) -> Result<index::Hash, ConversationStoreError> {
+    ) -> Result<CapturedNode, ConversationStoreError> {
         if let Some(digest) = self.created.get(&native.id) {
-            return Ok(*digest);
+            return Ok(CapturedNode {
+                digest: *digest,
+                prepared: None,
+            });
         }
         let connection = self.connection;
         // A missing row can be captured. A present but invalid row must fail,
         // never be mistaken for a cache miss and rebuilt from current input.
         if let Some(digest) = find_stored_hash(connection, &native)? {
-            return Ok(digest);
+            return Ok(CapturedNode {
+                digest,
+                prepared: None,
+            });
         }
         let node = manifest::node(connection, &native)?;
         let (content, widths, max_path, max_key_path) = match node.kind {
@@ -205,15 +265,26 @@ impl Capture<'_> {
                     .input
                     .get(at)
                     .ok_or_else(|| storage("actual frozen input missing new leaf"))?;
-                let leaf = fragments::capture(connection, self.scope, message, frozen)?;
-                let (widths, max_path, max_key_path) = leaf_geometry(connection, &leaf)?;
-                (Content::Leaf { leaf }, widths, max_path, max_key_path)
+                let captured = fragments::capture(connection, self.scope, message, frozen)?;
+                let (widths, max_path, max_key_path) =
+                    leaf_geometry_reusing(connection, &captured.leaf, captured.templates)?;
+                (
+                    Content::Leaf {
+                        leaf: captured.leaf,
+                    },
+                    widths,
+                    max_path,
+                    max_key_path,
+                )
             }
             manifest::NodeKind::Branch { left, right } => {
-                let left_hash = self.ensure(left, rank)?;
-                let right_hash = self.ensure(right, rank + left.count)?;
-                let a = load(connection, left, left_hash)?;
-                let b = load(connection, right, right_hash)?;
+                let left_captured = self.ensure(left, rank)?;
+                let right_captured = self.ensure(right, rank + left.count)?;
+                let (left_hash, right_hash) = (left_captured.digest, right_captured.digest);
+                // Read after both recursive writes, so triggers on the right
+                // subtree cannot silently invalidate a prepared left sibling.
+                let a = left_captured.into_node(connection, left)?;
+                let b = right_captured.into_node(connection, right)?;
                 let widths = WidthTable::join(&a.widths, &b.widths)?;
                 (
                     Content::Branch {
@@ -228,9 +299,9 @@ impl Capture<'_> {
                 )
             }
         };
-        let digest = store(
+        let captured = store(
             connection,
-            &Augmentation {
+            Augmentation {
                 native,
                 widths,
                 max_path,
@@ -244,8 +315,8 @@ impl Capture<'_> {
         {
             return Err(storage("Source capture metadata exceeds native node bound"));
         }
-        self.created.insert(native.id, digest);
-        Ok(digest)
+        self.created.insert(native.id, captured.digest);
+        Ok(captured)
     }
 }
 pub(super) fn capture(
@@ -264,7 +335,7 @@ pub(super) fn capture(
     };
     selection
         .root
-        .map(|root| capture.ensure(root, 0))
+        .map(|root| capture.ensure(root, 0).map(|node| node.digest))
         .transpose()
 }
 

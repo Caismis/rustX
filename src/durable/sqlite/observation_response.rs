@@ -50,17 +50,54 @@ pub(super) fn read(
         ));
     }
     let validated = super::observation::ValidatedCut::new(transaction, conversation, cut)?;
-    Ok(read_validated(&validated, owner, selections)?.page)
+    Ok(read_validated(&validated, owner, selections)?.into_page())
 }
 
 pub(super) struct Read {
-    pub page: ResponsePage,
-    pub owners: Vec<Option<Arc<ResponsePageItem>>>,
+    pub items: Vec<ReadItem>,
+    pub statistics: crate::runtime_client::response::ConversationStatistics,
+}
+impl Read {
+    fn into_page(self) -> ResponsePage {
+        ResponsePage {
+            items: self.items.into_iter().map(ReadItem::into_value).collect(),
+            statistics: self.statistics,
+        }
+    }
 }
 
-struct ReadItem {
-    value: ResponsePageItem,
-    owner: Option<Arc<ResponsePageItem>>,
+pub(super) struct ReadItem {
+    // Fresh facts move into the final page. Hits stay shared until the public
+    // fields that actually need ownership are materialized.
+    value: Option<ResponsePageItem>,
+    pub owner: Option<Arc<ResponsePageItem>>,
+}
+impl ReadItem {
+    #[cfg(test)]
+    pub(super) fn value(&self) -> &ResponsePageItem {
+        self.value
+            .as_ref()
+            .or(self.owner.as_deref())
+            .expect("native response facts")
+    }
+    pub(super) fn take_value(&mut self) -> std::borrow::Cow<'_, ResponsePageItem> {
+        match self.value.take() {
+            Some(value) => std::borrow::Cow::Owned(value),
+            None => {
+                std::borrow::Cow::Borrowed(self.owner.as_deref().expect("shared response facts"))
+            }
+        }
+    }
+    fn into_value(self) -> ResponsePageItem {
+        self.value.unwrap_or_else(|| {
+            #[cfg(test)]
+            OWNERSHIP_WORK.with(|work| {
+                let (owners, clones, moves) = work.get();
+                work.set((owners, clones + 1, moves));
+            });
+            Arc::unwrap_or_clone(self.owner.expect("shared response facts"))
+        })
+    }
 }
 
 /// Only a transaction-bound native proof can authorize skipping the cut query.
@@ -116,18 +153,12 @@ pub(super) fn read_validated(
         fields: BTreeMap::new(),
     };
     let mut items = Vec::with_capacity(selections.len());
-    let mut owners = Vec::with_capacity(selections.len());
     for selection in selections {
-        let item = reader.item(selection)?;
-        items.push(item.value);
-        owners.push(item.owner);
+        items.push(reader.item(selection)?);
     }
     Ok(Read {
-        page: ResponsePage {
-            items,
-            statistics: super::observation_statistics::read_validated(validated)?,
-        },
-        owners,
+        items,
+        statistics: super::observation_statistics::read_validated(validated)?,
     })
 }
 
@@ -521,13 +552,8 @@ impl Reader<'_> {
                 let (hits, reads, holes) = work.get();
                 work.set((hits + 1, reads, holes));
             });
-            #[cfg(test)]
-            OWNERSHIP_WORK.with(|work| {
-                let (owners, clones, moves) = work.get();
-                work.set((owners, clones + 1, moves));
-            });
             return Ok(ReadItem {
-                value: hit.item.as_ref().clone(),
+                value: None,
                 owner: Some(hit.item),
             });
         }
@@ -567,7 +593,10 @@ impl Reader<'_> {
                 work.set((owners, clones, moves + 1));
             });
         }
-        Ok(ReadItem { value: item, owner })
+        Ok(ReadItem {
+            value: Some(item),
+            owner,
+        })
     }
     fn check_execution_holes(&mut self, from: u64) -> Result<(), ConversationStoreError> {
         if self.hole_free_from.is_some_and(|prior| prior <= from) {

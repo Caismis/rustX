@@ -95,7 +95,7 @@ pub(super) fn index(
         .map_err(|_| invalid())?;
     connection
         .execute(
-            "INSERT INTO content_frontiers VALUES('canonical',?1,?2,'binary_bytes',1,?3)",
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical',?1,?2,'binary_bytes',1,?3)",
             params![id, block, reader.len],
         )
         .map_err(|error| storage(error.to_string()))?;

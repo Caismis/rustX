@@ -370,6 +370,29 @@ impl Owner {
         });
         Ok(Some(item))
     }
+    /// Exact freshly read descriptor bytes reuse only the decoded message.
+    /// Tool reads and response authorization still run independently afterward;
+    /// epoch changes never authorize a prior complete decoration here.
+    pub(in crate::durable::sqlite) fn transcript_descriptor(
+        &self,
+        source: &super::super::observation::TranscriptDescriptorSource<'_>,
+    ) -> Result<
+        Option<(
+            Arc<super::super::observation::TranscriptDescriptor>,
+            crate::runtime_client::checkpoint::PreparedTranscriptRow,
+        )>,
+        ConversationStoreError,
+    > {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| storage("response proof lock poisoned"))?;
+        Ok(state
+            .rows
+            .iter()
+            .find(|row| row.header.matches_descriptor(source))
+            .map(|row| (row.header.descriptor(), row.prepared.clone())))
+    }
     /// Exact current descriptor and Tool bytes authorize body reuse only.
     /// Reusing the complete row additionally requires the authenticated response
     /// owner. Running/delegated reads keep current decoration and a fresh row.

@@ -66,19 +66,32 @@ pub(super) fn store_blob(
         .map_err(|error| storage(error.to_string()))?;
     Ok(digest)
 }
+#[cfg(test)]
 pub(super) fn load_blob(
     connection: &Connection,
     digest: Hash,
 ) -> Result<Vec<u8>, ConversationStoreError> {
+    load_blob_reusing(connection, digest, None).map(|(bytes, _)| bytes)
+}
+/// A freshly encoded template already has its digest. Reuse that computation
+/// only after reading and comparing the current stored bytes, including when
+/// INSERT OR IGNORE found an existing row or an insert trigger changed it.
+pub(super) fn load_blob_reusing(
+    connection: &Connection,
+    digest: Hash,
+    encoded: Option<&[u8]>,
+) -> Result<(Vec<u8>, bool), ConversationStoreError> {
     let bytes:Option<Vec<u8>>=connection.prepare_cached("SELECT CASE WHEN typeof(bytes)='blob' AND length(bytes)<=65536 THEN bytes END FROM request_source_pages WHERE hash=?1").map_err(|error|storage(error.to_string()))?.query_row([digest.as_slice()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?.flatten();
     let bytes = bytes.ok_or_else(|| storage("original fragment metadata unavailable"))?;
     #[cfg(test)]
     super::record_index(bytes.len());
-    if Hash::from(Sha256::digest(&bytes)) != digest {
+    let reused = encoded == Some(bytes.as_slice());
+    if !reused && Hash::from(Sha256::digest(&bytes)) != digest {
         return Err(storage("original fragment metadata digest differs"));
     }
-    Ok(bytes)
+    Ok((bytes, reused))
 }
+
 fn load(connection: &Connection, reference: &Reference) -> Result<Page, ConversationStoreError> {
     if usize::from(reference.depth) >= MAX_DEPTH || reference.last.len() > 4160 {
         return Err(storage("fragment page reference exceeds bound"));

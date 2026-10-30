@@ -5,16 +5,22 @@ fn t09_t12_t19_pending_layout_cleanup_failure_cannot_refuse_native_adoption() {
         let store = store();
         store.initialize(&[]).unwrap();
         let accepted = store
-            .accept_inbound(draft("original accepted body🙂"))
+            .accept_inbound(draft(&"original accepted body🙂".repeat(4000)))
             .unwrap();
         let before = accepted.read_cut.clone();
-        let original = store
-            .pending_value_read(&before, accepted.sequence.get(), 0, 65_536)
-            .unwrap();
+        // Populate both the inline first chunk and overflow table so either
+        // injected DELETE failure exercises a real retained source row.
+        let mut bytes = Vec::new();
+        let mut offset = 0;
+        loop {
+            let chunk = store.pending_value_read(&before, accepted.sequence.get(), offset, 65_536).unwrap();
+            bytes.extend_from_slice(&chunk.bytes);
+            let Some(next) = chunk.next_offset else { break };
+            offset = next;
+        }
         let original: UserMessageBlock = crate::runtime_client::checkpoint::decode_domain_value(
-            serde_json::from_slice(&original.bytes).unwrap(),
-        )
-        .unwrap();
+            serde_json::from_slice(&bytes).unwrap(),
+        ).unwrap();
         assert_eq!(original, accepted.message);
         store.lock().unwrap().execute_batch(&format!(
             "CREATE TRIGGER pending_cleanup_fault BEFORE DELETE ON {table} WHEN OLD.source_kind='pending' BEGIN SELECT RAISE(FAIL,'optional pending cleanup'); END;"

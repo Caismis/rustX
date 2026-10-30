@@ -284,7 +284,7 @@ pub(super) fn preview(
     let mut blocks = Vec::with_capacity(66);
     let key = format!("ledger:{position}");
     for kind in ["text", "refusal"] {
-        let mut statement=connection.prepare_cached("SELECT h.block_index,substr(s.bytes,1,?3),f.readable_end FROM observation_block_headers h INDEXED BY observation_block_ledger_kind_idx JOIN content_segments s ON s.source_kind='canonical' AND s.source_id=?4 AND s.block_index=h.block_index AND s.representation='utf8_text' AND s.segment=0 JOIN content_frontiers f ON f.source_kind='canonical' AND f.source_id=?4 AND f.block_index=h.block_index AND f.representation='utf8_text' AND f.revision=1 WHERE h.ledger_position=?1 AND json_extract(h.header_json,'$.kind')=?2 ORDER BY h.block_index LIMIT 33").map_err(|error|storage(error.to_string()))?;
+        let mut statement=connection.prepare_cached("SELECT h.block_index,substr(f.bytes,1,?3),f.readable_end FROM observation_block_headers h INDEXED BY observation_block_ledger_kind_idx JOIN content_frontiers f ON f.source_kind='canonical' AND f.source_id=?4 AND f.block_index=h.block_index AND f.representation='utf8_text' AND f.revision=1 WHERE h.ledger_position=?1 AND json_extract(h.header_json,'$.kind')=?2 ORDER BY h.block_index LIMIT 33").map_err(|error|storage(error.to_string()))?;
         for row in statement
             .query_map(params![position, kind, limit * 8, key], |row| {
                 Ok((

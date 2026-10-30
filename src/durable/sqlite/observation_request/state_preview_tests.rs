@@ -125,7 +125,7 @@ fn state_preview_rejects_malformed_bytes_and_invalid_geometry_without_repair() {
     let value = fixture();
     let connection = connection();
     index_state(&connection, "preview_test", "source", &value).unwrap();
-    connection.execute_batch("SAVEPOINT malformed; UPDATE content_segments SET bytes=zeroblob(length(bytes)) WHERE source_kind='preview_test' AND source_id='source';").unwrap();
+    connection.execute_batch("SAVEPOINT malformed; UPDATE content_frontiers SET bytes=zeroblob(length(bytes)) WHERE source_kind='preview_test' AND source_id='source'; UPDATE content_segments SET bytes=zeroblob(length(bytes)) WHERE source_kind='preview_test' AND source_id='source';").unwrap();
     assert!(
         field_from(
             &connection,

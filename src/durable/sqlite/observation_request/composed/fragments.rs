@@ -27,6 +27,9 @@ mod metadata_tests;
 #[path = "reader_tests.rs"]
 mod reader_tests;
 #[cfg(test)]
+#[path = "template_capture_tests.rs"]
+mod template_capture_tests;
+#[cfg(test)]
 pub(super) fn geometry(
     source: &SeekableObservationSource,
     path: &[String],
@@ -411,12 +414,46 @@ fn capture_suffix(
         .map_err(|error| storage(error.to_string()))?;
     persist_provenance_parts(connection, &source, &reader, total, false).map(|(_, suffix)| suffix)
 }
+/// These values live only until the newly built leaf is consumed. They are
+/// never retained in the selected-input owner or across requests.
+pub(super) struct CapturedLeaf {
+    pub(super) leaf: Leaf,
+    pub(super) templates: Vec<CapturedTemplate>,
+}
+pub(super) struct CapturedTemplate {
+    template: Template,
+    encoded: Vec<u8>,
+}
+fn store_templates(
+    connection: &Connection,
+    templates: Vec<Template>,
+    variants: Vec<u8>,
+) -> Result<CapturedLeaf, ConversationStoreError> {
+    let mut captured = CapturedLeaf {
+        leaf: Leaf {
+            variants,
+            templates: Vec::with_capacity(templates.len()),
+        },
+        templates: Vec::with_capacity(templates.len()),
+    };
+    for template in templates {
+        let encoded = super::record::encode(&template, 65536)?;
+        captured
+            .leaf
+            .templates
+            .push(index::store_blob(connection, &encoded)?);
+        captured
+            .templates
+            .push(CapturedTemplate { template, encoded });
+    }
+    Ok(captured)
+}
 pub(super) fn capture(
     connection: &Connection,
     scope: &crate::runtime::identity::ConversationId,
     message: &crate::model::ModelInputMessage,
     frozen: &crate::model::projected::FrozenModelInput,
-) -> Result<Leaf, ConversationStoreError> {
+) -> Result<CapturedLeaf, ConversationStoreError> {
     let (mut view, header) = super::super::input_view(connection, scope, message, frozen)?;
     let provenance_bytes =
         super::super::provenance::Raw::frozen(frozen, &view.provenance).encoded_bytes()?;
@@ -461,16 +498,10 @@ pub(super) fn capture(
             template.header_suffix.clone(),
         )
     {
-        return Ok(Leaf {
-            variants: vec![0; weights::CLASSES],
-            templates: vec![store_template(connection, &template)?],
-        });
+        return store_templates(connection, vec![template], vec![0; weights::CLASSES]);
     }
     let mut templates = vec![template];
-    let mut leaf = Leaf {
-        variants: vec![0],
-        templates: Vec::new(),
-    };
+    let mut variants = vec![0];
     for class in 1..weights::CLASSES {
         let (sequence, rank) = weights::representative(class)?;
         view.provenance_source = Some(super::super::provenance_source(
@@ -483,7 +514,7 @@ pub(super) fn capture(
         if let Some(index) = templates.iter().position(|template| {
             template.header_prefix == parts.0 && template.header_suffix == parts.1
         }) {
-            leaf.variants
+            variants
                 .push(u8::try_from(index).map_err(|_| storage("native variant count invalid"))?);
             continue;
         }
@@ -492,7 +523,7 @@ pub(super) fn capture(
         } else {
             templates[0].suffix.clone()
         };
-        leaf.variants.push(
+        variants.push(
             u8::try_from(templates.len()).map_err(|_| storage("native variant count invalid"))?,
         );
         templates.push(Template {
@@ -505,10 +536,7 @@ pub(super) fn capture(
             nodes: 33,
         });
     }
-    for template in templates {
-        leaf.templates.push(store_template(connection, &template)?);
-    }
-    Ok(leaf)
+    store_templates(connection, templates, variants)
 }
 pub(super) fn fact(
     connection: &Connection,
@@ -579,6 +607,7 @@ pub(super) fn bytes(
     Ok(output)
 }
 
+#[cfg(test)]
 pub(super) fn store_template(
     connection: &Connection,
     template: &Template,
@@ -589,14 +618,44 @@ pub(super) fn load_template(
     connection: &Connection,
     digest: index::Hash,
 ) -> Result<Template, ConversationStoreError> {
+    load_template_reusing(connection, digest, None)
+}
+pub(super) fn load_template_reusing(
+    connection: &Connection,
+    digest: index::Hash,
+    captured: Option<CapturedTemplate>,
+) -> Result<Template, ConversationStoreError> {
     #[cfg(test)]
     super::WORK.with(|work| {
         let mut value = work.get();
         value.template_loads += 1;
         work.set(value);
     });
-    let bytes = index::load_blob(connection, digest)?;
-    let template: Template = super::record::decode(&bytes)?;
+    let (bytes, reused) = index::load_blob_reusing(
+        connection,
+        digest,
+        captured.as_ref().map(|value| value.encoded.as_slice()),
+    )?;
+    let template: Template = match captured {
+        Some(captured) if reused => {
+            #[cfg(test)]
+            super::WORK.with(|work| {
+                let mut value = work.get();
+                value.template_reuses += 1;
+                work.set(value);
+            });
+            captured.template
+        }
+        _ => {
+            #[cfg(test)]
+            super::WORK.with(|work| {
+                let mut value = work.get();
+                value.template_decodes += 1;
+                work.set(value);
+            });
+            super::record::decode(&bytes)?
+        }
+    };
     if template.header_prefix.len() + template.header_suffix.len() > 16384
         || template.children > 64
         || template.prefix.length > super::SAFE

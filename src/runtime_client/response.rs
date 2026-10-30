@@ -457,8 +457,23 @@ pub(crate) fn apply_page_facts(
     through: u64,
     facts: crate::durable::observation::ResponsePage,
 ) -> Result<(), ConversationStoreError> {
+    apply_page_items(
+        page,
+        through,
+        facts.statistics,
+        facts.items.into_iter().map(std::borrow::Cow::Owned),
+    )
+}
+
+/// Shared native facts retain their owner until final page materialization.
+/// Identity descriptors are inspected here, never cloned merely to count them.
+pub(crate) fn apply_page_items<'a>(
+    page: &mut RuntimeClientTranscriptPage,
+    through: u64,
+    statistics: ConversationStatistics,
+    mut items: impl Iterator<Item = std::borrow::Cow<'a, crate::durable::observation::ResponsePageItem>>,
+) -> Result<(), ConversationStoreError> {
     validate_decoration_cut(page, through)?;
-    let mut items = facts.items.into_iter();
     for entry in &mut page.entries {
         let facts = items.next().expect("one result per bounded selection");
         if let RuntimeClientTranscriptItem::AttemptTerminal { turn } = &mut entry.item
@@ -498,10 +513,11 @@ pub(crate) fn apply_page_facts(
                 facts.identity_fields.len(),
             ));
         }
-        entry.turn_process = facts.process;
-        entry.completed_response = facts.response;
+        let (process, response) = owned_decoration(facts);
+        entry.turn_process = process;
+        entry.completed_response = response;
     }
-    page.statistics = Some(facts.statistics);
+    page.statistics = Some(statistics);
     for row in &mut page.deferred_entries {
         let facts = items.next().expect("one result per bounded selection");
         if facts.process.is_none() && facts.response.is_none() {
@@ -511,20 +527,28 @@ pub(crate) fn apply_page_facts(
             page.collections
                 .push(models_frontier(row.offset, through, counts));
         }
-        merge_deferred_process(row, facts.process, facts.response, &mut page.collections)?;
-        if facts
+        let identities = facts
             .identity_fields
             .iter()
             .any(|field| field.readable_end > 256)
-        {
-            page.collections.push(identities_frontier(
-                row.offset,
-                through,
-                facts.identity_fields.len(),
-            ));
+            .then_some(facts.identity_fields.len());
+        let (process, response) = owned_decoration(facts);
+        merge_deferred_process(row, process, response, &mut page.collections)?;
+        if let Some(total) = identities {
+            page.collections
+                .push(identities_frontier(row.offset, through, total));
         }
     }
     Ok(())
+}
+
+fn owned_decoration(
+    facts: std::borrow::Cow<'_, crate::durable::observation::ResponsePageItem>,
+) -> (Option<TurnProcessView>, Option<CompletedResponseView>) {
+    match facts {
+        std::borrow::Cow::Owned(facts) => (facts.process, facts.response),
+        std::borrow::Cow::Borrowed(facts) => (facts.process.clone(), facts.response.clone()),
+    }
 }
 
 fn models_frontier(

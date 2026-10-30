@@ -318,6 +318,7 @@ fn checkpoint_tool_rows_share_cut_proof_but_keep_each_native_tool_validation() {
     let query = super::super::reading::CUT_SQL;
     store.lock().unwrap().prepare_cached(query).unwrap().reset_status(rusqlite::StatementStatus::Run);
     super::super::observation_response::row_work();
+    super::super::observation::descriptor_work();
     super::super::observation_tools::page_work();
     let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
     assert_eq!(actual, expected);
@@ -325,10 +326,12 @@ fn checkpoint_tool_rows_share_cut_proof_but_keep_each_native_tool_validation() {
     assert!(actual.transcript.entries.iter().all(|entry| !entry.tool_calls.is_empty()));
     assert_eq!(store.lock().unwrap().prepare_cached(query).unwrap().get_status(rusqlite::StatementStatus::Run), 1);
     assert_eq!(super::super::observation_response::row_work(), (2, 0));
+    assert_eq!(super::super::observation::descriptor_work(), (2, 0));
     assert_eq!(super::super::observation_tools::page_work(), 2);
     let repeated = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
     assert!(actual.transcript_rows.iter().zip(&repeated.transcript_rows).all(|(a,b)| a.same_owner(b)), "independently validated Tool inputs retain the complete immutable row");
     assert_eq!(super::super::observation_response::row_work(), (0, 2));
+    assert_eq!(super::super::observation::descriptor_work(), (0, 2), "message descriptor decoding is reused while each Tool page is still read and validated");
     assert_eq!(super::super::observation_tools::page_work(), 2, "proof retention reuses the mandatory native encodes, without another encoding pass");
     // Transcript rows are visited newest first. Keep JSON syntax and the indexed
     // kind valid, but make the second Tool's typed block invalid. The reader must
@@ -350,3 +353,104 @@ fn checkpoint_tool_rows_share_cut_proof_but_keep_each_native_tool_validation() {
 }
 
 include!("observation_tool_row_reuse_tests.rs");
+
+#[test]
+fn checkpoint_tail_reuses_descriptor_decoding_and_shared_response_facts() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    for index in 0..8 {
+        let name = format!("checkpoint-descriptor-{index}");
+        let attempt = response_start(&store, &name);
+        response_message(&store, &attempt, &name);
+        response_complete(&store, &attempt);
+    }
+    let before = store.observation_read_cut().unwrap();
+    super::super::observation::descriptor_work();
+    let original = store
+        .observation_checkpoint_head(&before, before.read.journal, 8)
+        .unwrap();
+    assert_eq!(super::super::observation::descriptor_work(), (8, 0));
+    assert_eq!(original.transcript.entries.len(), 8);
+    for advance in [false, true] {
+        if advance {
+            response_start(&store, "checkpoint-descriptor-unrelated");
+        }
+        let cut = store.observation_read_cut().unwrap();
+        super::super::observation_response::ownership_work();
+        super::super::observation_response::row_work();
+        let repeated = store
+            .observation_checkpoint_head(&cut, cut.read.journal, 8)
+            .unwrap();
+        assert_eq!(
+            super::super::observation::descriptor_work(),
+            (0, 8),
+            "exact current descriptor bytes replace eight JSON decodes, including after an unrelated append"
+        );
+        assert_eq!(
+            super::super::observation_response::ownership_work(),
+            (0, 0, 0),
+            "shared response facts are materialized directly into public fields without an intermediate item clone"
+        );
+        assert_eq!(super::super::observation_response::row_work(), (0, 8));
+        assert_eq!(repeated.transcript.entries, original.transcript.entries);
+        assert!(
+            original
+                .transcript_rows
+                .iter()
+                .zip(&repeated.transcript_rows)
+                .all(|(a, b)| a.same_owner(b))
+        );
+        assert_eq!(
+            repeated,
+            checkpoint_head_oracle(&store, &cut, cut.read.journal, 8).unwrap()
+        );
+        super::super::observation::descriptor_work();
+    }
+}
+
+#[test]
+fn checkpoint_descriptor_reuse_keeps_running_decoration_and_exact_current_bytes() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = response_start(&store, "checkpoint-descriptor-running");
+    response_message(&store, &attempt, "checkpoint-descriptor-running-message");
+    let before = store.observation_read_cut().unwrap();
+    let running = store
+        .observation_checkpoint_head(&before, before.read.journal, 8)
+        .unwrap();
+    assert!(running.transcript.entries[0].response_pending);
+    response_complete(&store, &attempt);
+    let cut = store.observation_read_cut().unwrap();
+    super::super::observation::descriptor_work();
+    let complete = store
+        .observation_checkpoint_head(&cut, cut.read.journal, 8)
+        .unwrap();
+    assert_eq!(super::super::observation::descriptor_work(), (0, 1));
+    assert!(!complete.transcript.entries[0].response_pending);
+    assert!(complete.transcript.entries[0].completed_response.is_some());
+    assert!(!running.transcript_rows[0].same_owner(&complete.transcript_rows[0]));
+    assert!(running.transcript_rows[0].same_body(&complete.transcript_rows[0]));
+    assert_eq!(
+        complete,
+        checkpoint_head_oracle(&store, &cut, cut.read.journal, 8).unwrap()
+    );
+    // Actual descriptor bytes, identity, ledger and journal are always read and
+    // compared. A cached typed value cannot cover corrupt or coherently edited storage.
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE observation_headers SET header_json=x'7b' WHERE ledger_position=1",
+            [],
+        )
+        .unwrap();
+    let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 8).unwrap_err();
+    let actual = store
+        .observation_checkpoint_head(&cut, cut.read.journal, 8)
+        .unwrap_err();
+    assert_eq!(actual.to_string(), expected.to_string());
+    assert_eq!(
+        running.transcript_rows[0].value(),
+        running.transcript.entries[0]
+    );
+}

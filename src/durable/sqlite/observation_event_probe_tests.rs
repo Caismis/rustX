@@ -47,7 +47,7 @@ fn event_source_oracle(connection: &Connection, sequence: u64) -> EventSourceOra
         ),
     };
     assert!(!oracle.fields.is_empty(), "actual event field rows");
-    assert!(!oracle.segments.is_empty(), "actual original event bytes");
+    assert!(oracle.frontiers.iter().any(|row| matches!(row.last(), Some(rusqlite::types::Value::Blob(bytes)) if !bytes.is_empty())), "actual original event first bytes retained inline");
     assert!(
         !oracle.frontiers.is_empty(),
         "actual original event frontier"

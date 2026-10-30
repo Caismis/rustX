@@ -253,3 +253,87 @@ fn missing_request_source_row_is_captured_for_the_next_request() {
         &shape_oracle(&store, &next, sequence),
     );
 }
+
+#[test]
+fn new_request_source_nodes_reuse_construction_after_actual_storage_checks() {
+    let store = fragment_fixture();
+    let first = fragment_snapshot(&store, 1, 0);
+    observation_request::composed::take_work();
+    let sequence = store
+        .commit_model_turn_start(&[], &first, Utc::now())
+        .unwrap()
+        .started
+        .sequence;
+    let work = observation_request::composed::take_work();
+    assert_eq!(work.new_leaves, first.input.len());
+    assert_eq!(
+        work.node_reuses,
+        work.new_nodes - 1,
+        "every newly captured child, excluding the root, reuses its decoded construction"
+    );
+    assert!(work.template_reuses >= work.new_leaves);
+    assert_eq!(work.template_decodes, 0);
+    assert!(
+        work.node_decodes > 0,
+        "final root reads still inspect persisted evidence"
+    );
+    assert_fragment_oracle(&store, &first, sequence);
+    store
+        .append_canonical(&user_message("capture-new-tail", "new original 水🙂"))
+        .unwrap();
+    let next = fragment_snapshot(&store, 2, 0);
+    observation_request::composed::take_work();
+    let sequence = store
+        .commit_model_turn_start(&[], &next, Utc::now())
+        .unwrap()
+        .started
+        .sequence;
+    let work = observation_request::composed::take_work();
+    assert_eq!(work.new_leaves, 1);
+    assert!(work.node_reuses > 0);
+    assert_eq!(work.template_decodes, 0);
+    assert_fragment_oracle(&store, &next, sequence);
+}
+
+#[test]
+fn prepared_request_children_still_detect_later_sibling_trigger_mutation() {
+    for native in [false, true] {
+        let store = fragment_fixture();
+        let canonical = store.load_canonical().unwrap();
+        {
+            let connection = store.lock().unwrap();
+            if native {
+                connection.execute_batch("CREATE TEMP TRIGGER rewrite_prior_native AFTER INSERT ON request_source_nodes WHEN EXISTS(SELECT 1 FROM request_source_nodes WHERE native_id<NEW.native_id) BEGIN UPDATE native_input_nodes SET digest=zeroblob(32) WHERE id=(SELECT min(native_id) FROM request_source_nodes); END;").unwrap();
+            } else {
+                connection.execute_batch("CREATE TEMP TRIGGER rewrite_prior_source AFTER INSERT ON request_source_nodes BEGIN UPDATE request_source_nodes SET metadata=x'7b' WHERE native_id<NEW.native_id; END;").unwrap();
+            }
+        }
+        let snapshot = fragment_snapshot(&store, 1, 0);
+        let sequence = store
+            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .unwrap()
+            .started
+            .sequence;
+        assert_shape_optional_source_hole(&store, &snapshot, sequence);
+        assert_eq!(
+            store.load_request_snapshot(&snapshot.request_id).unwrap(),
+            snapshot
+        );
+        assert_eq!(store.load_canonical().unwrap(), canonical);
+        let connection = store.lock().unwrap();
+        for table in [
+            "request_source_roots",
+            "request_source_nodes",
+            "request_source_pages",
+        ] {
+            assert_eq!(
+                connection
+                    .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                        .get::<_, u64>(0))
+                    .unwrap(),
+                0,
+                "failed optional capture rolls back {table}"
+            );
+        }
+    }
+}

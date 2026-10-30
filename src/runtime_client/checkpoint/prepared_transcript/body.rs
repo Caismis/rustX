@@ -157,6 +157,16 @@ impl Owner {
     pub(super) fn entry(&self, decoration: &Decoration) -> RuntimeClientTranscriptEntry {
         self.value.entry(decoration)
     }
+    pub(super) fn undecorated_entry(&self) -> RuntimeClientTranscriptEntry {
+        RuntimeClientTranscriptEntry {
+            cursor: self.value.cursor,
+            item: self.value.item.clone(),
+            tool_calls: Vec::new(),
+            turn_process: None,
+            response_pending: false,
+            completed_response: None,
+        }
+    }
     pub(super) fn equal(&self, other: &Self) -> bool {
         self.conversation == other.conversation && self.value == other.value
     }
