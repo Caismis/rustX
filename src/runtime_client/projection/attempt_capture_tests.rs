@@ -292,7 +292,9 @@ fn live_attempt_keeps_32_descriptors_and_reuses_binding_owners_across_unchanged_
     });
     let original = projection.capture_working_seed();
     let mut old_capture = Capture::new(1);
+    checkpoint::take_prepared_fit_work();
     let old = original.capture_attempt(&mut old_capture).unwrap();
+    assert_eq!(checkpoint::take_prepared_fit_work(), 0);
     let old_bytes = serde_json::to_vec(&old_capture.content).unwrap();
     assert_eq!(old.in_flight.as_ref().unwrap().blocks.len(), 32);
     assert_eq!(old_capture.content.len(), 32);

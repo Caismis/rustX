@@ -825,20 +825,20 @@ impl CheckpointSeed {
                         &mut bindings,
                         Some(&prepared),
                     ),
-                    model: capture
-                        .prepared(&prepared.model, |capture| {
-                            capture.item("attempt.model", &attempt.model).flatten()
-                        })
-                        .0
-                        .into_owned(),
-                    execution_settings: capture
-                        .prepared(&prepared.settings, |capture| {
+                    model: prepared_attempt::capture(capture, &prepared.model, |capture| {
+                        capture.item("attempt.model", &attempt.model).flatten()
+                    })
+                    .into_owned(),
+                    execution_settings: prepared_attempt::capture(
+                        capture,
+                        &prepared.settings,
+                        |capture| {
                             capture
                                 .item("attempt.execution_settings", &attempt.execution_settings)
                                 .flatten()
-                        })
-                        .0
-                        .into_owned(),
+                        },
+                    )
+                    .into_owned(),
                 });
         self.attempt_bindings.append(bindings, &mut capture.content);
         result
@@ -1461,7 +1461,7 @@ impl CheckpointSeed {
             .enumerate()
             .map(|(index, tool)| {
                 let admitted = if let Some(owner) = prepared.and_then(|p| p.tools.get(index)) {
-                    *capture.prepared(owner, |capture| capture.reserve(tool)).0
+                    *prepared_attempt::capture(capture, owner, |capture| capture.reserve(tool))
                 } else {
                     capture.reserve(tool)
                 };
@@ -1596,10 +1596,7 @@ impl CheckpointSeed {
                 ),
             };
             let copied = if let Some(owner) = prepared.and_then(|p| p.blocks.get(index)) {
-                capture
-                    .prepared(owner, |capture| capture.live_block(block))
-                    .0
-                    .into_owned()
+                prepared_attempt::live_block(capture, owner, block)
             } else {
                 capture.live_block(block)
             };

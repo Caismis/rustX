@@ -611,6 +611,7 @@ thread_local! {
     static CAPTURE_WORK: std::cell::Cell<[u64; 6]> = const { std::cell::Cell::new([0; 6]) };
     // Capped JSON encodes, structural byte parses, typed byte parses.
     static ITEM_WORK: std::cell::Cell<[u64; 3]> = const { std::cell::Cell::new([0; 3]) };
+    static PREPARED_FIT_WORK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 #[cfg(test)]
 fn record_item_work(index: usize) {
@@ -623,6 +624,10 @@ fn record_item_work(index: usize) {
 #[cfg(test)]
 pub(super) fn take_item_work() -> [u64; 3] {
     ITEM_WORK.with(|counts| counts.replace([0; 3]))
+}
+#[cfg(test)]
+pub(super) fn take_prepared_fit_work() -> u64 {
+    PREPARED_FIT_WORK.with(|work| work.replace(0))
 }
 #[cfg(test)]
 pub(super) fn record_capture_work(index: usize) {
@@ -657,6 +662,15 @@ impl Capture {
         (self.remaining, self.required, self.evicted)
     }
 
+    #[cfg(test)]
+    pub(super) fn with_remaining(revision: u64, remaining: usize) -> Self {
+        assert!(remaining <= CHECKPOINT_TARGET_BYTES / 8);
+        Self {
+            remaining,
+            ..Self::new(revision)
+        }
+    }
+
     pub fn new(revision: u64) -> Self {
         Self {
             collections: Vec::new(),
@@ -687,6 +701,8 @@ impl Capture {
             record_capture_work(0);
             let mut capture = Self::new(0);
             let value = build(&mut capture);
+            #[cfg(test)]
+            PREPARED_FIT_WORK.with(|work| work.set(work.get() + 1));
             let fit =
                 super::preflight::required_safe_integer_budget(&value, CHECKPOINT_TARGET_BYTES);
             PreparedCapture {
@@ -699,6 +715,8 @@ impl Capture {
             #[cfg(test)]
             record_capture_work(2);
             let value = build(self);
+            #[cfg(test)]
+            PREPARED_FIT_WORK.with(|work| work.set(work.get() + 1));
             let fit =
                 super::preflight::required_safe_integer_budget(&value, CHECKPOINT_TARGET_BYTES);
             return (std::borrow::Cow::Owned(value), fit);
