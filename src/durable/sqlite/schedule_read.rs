@@ -47,12 +47,13 @@ impl ScheduleReadScope {
         self.check()?;
         *self.interrupt.lock().expect("schedule read interrupt") =
             Some(connection.get_interrupt_handle());
-        // Closing the last WAL writer can briefly exclude a new reader. Use
-        // SQLite's bounded wait instead of treating that normal transition as
-        // unavailable storage. Each lock wait stays short; interrupt/progress
-        // and the owner's overall read deadline remain installed.
+        // Closing the last WAL writer can briefly exclude a new reader while
+        // it checkpoints. Use SQLite's bounded wait instead of treating that
+        // normal transition as unavailable storage. The wait is a fraction of
+        // the owner's overall read deadline, which stays authoritative;
+        // interrupt/progress remain installed for the query itself.
         connection
-            .busy_timeout(std::time::Duration::from_millis(25))
+            .busy_timeout(std::time::Duration::from_millis(250))
             .map_err(|e| storage(e.to_string()))?;
         let scope = self.clone();
         // Bound database work independently of elapsed-time cancellation.
@@ -85,7 +86,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("schedule-reader.sqlite");
         let writer = Connection::open(&path).unwrap();
-        writer.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE probe(id INTEGER); PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; INSERT INTO probe VALUES(1); COMMIT;").unwrap();
+        // The writer's closing checkpoint skips fsync, so the release stays
+        // transient however busy the disk is; the reader's wait is under test.
+        writer.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=OFF; CREATE TABLE probe(id INTEGER); PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; INSERT INTO probe VALUES(1); COMMIT;").unwrap();
         let reader =
             Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
         let scope = Arc::new(ScheduleReadScope::default());

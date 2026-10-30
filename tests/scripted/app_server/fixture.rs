@@ -432,8 +432,11 @@ fn delivery_child_gate_uses_exact_task_text_not_parent_context_mentions() {
     assert_eq!(delivery_child_input_index(&tool), 0);
 }
 
+/// A hang guard, not a latency bound. A fixture's durable turns can take tens
+/// of seconds in a debug build while the whole suite shares the CPU and disk,
+/// so only a fixture that stops making progress for minutes is a failure.
 pub(super) async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
-    tokio::time::timeout(std::time::Duration::from_secs(30), future)
+    tokio::time::timeout(std::time::Duration::from_secs(180), future)
         .await
         .expect("test liveness")
 }

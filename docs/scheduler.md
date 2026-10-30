@@ -289,7 +289,7 @@ It never reloads the complete catalog from disk for each database. Prepared read
 cannot reopen a tombstoned allocation; unrelated metadata edits remain allowed.
 
 Each read has a one-second monotonic deadline covering allocation/open/validation/
-query/close, a bounded 25 ms SQLite busy wait, a two-million VM-step ceiling and an
+query/close, a bounded 250 ms SQLite busy wait, a two-million VM-step ceiling and an
 exact-connection interrupt scope. At most 64 physical reader tasks may exist.
 Timeout/caller cancellation interrupts SQL; a physically delayed filesystem call
 keeps its counted allocation/reader owner until actual release. Drain waits for
