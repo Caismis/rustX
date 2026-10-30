@@ -413,6 +413,10 @@ fn position<'a>(
                 });
                 Expression::Value(item)
             }
+            (Expression::Value(WorkflowValue::Template { parts }), S::Item { index }) => {
+                current.expected = None;
+                Expression::Value(parts.get(*index as usize)?)
+            }
             (Expression::Predicate(WorkflowPredicate::Boolean { value }), S::Value) => {
                 current.expected = Some(Cow::Owned(serde_json::json!({"type":"boolean"})));
                 Expression::Value(value)

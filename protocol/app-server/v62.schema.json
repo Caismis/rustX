@@ -12297,6 +12297,27 @@
             "type",
             "items"
           ]
+        },
+        {
+          "description": "One string from fixed text and references, rendered as prompt parts\nare: a non-string referenced value is inserted as its JSON text.",
+          "type": "object",
+          "properties": {
+            "parts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "template"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "parts"
+          ]
         }
       ]
     },
@@ -33291,7 +33312,7 @@
         "builtin_tools": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/WorkflowToolChoice"
           }
         }
       },
@@ -33299,6 +33320,25 @@
       "required": [
         "profiles",
         "builtin_tools"
+      ]
+    },
+    "WorkflowToolChoice": {
+      "description": "One builtin Tool an author can choose for a Tool node: its name and the\ntool-owned description and argument schema an authoring form is built from.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "input_schema": true
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "input_schema"
       ]
     },
     "WorkflowModelChoices": {

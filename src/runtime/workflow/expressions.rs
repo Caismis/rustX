@@ -127,6 +127,7 @@ pub(super) fn intrinsic_value_type(value: &WorkflowValue) -> Option<&'static str
         WorkflowValue::Literal { value } => Some(json_type(value)),
         WorkflowValue::Object { .. } => Some("object"),
         WorkflowValue::Array { .. } => Some("array"),
+        WorkflowValue::Template { .. } => Some("string"),
         WorkflowValue::Reference { .. } => None,
     }
 }
@@ -252,6 +253,11 @@ pub(super) fn evaluate_value(
             }
             Value::Array(result)
         }
+        WorkflowValue::Template { parts } => {
+            Value::String(super::model::render_parts(parts, |part| {
+                evaluate_value(part, input, values)
+            })?)
+        }
     };
     bounded_value_bytes(&value)?;
     Ok(value)
@@ -376,5 +382,49 @@ mod tests {
             evaluate_value(&reference(&["missing"]), &Value::Null, &values),
             Err(WorkflowRunError::InvalidValue(detail)) if detail.contains("uncommitted reference")
         ));
+    }
+
+    /// A template is one string: text as is, references as their string or
+    /// JSON text. Its parts are text or references only, in scope.
+    #[test]
+    fn templates_render_text_and_references_into_one_string() {
+        let values = imbl::OrdMap::from(vec![(
+            "search".to_owned(),
+            serde_json::json!({"topic": "rust", "count": 3}),
+        )]);
+        let text = |text: &str| WorkflowValue::Literal {
+            value: Value::String(text.to_owned()),
+        };
+        let reference = |path: &[&str]| WorkflowValue::Reference {
+            path: path.iter().map(|key| (*key).to_owned()).collect(),
+        };
+        let template = WorkflowValue::Template {
+            parts: vec![
+                text("about "),
+                reference(&["search", "topic"]),
+                text(", top "),
+                reference(&["search", "count"]),
+            ],
+        };
+        assert_eq!(
+            evaluate_value(&template, &Value::Null, &values).unwrap(),
+            serde_json::json!("about rust, top 3")
+        );
+        let available = SchemaMap(BTreeMap::from([(
+            "search".to_owned(),
+            serde_json::json!({"type":"object","properties":{"topic":{"type":"string"},"count":{"type":"integer"}},"required":["topic","count"],"additionalProperties":false}),
+        )]));
+        assert_eq!(
+            value_schema(&template, &available, "tool", 0).unwrap(),
+            serde_json::json!({"type": "string"})
+        );
+        let nested = WorkflowValue::Template {
+            parts: vec![WorkflowValue::Array { items: vec![] }],
+        };
+        assert!(value_schema(&nested, &available, "tool", 0).is_err());
+        let unavailable = WorkflowValue::Template {
+            parts: vec![reference(&["missing"])],
+        };
+        assert!(value_schema(&unavailable, &available, "tool", 0).is_err());
     }
 }

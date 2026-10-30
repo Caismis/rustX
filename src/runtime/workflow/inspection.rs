@@ -241,6 +241,9 @@ fn binding(value: &WorkflowValue) -> Value {
         WorkflowValue::Array { items } => {
             json!({"type":"array", "items":items.iter().map(binding).collect::<Vec<_>>()})
         }
+        WorkflowValue::Template { parts } => {
+            json!({"type":"template", "parts":parts.iter().map(binding).collect::<Vec<_>>()})
+        }
     }
 }
 

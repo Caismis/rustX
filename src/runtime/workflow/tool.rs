@@ -29,11 +29,21 @@ pub(super) fn eligible(definition: &ToolDefinition) -> bool {
                 || crate::tools::native::is_domain_control(&definition.name)))
 }
 
-/// The builtin Tools a Workflow Tool node can select at all, by name, in the
-/// native order. Authoring presents these as choices; admission against the
+/// One builtin Tool an author can choose for a Tool node: its name and the
+/// tool-owned description and argument schema an authoring form is built from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowToolChoice {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+/// The builtin Tools a Workflow Tool node can select at all, in the native
+/// order. Authoring presents these as choices; admission against the
 /// adopted generation remains the only authority.
 #[must_use]
-pub fn selectable_builtin_tools() -> Vec<String> {
+pub fn selectable_builtin_tools() -> Vec<WorkflowToolChoice> {
     crate::tools::native::definitions(
         crate::tools::native::NativeToolPolicies::default(),
         &crate::runtime::subagent::AgentCatalog::default(),
@@ -44,7 +54,11 @@ pub fn selectable_builtin_tools() -> Vec<String> {
             && *policy == crate::tools::deadline::ForegroundPolicy::Leaf
             && eligible(definition)
     })
-    .map(|(definition, _)| definition.name)
+    .map(|(definition, _)| WorkflowToolChoice {
+        name: definition.name,
+        description: definition.description,
+        input_schema: definition.input_schema,
+    })
     .collect()
 }
 

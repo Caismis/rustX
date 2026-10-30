@@ -17,6 +17,7 @@ export function valueText(value: Value): string {
     case 'literal': return clip(JSON.stringify(value.value) ?? 'null');
     case 'object': return `{${Object.keys(value.fields).join(', ')}}`;
     case 'array': return `[${value.items.map(valueText).join(', ')}]`;
+    case 'template': return clip(promptText(value.parts));
   }
 }
 

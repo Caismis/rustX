@@ -43,3 +43,22 @@ export function KindIcon({ kind, size, className }: { kind: NodeKind | 'start'; 
   const Icon = KIND_ICONS[kind];
   return <Icon size={size} className={className} />;
 }
+
+/** Builtin Tools by name, as Dify gives each tool its provider's icon; any
+ * other Tool shows the Tool kind's glyph. */
+const TOOL_ICONS: Record<string, ReturnType<typeof glyph>> = {
+  ask_user: glyph(<><circle cx="12" cy="12" r="9" /><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01" /></>),
+  read: glyph(<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" />),
+  read_image: glyph(<><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="m21 16-5-5-9 9" /></>),
+  present: glyph(<path d="M4 4h16v11H4zM12 15v5M8 20h8M8 9h8" />),
+  write: glyph(<path d="M6 2.5h9l5 5v13a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2v-15a2 2 0 0 1 2-2zM15 2.5V8h5M12 11v6M9 14h6" />),
+  edit: glyph(<path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />),
+  glob: IconFolder,
+  grep: glyph(<><circle cx="10.5" cy="10.5" r="6.5" /><path d="m20 20-4.9-4.9M8 10.5h5" /></>),
+  bash: glyph(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M12.5 15H17" /></>),
+};
+
+export function ToolIcon({ name, size, className }: { name: string; size?: number; className?: string }) {
+  const Icon = Object.hasOwn(TOOL_ICONS, name) ? TOOL_ICONS[name] : KIND_ICONS.tool;
+  return <Icon size={size} className={className} />;
+}

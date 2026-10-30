@@ -180,11 +180,11 @@ pub struct WorkflowLibrary {
 /// The native names an author can choose from in this scope: discovered
 /// named Agent profiles and the builtin Tools a Tool node can select.
 /// Choices, never admission: the native check decides.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowVocabulary {
     pub profiles: Vec<crate::runtime::subagent::SubagentName>,
-    pub builtin_tools: Vec<String>,
+    pub builtin_tools: Vec<crate::runtime::workflow::WorkflowToolChoice>,
 }
 
 /// The complete authorized source of one exact Workflow file.

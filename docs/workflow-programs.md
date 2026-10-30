@@ -433,12 +433,14 @@ Values are a closed tagged AST:
 | `literal` | `value: <JSON value>` | Literal data, never interpreted |
 | `object` | `fields: {key: <value expression>}` | Atomic object construction |
 | `array` | `items: [<value expression>, ...]` | Atomic array construction |
+| `template` | `parts: [<string literal or reference>, ...]` | One string rendered from its parts |
 
 A Loop's `input` and a Return's `output` are each one value expression. An Agent's `task`,
 like a Model message's `content`, is a list of fixed string literals and
 references, rendered in order when the AgentRun starts: a string is inserted
 as itself, any other value as JSON text. The task is the only way workflow
-values reach an Agent. There is no interpolation, truthiness, callback, Transform node,
+values reach an Agent. A `template` value renders its parts the same way into
+one string; the visual editor writes a Tool's text parameters as templates. There is no interpolation, truthiness, callback, Transform node,
 or embedded programming language. Unknown fields/tags and duplicate
 construction field keys are rejected. A failing construction commits no
 partial local value.

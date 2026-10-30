@@ -205,7 +205,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
           {block.length === 0 && <><span aria-hidden>/</span><span className={css.crumbFile}>{target.id}</span></>}
         </nav>
         <Canvas document={document} path={block} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection} currentState={currentState} organizeEpoch={layoutEpoch} collapsed={collapsed} setCollapsed={setCollapsed}
-          problems={problems} edit={edit} editable={editable && !saving} blockLabel={blockLabel} drafts={context.drafts} onDuplicate={duplicate} />
+          problems={problems} edit={edit} editable={editable && !saving} blockLabel={blockLabel} drafts={context.drafts} onDuplicate={duplicate} tools={base.source.vocabulary.builtin_tools} />
       </div>
     </ReactFlowProvider>
     {/* As Dify: a selected connection only highlights; it opens no panel. */}

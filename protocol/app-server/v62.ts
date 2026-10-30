@@ -2005,6 +2005,10 @@ export type WorkflowNodeDefinition =
         | {
             items: WorkflowValue[];
             type: 'array';
+          }
+        | {
+            parts: WorkflowValue[];
+            type: 'template';
           };
       type: 'return';
     };
@@ -2056,6 +2060,10 @@ export type WorkflowValue =
   | {
       items: WorkflowValue[];
       type: 'array';
+    }
+  | {
+      parts: WorkflowValue[];
+      type: 'template';
     };
 /**
  * The single authored output contract of a Workflow Model node.
@@ -18287,7 +18295,19 @@ export interface WorkflowSource {
  */
 export interface WorkflowVocabulary {
   profiles: SubagentName[];
-  builtin_tools: string[];
+  builtin_tools: WorkflowToolChoice[];
+}
+/**
+ * One builtin Tool an author can choose for a Tool node: its name and the
+ * tool-owned description and argument schema an authoring form is built from.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolChoice".
+ */
+export interface WorkflowToolChoice {
+  name: string;
+  description: string;
+  input_schema: unknown;
 }
 /**
  * One offline check of one exact candidate document.

@@ -1,3 +1,4 @@
+import type { WorkflowToolChoice } from '../../../../../../../protocol/app-server/v62';
 import type { ArrayEdit } from '../../../document/fields';
 import { useTranslation } from '../../../../../locale/react';
 import { setWorkflow } from '../../../document/commands';
@@ -17,13 +18,13 @@ type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?:
 /** As Dify's Start panel, the Start node shows only the block's input fields
  * and its next steps. Settings show the Workflow's own fields
  * (root only) and the block's input and output contract. */
-export function BlockForm({ document, block, edit, onSelect, start = false }: { document: WorkflowDocument; block: BlockPath; edit: Edit; onSelect: (selection: Selection) => void; start?: boolean }) {
+export function BlockForm({ document, block, edit, onSelect, tools, start = false }: { document: WorkflowDocument; block: BlockPath; edit: Edit; onSelect: (selection: Selection) => void; tools: readonly WorkflowToolChoice[]; start?: boolean }) {
   const tx = useTranslation();
   const owner = blockAt(document, block)!;
   const input = <InputFields label={tx('workflows:inspector.block-input')} value={owner.input} address={blockField(block, ['input'])} edit={edit} />;
   if (start) return <>
     {input}
-    <NextStep document={document} block={block} edit={edit} onSelect={onSelect} />
+    <NextStep document={document} block={block} tools={tools} edit={edit} onSelect={onSelect} />
   </>;
   const timeout = document.timeout_ms ?? '';
   const display = document.editor?.display ?? { title: '' };

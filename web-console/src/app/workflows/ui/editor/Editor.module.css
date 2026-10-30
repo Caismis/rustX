@@ -178,21 +178,42 @@
 .palette {
   position: absolute;
   z-index: 30;
-  width: 246px;
-  padding: 8px;
+  width: 300px;
+  max-height: 460px;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 4px;
   border: 1px solid var(--dsw-alias-border-l3);
   border-radius: 11px;
   background: var(--dsw-alias-bg-layer-3);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
 }
+.palette > .note { margin: 4px 6px 6px; }
 
-.palette ul { margin: 0; padding: 0; list-style: none; }
-.paletteSearch { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 9px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 7px; color: var(--dsw-alias-label-tertiary); }
-.paletteSearch input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; }
-.paletteTitle { margin: 0; padding: 9px 7px 6px; font-size: 10.5px; color: var(--dsw-alias-label-tertiary); }
-.paletteOption { display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 8px; border-radius: 7px; font-size: 12.5px; color: var(--dsw-alias-label-secondary); cursor: pointer; }
-.paletteKindIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 21px; height: 21px; border-radius: 5px; background: var(--node-kind-color); color: #fff; }
-.paletteActive { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+/* Dify's block selector: tabs over a per-tab search, classified rows and a
+ * preview card beside the row under the pointer. */
+.chooser { position: relative; display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.chooserTabs { display: flex; flex: none; gap: 2px; padding: 1px 2px 4px; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+.chooserTab { min-height: 31px; padding: 0 12px; border: 0; border-radius: 7px; background: none; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.chooserTab:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.chooserTabActive { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-state-business-primary); font-weight: 600; }
+.chooserSearch { display: flex; flex: none; align-items: center; gap: 6px; height: 34px; margin: 6px 2px 4px; padding: 0 9px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 7px; color: var(--dsw-alias-label-tertiary); }
+.chooserSearch:focus-within { border-color: var(--dsw-alias-state-business-primary); box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary); }
+.chooserSearch input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; }
+.chooserSearch input::placeholder { color: var(--dsw-alias-label-tertiary); }
+.chooserList { flex: 1; min-height: 0; max-height: 400px; overflow: auto; overscroll-behavior: contain; padding: 0 2px 4px; }
+.chooserGroup { margin: 8px 0 2px; padding: 0 8px; color: var(--dsw-alias-label-tertiary); font-size: 11px; font-weight: 500; line-height: 20px; }
+.chooserOption { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 3px 8px; border: 0; border-radius: 7px; background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.chooserActive { background: var(--dsw-alias-interactive-bg-hover); }
+.chooserLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chooserIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 21px; height: 21px; border-radius: 5px; background: var(--node-kind-color, var(--dsw-alias-label-tertiary)); color: #fff; }
+.chooserEmpty { margin: 18px 8px; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+.chooserPreview { position: absolute; left: calc(100% + 12px); z-index: 1; width: 220px; box-sizing: border-box; padding: 12px 14px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 11px; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 12px 32px rgba(0,0,0,.24); pointer-events: none; }
+.chooserPreviewLeft { right: calc(100% + 12px); left: auto; }
+.chooserPreviewIcon { width: 28px; height: 28px; margin-bottom: 8px; border-radius: 7px; }
+.chooserPreview b { display: block; margin-bottom: 4px; color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.chooserPreview p { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 11.5px; line-height: 17px; }
 
 /* Dify's inspector continuation: source tile, connector, and a full-width
  * dashed drop zone for each native output port. */
@@ -211,7 +232,7 @@
 .nextConnected { display: flex; align-items: center; gap: 2px; min-height: 34px; margin-bottom: 2px; padding: 0 4px 0 1px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; background: var(--dsw-alias-bg-layer-1); }
 .nextTarget { display: flex; flex: 1; min-width: 0; align-items: center; gap: 7px; height: 33px; padding: 0 6px; border: 0; background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .nextTarget > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nextTargetIcon, .nextChoiceIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; background: var(--node-kind-color, var(--dsw-alias-label-tertiary)); color: #fff; }
+.nextTargetIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; background: var(--node-kind-color, var(--dsw-alias-label-tertiary)); color: #fff; }
 .nextRemove { display: flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 5px; background: none; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 .nextRemove:hover, .nextRemove:focus-visible, .nextTarget:hover, .nextTarget:focus-visible { background: var(--dsw-alias-interactive-bg-hover); }
 .nextAdd { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 36px; padding: 5px 8px; border: 1px dashed var(--dsw-alias-border-l3); border-radius: 7px; background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 45%, transparent); color: var(--dsw-alias-label-tertiary); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
@@ -219,20 +240,6 @@
 .nextAdd:focus-visible, .nextTarget:focus-visible, .nextRemove:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
 .nextAddIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; background: var(--dsw-alias-bg-layer-1); }
 .nextPicker { z-index: 100; width: min(328px, calc(100vw - 24px)); max-height: min(560px, calc(100vh - 24px)); display: flex; flex-direction: column; box-sizing: border-box; padding: 4px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 11px; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 12px 32px rgba(0,0,0,.18); color: var(--dsw-alias-label-primary); }
-.nextTabs { display: flex; flex: none; gap: 2px; padding: 1px 2px 4px; border-bottom: 1px solid var(--dsw-alias-border-l2); }
-.nextTab { min-height: 31px; padding: 0 12px; border: 0; border-radius: 7px; background: none; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 12px; cursor: pointer; }
-.nextTab:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.nextTabActive { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-state-business-primary); font-weight: 600; }
-.nextSearch { display: flex; flex: none; align-items: center; gap: 6px; height: 35px; margin: 4px 1px 5px; padding: 0 9px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 7px; color: var(--dsw-alias-label-tertiary); }
-.nextSearch:focus-within { border-color: var(--dsw-alias-state-business-primary); box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary); }
-.nextSearch input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; }
-.nextSearch input::placeholder { color: var(--dsw-alias-label-tertiary); }
-.nextChoices { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 2px 4px; }
-.nextGroup { margin: 8px 0 2px; padding: 0 8px; color: var(--dsw-alias-label-tertiary); font-size: 10.5px; line-height: 19px; }
-.nextChoice { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 3px 8px; border: 0; border-radius: 6px; background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
-.nextChoice:hover, .nextChoiceActive { background: var(--dsw-alias-interactive-bg-hover); }
-.nextChoiceIcon { width: 21px; height: 21px; }
-.nextEmpty { margin: 18px 8px; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
 
 .node {
   position: relative;
@@ -675,6 +682,7 @@
 .promptInput { min-height: calc(2lh + 4px); max-height: calc(14lh + 4px); overflow-y: auto; box-sizing: border-box; padding: 2px 0; color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; outline: none; }
 .promptInput p { margin: 0; }
 .promptInputExpanded { min-height: calc(20lh + 4px); max-height: none; }
+.promptInputCompact { min-height: calc(1lh + 4px); max-height: calc(8lh + 4px); }
 .promptPlaceholder { position: absolute; top: 2px; left: 0; color: var(--dsw-alias-label-tertiary); font-size: 13px; line-height: 1.7; pointer-events: none; user-select: none; }
 /* A variable token sits in the text like Dify's variable block. */
 .promptVariable { display: inline-block; margin: 0 1px; vertical-align: middle; }
@@ -756,3 +764,26 @@
 .failBranchCard p { margin: 4px 0 0; font-size: 11.5px; line-height: 1.5; color: var(--dsw-alias-label-tertiary); }
 .nextPortFail { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, var(--dsw-alias-bg-layer-2)) !important; }
 .nextPortFail .nextPortLabel { color: var(--dsw-alias-state-warn-primary); }
+
+/* Dify's tool form: a parameter's name and description over its control;
+ * text as a mixed variable input, other types behind a {x} / ✎ switch. */
+.toolForm { display: flex; flex-direction: column; gap: 14px; }
+.toolArgument { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.toolArgumentHead { display: flex; align-items: center; gap: 3px; min-height: 22px; }
+.toolArgumentHead b { color: var(--dsw-alias-label-primary); font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+.toolArgumentHead .required { color: var(--dsw-alias-state-error-primary); font-size: 12px; }
+.toolArgumentAbout { margin: 0 0 2px; color: var(--dsw-alias-label-tertiary); font-size: 11.5px; line-height: 17px; overflow-wrap: anywhere; }
+.toolArgumentRow { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.toolArgumentRow > :last-child { flex: 1; min-width: 0; }
+.toolArgumentRow textarea { min-height: 60px; }
+.toolBoolean { display: flex; align-items: center; min-height: 32px; }
+.templateInput { position: relative; display: flex; align-items: flex-start; gap: 6px; min-height: 32px; box-sizing: border-box; padding: 4px 8px; border: 1px solid transparent; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
+.templateInput:hover { border-color: var(--dsw-alias-border-l3); }
+.templateInput:focus-within { border-color: var(--dsw-alias-state-business-primary); }
+.templateInput[aria-invalid='true'] { border-color: var(--dsw-alias-state-warn-primary); }
+.templateInput .promptEditor { flex: 1; min-width: 0; }
+.typeBadge { flex: none; margin-top: 2px; padding: 0 5px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 5px; color: var(--dsw-alias-label-tertiary); font-size: 10.5px; font-weight: 500; line-height: 18px; }
+.typeSwitch { display: inline-flex; flex: none; gap: 2px; padding: 2px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
+.typeSwitch button { width: 30px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--dsw-alias-label-tertiary); font: inherit; font-family: var(--ds-font-family-code); font-size: 12px; cursor: pointer; }
+.typeSwitch button:hover { color: var(--dsw-alias-label-primary); }
+.typeSwitch .typeSwitchActive { background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); box-shadow: 0 1px 2px rgba(0,0,0,.18); }

@@ -30,7 +30,7 @@ async function add(page: Page, name: string, after?: { node: string; port: strin
     const port = after.port === 'next' ? 'Next step' : after.port;
     await panel(page).getByRole('button', { name: new RegExp(`^(Choose next node for|Add parallel node on) ${port}$`) }).click();
     const picker = page.getByRole('dialog', { name: 'Choose a workflow node' });
-    await picker.getByRole('tab', { name: name === 'Tool' ? 'Tools' : 'Nodes' }).click();
+    await picker.getByRole('tab', { name: 'Nodes' }).click();
     await picker.getByRole('option', { name, exact: true }).click();
   } else {
     await canvas(page).getByRole('toolbar').getByRole('button', { name: 'Add node', exact: true }).click();
@@ -120,7 +120,7 @@ test('adds parallel next nodes from the inspector and keeps every existing conne
     const next = panel(page).getByRole('region', { name: 'Next step' });
     await next.getByRole('button', { name: 'Choose next node for Next step' }).click();
     const picker = page.getByRole('dialog', { name: 'Choose a workflow node' });
-    const search = picker.getByRole('textbox', { name: 'Search nodes and tools' });
+    const search = picker.getByRole('textbox', { name: 'Search nodes' });
     await expect(search).toBeFocused(); await expect(picker.getByRole('option', { name: 'Parallel', exact: true })).toHaveCount(0);
     await search.fill('review'); await search.press('Enter'); await chooseExistingNext(page, 'done');
     await activate(page, 'Model node model'); await next.getByRole('button', { name: 'Add parallel node on Next step' }).click();

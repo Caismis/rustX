@@ -6,6 +6,7 @@ import type { Predicate, Value, WorkflowDocument } from '../../../document/model
 import { useFieldDraft } from './drafts';
 import { JsonField } from './fields';
 import { ReferencePicker } from './ReferencePicker';
+import { TemplateInput } from './TemplateInput';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
@@ -20,7 +21,7 @@ function updateKind<K extends Value['type'] | Predicate['type'], T extends { typ
 import css from '../Editor.module.css';
 
 type ValueKind = Value['type'];
-const VALUE_KINDS: readonly ValueKind[] = ['reference', 'literal', 'object', 'array'];
+const VALUE_KINDS: readonly ValueKind[] = ['reference', 'template', 'literal', 'object', 'array'];
 
 function template(kind: ValueKind): Value {
   switch (kind) {
@@ -28,6 +29,7 @@ function template(kind: ValueKind): Value {
     case 'literal': return { type: 'literal', value: null };
     case 'object': return { type: 'object', fields: {} };
     case 'array': return { type: 'array', items: [] };
+    case 'template': return { type: 'template', parts: [] };
   }
 }
 
@@ -50,6 +52,8 @@ export function ValueEditor({ label, address, value, edit }: { label: string; ad
         onClick={() => { if (value.type !== kind) edit(document => setField(document, address, template(kind))); }}>{tx(`workflows:value.${kind}`)}</button>)}
     </div>
     {value.type === 'reference' && <><ReferencePicker address={address} path={value.path} edit={edit} /><details className={css.advanced}><summary>{tx('workflows:value.manual')}</summary><PathEditor address={within(address, ['path'])} path={value.path} edit={edit} /></details></>}
+    {value.type === 'template' && <TemplateInput parts={value.parts} address={address} edit={edit} label={label}
+      onChange={(parts, session) => edit(document => updateKind<'template', Value>(document, address, ['template'], current => ({ ...current, parts })), `${encodeField(address)}:${session}`)} />}
     {value.type === 'literal' && <JsonField label={tx('workflows:value.literal-json')} value={value.value} rows={3} address={within(address, ['value'])} />}
     {value.type === 'object' && <div className={css.nested}>
       {Object.entries(value.fields).map(([key, entry]) => <div key={key} className={css.nestedRow}>

@@ -338,6 +338,31 @@ impl<'a> SchemaInference<'a> {
         Ok(schemas)
     }
 
+    /// A template is a string; its parts are text or references in scope.
+    fn template(&mut self, parts: &[WorkflowValue]) -> Result<Schema<'a>, InferenceError> {
+        if parts.len() > super::super::MAX_MODEL_MESSAGE_PARTS {
+            return Err(invalid("template exceeds its part bound").into());
+        }
+        for (index, part) in parts.iter().enumerate() {
+            match part {
+                WorkflowValue::Literal {
+                    value: Value::String(_),
+                } => {}
+                WorkflowValue::Reference { path } => {
+                    self.resolve(path)
+                        .map_err(|e| e.at(format!("parts.{index}")))?;
+                }
+                _ => {
+                    return Err(InferenceError::from(invalid(
+                        "template parts are text or references only",
+                    ))
+                    .at(format!("parts.{index}")));
+                }
+            }
+        }
+        self.derived(512, || serde_json::json!({"type":"string"}))
+    }
+
     /// Exact AST identity replaces only the queried value. References and
     /// replacements share trees; derived object/array copies are precharged.
     pub(in super::super) fn infer(
@@ -426,6 +451,7 @@ impl<'a> SchemaInference<'a> {
                     }
                 }
             }
+            WorkflowValue::Template { parts } => self.template(parts),
         }
     }
 

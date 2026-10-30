@@ -19,6 +19,8 @@ Reference paths below are relative to `web/app/components/workflow/`.
 | `nodes/if-else/node.tsx` | IF/ELSE exits |
 | `nodes/loop/node.tsx`, `nodes/iteration/use-interactions.ts` | Nested body frame, focus and sizing |
 | `custom-edge.tsx`, `block-selector/blocks.tsx` | Searchable next-node picker and explicit edge insertion |
+| `block-selector/tabs.tsx`, `blocks.tsx`, `tool/action-item.tsx`, `preview-card.tsx` | Nodes and Tools tabs, classified rows, a node per Tool and a hover preview card |
+| `nodes/tool/panel.tsx`, `components/tool-form/`, `mixed-variable-text-input/` | Tool parameters as a form: text with inline variables, a variable/constant switch, folded output variables |
 | `note-node/index.tsx`, `utils/elk-layout.ts` | Notes and hierarchical organize |
 | `nodes/llm/components/json-schema-config-modal/` (studied at `ea5e4e9e21`) | Transactional structured-output dialog, visual field cards, JSON Schema tab and JSON-example import |
 
@@ -39,6 +41,21 @@ successor and a dashed add row. An empty port says **Select the next node**;
 a connected port says **Add parallel node**. Branch and Loop list each output
 port separately. All node icons have a solid semantic background and a white
 glyph, consistently across cards, inspector headers, successor rows and pickers.
+
+The canvas **+** and the next-step popover share one chooser, as Dify's block
+selector: a **Nodes** tab classified into a default group and **Logic**, a
+**Tools** tab with one row per builtin Tool (the scope's vocabulary carries
+each Tool's description and argument schema) and an **MCP or Python tool**
+row for a source Tool named in the panel, and, for a next step, the
+**Existing** nodes. Each tab keeps its own search; hovering a row shows its
+description in a card beside it. A Tool row adds a Tool node for that Tool,
+titled by its name and described by its first sentence.
+
+A builtin Tool node's panel is its parameters as a form: each name, required
+mark and description above its control. Text parameters take typed text with
+`/` or `{` inserting variables (a `template` value); other types switch
+between a variable and a constant, as Dify's `{x}` / ✎ switch. Unset
+parameters are absent from the arguments. Output variables fold below.
 
 Selecting a node type from the searchable popover creates a new sibling and
 adds one connection. Selecting an existing node adds only that connection.
@@ -70,6 +87,8 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | `document/commands.ts`, `schema.ts`, `geometry.ts`, `clipboard.ts` | Atomic typed transformations |
 | `WorkflowEditor`, `Inspector`, specialized panels | Selection, field navigation, inspector sizing and configuration |
 | `NextStep` | Successor rows and searchable append picker |
+| `NodeChooser`, `Palette` | The shared node and Tool chooser, at the pointer or beside a port |
+| `ToolPanel`, `TemplateInput` | Builtin Tool parameter forms and text with inline variables |
 | `SchemaEditor`, `ValueEditor`, `ReferencePicker` | Native schema/value forms and consumer-addressed analysis queries |
 | `StructuredOutputDialog` | Model-output working copy, field confirmations, native declaration validation and one saved history transaction |
 | `scene.ts`, `WorkflowNode`, `WorkflowEdge`, `Canvas` | Recursive scene, connection gestures and transient viewport state |

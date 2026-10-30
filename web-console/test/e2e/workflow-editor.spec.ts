@@ -606,7 +606,7 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
     await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(1);
     await page.getByRole('button', { name: 'Add node', exact: true }).click();
-    await expect(page.getByRole('option')).toHaveCount(7);
+    await expect(page.getByRole('option')).toHaveCount(6);
     await page.getByLabel('Search nodes').fill('model');
     await page.keyboard.press('Enter');
     await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(2);

@@ -73,6 +73,7 @@ function value(input: unknown): void {
     case 'reference': keys(record, ['type', 'path']); for (const part of array(record.path)) text(part); return;
     case 'object': keys(record, ['type', 'fields']); Object.values(object(record.fields)).forEach(value); return;
     case 'array': keys(record, ['type', 'items']); array(record.items).forEach(value); return;
+    case 'template': keys(record, ['type', 'parts']); for (const part of array(record.parts)) { const at = object(part); if (at.type === 'literal' ? typeof at.value !== 'string' : at.type !== 'reference') fail(); value(part); } return;
     default: fail();
   }
 }

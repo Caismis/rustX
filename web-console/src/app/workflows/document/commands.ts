@@ -55,7 +55,7 @@ export function nodeTemplate(kind: NodeKind): NodeDefinition {
     case 'agent': return { type: 'agent', profile: '', task: [], output: { type: 'text' } };
     // As Dify's LLM node: an empty system prompt, then an empty user turn.
     case 'model': return { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [] }, { role: 'user', content: [] }], output: { type: 'text' } };
-    case 'tool': return { type: 'tool', selector: { origin: 'builtin', name: '' }, arguments: { type: 'literal', value: {} }, result: { type: 'text', part: 0 } };
+    case 'tool': return { type: 'tool', selector: { origin: 'builtin', name: '' }, arguments: { type: 'object', fields: {} }, result: { type: 'text', part: 0 } };
     case 'branch': return { type: 'branch', cases: [{ id: 'true', condition: { type: 'and', predicates: [] } }] };
     case 'review': return { type: 'review', subject: { type: 'plan', value: { type: 'reference', path: ['args'] } }, context: [] };
     case 'loop': return { type: 'loop', input: { type: 'literal', value: {} }, body: emptyBlock(), until: { type: 'boolean', value: { type: 'literal', value: true } }, carry: { type: 'reference', path: ['result'] }, max_iterations: 3 };

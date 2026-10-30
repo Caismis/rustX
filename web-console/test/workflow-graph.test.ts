@@ -131,3 +131,15 @@ it('keeps surviving CASE exits stable when an earlier case is removed', () => {
   expect(geometry.elseTop).toBe(113);
   expect(projectScene(removed).nodes.find(item => item.data.local === 'choose')?.height).toBe(geometry.height);
 });
+
+it('renames a producer inside a Tool argument template and copies the template as a fragment', () => {
+  let document: WorkflowDocument = { description: 'Template', block: emptyBlock() };
+  document = addNode(document, [], 'model', 'search');
+  document = addNode(document, [], 'tool', 'read', { from: 'search', port: 'next' });
+  const tool = document.block.nodes.read;
+  if (tool.type !== 'tool') throw new Error('tool');
+  document.block.nodes.read = { ...tool, arguments: { type: 'object', fields: { path: { type: 'template', parts: [{ type: 'literal', value: 'notes/' }, { type: 'reference', path: ['search', 'text'] }] } } } };
+  const renamed = renameNode(document, [], 'search', 'lookup').block.nodes.read;
+  expect(renamed).toMatchObject({ arguments: { fields: { path: { type: 'template', parts: [{ type: 'literal', value: 'notes/' }, { type: 'reference', path: ['lookup', 'text'] }] } } } });
+  expect(parseFragment(copyFragment(document, 'test', [], ['read']))).toBeTruthy();
+});

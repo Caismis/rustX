@@ -116,9 +116,9 @@ function Sync({ parts, onChange }: { parts: readonly Value[]; onChange: (parts: 
 
 /** One message's content as Dify's prompt editor: plain text with inline
  * variable tokens. `children` (the card around it) can reach the editor. */
-export function PromptEditor({ parts, address, edit, label, placeholder, variablePlaceholder, expanded, invalid, onChange, children }: {
+export function PromptEditor({ parts, address, edit, label, placeholder, variablePlaceholder, expanded, compact, invalid, onChange, children }: {
   parts: readonly Value[]; address: FieldAddress; edit: Edit; label: string; placeholder: string; variablePlaceholder: string;
-  expanded?: boolean; invalid?: boolean; onChange: (parts: Value[]) => void; children: (editable: JSX.Element) => JSX.Element;
+  expanded?: boolean; compact?: boolean; invalid?: boolean; onChange: (parts: Value[]) => void; children: (editable: JSX.Element) => JSX.Element;
 }) {
   const initial = useRef(parts);
   return <LexicalComposer initialConfig={{
@@ -128,7 +128,7 @@ export function PromptEditor({ parts, address, edit, label, placeholder, variabl
     <TokenScope.Provider value={{ address, edit, placeholder: variablePlaceholder }}>
       {children(<div className={css.promptEditor}>
         <PlainTextPlugin ErrorBoundary={LexicalErrorBoundary}
-          contentEditable={<ContentEditable className={expanded ? `${css.promptInput} ${css.promptInputExpanded}` : css.promptInput} aria-label={label} aria-invalid={invalid || undefined} aria-placeholder={placeholder}
+          contentEditable={<ContentEditable className={`${css.promptInput} ${expanded ? css.promptInputExpanded : compact ? css.promptInputCompact : ''}`} aria-label={label} aria-invalid={invalid || undefined} aria-placeholder={placeholder}
             placeholder={<span className={css.promptPlaceholder}>{placeholder}</span>} />} />
       </div>)}
       <Sync parts={parts} onChange={onChange} />

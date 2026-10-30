@@ -12,6 +12,7 @@ function value(input: Value, rewrite: PathRewrite): Value {
     case 'literal': return input;
     case 'object': return { ...input, fields: Object.fromEntries(Object.entries(input.fields).map(([key, field]) => [key, value(field, rewrite)])) };
     case 'array': return { ...input, items: input.items.map(item => value(item, rewrite)) };
+    case 'template': return { ...input, parts: input.parts.map(part => value(part, rewrite)) };
   }
 }
 

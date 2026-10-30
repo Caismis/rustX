@@ -1,46 +1,24 @@
-import { useEffect, useRef, useState } from 'react';
-import clsx from 'clsx';
+import { useEffect, useRef } from 'react';
+import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../locale/react';
-import { IconSearchOutline16 } from '../../../../presentation/primitives/icons';
-import { NODE_KINDS, type NodeKind } from '../../document/model';
-import { KindIcon } from '../icons';
+import { NodeChooser, type NodeChoice } from './NodeChooser';
 import css from './Editor.module.css';
 
-/** The contextual, searchable Add Node palette. It lists exactly the eight
- * native node kinds and closes on choice, Escape or outside focus. */
-export function Palette({ at, onChoose, onClose, insertion = false }: { at: { x: number; y: number }; onChoose: (kind: NodeKind) => void; onClose: () => void; insertion?: boolean }) {
+/** The contextual Add Node palette: Dify's block selector at the pointer. It
+ * closes on choice, Escape or outside focus. */
+export function Palette({ at, tools, onChoose, onClose, insertion = false }: { at: { x: number; y: number }; tools: readonly WorkflowToolChoice[]; onChoose: (choice: NodeChoice) => void; onClose: () => void; insertion?: boolean }) {
   const tx = useTranslation();
-  const [query, setQuery] = useState('');
-  const [active, setActive] = useState(0);
-  const root = useRef<HTMLDivElement>(null);
-  const input = useRef<HTMLInputElement>(null);
+  const root = useRef<HTMLDivElement>(null), input = useRef<HTMLInputElement>(null);
   // Take the keyboard after the opening gesture has settled.
   useEffect(() => { const frame = requestAnimationFrame(() => input.current?.focus()); return () => cancelAnimationFrame(frame); }, []);
-  const kinds = NODE_KINDS.filter(kind => (!insertion || !['branch', 'loop', 'return'].includes(kind)) && (tx(`workflows:kind.${kind}`).toLowerCase().includes(query.trim().toLowerCase()) || kind.includes(query.trim().toLowerCase())));
   useEffect(() => {
     const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) onClose(); };
     document.addEventListener('pointerdown', outside, true);
     return () => document.removeEventListener('pointerdown', outside, true);
   }, [onClose]);
   return <div ref={root} className={css.palette} style={{ left: at.x, top: at.y }} role="dialog" aria-label={tx('workflows:canvas.add')}
-    onKeyDown={event => {
-      if (event.nativeEvent.isComposing) return;
-      if (event.key === 'Escape') { event.stopPropagation(); onClose(); }
-      else if (event.key === 'ArrowDown') { event.preventDefault(); setActive(index => Math.min(index + 1, kinds.length - 1)); }
-      else if (event.key === 'ArrowUp') { event.preventDefault(); setActive(index => Math.max(index - 1, 0)); }
-      else if (event.key === 'Enter' && kinds[active]) { event.preventDefault(); onChoose(kinds[active]); }
-    }}>
+    onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.stopPropagation(); onClose(); } }}>
     {insertion && <p className={css.note}>{tx('workflows:canvas.insertion-note')}</p>}
-    <label className={css.paletteSearch}><IconSearchOutline16 /><input ref={input} value={query} placeholder={tx('workflows:palette.search')} aria-label={tx('workflows:palette.search')}
-      aria-controls="workflow-palette" aria-activedescendant={kinds[active] ? `workflow-palette-${kinds[active]}` : undefined}
-      onChange={event => { setQuery(event.target.value); setActive(0); }} /></label>
-    <p className={css.paletteTitle}>{tx('workflows:palette.available')}</p>
-    <ul id="workflow-palette" role="listbox" aria-label={tx('workflows:palette.available')}>
-      {kinds.map((kind, index) => <li key={kind} id={`workflow-palette-${kind}`} role="option" aria-selected={index === active}
-        className={clsx(css.paletteOption, index === active && css.paletteActive)} title={tx(`workflows:kind-about.${kind}`)} onMouseEnter={() => setActive(index)} onClick={() => onChoose(kind)}>
-        <span className={clsx(css.paletteKindIcon, css[`kind_${kind}`])}><KindIcon kind={kind} size={15} /></span>{tx(`workflows:kind.${kind}`)}
-      </li>)}
-      {!kinds.length && <li className={css.note}>{tx('workflows:palette.none')}</li>}
-    </ul>
+    <NodeChooser tools={tools} input={input} omit={insertion ? ['branch', 'loop', 'return'] : []} onChoose={choice => { if (!('id' in choice)) onChoose(choice); }} />
   </div>;
 }

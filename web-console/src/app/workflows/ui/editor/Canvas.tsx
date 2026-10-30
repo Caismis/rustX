@@ -1,4 +1,5 @@
 import type { ArrayEdit } from '../../document/fields';
+import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v62';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Background, BackgroundVariant, MiniMap, ReactFlow, applyNodeChanges, useReactFlow, useViewport, useNodesInitialized, type Connection, type EdgeChange, type NodeChange, type Viewport } from '@xyflow/react';
 import clsx from 'clsx';
@@ -9,11 +10,12 @@ import type { FieldDraft } from '../../machines/editor';
 import { CommandRejected, addBefore, addNode, deleteNodes, disconnect, freshIdentifier, insertNode } from '../../document/commands';
 import { copyFragment, fragmentOwnsField, parseFragment, pasteFragment } from '../../document/clipboard';
 import { freshNote, putNote, removeNotes, setNodePresentation } from '../../document/geometry';
-import { blockAt, blockKey as keyOfBlock, deepNodeCount, edgesOf, sameBlockPath, sameDocument, type Block, type BlockPath, type NodeKind, type WorkflowDocument } from '../../document/model';
+import { blockAt, blockKey as keyOfBlock, deepNodeCount, edgesOf, sameBlockPath, sameDocument, type Block, type BlockPath, type WorkflowDocument } from '../../document/model';
 import { type ControlPort } from '../../document/ports';
 import { IconCursor, IconFit, IconHand, IconMinus, IconPlus, IconBlock, IconFile, IconGrid, IconWorkflow } from '../icons';
 import { LayoutSession, organizeDocument, type LayoutOwner, type Point } from './layout';
 import { Palette } from './Palette';
+import { chosenNode, type NodeChoice } from './NodeChooser';
 import { applySceneConnection } from './connections';
 import { readViewport, writeViewport } from './view-store';
 import { CanvasActions, WorkflowNode } from './WorkflowNode';
@@ -40,11 +42,11 @@ interface Addition {
 
 /** One React Flow scene, one native editing document. Local nodes retain only
  * transient pointer geometry/selection, never executable definitions. */
-export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch, selection, onSelect, problems, edit, editable, blockLabel, currentState, organizeEpoch = 0, collapsed, setCollapsed, drafts, onDuplicate }: {
+export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch, selection, onSelect, problems, edit, editable, blockLabel, currentState, organizeEpoch = 0, collapsed, setCollapsed, drafts, onDuplicate, tools }: {
   document: WorkflowDocument; path: BlockPath; viewKey: string; viewEpoch: number; selection: Selection; onSelect: (selection: Selection) => void;
   problems: Problems; edit: Edit; editable: boolean; blockLabel: string; currentState: () => LayoutOwner; organizeEpoch?: number;
   collapsed: ReadonlySet<string>; setCollapsed: Dispatch<SetStateAction<ReadonlySet<string>>>;
-  drafts: Readonly<Record<string, FieldDraft>>; onDuplicate: Duplicate;
+  drafts: Readonly<Record<string, FieldDraft>>; onDuplicate: Duplicate; tools: readonly WorkflowToolChoice[];
 }) {
   const tx = useTranslation(), flow = useReactFlow<SceneNode, SceneEdge>(), initialized = useNodesInitialized(), container = useRef<HTMLDivElement>(null);
   const [stored] = useState(() => readViewport(viewKey));
@@ -253,9 +255,9 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     });
     setSelected(new Set()); onSelect(undefined);
   };
-  const add = (kind: NodeKind) => {
+  const add = (choice: NodeChoice) => {
     if (!palette || !editable) return;
-    const chosen = palette; let added = '';
+    const chosen = palette, kind = choice.kind; let added = '';
     mutate(document => {
       const block = blockAt(document, chosen.path); if (!block) throw new CommandRejected('missing_node');
       const id = freshIdentifier(block, kind); added = id;
@@ -263,14 +265,14 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       let next = chosen.edge ? insertNode(document, chosen.path, chosen.edge.index, kind, id)
         : chosen.before ? addBefore(document, chosen.path, kind, id, chosen.before) : addNode(document, chosen.path, kind, id, chosen.from && { from: chosen.from.node, port: chosen.from.port });
       if (deepNodeCount(next.block) > 256) throw new CommandRejected('limit_exceeded');
-      // As Dify: a new node is titled by its kind, numbered after the first
-      // of that kind in its block, and starts with the kind's description.
-      const name = tx(`workflows:kind.${kind}`), same = Object.values(block.nodes).filter(node => node.type === kind).length;
+      // As Dify: a new node is titled by its kind or Tool, numbered after the
+      // first of those in its block, and starts with their description.
+      const made = chosenNode(tx, next, chosen.path, id, choice); next = made.document;
       for (const moved of chosen.room?.ids ?? []) {
         const position = byId.get(viewId(chosen.path, 'node', moved))?.position;
         if (position) next = setNodePresentation(next, chosen.path, moved, { position: { x: position.x + chosen.room!.dx, y: position.y } });
       }
-      return setNodePresentation(next, chosen.path, id, { position: chosen.position, title: same ? `${name} ${same + 1}` : name, description: tx(`workflows:kind-about.${kind}`) });
+      return setNodePresentation(next, chosen.path, id, { position: chosen.position, title: made.title, description: made.description });
     });
     setPalette(undefined); if (added) onSelect({ kind: 'node', id: added, path: chosen.path });
   };
@@ -368,7 +370,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       </div>
       <Zoom />
       <p className={css.canvasStatus} aria-live="polite">{message ?? (organizing ? tx('workflows:canvas.organizing') : tx('workflows:canvas.status', { p0: blockLabel, p1: deepNodeCount(document.block) }))}</p>
-      {palette && <Palette at={palette.at} insertion={!!palette.insertion} onChoose={add} onClose={() => { setPalette(undefined); container.current?.focus(); }} />}
+      {palette && <Palette at={palette.at} tools={tools} insertion={!!palette.insertion} onChoose={add} onClose={() => { setPalette(undefined); container.current?.focus(); }} />}
       {menu && <div className={css.contextMenu} role="dialog" aria-label={tx('workflows:canvas.node-actions', { p0: byId.get(menu.id)?.data.title ?? '' })} style={{ left: menu.at.x, top: menu.at.y }} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(undefined); container.current?.focus(); } }}>
         {['node', 'note'].includes(byId.get(menu.id)?.data.view ?? '') ? <>
           <button type="button" autoFocus onClick={() => { try { const text = fragmentFor(menu.id); void writeClipboard(text).then(ok => setMessage(tx(ok ? 'workflows:canvas.copied' : 'workflows:notice.copy-failed'))); } catch (error) { report(error); } setMenu(undefined); }}>{tx('workflows:canvas.copy')}</button>

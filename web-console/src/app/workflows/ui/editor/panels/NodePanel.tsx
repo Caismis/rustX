@@ -3,7 +3,8 @@ import { nodeAt, blockAt, type NodeKind } from '../../../document/model';
 import { AgentPanel, ModelPanel } from './InferencePanels';
 import { LoopPanel } from './ControlPanels';
 import { BranchPanel } from './BranchPanel';
-import { ReturnPanel, ReviewPanel, ToolPanel } from './ResultPanels';
+import { ReturnPanel, ReviewPanel } from './ResultPanels';
+import { ToolPanel } from './ToolPanel';
 import { type PanelProps } from './shared';
 import { NextStep } from '../NextStep';
 import css from '../Editor.module.css';
@@ -13,5 +14,5 @@ export function NodePanel(props: PanelProps) {
   const node = nodeAt(blockAt(props.document, props.block)!, props.id);
   if (!node || node.type === 'start') return null;
   const Panel = PANELS[node.type];
-  return <div className={css.nodeSettings}><Panel {...props} /><NextStep document={props.document} block={props.block} source={props.id} edit={props.edit} onSelect={props.onSelect} /></div>;
+  return <div className={css.nodeSettings}><Panel {...props} /><NextStep document={props.document} block={props.block} source={props.id} tools={props.vocabulary?.builtin_tools ?? []} edit={props.edit} onSelect={props.onSelect} /></div>;
 }

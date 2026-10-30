@@ -1417,6 +1417,27 @@
             "items"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One string from fixed text and references, rendered as prompt parts\nare: a non-string referenced value is inserted as its JSON text.",
+          "properties": {
+            "parts": {
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "template",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "parts"
+          ],
+          "type": "object"
         }
       ]
     }

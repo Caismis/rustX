@@ -35,8 +35,8 @@ export function consumerAddress(document: WorkflowDocument, field: FieldAddress)
   while (parts.length) {
     const part = parts.shift();
     if (part === 'fields') { const name = key(); if (name === undefined) return undefined; path.push({ kind: 'field', key: name }); }
-    else if (part === 'items' || part === 'predicates') {
-      const index = parts.shift(); if (typeof index !== 'number') return undefined; path.push({ kind: part === 'items' ? 'item' : 'predicate_at', index });
+    else if (part === 'items' || part === 'parts' || part === 'predicates') {
+      const index = parts.shift(); if (typeof index !== 'number') return undefined; path.push({ kind: part === 'predicates' ? 'predicate_at' : 'item', index });
     } else if (part === 'value' || part === 'left' || part === 'right' || part === 'predicate') path.push({ kind: part });
     else return undefined;
   }

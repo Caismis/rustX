@@ -43,7 +43,7 @@ use expressions::{
     evaluate_predicate, evaluate_value, valid_local_key, validate_predicate, value_schema,
 };
 pub(crate) use tool::default_workflow_timeout_ms;
-pub use tool::{WorkflowToolResult, selectable_builtin_tools};
+pub use tool::{WorkflowToolChoice, WorkflowToolResult, selectable_builtin_tools};
 
 /// Runtime-owned identity, independent of model `ToolCall` text.
 /// Retained with the canonical outer result, not with an execution owner.
@@ -684,6 +684,9 @@ pub enum WorkflowValue {
     },
     /// Construct an array atomically.
     Array { items: Vec<WorkflowValue> },
+    /// One string from fixed text and references, rendered as prompt parts
+    /// are: a non-string referenced value is inserted as its JSON text.
+    Template { parts: Vec<WorkflowValue> },
 }
 
 /// Typed predicates. Equality requires matching scalar types; no coercion.

@@ -4,7 +4,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
-import { IconCloseOutline16, IconSearchOutline16 } from '../../../../presentation/primitives/icons';
+import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v62';
+import { IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import { addNode, connect, disconnect, freshIdentifier } from '../../document/commands';
 import { nodePresentation, setNodePresentation } from '../../document/geometry';
 import { blockAt, edgesOf, nodeAt, startOf, sameBlockPath, type BlockPath, type NodeKind, type WorkflowDocument } from '../../document/model';
@@ -12,6 +13,7 @@ import { edgePort, portsOf, type ControlPort, type BuiltinPort } from '../../doc
 import { IconBlock, IconEntry, IconPlus, KindIcon } from '../icons';
 import { NODE_WIDTH, projectScene } from './scene';
 import { viewId, type Selection } from './selection';
+import { chosenNode, NodeChooser, type Choice } from './NodeChooser';
 import type { Edit } from './panels/shared';
 import css from './Editor.module.css';
 
@@ -35,22 +37,17 @@ function NextLine({ anchors }: { anchors: readonly number[] }) {
   </svg>;
 }
 
-type Tab = 'nodes' | 'tools' | 'existing';
-type Choice = { kind: NodeKind; group: string } | { id: string };
 
 /** The inspector's continuation uses the same native graph commands as the
  * canvas. Every addition appends a sibling without replacing existing edges. */
-export function NextStep({ document, block, source, edit, onSelect }: {
-  document: WorkflowDocument; block: BlockPath; source?: string; edit: Edit; onSelect: (selection: Selection) => void;
+export function NextStep({ document, block, source, tools, edit, onSelect }: {
+  document: WorkflowDocument; block: BlockPath; source?: string; tools: readonly WorkflowToolChoice[]; edit: Edit; onSelect: (selection: Selection) => void;
 }) {
   const tx = useTranslation(), owner = blockAt(document, block)!;
   const sourceId = source ?? startOf(owner);
   const sourceNode = sourceId ? nodeAt(owner, sourceId) : undefined;
   const ports: readonly Port[] = sourceNode ? portsOf(sourceNode) : [];
   const [openPort, setOpenPort] = useState<Port>();
-  const [tab, setTab] = useState<Tab>('nodes');
-  const [query, setQuery] = useState('');
-  const [active, setActive] = useState(0);
   const trigger = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null), input = useRef<HTMLInputElement>(null);
   const { refs, floatingStyles, isPositioned } = useFloating({
     open: !!openPort, placement: 'left-start', strategy: 'fixed', whileElementsMounted: autoUpdate,
@@ -91,18 +88,6 @@ export function NextStep({ document, block, source, edit, onSelect }: {
   // An Agent route is named by its own ID, as the child answers with it.
   const portLabel = (port: Port) => sourceNode?.type === 'branch' ? branchPortLabel(sourceNode, port)
     : sourceNode?.type === 'agent' && sourceNode.routes?.some(route => route.id === port) ? port : tx(`workflows:port.${port as BuiltinPort}`);
-  const groups: { label: string; kinds: readonly NodeKind[] }[] = [
-    { label: tx('workflows:next-step.group-ai'), kinds: ['agent', 'model'] },
-    { label: tx('workflows:next-step.group-control'), kinds: ['branch', 'loop'] },
-    { label: tx('workflows:next-step.group-result'), kinds: ['review', 'return'] },
-  ];
-  const search = query.trim().toLocaleLowerCase();
-  const matches = (value: string) => value.toLocaleLowerCase().includes(search);
-  const choices: Choice[] = tab === 'existing'
-    ? Object.keys(owner.nodes).filter(id => id !== sourceId && owner.nodes[id].type !== 'start' && (!openPort || !targetsFor(openPort).includes(id)) && (matches(id) || matches(nodeTitle(id)))).map(id => ({ id }))
-    : (tab === 'tools' ? [{ label: tx('workflows:next-step.group-tools'), kinds: ['tool' as const] }] : groups)
-      .flatMap(group => group.kinds.filter(kind => (matches(kind) || matches(tx(`workflows:kind.${kind}`)))).map(kind => ({ kind, group: group.label })));
-
   function nodeTitle(id: string) {
     return nodePresentation(document, block, id)?.title || id;
   }
@@ -110,7 +95,7 @@ export function NextStep({ document, block, source, edit, onSelect }: {
     if (openPort === port) { close(true); return; }
     trigger.current = element;
     refs.setReference(element);
-    setTab('nodes'); setQuery(''); setActive(0); setOpenPort(port);
+    setOpenPort(port);
   }
   function remove(port: Port, target: string) {
     edit(current => {
@@ -138,10 +123,9 @@ export function NextStep({ document, block, source, edit, onSelect }: {
         y: outgoing.length ? Math.max(...outgoing.map(node => node.position.y + (node.height ?? 128))) + 48 : origin?.position.y ?? 80 };
       while (scene.some(node => sameBlockPath(node.data.path, block) && position.x < node.position.x + (node.width ?? NODE_WIDTH)
         && position.x + NODE_WIDTH > node.position.x && position.y < node.position.y + (node.height ?? 128) + 24 && position.y + 152 > node.position.y)) position.y += 176;
-      const name = tx(`workflows:kind.${choice.kind}`);
-      const count = Object.values(owner.nodes).filter(node => node.type === choice.kind).length;
+      const made = chosenNode(tx, next, block, id, choice);
       added = id;
-      return setNodePresentation(next, block, id, { position, title: count ? `${name} ${count + 1}` : name, description: tx(`workflows:kind-about.${choice.kind}`) });
+      return setNodePresentation(made.document, block, id, { position, title: made.title, description: made.description });
     });
     close();
     if (added) onSelect({ kind: 'node', id: added, path: block });
@@ -180,32 +164,9 @@ export function NextStep({ document, block, source, edit, onSelect }: {
     </div>
     {openPort && createPortal(<div ref={element => { panel.current = element; refs.setFloating(element); }} className={css.nextPicker}
       style={{ ...floatingStyles, visibility: isPositioned ? 'visible' : 'hidden' }} role="dialog" aria-label={tx('workflows:next-step.picker')}
-      onKeyDown={event => {
-        if (event.nativeEvent.isComposing) return;
-        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true); }
-        else if (event.target === input.current && event.key === 'ArrowDown') { event.preventDefault(); setActive(index => Math.min(index + 1, Math.max(0, choices.length - 1))); }
-        else if (event.target === input.current && event.key === 'ArrowUp') { event.preventDefault(); setActive(index => Math.max(index - 1, 0)); }
-        else if (event.target === input.current && event.key === 'Enter' && choices[active]) { event.preventDefault(); choose(choices[active]); }
-      }}>
-      <div className={css.nextTabs} role="tablist" aria-label={tx('workflows:next-step.picker')}>
-        {(['nodes', 'tools', 'existing'] as const).map(value => <button key={value} type="button" role="tab" aria-selected={tab === value}
-          className={clsx(css.nextTab, tab === value && css.nextTabActive)} onClick={() => { setTab(value); setActive(0); input.current?.focus(); }}>{tx(`workflows:next-step.tab-${value}`)}</button>)}
-      </div>
-      <label className={css.nextSearch}><IconSearchOutline16 /><input ref={input} value={query} placeholder={tx('workflows:next-step.search')} aria-label={tx('workflows:next-step.search')}
-        aria-controls="workflow-next-choices" aria-activedescendant={choices[active] ? `workflow-next-choice-${active}` : undefined}
-        onChange={event => { setQuery(event.target.value); setActive(0); }} /></label>
-      <div className={css.nextChoices} id="workflow-next-choices" role="listbox" aria-label={tx('workflows:next-step.picker')}>
-        {choices.map((choice, index) => <div key={'id' in choice ? choice.id : choice.kind}>
-          {'group' in choice && (!choices[index - 1] || !('group' in choices[index - 1]) || (choices[index - 1] as { group: string }).group !== choice.group) && <p className={css.nextGroup}>{choice.group}</p>}
-          <button id={`workflow-next-choice-${index}`} data-node-id={'id' in choice ? choice.id : undefined} type="button" role="option" aria-selected={active === index}
-            className={clsx(css.nextChoice, active === index && css.nextChoiceActive)} onMouseEnter={() => setActive(index)} onClick={() => choose(choice)}>
-            {'kind' in choice ? <span className={clsx(css.nextChoiceIcon, css[`kind_${choice.kind}`])}><KindIcon kind={choice.kind} size={15} /></span>
-              : <span className={clsx(css.nextChoiceIcon, css[`kind_${owner.nodes[choice.id].type}`])}><KindIcon kind={owner.nodes[choice.id].type} size={15} /></span>}
-            <span>{'kind' in choice ? tx(`workflows:kind.${choice.kind}`) : nodeTitle(choice.id)}</span>
-          </button>
-        </div>)}
-        {!choices.length && <p className={css.nextEmpty}>{tx('workflows:palette.none')}</p>}
-      </div>
+      onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); close(true); } }}>
+      <NodeChooser tools={tools} input={input} preview="left" onChoose={choose}
+        existing={Object.keys(owner.nodes).filter(id => id !== sourceId && owner.nodes[id].type !== 'start' && (!openPort || !targetsFor(openPort).includes(id))).map(id => ({ id, title: nodeTitle(id), kind: owner.nodes[id].type as NodeKind }))} />
     </div>, window.document.body)}
   </section>;
 }

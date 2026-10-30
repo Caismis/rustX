@@ -104,7 +104,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
         <DraftTextField compact label={tx('workflows:panel.title')} placeholder={startTitle} value={entry?.title || startTitle} address={entryField('title')} /></span></div>
       : <div className={css.inspectTitle}><span className={css.nodeIcon}><IconBlock size={17} /></span><span className={css.nodeText}><span className={css.nodeTitle}>{tx(path.length ? 'workflows:inspector.block-title' : 'workflows:inspector.workflow-title')}</span></span></div>;
     if (selection.kind === 'start') description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={entry?.description ?? ''} multiline address={entryField('description')} />;
-    body = owner && <BlockForm document={document} block={path} edit={edit} onSelect={onSelect} start={selection.kind === 'start'} />;
+    body = owner && <BlockForm document={document} block={path} edit={edit} onSelect={onSelect} tools={vocabulary?.builtin_tools ?? []} start={selection.kind === 'start'} />;
   }
   return <aside ref={root} className={css.inspector} style={{ '--inspector-width': `${width}px` } as CSSProperties} aria-label={tx('workflows:inspector.label')} onWheel={event => event.stopPropagation()}
     onKeyDown={event => { if (event.key === 'Escape' && !event.isDefaultPrevented() && !(event.target as Element).closest('textarea, input, select, [role="dialog"], [role="listbox"]')) { event.stopPropagation(); onSelect(undefined); } }}>

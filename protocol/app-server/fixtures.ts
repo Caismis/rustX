@@ -1507,15 +1507,341 @@ export const fixtures = [
             "reviewer"
           ],
           "builtin_tools": [
-            "ask_user",
-            "read",
-            "read_image",
-            "present",
-            "write",
-            "edit",
-            "glob",
-            "grep",
-            "bash"
+            {
+              "name": "ask_user",
+              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "header": {
+                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 16
+                        },
+                        "options": {
+                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "description": {
+                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 1024
+                              },
+                              "preview": {
+                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192
+                              }
+                            },
+                            "additionalProperties": false,
+                            "required": [
+                              "label",
+                              "description"
+                            ]
+                          },
+                          "minItems": 2,
+                          "maxItems": 4
+                        },
+                        "multi_select": {
+                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
+                          "type": "boolean",
+                          "default": false
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "question",
+                        "header",
+                        "options"
+                      ]
+                    },
+                    "description": "One to four related blocking questions with unique question text.",
+                    "minItems": 1,
+                    "maxItems": 4
+                  }
+                },
+                "required": [
+                  "questions"
+                ]
+              }
+            },
+            {
+              "name": "read",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "The 1-based line to start reading from. Zero is normalized to one."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "read_image",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "present",
+              "description": "Declare existing files as deliverables for the user. Files may be created by Write, Edit, Bash or any process in the Session cwd. Use for separate file deliverables, not ordinary code edits. Accepts 1–8 files inside the native cwd, in input order; first normalized duplicate wins, including its description. Each successful call is a separate declaration. All entries must be regular files, with no symlink components or parent traversal. Does not copy or mutate bytes: reopening reads current accessible files. Files over 512 KiB may be declared but cannot be previewed/downloaded.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "description": "Relative to the native cwd, or absolute inside that cwd. No symlinks or '..'.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "description": {
+                          "description": "Optional brief human-facing description; preserved verbatim.",
+                          "type": "string",
+                          "maxLength": 512
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "path"
+                      ]
+                    },
+                    "description": "Ordered list of existing regular files. First normalized duplicate wins.",
+                    "minItems": 1,
+                    "maxItems": 8
+                  }
+                },
+                "required": [
+                  "files"
+                ]
+              }
+            },
+            {
+              "name": "write",
+              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "The complete new UTF-8 content of the file."
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            },
+            {
+              "name": "edit",
+              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "edits": {
+                    "type": "array",
+                    "items": {
+                      "description": "One text replacement of an [`EditInput`].",
+                      "type": "object",
+                      "properties": {
+                        "oldText": {
+                          "description": "The source text to replace. Exact matching is preferred; when exact\nmatching fails, the executor applies its documented NFKC-based fuzzy\nnormalization without guessing between ambiguous candidates.",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "newText": {
+                          "description": "The replacement text.",
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "oldText",
+                        "newText"
+                      ]
+                    },
+                    "description": "Replacements matched against one original file snapshot and committed\ntogether as one change.",
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "path",
+                  "edits"
+                ]
+              }
+            },
+            {
+              "name": "glob",
+              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The glob pattern, matched against paths relative to the search root."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of results to return. Defaults to 1000; larger\nvalues are accepted and remain bounded by the tool's byte budget."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "grep",
+              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The pattern to search for. A regular expression unless `literal` is\ntrue."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                  },
+                  "glob": {
+                    "type": "string",
+                    "description": "A glob restricting which files are searched, matched against paths\nrelative to the search root."
+                  },
+                  "ignoreCase": {
+                    "type": "boolean",
+                    "description": "Whether to match case-insensitively."
+                  },
+                  "literal": {
+                    "type": "boolean",
+                    "description": "Whether to search for literal text instead of a regular expression."
+                  },
+                  "context": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "description": "How many lines of surrounding context to return on each side.",
+                    "maximum": 20
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of matching lines to return. Defaults to 100.\nLarger values are accepted and are bounded by the tool's finite\ncontent budget rather than by a schema maximum."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "bash",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "description": "The command handed to one `/bin/bash -c` invocation.",
+                    "minLength": 1
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "timeout": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                  }
+                },
+                "required": [
+                  "command"
+                ]
+              }
+            }
           ]
         }
       }
@@ -1714,15 +2040,341 @@ export const fixtures = [
             "reviewer"
           ],
           "builtin_tools": [
-            "ask_user",
-            "read",
-            "read_image",
-            "present",
-            "write",
-            "edit",
-            "glob",
-            "grep",
-            "bash"
+            {
+              "name": "ask_user",
+              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "header": {
+                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 16
+                        },
+                        "options": {
+                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "description": {
+                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 1024
+                              },
+                              "preview": {
+                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192
+                              }
+                            },
+                            "additionalProperties": false,
+                            "required": [
+                              "label",
+                              "description"
+                            ]
+                          },
+                          "minItems": 2,
+                          "maxItems": 4
+                        },
+                        "multi_select": {
+                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
+                          "type": "boolean",
+                          "default": false
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "question",
+                        "header",
+                        "options"
+                      ]
+                    },
+                    "description": "One to four related blocking questions with unique question text.",
+                    "minItems": 1,
+                    "maxItems": 4
+                  }
+                },
+                "required": [
+                  "questions"
+                ]
+              }
+            },
+            {
+              "name": "read",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "The 1-based line to start reading from. Zero is normalized to one."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "read_image",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "present",
+              "description": "Declare existing files as deliverables for the user. Files may be created by Write, Edit, Bash or any process in the Session cwd. Use for separate file deliverables, not ordinary code edits. Accepts 1–8 files inside the native cwd, in input order; first normalized duplicate wins, including its description. Each successful call is a separate declaration. All entries must be regular files, with no symlink components or parent traversal. Does not copy or mutate bytes: reopening reads current accessible files. Files over 512 KiB may be declared but cannot be previewed/downloaded.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "description": "Relative to the native cwd, or absolute inside that cwd. No symlinks or '..'.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "description": {
+                          "description": "Optional brief human-facing description; preserved verbatim.",
+                          "type": "string",
+                          "maxLength": 512
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "path"
+                      ]
+                    },
+                    "description": "Ordered list of existing regular files. First normalized duplicate wins.",
+                    "minItems": 1,
+                    "maxItems": 8
+                  }
+                },
+                "required": [
+                  "files"
+                ]
+              }
+            },
+            {
+              "name": "write",
+              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "The complete new UTF-8 content of the file."
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            },
+            {
+              "name": "edit",
+              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "edits": {
+                    "type": "array",
+                    "items": {
+                      "description": "One text replacement of an [`EditInput`].",
+                      "type": "object",
+                      "properties": {
+                        "oldText": {
+                          "description": "The source text to replace. Exact matching is preferred; when exact\nmatching fails, the executor applies its documented NFKC-based fuzzy\nnormalization without guessing between ambiguous candidates.",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "newText": {
+                          "description": "The replacement text.",
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "oldText",
+                        "newText"
+                      ]
+                    },
+                    "description": "Replacements matched against one original file snapshot and committed\ntogether as one change.",
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "path",
+                  "edits"
+                ]
+              }
+            },
+            {
+              "name": "glob",
+              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The glob pattern, matched against paths relative to the search root."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of results to return. Defaults to 1000; larger\nvalues are accepted and remain bounded by the tool's byte budget."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "grep",
+              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The pattern to search for. A regular expression unless `literal` is\ntrue."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                  },
+                  "glob": {
+                    "type": "string",
+                    "description": "A glob restricting which files are searched, matched against paths\nrelative to the search root."
+                  },
+                  "ignoreCase": {
+                    "type": "boolean",
+                    "description": "Whether to match case-insensitively."
+                  },
+                  "literal": {
+                    "type": "boolean",
+                    "description": "Whether to search for literal text instead of a regular expression."
+                  },
+                  "context": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "description": "How many lines of surrounding context to return on each side.",
+                    "maximum": 20
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of matching lines to return. Defaults to 100.\nLarger values are accepted and are bounded by the tool's finite\ncontent budget rather than by a schema maximum."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "bash",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "description": "The command handed to one `/bin/bash -c` invocation.",
+                    "minLength": 1
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "timeout": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                  }
+                },
+                "required": [
+                  "command"
+                ]
+              }
+            }
           ]
         }
       }
@@ -1833,15 +2485,341 @@ export const fixtures = [
             "reviewer"
           ],
           "builtin_tools": [
-            "ask_user",
-            "read",
-            "read_image",
-            "present",
-            "write",
-            "edit",
-            "glob",
-            "grep",
-            "bash"
+            {
+              "name": "ask_user",
+              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "header": {
+                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 16
+                        },
+                        "options": {
+                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "description": {
+                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 1024
+                              },
+                              "preview": {
+                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192
+                              }
+                            },
+                            "additionalProperties": false,
+                            "required": [
+                              "label",
+                              "description"
+                            ]
+                          },
+                          "minItems": 2,
+                          "maxItems": 4
+                        },
+                        "multi_select": {
+                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
+                          "type": "boolean",
+                          "default": false
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "question",
+                        "header",
+                        "options"
+                      ]
+                    },
+                    "description": "One to four related blocking questions with unique question text.",
+                    "minItems": 1,
+                    "maxItems": 4
+                  }
+                },
+                "required": [
+                  "questions"
+                ]
+              }
+            },
+            {
+              "name": "read",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "The 1-based line to start reading from. Zero is normalized to one."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "read_image",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "present",
+              "description": "Declare existing files as deliverables for the user. Files may be created by Write, Edit, Bash or any process in the Session cwd. Use for separate file deliverables, not ordinary code edits. Accepts 1–8 files inside the native cwd, in input order; first normalized duplicate wins, including its description. Each successful call is a separate declaration. All entries must be regular files, with no symlink components or parent traversal. Does not copy or mutate bytes: reopening reads current accessible files. Files over 512 KiB may be declared but cannot be previewed/downloaded.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "description": "Relative to the native cwd, or absolute inside that cwd. No symlinks or '..'.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "description": {
+                          "description": "Optional brief human-facing description; preserved verbatim.",
+                          "type": "string",
+                          "maxLength": 512
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "path"
+                      ]
+                    },
+                    "description": "Ordered list of existing regular files. First normalized duplicate wins.",
+                    "minItems": 1,
+                    "maxItems": 8
+                  }
+                },
+                "required": [
+                  "files"
+                ]
+              }
+            },
+            {
+              "name": "write",
+              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "The complete new UTF-8 content of the file."
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            },
+            {
+              "name": "edit",
+              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "edits": {
+                    "type": "array",
+                    "items": {
+                      "description": "One text replacement of an [`EditInput`].",
+                      "type": "object",
+                      "properties": {
+                        "oldText": {
+                          "description": "The source text to replace. Exact matching is preferred; when exact\nmatching fails, the executor applies its documented NFKC-based fuzzy\nnormalization without guessing between ambiguous candidates.",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "newText": {
+                          "description": "The replacement text.",
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "oldText",
+                        "newText"
+                      ]
+                    },
+                    "description": "Replacements matched against one original file snapshot and committed\ntogether as one change.",
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "path",
+                  "edits"
+                ]
+              }
+            },
+            {
+              "name": "glob",
+              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The glob pattern, matched against paths relative to the search root."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of results to return. Defaults to 1000; larger\nvalues are accepted and remain bounded by the tool's byte budget."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "grep",
+              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The pattern to search for. A regular expression unless `literal` is\ntrue."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                  },
+                  "glob": {
+                    "type": "string",
+                    "description": "A glob restricting which files are searched, matched against paths\nrelative to the search root."
+                  },
+                  "ignoreCase": {
+                    "type": "boolean",
+                    "description": "Whether to match case-insensitively."
+                  },
+                  "literal": {
+                    "type": "boolean",
+                    "description": "Whether to search for literal text instead of a regular expression."
+                  },
+                  "context": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "description": "How many lines of surrounding context to return on each side.",
+                    "maximum": 20
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of matching lines to return. Defaults to 100.\nLarger values are accepted and are bounded by the tool's finite\ncontent budget rather than by a schema maximum."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "bash",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "description": "The command handed to one `/bin/bash -c` invocation.",
+                    "minLength": 1
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "timeout": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                  }
+                },
+                "required": [
+                  "command"
+                ]
+              }
+            }
           ]
         }
       }
@@ -2198,15 +3176,341 @@ export const fixtures = [
             "reviewer"
           ],
           "builtin_tools": [
-            "ask_user",
-            "read",
-            "read_image",
-            "present",
-            "write",
-            "edit",
-            "glob",
-            "grep",
-            "bash"
+            {
+              "name": "ask_user",
+              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "header": {
+                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 16
+                        },
+                        "options": {
+                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "description": {
+                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 1024
+                              },
+                              "preview": {
+                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192
+                              }
+                            },
+                            "additionalProperties": false,
+                            "required": [
+                              "label",
+                              "description"
+                            ]
+                          },
+                          "minItems": 2,
+                          "maxItems": 4
+                        },
+                        "multi_select": {
+                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
+                          "type": "boolean",
+                          "default": false
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "question",
+                        "header",
+                        "options"
+                      ]
+                    },
+                    "description": "One to four related blocking questions with unique question text.",
+                    "minItems": 1,
+                    "maxItems": 4
+                  }
+                },
+                "required": [
+                  "questions"
+                ]
+              }
+            },
+            {
+              "name": "read",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "The 1-based line to start reading from. Zero is normalized to one."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "read_image",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "present",
+              "description": "Declare existing files as deliverables for the user. Files may be created by Write, Edit, Bash or any process in the Session cwd. Use for separate file deliverables, not ordinary code edits. Accepts 1–8 files inside the native cwd, in input order; first normalized duplicate wins, including its description. Each successful call is a separate declaration. All entries must be regular files, with no symlink components or parent traversal. Does not copy or mutate bytes: reopening reads current accessible files. Files over 512 KiB may be declared but cannot be previewed/downloaded.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "description": "Relative to the native cwd, or absolute inside that cwd. No symlinks or '..'.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "description": {
+                          "description": "Optional brief human-facing description; preserved verbatim.",
+                          "type": "string",
+                          "maxLength": 512
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "path"
+                      ]
+                    },
+                    "description": "Ordered list of existing regular files. First normalized duplicate wins.",
+                    "minItems": 1,
+                    "maxItems": 8
+                  }
+                },
+                "required": [
+                  "files"
+                ]
+              }
+            },
+            {
+              "name": "write",
+              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "The complete new UTF-8 content of the file."
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            },
+            {
+              "name": "edit",
+              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "edits": {
+                    "type": "array",
+                    "items": {
+                      "description": "One text replacement of an [`EditInput`].",
+                      "type": "object",
+                      "properties": {
+                        "oldText": {
+                          "description": "The source text to replace. Exact matching is preferred; when exact\nmatching fails, the executor applies its documented NFKC-based fuzzy\nnormalization without guessing between ambiguous candidates.",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "newText": {
+                          "description": "The replacement text.",
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "oldText",
+                        "newText"
+                      ]
+                    },
+                    "description": "Replacements matched against one original file snapshot and committed\ntogether as one change.",
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "path",
+                  "edits"
+                ]
+              }
+            },
+            {
+              "name": "glob",
+              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The glob pattern, matched against paths relative to the search root."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of results to return. Defaults to 1000; larger\nvalues are accepted and remain bounded by the tool's byte budget."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "grep",
+              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The pattern to search for. A regular expression unless `literal` is\ntrue."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                  },
+                  "glob": {
+                    "type": "string",
+                    "description": "A glob restricting which files are searched, matched against paths\nrelative to the search root."
+                  },
+                  "ignoreCase": {
+                    "type": "boolean",
+                    "description": "Whether to match case-insensitively."
+                  },
+                  "literal": {
+                    "type": "boolean",
+                    "description": "Whether to search for literal text instead of a regular expression."
+                  },
+                  "context": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "description": "How many lines of surrounding context to return on each side.",
+                    "maximum": 20
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of matching lines to return. Defaults to 100.\nLarger values are accepted and are bounded by the tool's finite\ncontent budget rather than by a schema maximum."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "bash",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "description": "The command handed to one `/bin/bash -c` invocation.",
+                    "minLength": 1
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "timeout": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                  }
+                },
+                "required": [
+                  "command"
+                ]
+              }
+            }
           ]
         }
       }
@@ -3128,15 +4432,341 @@ export const fixtures = [
             "reviewer"
           ],
           "builtin_tools": [
-            "ask_user",
-            "read",
-            "read_image",
-            "present",
-            "write",
-            "edit",
-            "glob",
-            "grep",
-            "bash"
+            {
+              "name": "ask_user",
+              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "header": {
+                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 16
+                        },
+                        "options": {
+                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "description": {
+                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 1024
+                              },
+                              "preview": {
+                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192
+                              }
+                            },
+                            "additionalProperties": false,
+                            "required": [
+                              "label",
+                              "description"
+                            ]
+                          },
+                          "minItems": 2,
+                          "maxItems": 4
+                        },
+                        "multi_select": {
+                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
+                          "type": "boolean",
+                          "default": false
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "question",
+                        "header",
+                        "options"
+                      ]
+                    },
+                    "description": "One to four related blocking questions with unique question text.",
+                    "minItems": 1,
+                    "maxItems": 4
+                  }
+                },
+                "required": [
+                  "questions"
+                ]
+              }
+            },
+            {
+              "name": "read",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "The 1-based line to start reading from. Zero is normalized to one."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "read_image",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "present",
+              "description": "Declare existing files as deliverables for the user. Files may be created by Write, Edit, Bash or any process in the Session cwd. Use for separate file deliverables, not ordinary code edits. Accepts 1–8 files inside the native cwd, in input order; first normalized duplicate wins, including its description. Each successful call is a separate declaration. All entries must be regular files, with no symlink components or parent traversal. Does not copy or mutate bytes: reopening reads current accessible files. Files over 512 KiB may be declared but cannot be previewed/downloaded.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "description": "Relative to the native cwd, or absolute inside that cwd. No symlinks or '..'.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "description": {
+                          "description": "Optional brief human-facing description; preserved verbatim.",
+                          "type": "string",
+                          "maxLength": 512
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "path"
+                      ]
+                    },
+                    "description": "Ordered list of existing regular files. First normalized duplicate wins.",
+                    "minItems": 1,
+                    "maxItems": 8
+                  }
+                },
+                "required": [
+                  "files"
+                ]
+              }
+            },
+            {
+              "name": "write",
+              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "The complete new UTF-8 content of the file."
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            },
+            {
+              "name": "edit",
+              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "edits": {
+                    "type": "array",
+                    "items": {
+                      "description": "One text replacement of an [`EditInput`].",
+                      "type": "object",
+                      "properties": {
+                        "oldText": {
+                          "description": "The source text to replace. Exact matching is preferred; when exact\nmatching fails, the executor applies its documented NFKC-based fuzzy\nnormalization without guessing between ambiguous candidates.",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "newText": {
+                          "description": "The replacement text.",
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "oldText",
+                        "newText"
+                      ]
+                    },
+                    "description": "Replacements matched against one original file snapshot and committed\ntogether as one change.",
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "path",
+                  "edits"
+                ]
+              }
+            },
+            {
+              "name": "glob",
+              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The glob pattern, matched against paths relative to the search root."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of results to return. Defaults to 1000; larger\nvalues are accepted and remain bounded by the tool's byte budget."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "grep",
+              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The pattern to search for. A regular expression unless `literal` is\ntrue."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                  },
+                  "glob": {
+                    "type": "string",
+                    "description": "A glob restricting which files are searched, matched against paths\nrelative to the search root."
+                  },
+                  "ignoreCase": {
+                    "type": "boolean",
+                    "description": "Whether to match case-insensitively."
+                  },
+                  "literal": {
+                    "type": "boolean",
+                    "description": "Whether to search for literal text instead of a regular expression."
+                  },
+                  "context": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "description": "How many lines of surrounding context to return on each side.",
+                    "maximum": 20
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of matching lines to return. Defaults to 100.\nLarger values are accepted and are bounded by the tool's finite\ncontent budget rather than by a schema maximum."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "bash",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "description": "The command handed to one `/bin/bash -c` invocation.",
+                    "minLength": 1
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "timeout": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                  }
+                },
+                "required": [
+                  "command"
+                ]
+              }
+            }
           ]
         }
       }
@@ -3262,15 +4892,341 @@ export const fixtures = [
             "reviewer"
           ],
           "builtin_tools": [
-            "ask_user",
-            "read",
-            "read_image",
-            "present",
-            "write",
-            "edit",
-            "glob",
-            "grep",
-            "bash"
+            {
+              "name": "ask_user",
+              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "header": {
+                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 16
+                        },
+                        "options": {
+                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "description": {
+                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 1024
+                              },
+                              "preview": {
+                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192
+                              }
+                            },
+                            "additionalProperties": false,
+                            "required": [
+                              "label",
+                              "description"
+                            ]
+                          },
+                          "minItems": 2,
+                          "maxItems": 4
+                        },
+                        "multi_select": {
+                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
+                          "type": "boolean",
+                          "default": false
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "question",
+                        "header",
+                        "options"
+                      ]
+                    },
+                    "description": "One to four related blocking questions with unique question text.",
+                    "minItems": 1,
+                    "maxItems": 4
+                  }
+                },
+                "required": [
+                  "questions"
+                ]
+              }
+            },
+            {
+              "name": "read",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "The 1-based line to start reading from. Zero is normalized to one."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "read_image",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "present",
+              "description": "Declare existing files as deliverables for the user. Files may be created by Write, Edit, Bash or any process in the Session cwd. Use for separate file deliverables, not ordinary code edits. Accepts 1–8 files inside the native cwd, in input order; first normalized duplicate wins, including its description. Each successful call is a separate declaration. All entries must be regular files, with no symlink components or parent traversal. Does not copy or mutate bytes: reopening reads current accessible files. Files over 512 KiB may be declared but cannot be previewed/downloaded.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "description": "Relative to the native cwd, or absolute inside that cwd. No symlinks or '..'.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "description": {
+                          "description": "Optional brief human-facing description; preserved verbatim.",
+                          "type": "string",
+                          "maxLength": 512
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "path"
+                      ]
+                    },
+                    "description": "Ordered list of existing regular files. First normalized duplicate wins.",
+                    "minItems": 1,
+                    "maxItems": 8
+                  }
+                },
+                "required": [
+                  "files"
+                ]
+              }
+            },
+            {
+              "name": "write",
+              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "The complete new UTF-8 content of the file."
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            },
+            {
+              "name": "edit",
+              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "edits": {
+                    "type": "array",
+                    "items": {
+                      "description": "One text replacement of an [`EditInput`].",
+                      "type": "object",
+                      "properties": {
+                        "oldText": {
+                          "description": "The source text to replace. Exact matching is preferred; when exact\nmatching fails, the executor applies its documented NFKC-based fuzzy\nnormalization without guessing between ambiguous candidates.",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "newText": {
+                          "description": "The replacement text.",
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "oldText",
+                        "newText"
+                      ]
+                    },
+                    "description": "Replacements matched against one original file snapshot and committed\ntogether as one change.",
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "path",
+                  "edits"
+                ]
+              }
+            },
+            {
+              "name": "glob",
+              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The glob pattern, matched against paths relative to the search root."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of results to return. Defaults to 1000; larger\nvalues are accepted and remain bounded by the tool's byte budget."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "grep",
+              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The pattern to search for. A regular expression unless `literal` is\ntrue."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                  },
+                  "glob": {
+                    "type": "string",
+                    "description": "A glob restricting which files are searched, matched against paths\nrelative to the search root."
+                  },
+                  "ignoreCase": {
+                    "type": "boolean",
+                    "description": "Whether to match case-insensitively."
+                  },
+                  "literal": {
+                    "type": "boolean",
+                    "description": "Whether to search for literal text instead of a regular expression."
+                  },
+                  "context": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "description": "How many lines of surrounding context to return on each side.",
+                    "maximum": 20
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of matching lines to return. Defaults to 100.\nLarger values are accepted and are bounded by the tool's finite\ncontent budget rather than by a schema maximum."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "bash",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "description": "The command handed to one `/bin/bash -c` invocation.",
+                    "minLength": 1
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "timeout": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                  }
+                },
+                "required": [
+                  "command"
+                ]
+              }
+            }
           ]
         }
       }
@@ -3433,15 +5389,341 @@ export const fixtures = [
             "reviewer"
           ],
           "builtin_tools": [
-            "ask_user",
-            "read",
-            "read_image",
-            "present",
-            "write",
-            "edit",
-            "glob",
-            "grep",
-            "bash"
+            {
+              "name": "ask_user",
+              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "header": {
+                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 16
+                        },
+                        "options": {
+                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "description": {
+                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 1024
+                              },
+                              "preview": {
+                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192
+                              }
+                            },
+                            "additionalProperties": false,
+                            "required": [
+                              "label",
+                              "description"
+                            ]
+                          },
+                          "minItems": 2,
+                          "maxItems": 4
+                        },
+                        "multi_select": {
+                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
+                          "type": "boolean",
+                          "default": false
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "question",
+                        "header",
+                        "options"
+                      ]
+                    },
+                    "description": "One to four related blocking questions with unique question text.",
+                    "minItems": 1,
+                    "maxItems": 4
+                  }
+                },
+                "required": [
+                  "questions"
+                ]
+              }
+            },
+            {
+              "name": "read",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "The 1-based line to start reading from. Zero is normalized to one."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "read_image",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            },
+            {
+              "name": "present",
+              "description": "Declare existing files as deliverables for the user. Files may be created by Write, Edit, Bash or any process in the Session cwd. Use for separate file deliverables, not ordinary code edits. Accepts 1–8 files inside the native cwd, in input order; first normalized duplicate wins, including its description. Each successful call is a separate declaration. All entries must be regular files, with no symlink components or parent traversal. Does not copy or mutate bytes: reopening reads current accessible files. Files over 512 KiB may be declared but cannot be previewed/downloaded.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "description": "Relative to the native cwd, or absolute inside that cwd. No symlinks or '..'.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "description": {
+                          "description": "Optional brief human-facing description; preserved verbatim.",
+                          "type": "string",
+                          "maxLength": 512
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "path"
+                      ]
+                    },
+                    "description": "Ordered list of existing regular files. First normalized duplicate wins.",
+                    "minItems": 1,
+                    "maxItems": 8
+                  }
+                },
+                "required": [
+                  "files"
+                ]
+              }
+            },
+            {
+              "name": "write",
+              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "The complete new UTF-8 content of the file."
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            },
+            {
+              "name": "edit",
+              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                  },
+                  "edits": {
+                    "type": "array",
+                    "items": {
+                      "description": "One text replacement of an [`EditInput`].",
+                      "type": "object",
+                      "properties": {
+                        "oldText": {
+                          "description": "The source text to replace. Exact matching is preferred; when exact\nmatching fails, the executor applies its documented NFKC-based fuzzy\nnormalization without guessing between ambiguous candidates.",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "newText": {
+                          "description": "The replacement text.",
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "oldText",
+                        "newText"
+                      ]
+                    },
+                    "description": "Replacements matched against one original file snapshot and committed\ntogether as one change.",
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "path",
+                  "edits"
+                ]
+              }
+            },
+            {
+              "name": "glob",
+              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The glob pattern, matched against paths relative to the search root."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of results to return. Defaults to 1000; larger\nvalues are accepted and remain bounded by the tool's byte budget."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "grep",
+              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "The pattern to search for. A regular expression unless `literal` is\ntrue."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                  },
+                  "glob": {
+                    "type": "string",
+                    "description": "A glob restricting which files are searched, matched against paths\nrelative to the search root."
+                  },
+                  "ignoreCase": {
+                    "type": "boolean",
+                    "description": "Whether to match case-insensitively."
+                  },
+                  "literal": {
+                    "type": "boolean",
+                    "description": "Whether to search for literal text instead of a regular expression."
+                  },
+                  "context": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "description": "How many lines of surrounding context to return on each side.",
+                    "maximum": 20
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The maximum number of matching lines to return. Defaults to 100.\nLarger values are accepted and are bounded by the tool's finite\ncontent budget rather than by a schema maximum."
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            },
+            {
+              "name": "bash",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "description": "The command handed to one `/bin/bash -c` invocation.",
+                    "minLength": 1
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "timeout": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                  }
+                },
+                "required": [
+                  "command"
+                ]
+              }
+            }
           ]
         }
       }
