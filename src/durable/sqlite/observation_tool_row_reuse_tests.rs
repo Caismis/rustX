@@ -1,3 +1,5 @@
+include!("observation_tool_source_read_tests.rs");
+
 fn complete_tool_row_fixture(store: &SqliteConversationStore) {
     store.initialize(&[]).unwrap();
     let attempt = response_start(store, "tool-row-owner");

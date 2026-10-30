@@ -30,6 +30,22 @@ mod binary_tests;
 #[path = "content_inline_tests.rs"]
 mod inline_tests;
 #[cfg(test)]
+#[path = "content_source_read_tests.rs"]
+mod source_read_tests;
+#[cfg(test)]
+thread_local! { static SOURCE_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) }; }
+#[cfg(test)]
+pub(super) fn record_canonical_lookup() {
+    SOURCE_WORK.with(|work| {
+        let (lookups, encodes) = work.get();
+        work.set((lookups + 1, encodes));
+    });
+}
+#[cfg(test)]
+pub(super) fn take_source_work() -> (usize, usize) {
+    SOURCE_WORK.with(|work| work.replace((0, 0)))
+}
+#[cfg(test)]
 thread_local! { static LAST_READ_WORK: std::cell::Cell<(usize,usize)> = const { std::cell::Cell::new((0,0)) }; }
 #[cfg(test)]
 pub(super) fn last_read_work() -> (usize, usize) {
@@ -60,6 +76,8 @@ pub(super) fn canonical_position(
     connection: &Connection,
     locator: &CanonicalContentLocator,
 ) -> Result<u64, ConversationStoreError> {
+    #[cfg(test)]
+    record_canonical_lookup();
     let position = match locator {
         CanonicalContentLocator::ByMessageId { message_id } => connection
             .query_row_cached(
@@ -99,68 +117,95 @@ fn canonical_key(connection: &Connection, id: &str) -> Result<String, Conversati
         .map_err(|error| storage(error.to_string()))?;
     Ok(format!("ledger:{position}"))
 }
-fn storage_key<'a>(
-    connection: &Connection,
-    source: &'a Source,
-) -> Result<(&'static str, std::borrow::Cow<'a, str>, u32), ConversationStoreError> {
+fn storage_key(
+    source: &Source,
+    position: Option<u64>,
+) -> (&'static str, std::borrow::Cow<'_, str>, u32) {
     if let Source::CanonicalMessageBlock {
         component,
-        locator,
         block_index,
+        ..
     } = source
     {
-        return Ok((
+        return (
             component.key(),
             std::borrow::Cow::Owned(format!(
                 "ledger:{}",
-                canonical_position(connection, locator)?
+                position.expect("canonical source was resolved before deriving its storage key")
             )),
             block_index.get(),
-        ));
+        );
     }
-    Ok(source.key())
+    source.key()
 }
-fn normalize_source(
+fn descriptor_source<'a>(
     connection: &Connection,
-    source: &Source,
-) -> Result<Source, ConversationStoreError> {
+    source: &'a Source,
+) -> Result<(std::borrow::Cow<'a, Source>, Option<u64>), ConversationStoreError> {
     if let Source::CanonicalMessageBlock {
         component,
-        locator: CanonicalContentLocator::ByMessageId { message_id },
+        locator: locator @ CanonicalContentLocator::ByMessageId { message_id },
         block_index,
     } = source
         && message_id.as_str().len() > 256
     {
-        let position = connection
-            .query_row_cached(
-                "SELECT position FROM message_ledger WHERE message_id=?1",
-                [message_id.as_str()],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| storage(error.to_string()))?
-            .ok_or_else(invalid)?;
-        return Ok(Source::CanonicalMessageBlock {
+        let position = canonical_position(connection, locator)?;
+        let source = Source::CanonicalMessageBlock {
             component: *component,
             locator: CanonicalContentLocator::ByLedgerPosition { position },
             block_index: *block_index,
-        });
+        };
+        validate_resolved_canonical(&source, position)?;
+        return Ok((std::borrow::Cow::Owned(source), Some(position)));
     }
-    Ok(source.clone())
+    let position = validate_source(connection, source)?;
+    Ok((std::borrow::Cow::Borrowed(source), position))
 }
 
-fn validate_source(connection: &Connection, source: &Source) -> Result<(), ConversationStoreError> {
+fn validate_canonical_shape(
+    locator: &CanonicalContentLocator,
+    block_index: crate::message::types::ContentBlockIndex,
+    component: CanonicalContentComponent,
+) -> Result<(), ConversationStoreError> {
+    validate_canonical_locator(locator)?;
+    if component == CanonicalContentComponent::MessageMetadata && block_index.get() != 0 {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn validate_resolved_canonical(
+    source: &Source,
+    position: u64,
+) -> Result<(), ConversationStoreError> {
+    let Source::CanonicalMessageBlock {
+        locator,
+        block_index,
+        component,
+    } = source
+    else {
+        return Err(invalid());
+    };
+    validate_canonical_shape(locator, *block_index, *component)?;
+    if matches!(locator, CanonicalContentLocator::ByLedgerPosition { position: actual } if *actual != position)
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn validate_source(
+    connection: &Connection,
+    source: &Source,
+) -> Result<Option<u64>, ConversationStoreError> {
     match source {
         Source::CanonicalMessageBlock {
             locator,
             block_index,
             component,
         } => {
-            validate_canonical_locator(locator)?;
-            if *component == CanonicalContentComponent::MessageMetadata && block_index.get() != 0 {
-                return Err(invalid());
-            }
-            canonical_position(connection, locator)?;
+            validate_canonical_shape(locator, *block_index, *component)?;
+            return canonical_position(connection, locator).map(Some);
         }
         Source::LivePublicationPrefix {
             stream_id,
@@ -217,7 +262,7 @@ fn validate_source(connection: &Connection, source: &Source) -> Result<(), Conve
             }
         }
     }
-    Ok(())
+    Ok(None)
 }
 pub(super) fn descriptor(
     connection: &Connection,
@@ -225,9 +270,38 @@ pub(super) fn descriptor(
     source: &Source,
     representation: Rep,
 ) -> Result<Option<ContentRef>, ConversationStoreError> {
-    let source = normalize_source(connection, source)?;
-    validate_source(connection, &source)?;
-    let (kind, id, block) = storage_key(connection, &source)?;
+    let (source, position) = descriptor_source(connection, source)?;
+    descriptor_resolved(connection, conversation, &source, representation, position)
+}
+
+/// The caller just read this source's ledger position in the same transaction.
+/// It must not retain this fact across a write (including a trigger or rollback).
+/// Frontiers and original-raw evidence are still independently read below.
+pub(super) fn canonical_descriptor_at_position(
+    connection: &Connection,
+    conversation: &ConversationId,
+    source: &Source,
+    representation: Rep,
+    position: u64,
+) -> Result<Option<ContentRef>, ConversationStoreError> {
+    validate_resolved_canonical(source, position)?;
+    descriptor_resolved(
+        connection,
+        conversation,
+        source,
+        representation,
+        Some(position),
+    )
+}
+
+fn descriptor_resolved(
+    connection: &Connection,
+    conversation: &ConversationId,
+    source: &Source,
+    representation: Rep,
+    position: Option<u64>,
+) -> Result<Option<ContentRef>, ConversationStoreError> {
+    let (kind, id, block) = storage_key(source, position);
     let evidence:Option<(u64,u64)>=connection.query_row_cached("SELECT revision,readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 ORDER BY revision DESC LIMIT 1",params![kind,id,block,representation.key()],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|e|storage(e.to_string()))?;
     if evidence.is_none() && representation == Rep::RawJsonUtf8 {
         let retained: bool = connection
@@ -257,16 +331,15 @@ pub(super) fn descriptor_at(
     representation: Rep,
     revision: u64,
 ) -> Result<Option<ContentRef>, ConversationStoreError> {
-    let source = normalize_source(connection, source)?;
-    validate_source(connection, &source)?;
+    let (source, position) = descriptor_source(connection, source)?;
     if revision > CONTENT_SAFE_INTEGER_MAX {
         return Err(invalid());
     }
-    let (kind, id, block) = storage_key(connection, &source)?;
+    let (kind, id, block) = storage_key(&source, position);
     let evidence:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision=?5",params![kind,id,block,representation.key(),revision],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     Ok(evidence.map(|readable_end| ContentRef {
         conversation_id: conversation.clone(),
-        source: source.clone(),
+        source: source.into_owned(),
         representation,
         version: 1,
         content_revision: revision,
@@ -280,6 +353,63 @@ pub(super) fn read(
     offset: u64,
     max_bytes: u32,
 ) -> Result<ContentChunk, ConversationStoreError> {
+    let (bytes, end) = read_bytes(connection, conversation, reference, offset, max_bytes)?;
+    #[cfg(test)]
+    SOURCE_WORK.with(|work| {
+        let (lookups, encodes) = work.get();
+        work.set((lookups, encodes + 1));
+    });
+    Ok(ContentChunk {
+        content_ref: reference.clone(),
+        offset,
+        data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        end_offset: end,
+        readable_end: reference.readable_end,
+        next_offset: (end < reference.readable_end).then_some(end),
+        complete: end == reference.readable_end,
+    })
+}
+
+/// Same validation and bytes as the public content chunk, without its transport
+/// Base64 allocation or `ContentRef` clone. No evidence survives this call.
+pub(super) fn read_bytes(
+    connection: &Connection,
+    conversation: &ConversationId,
+    reference: &ContentRef,
+    offset: u64,
+    max_bytes: u32,
+) -> Result<(Vec<u8>, u64), ConversationStoreError> {
+    read_bytes_at_position(connection, conversation, reference, offset, max_bytes, None)
+}
+
+/// Like `canonical_descriptor_at_position`, this is only for a continuous read
+/// phase whose caller already resolved the same source in the current snapshot.
+pub(super) fn canonical_read_bytes_at_position(
+    connection: &Connection,
+    conversation: &ConversationId,
+    reference: &ContentRef,
+    offset: u64,
+    max_bytes: u32,
+    position: u64,
+) -> Result<(Vec<u8>, u64), ConversationStoreError> {
+    read_bytes_at_position(
+        connection,
+        conversation,
+        reference,
+        offset,
+        max_bytes,
+        Some(position),
+    )
+}
+
+fn read_bytes_at_position(
+    connection: &Connection,
+    conversation: &ConversationId,
+    reference: &ContentRef,
+    offset: u64,
+    max_bytes: u32,
+    known_position: Option<u64>,
+) -> Result<(Vec<u8>, u64), ConversationStoreError> {
     #[cfg(test)]
     LAST_READ_WORK.with(|work| work.set((0, 0)));
     if reference.conversation_id != *conversation
@@ -292,8 +422,13 @@ pub(super) fn read(
     if offset > CONTENT_SAFE_INTEGER_MAX || max_bytes == 0 || max_bytes > CONTENT_READ_MAX_BYTES {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    validate_source(connection, &reference.source)?;
-    let (kind, id, block) = storage_key(connection, &reference.source)?;
+    let position = if let Some(position) = known_position {
+        validate_resolved_canonical(&reference.source, position)?;
+        Some(position)
+    } else {
+        validate_source(connection, &reference.source)?
+    };
+    let (kind, id, block) = storage_key(&reference.source, position);
     let frontier:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision=?5",params![kind,id,block,reference.representation.key(),reference.content_revision],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
     if frontier != Some(reference.readable_end) {
         return Err(invalid());
@@ -335,15 +470,7 @@ pub(super) fn read(
             end,
         )?
     };
-    Ok(ContentChunk {
-        content_ref: reference.clone(),
-        offset,
-        data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-        end_offset: end,
-        readable_end: reference.readable_end,
-        next_offset: (end < reference.readable_end).then_some(end),
-        complete: end == reference.readable_end,
-    })
+    Ok((bytes, end))
 }
 pub(super) fn range_bytes(
     connection: &Connection,
@@ -1174,7 +1301,7 @@ fn live_headers(
             };
             *actual_component = component;
             *block_index = crate::message::types::ContentBlockIndex::new(index);
-            let (source_kind, id, block) = storage_key(connection, &block_source)?;
+            let (source_kind, id, block) = block_source.key();
             let revision:Option<u64>=connection.query_row("SELECT revision FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision<=?5 ORDER BY revision DESC LIMIT 1",params![source_kind,id,block,rep.key(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
             if let Some(revision) = revision {
                 if component == PublicationContentComponent::Payload && rep == Rep::CanonicalJsonV1

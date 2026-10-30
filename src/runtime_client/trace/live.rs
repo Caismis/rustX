@@ -84,20 +84,53 @@ impl AnchorFacts {
     }
 }
 
+/// The fields lifecycle repair borrows from either an owned public snapshot or
+/// an internal shared cut. Repair never materializes another whole snapshot.
+#[derive(Clone, Copy)]
+pub(crate) struct LiveSnapshot<'a> {
+    conversation_id: &'a crate::runtime::identity::ConversationId,
+    jobs: &'a [crate::runtime_client::snapshot::RuntimeClientJob],
+    agents: &'a [crate::runtime_client::snapshot::RuntimeClientAgent],
+    workflows: &'a crate::runtime::workflow::read_model::WorkflowSnapshot,
+    pending_interactions: &'a [crate::runtime_client::snapshot::RuntimeClientInteractionHeader],
+    attempt: &'a Option<crate::runtime_client::snapshot::RuntimeClientAttempt>,
+}
+macro_rules! live_snapshot {
+    ($snapshot:ty) => {
+        impl<'a> From<&'a $snapshot> for LiveSnapshot<'a> {
+            fn from(snapshot: &'a $snapshot) -> Self {
+                Self {
+                    conversation_id: &snapshot.conversation_id,
+                    jobs: &snapshot.jobs,
+                    agents: &snapshot.agents,
+                    workflows: &snapshot.workflows,
+                    pending_interactions: &snapshot.pending_interactions,
+                    attempt: &snapshot.attempt,
+                }
+            }
+        }
+    };
+}
+live_snapshot!(crate::runtime_client::snapshot::RuntimeClientSnapshot);
+live_snapshot!(crate::runtime_client::projection::shared_snapshot::SharedSnapshot);
+
 /// Applies current lifecycle evidence to the snapshot's own Trace window.
 #[cfg(test)]
 pub(crate) fn repair_live(snapshot: &mut crate::runtime_client::snapshot::RuntimeClientSnapshot) {
     let mut page = std::mem::take(&mut snapshot.trace);
-    repair_records(&mut page.records, snapshot);
+    repair_records(&mut page.records, &*snapshot);
     snapshot.trace = page;
 }
 
 /// Applies current lifecycle evidence to already projected summary records.
-pub(crate) fn repair_records(
+pub(crate) fn repair_records<'a>(
     records: &mut [TraceRecord],
-    snapshot: &crate::runtime_client::snapshot::RuntimeClientSnapshot,
+    snapshot: impl Into<LiveSnapshot<'a>>,
 ) {
-    repair(records.iter_mut().map(TraceRecord::live_target), snapshot);
+    repair(
+        records.iter_mut().map(TraceRecord::live_target),
+        snapshot.into(),
+    );
 }
 
 /// Applies current lifecycle evidence to one refreshed record's own facts.
@@ -105,13 +138,10 @@ pub(super) fn repair_anchor(
     facts: &mut AnchorFacts,
     snapshot: &crate::runtime_client::snapshot::RuntimeClientSnapshot,
 ) {
-    repair(std::iter::once(facts.live_target()), snapshot);
+    repair(std::iter::once(facts.live_target()), snapshot.into());
 }
 
-fn repair<'a>(
-    targets: impl IntoIterator<Item = LiveTarget<'a>>,
-    snapshot: &crate::runtime_client::snapshot::RuntimeClientSnapshot,
-) {
+fn repair<'a>(targets: impl IntoIterator<Item = LiveTarget<'a>>, snapshot: LiveSnapshot<'_>) {
     use crate::runtime::subagent::SubagentState as S;
     use crate::runtime::workflow::read_model::WorkflowState as W;
     use crate::tools::background::BackgroundLifecycle as B;
@@ -159,7 +189,7 @@ fn repair<'a>(
                 .pending_interactions
                 .iter()
                 .any(|current| {
-                    current.conversation_id == snapshot.conversation_id
+                    &current.conversation_id == snapshot.conversation_id
                         && record.native_id == Some(current.request_id.as_str())
                 })
                 .then_some(TraceState::Waiting),

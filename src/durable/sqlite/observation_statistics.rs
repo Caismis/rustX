@@ -1,5 +1,6 @@
 //! Finite aggregate read layouts attached to the existing native Journal commit.
 //! They grant no execution authority and publish neither events nor cursors.
+use super::observation_codec as codec;
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
 use crate::durable::reading::TurnExecution;
 use crate::durable::response::{add_usage, timing::ActivityFold};
@@ -63,12 +64,15 @@ fn activity_from_fields(value: StoredActivity) -> TurnExecution {
         ..TurnExecution::default()
     }
 }
-fn totals_fields(value: &ConversationStatistics) -> impl serde::Serialize + '_ {
+fn totals_fields<'a, T: serde::Serialize + 'a>(
+    value: &'a ConversationStatistics,
+    timing: T,
+) -> impl serde::Serialize + 'a {
     (
         value.turns,
         value.steps,
         &value.latest_turn,
-        &value.timing,
+        timing,
         value.completed_responses,
         value.model_requests,
         value.requests_with_usage,
@@ -97,31 +101,80 @@ fn totals_from_fields(value: StoredTotals) -> ConversationStatistics {
         reported_usage,
     }
 }
-fn encode(state: &StatisticsLayout) -> Result<Vec<u8>, ConversationStoreError> {
-    let local = (!shared(state)).then(|| {
+fn fields(state: &StatisticsLayout, is_shared: bool) -> impl serde::Serialize + '_ {
+    let local = (!is_shared).then(|| {
         (
-            totals_fields(&state.local.view.statistics),
+            totals_fields(
+                &state.local.view.statistics,
+                &state.local.view.statistics.timing,
+            ),
             activity_fields(&state.local.activity),
         )
     });
-    crate::runtime_client::checkpoint::bounded_bytes(
-        &(
-            totals_fields(&state.statistics),
-            activity_fields(&state.activity),
-            &state.local.view.duration,
-            state.local.active_start,
-            local,
-        ),
+    (
+        totals_fields(&state.statistics, &state.statistics.timing),
+        activity_fields(&state.activity),
+        &state.local.view.duration,
+        state.local.active_start,
+        local,
+    )
+}
+
+#[derive(serde::Serialize)]
+struct JsonTiming {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mean_ttft_ms: Option<u64>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "codec::json_optional_float"
+    )]
+    output_tokens_per_second: Option<f64>,
+}
+impl From<&crate::durable::response::ConversationTiming> for JsonTiming {
+    fn from(value: &crate::durable::response::ConversationTiming) -> Self {
+        Self {
+            model_ms: value.model_ms,
+            tool_ms: value.tool_ms,
+            mean_ttft_ms: value.mean_ttft_ms,
+            output_tokens_per_second: value.output_tokens_per_second,
+        }
+    }
+}
+fn compact_totals_fields(value: &ConversationStatistics) -> impl serde::Serialize + '_ {
+    totals_fields(value, value.timing.as_ref().map(JsonTiming::from))
+}
+fn compact_fields(state: &StatisticsLayout, is_shared: bool) -> impl serde::Serialize + '_ {
+    (
+        compact_totals_fields(&state.statistics),
+        activity_fields(&state.activity),
+        &state.local.view.duration,
+        state.local.active_start,
+        (!is_shared).then(|| {
+            (
+                compact_totals_fields(&state.local.view.statistics),
+                activity_fields(&state.local.activity),
+            )
+        }),
+    )
+}
+fn encode(state: &StatisticsLayout) -> Result<Vec<u8>, ConversationStoreError> {
+    // Admission uses the original tuple, before JSON's nonfinite-to-null timing
+    // conversion. The smaller private encoding cannot admit additional values.
+    let is_shared = shared(state);
+    codec::encode(
+        &fields(state, is_shared),
+        &compact_fields(state, is_shared),
         crate::durable::observation::HEADER_ENCODED_MAX,
     )
-    .ok_or_else(|| storage("native aggregate header exceeds bound"))
+    .map_err(|_| storage("native aggregate header exceeds bound"))
 }
 fn decode(bytes: &[u8]) -> Result<StatisticsLayout, ConversationStoreError> {
-    if bytes.len() > crate::durable::observation::HEADER_ENCODED_MAX {
-        return Err(storage("native aggregate header exceeds bound"));
-    }
     let (statistics, activity, duration, active_start, local): StoredStatistics =
-        serde_json::from_slice(bytes).map_err(|error| storage(error.to_string()))?;
+        codec::decode_json_tuple(bytes, crate::durable::observation::HEADER_ENCODED_MAX)?;
     let statistics = totals_from_fields(statistics);
     let activity = activity_from_fields(activity);
     let (local_statistics, local_activity) = local.map_or_else(
@@ -684,6 +737,155 @@ pub(super) fn read_work() -> (usize, usize, usize) {
 mod compact_tests {
     use super::*;
 
+    fn timed(rate: f64) -> StatisticsLayout {
+        let statistics = ConversationStatistics {
+            timing: Some(crate::durable::response::ConversationTiming {
+                model_ms: Some(u64::MAX),
+                tool_ms: Some(0),
+                mean_ttft_ms: Some(3),
+                output_tokens_per_second: Some(rate),
+            }),
+            reported_usage: Some(crate::model::ModelUsage {
+                input_tokens: u64::MAX,
+                output_tokens: 17,
+                total_tokens: u64::MAX,
+                details: None,
+            }),
+            ..ConversationStatistics::default()
+        };
+        let mut state = StatisticsLayout {
+            statistics,
+            ..StatisticsLayout::default()
+        };
+        state.local.view.statistics = state.statistics.clone();
+        state
+    }
+
+    #[test]
+    fn binary_statistics_preserve_tuple_admission_nonfinite_and_full_width_values() {
+        for rate in [
+            0.0,
+            -0.0,
+            1.0,
+            f64::MIN_POSITIVE,
+            f64::MAX,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let state = timed(rate);
+            let json = crate::runtime_client::checkpoint::bounded_bytes(
+                &fields(&state, shared(&state)),
+                16_384,
+            )
+            .unwrap();
+            let binary = encode(&state).unwrap();
+            let original: StoredStatistics = serde_json::from_slice(&json).unwrap();
+            let restored: StoredStatistics = codec::decode_json_tuple(&binary, 16_384).unwrap();
+            assert_eq!(
+                serde_json::to_vec(&restored).unwrap(),
+                serde_json::to_vec(&original).unwrap()
+            );
+            let rate_read = decode(&binary)
+                .unwrap()
+                .statistics
+                .timing
+                .unwrap()
+                .output_tokens_per_second;
+            if rate.is_finite() {
+                assert_eq!(rate_read.unwrap().to_bits(), rate.to_bits());
+            } else {
+                assert_eq!(rate_read, None, "JSON nonfinite timing remains null");
+            }
+        }
+        let mut state = timed(1.0);
+        let mut lower = 0;
+        let mut upper = 20_000;
+        while lower + 1 < upper {
+            let size = usize::midpoint(lower, upper);
+            state.statistics.latest_turn = Some(ConversationTurnClock {
+                attempt_id: Some(crate::runtime::identity::AttemptId::new("x".repeat(size))),
+                attempt_id_deferred: false,
+                attempt_id_source: None,
+                started_at: chrono::DateTime::from_timestamp(1_700_000_000, 123).unwrap(),
+                ended_at: None,
+            });
+            if crate::runtime_client::checkpoint::bounded_bytes(
+                &fields(&state, shared(&state)),
+                16_384,
+            )
+            .is_some()
+            {
+                lower = size;
+            } else {
+                upper = size;
+            }
+        }
+        for size in [lower, upper] {
+            state.statistics.latest_turn.as_mut().unwrap().attempt_id =
+                Some(crate::runtime::identity::AttemptId::new("x".repeat(size)));
+            assert_eq!(
+                encode(&state).is_ok(),
+                crate::runtime_client::checkpoint::bounded_bytes(
+                    &fields(&state, shared(&state)),
+                    16_384
+                )
+                .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn binary_statistics_read_keeps_tuple_byte_boundary_and_seed_capacity() {
+        use crate::durable::{ConversationStore, SqliteConversationStore};
+        let state = timed(1.0);
+        let mut value = serde_json::to_value(fields(&state, shared(&state))).unwrap();
+        value[0][7]["ignored"] = serde_json::json!("");
+        let base = serde_json::to_vec(&value).unwrap().len();
+        for length in [16_383, 16_384, 16_385] {
+            value[0][7]["ignored"] = serde_json::json!("x".repeat(length - base));
+            assert_eq!(serde_json::to_vec(&value).unwrap().len(), length);
+            let bytes = codec::encode_admitted(&value).unwrap();
+            assert_eq!(decode(&bytes).is_ok(), length <= 16_384);
+        }
+        value[0][7]["ignored"] = serde_json::json!(vec![1.0_f64; 3900]);
+        assert!(serde_json::to_vec(&value).unwrap().len() < 16_384);
+        let bytes = codec::encode_admitted(&value).unwrap();
+        assert!(bytes.len() > 16_384 && bytes.len() <= codec::MAX_BYTES);
+        let store = SqliteConversationStore::in_memory(
+            crate::runtime::identity::ConversationId::generate(),
+        )
+        .unwrap();
+        store.initialize(&[]).unwrap();
+        let connection = store.lock().unwrap();
+        connection
+            .execute(
+                "UPDATE rustx_store SET observation_statistics=?1 WHERE id=1",
+                [&bytes],
+            )
+            .unwrap();
+        assert_eq!(read(&connection, 0).unwrap(), state.statistics);
+        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_statistics) VALUES(1,'wide-statistics',1,'test','time','{}',?1)", [&bytes]).unwrap();
+        let retained: Vec<u8> = connection
+            .query_row(
+                "SELECT observation_statistics FROM events WHERE sequence=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(decode(&retained).unwrap().statistics, state.statistics);
+        connection
+            .execute(
+                "UPDATE rustx_store SET observation_statistics=?1 WHERE id=1",
+                [serde_json::to_vec(&fields(&state, shared(&state))).unwrap()],
+            )
+            .unwrap();
+        assert!(
+            read(&connection, 0).is_err(),
+            "schema 86 has no old JSON decoder"
+        );
+    }
+
     #[test]
     fn compact_statistics_shared_and_inherited_round_trip_and_shape() {
         for inherited in [false, true] {
@@ -728,10 +930,11 @@ mod compact_tests {
             assert_eq!(actual.local.view, state.local.view);
             assert_eq!(actual.local.activity, state.local.activity);
             assert_eq!(actual.local.active_start, state.local.active_start);
-            let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let mut value: serde_json::Value = codec::decode(&bytes).unwrap();
             assert_eq!(value[4].is_null(), !inherited);
             value.as_array_mut().unwrap().pop();
-            assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
+            assert!(decode(&codec::encode_admitted(&value).unwrap()).is_err());
+            assert!(decode(&serde_json::to_vec(&fields(&state, shared(&state))).unwrap()).is_err());
             assert!(
                 decode(&old).is_err(),
                 "obsolete duplicated encoding is not a fallback"

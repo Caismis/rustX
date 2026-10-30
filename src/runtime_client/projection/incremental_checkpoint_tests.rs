@@ -135,7 +135,7 @@ fn transcript_capture_seed() -> CheckpointSeed {
     let mut seed = (*projection.checkpoint_seed()).clone();
     seed.snapshot.transcript.source_cut = Some(store.observation_read_cut().unwrap());
     seed.snapshot.transcript.statistics =
-        Some(crate::runtime_client::response::ConversationStatistics::default());
+        Some(crate::runtime_client::response::ConversationStatistics::default()).into();
     seed.snapshot.transcript.entries = (1..=8)
         .map(
             |index| crate::runtime_client::RuntimeClientTranscriptEntry {
@@ -149,7 +149,7 @@ fn transcript_capture_seed() -> CheckpointSeed {
                 tool_calls: Vec::new(),
             },
         )
-        .collect();
+        .collect::<Vec<_>>().into();
     seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
     seed.transcript_head = checkpoint::PreparedTranscriptHead::from_entries(
         &seed.snapshot.conversation_id,
@@ -217,7 +217,7 @@ fn incremental_transcript_cut_changes_reuse_rows_and_keep_current_envelope() {
         let page = captured.materialize().snapshot.transcript;
         assert_eq!(page.source_cut, current.snapshot.transcript.source_cut);
         assert_eq!(page.next_cursor, current.snapshot.transcript.next_cursor);
-        assert_eq!(page.collections, current.snapshot.transcript.collections);
+        assert_eq!(&page.collections, current.snapshot.transcript.collections.value());
         compare_original(&current);
     }
     assert_eq!(original.checkpoint_candidate().unwrap(), retained);
@@ -287,7 +287,7 @@ fn incremental_transcript_split_capture_keeps_shared_budget_pressure_exact() {
                     })];
                     message
                 })
-                .collect();
+                .collect::<Vec<_>>().into();
         });
         assert!(seed.transcript_head.same_owners(&original.transcript_head));
         checkpoint::take_capture_work();

@@ -482,3 +482,20 @@ fn compact_statistics_preserve_every_historical_cut_and_lineage_after_reopen() {
         }
     }
 }
+
+#[test]
+fn binary_aggregate_headers_reject_schema_85_without_rewriting_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("json-aggregate-schema.sqlite");
+    let conversation = ConversationId::generate();
+    let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+    store.initialize(&[]).unwrap();
+    store.lock().unwrap().execute("UPDATE rustx_store SET schema_version=85 WHERE id=1", []).unwrap();
+    drop(store);
+    assert!(matches!(
+        SqliteConversationStore::open_existing(conversation, &path),
+        Err(ConversationStoreError::SchemaVersionMismatch { stored: 85, expected: 86 })
+    ));
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(connection.query_row("SELECT schema_version FROM rustx_store WHERE id=1", [], |row| row.get::<_, i64>(0)).unwrap(), 85);
+}

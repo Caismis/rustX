@@ -56,9 +56,7 @@ pub(super) fn encode_admitted(record: &impl Serialize) -> Result<Vec<u8>, Conver
 }
 
 pub(super) fn decode<T: de::DeserializeOwned>(bytes: &[u8]) -> Result<T, ConversationStoreError> {
-    if bytes.len() > MAX_BYTES || !matches!(bytes.first(), Some(0x90..=0x9f | 0xdc | 0xdd)) {
-        return Err(storage("native observation compact encoding invalid"));
-    }
+    check_record(bytes)?;
     // Check every actual element without retaining collections. Besides keeping
     // hostile length hints away from typed allocations, this rejects MessagePack
     // values JSON cannot represent (notably NaN, which Value would turn to null).
@@ -67,6 +65,40 @@ pub(super) fn decode<T: de::DeserializeOwned>(bytes: &[u8]) -> Result<T, Convers
     scan.set_max_depth(128);
     JsonShape::deserialize(&mut scan)
         .map_err(|_| storage("native observation compact structure invalid"))?;
+    decode_scanned(bytes)
+}
+
+fn check_record(bytes: &[u8]) -> Result<(), ConversationStoreError> {
+    if bytes.len() > MAX_BYTES || !matches!(bytes.first(), Some(0x90..=0x9f | 0xdc | 0xdd)) {
+        return Err(storage("native observation compact encoding invalid"));
+    }
+    Ok(())
+}
+
+/// Statistics and Execution used to bound their stored JSON tuple, rather than
+/// the normalized DTO. Count the actual record before typed decoding can ignore
+/// unknown fields or omit explicit nulls. Do not apply writer preflight here:
+/// finite dense floats and full-width integers remain valid historical cells.
+pub(super) fn decode_json_tuple<T: de::DeserializeOwned>(
+    bytes: &[u8],
+    maximum: usize,
+) -> Result<T, ConversationStoreError> {
+    check_record(bytes)?;
+    let mut scan = rmp_serde::Deserializer::from_read_ref(bytes);
+    scan.set_max_depth(128);
+    let mut remaining = maximum;
+    de::DeserializeSeed::deserialize(
+        JsonLength {
+            remaining: &mut remaining,
+            key: false,
+        },
+        &mut scan,
+    )
+    .map_err(|_| storage("native observation compact tuple exceeds JSON bound or is invalid"))?;
+    decode_scanned(bytes)
+}
+
+fn decode_scanned<T: de::DeserializeOwned>(bytes: &[u8]) -> Result<T, ConversationStoreError> {
     let mut decoder = rmp_serde::Deserializer::from_read_ref(bytes).with_human_readable();
     decoder.set_max_depth(128);
     let value = T::deserialize(&mut decoder)
@@ -85,6 +117,125 @@ pub(super) fn decode<T: de::DeserializeOwned>(bytes: &[u8]) -> Result<T, Convers
         ));
     }
     Ok(value)
+}
+
+/// The old JSON writer retained a present nonfinite timing field as null.
+/// Preserve that representation without cloning a summary or constructing Value.
+#[allow(clippy::ref_option)] // serde serialize_with receives a reference to the field.
+pub(super) fn json_optional_float<S: serde::Serializer>(
+    value: &Option<f64>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(value) if value.is_finite() => serializer.serialize_some(value),
+        _ => serializer.serialize_none(),
+    }
+}
+
+struct JsonLength<'a> {
+    remaining: &'a mut usize,
+    key: bool,
+}
+impl JsonLength<'_> {
+    fn value<E: de::Error>(&self) -> Result<(), E> {
+        if self.key {
+            Err(E::custom("JSON map key must be a string"))
+        } else {
+            Ok(())
+        }
+    }
+    fn debit<E: de::Error>(&mut self, bytes: usize) -> Result<(), E> {
+        *self.remaining = self
+            .remaining
+            .checked_sub(bytes)
+            .ok_or_else(|| E::custom("JSON tuple exceeds bound"))?;
+        Ok(())
+    }
+    fn scalar<E: de::Error>(&mut self, value: &impl Serialize) -> Result<(), E> {
+        let bytes = public_length(value, *self.remaining)
+            .map_err(|_| E::custom("JSON scalar exceeds bound"))?;
+        self.debit(bytes)
+    }
+}
+impl<'de> de::DeserializeSeed<'de> for JsonLength<'_> {
+    type Value = ();
+    fn deserialize<D: de::Deserializer<'de>>(self, decoder: D) -> Result<(), D::Error> {
+        if self.key {
+            decoder.deserialize_str(self)
+        } else {
+            decoder.deserialize_any(self)
+        }
+    }
+}
+impl<'de> de::Visitor<'de> for JsonLength<'_> {
+    type Value = ();
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a bounded finite JSON tuple")
+    }
+    fn visit_unit<E: de::Error>(mut self) -> Result<(), E> {
+        self.value()?;
+        self.debit(4)
+    }
+    fn visit_bool<E: de::Error>(mut self, value: bool) -> Result<(), E> {
+        self.value()?;
+        self.debit(if value { 4 } else { 5 })
+    }
+    fn visit_i64<E: de::Error>(mut self, value: i64) -> Result<(), E> {
+        self.value()?;
+        self.scalar(&value)
+    }
+    fn visit_u64<E: de::Error>(mut self, value: u64) -> Result<(), E> {
+        self.value()?;
+        self.scalar(&value)
+    }
+    fn visit_f64<E: de::Error>(mut self, value: f64) -> Result<(), E> {
+        self.value()?;
+        if !value.is_finite() {
+            return Err(E::custom("nonfinite JSON number"));
+        }
+        self.scalar(&value)
+    }
+    fn visit_str<E: de::Error>(mut self, value: &str) -> Result<(), E> {
+        self.scalar(&value)
+    }
+    fn visit_seq<A: de::SeqAccess<'de>>(mut self, mut sequence: A) -> Result<(), A::Error> {
+        self.value()?;
+        self.debit(2)?;
+        let mut count = 0;
+        while sequence
+            .next_element_seed(JsonLength {
+                remaining: &mut *self.remaining,
+                key: false,
+            })?
+            .is_some()
+        {
+            if count > 0 {
+                self.debit(1)?;
+            }
+            count += 1;
+        }
+        Ok(())
+    }
+    fn visit_map<A: de::MapAccess<'de>>(mut self, mut map: A) -> Result<(), A::Error> {
+        self.value()?;
+        self.debit(2)?;
+        let mut count = 0;
+        while map
+            .next_key_seed(JsonLength {
+                remaining: &mut *self.remaining,
+                key: true,
+            })?
+            .is_some()
+        {
+            self.debit(if count > 0 { 2 } else { 1 })?;
+            map.next_value_seed(JsonLength {
+                remaining: &mut *self.remaining,
+                key: false,
+            })?;
+            count += 1;
+        }
+        Ok(())
+    }
 }
 
 struct JsonShape;
