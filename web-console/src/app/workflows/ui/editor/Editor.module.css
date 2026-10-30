@@ -713,7 +713,6 @@
 .schemaTree .schemaTree { margin-top: 6px; padding-left: 14px; border-left: 1px solid var(--dsw-alias-border-l2); }
 .schemaTree li > span { display: flex; align-items: baseline; gap: 6px; }
 .schemaTree small { font-size: 10.5px; color: var(--dsw-alias-state-warn-primary); }
-.schemaDialog { width: min(640px, 100%); }
 
 /* Dify's ErrorHandleOnNode: the error strategy row, whose fail port sits on
    the card's right border (14px padding + 1px border away). */

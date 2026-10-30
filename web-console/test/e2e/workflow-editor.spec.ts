@@ -11,6 +11,7 @@ import { captureEvidence, expectStableScreenshot } from './screenshot';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { parse } from 'yaml';
+import { replaceJson, schemaJson, structuredDialog } from './workflow-schema-actions';
 import { COLLIDING_FIELDS } from '../workflow-colliding-document';
 
 const examples = fileURLToPath(new URL('../../../examples/local-runtime/', import.meta.url));
@@ -604,12 +605,12 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await selectModel();
   };
   // As Dify: structured_output's Configure opens the schema in a dialog.
-  const schemaDialog = page.getByRole('dialog', { name: 'Structured output' });
+  const schemaDialog = structuredDialog(page);
   const openSchema = async () => {
     if (!(await schemaDialog.count())) await inspector.getByRole('button', { name: 'Configure', exact: true }).click();
-    await showSchemaJson(schemaDialog, 'Output JSON Schema');
+    await schemaJson(schemaDialog);
   };
-  const closeSchema = () => schemaDialog.getByRole('button', { name: 'Done', exact: true }).click();
+  const closeSchema = async () => { await schemaDialog.getByRole('button', { name: 'Save', exact: true }).click(); await expect(schemaDialog).toHaveCount(0); };
   const reopen = async () => {
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'One tool-free model call.', exact: true }).click();
@@ -673,7 +674,7 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     // an authored schema; the downstream Return accepts either Model output.
     const defaultSchema = { type: 'object', properties: {}, required: [], additionalProperties: false };
     await openSchema();
-    await expect(schemaDialog.getByLabel('Output JSON Schema')).toHaveValue(JSON.stringify(defaultSchema, null, 2));
+    await expect(schemaDialog.getByRole('textbox', { name: 'JSON', exact: true })).toHaveText(JSON.stringify(defaultSchema, null, 2), { useInnerText: true });
     await closeSchema();
     await expect(inspector).toContainText('Structured output is not configured');
     await checkAndSave();
@@ -681,11 +682,10 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await page.screenshot({ path: '/tmp/rustx-model-editor-default-json-schema.png', fullPage: false, animations: 'disabled' });
     await reopen();
     await openSchema();
-    await expect(schemaDialog.getByLabel('Output JSON Schema')).toHaveValue(JSON.stringify(defaultSchema, null, 2));
+    await expect(schemaDialog.getByRole('textbox', { name: 'JSON', exact: true })).toHaveText(JSON.stringify(defaultSchema, null, 2), { useInnerText: true });
     const schema = { type: 'object', properties: { risk: { type: 'string', enum: ['low', 'high'] } }, required: ['risk'], additionalProperties: false };
     await openSchema();
-    await schemaDialog.getByLabel('Output JSON Schema').fill(JSON.stringify(schema, null, 2));
-    await schemaDialog.getByLabel('Output JSON Schema').blur();
+    await replaceJson(schemaDialog.getByRole('textbox', { name: 'JSON', exact: true }), JSON.stringify(schema, null, 2));
     await closeSchema();
     await expect(inspector.locator('ul').getByText('risk', { exact: true })).toBeVisible();
     // Save/reopen must preserve that same declared output type.
@@ -694,13 +694,13 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await reopen();
     await expect(structured).toHaveAttribute('aria-checked', 'true');
     await openSchema();
-    await expect(schemaDialog.getByLabel('Output JSON Schema')).toHaveValue(JSON.stringify(schema, null, 2));
+    await expect(schemaDialog.getByRole('textbox', { name: 'JSON', exact: true })).toHaveText(JSON.stringify(schema, null, 2), { useInnerText: true });
     await accessible(page, '[data-workflows-level="editor"]');
     await page.screenshot({ path: '/tmp/rustx-model-editor-json-schema.png', fullPage: false, animations: 'disabled' });
     await page.setViewportSize({ width: 900, height: 900 });
     await expect(structured).toBeVisible();
     await openSchema();
-    await expect(schemaDialog.getByLabel('Output JSON Schema')).toBeVisible();
+    await expect(schemaDialog.getByRole('textbox', { name: 'JSON', exact: true })).toBeVisible();
     await page.screenshot({ path: '/tmp/rustx-model-editor-narrow.png', fullPage: false, animations: 'disabled' });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);

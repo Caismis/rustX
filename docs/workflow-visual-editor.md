@@ -20,6 +20,7 @@ Reference paths below are relative to `web/app/components/workflow/`.
 | `nodes/loop/node.tsx`, `nodes/iteration/use-interactions.ts` | Nested body frame, focus and sizing |
 | `custom-edge.tsx`, `block-selector/blocks.tsx` | Searchable next-node picker and explicit edge insertion |
 | `note-node/index.tsx`, `utils/elk-layout.ts` | Notes and hierarchical organize |
+| `nodes/llm/components/json-schema-config-modal/` (studied at `ea5e4e9e21`) | Transactional structured-output dialog, visual field cards, JSON Schema tab and JSON-example import |
 
 The implementation uses rustX's existing XState, XYFlow, shared icons, tokens,
 localization and Markdown components. Dify source, CSS, artwork, branding,
@@ -70,6 +71,7 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | `WorkflowEditor`, `Inspector`, specialized panels | Selection, field navigation, inspector sizing and configuration |
 | `NextStep` | Successor rows and searchable append picker |
 | `SchemaEditor`, `ValueEditor`, `ReferencePicker` | Native schema/value forms and consumer-addressed analysis queries |
+| `StructuredOutputDialog` | Model-output working copy, field confirmations, native declaration validation and one saved history transaction |
 | `scene.ts`, `WorkflowNode`, `WorkflowEdge`, `Canvas` | Recursive scene, connection gestures and transient viewport state |
 | `connections.ts` | One connection policy for previews and committed gestures |
 | `layout.ts` | Lazy ELK, measured layout, stale-request cancellation and metadata-only updates |

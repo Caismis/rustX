@@ -1,24 +1,25 @@
-import { useId, useState } from 'react';
+import { lazy, Suspense, useId, useState } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import { IconChevronDownOutline14, IconEditOutline16, IconQuestionOutline14 } from '../../../../../presentation/primitives/icons';
-import { Button } from '../../../../../presentation/primitives/Button';
-import { Modal } from '../../../../../presentation/primitives/Modal';
-import { schemaObject } from '../../../document/schema';
+import { schemaObject, schemaTarget } from '../../../document/schema';
 import { Switch } from '../../../../../presentation/primitives/Switch';
 import { Tooltip } from '../../../../../presentation/primitives/Tooltip';
 import { CommandRejected, disconnect, replaceNode } from '../../../document/commands';
-import { blockAt, edgesOf, nodeAt, type NodeDefinition } from '../../../document/model';
+import { blockAt, edgesOf, nodeAt, type NodeDefinition, type WorkflowDocument } from '../../../document/model';
+import { orderedKeys } from '../../../document/presentation';
 import { edgePort } from '../../../document/ports';
 import { IconPlus } from '../../icons';
 import { PromptCard } from '../forms/PromptCard';
 import { PromptEditor, promptText, useInsertVariable } from '../forms/PromptEditor';
 import { useTranslation } from '../../../../../locale/react';
-import { encodeField } from '../../../document/fields';
+import { encodeField, within, type FieldAddress } from '../../../document/fields';
 import { ModelSelection } from '../forms/ModelSelection';
 import { SchemaEditor } from '../forms/SchemaEditor';
 import { DraftTextField, JsonField, Section, TextField } from '../forms/fields';
 import { Bindings, useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
+
+const StructuredOutputDialog = lazy(() => import('../forms/structured-output/StructuredOutputDialog').then(module => ({ default: module.StructuredOutputDialog })));
 
 export function ModelPanel(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'model');
@@ -64,13 +65,10 @@ function ModelOutputs(props: PanelProps) {
         <div className={css.structuredHead}><b>{/* i18n-raw: native output field name */ 'structured_output'}</b><code>{/* i18n-raw: JSON Schema type name */ 'object'}</code>
           <button type="button" className={css.smallButton} onClick={() => setConfiguring(true)}><IconEditOutline16 />{tx('workflows:prompt.configure')}</button>
         </div>
-        {Object.keys(schemaObject(schemaObject(schema)?.properties) ?? {}).length ? <SchemaTree schema={schema} /> : <p className={css.structuredEmpty}>{tx('workflows:prompt.structured-empty')}</p>}
+        {Object.keys(schemaObject(schemaObject(schema)?.properties) ?? {}).length ? <SchemaTree schema={schema} document={props.document} address={at('output', 'schema')} /> : <p className={css.structuredEmpty}>{tx('workflows:prompt.structured-empty')}</p>}
       </div>}
     </>}
-    {configuring && schema !== undefined && <Modal open onClose={() => setConfiguring(false)} title={tx('workflows:prompt.structured')} closeLabel={tx('workflows:dialog.close')} className={css.schemaDialog}
-      footer={<Button variant="primary" onClick={() => setConfiguring(false)}>{tx('workflows:prompt.done')}</Button>}>
-      <SchemaEditor label={tx('workflows:inspector.model-output-schema')} value={schema} address={at('output', 'schema')} edit={props.edit} />
-    </Modal>}
+    {configuring && schema !== undefined && <Suspense fallback={null}><StructuredOutputDialog document={props.document} address={at('output', 'schema')} edit={props.edit} onClose={() => setConfiguring(false)} /></Suspense>}
   </section>;
 }
 
@@ -145,14 +143,15 @@ function RetryField({ label, unit, min, max, step, value, onChange }: { label: s
 }
 
 /** The declared fields of a structured output, as Dify lists them. */
-function SchemaTree({ schema }: { schema: unknown }) {
+function SchemaTree({ schema, document, address }: { schema: unknown; document: WorkflowDocument; address: FieldAddress }) {
   const tx = useTranslation(), object = schemaObject(schema), properties = schemaObject(object?.properties) ?? {};
   const required = Array.isArray(object?.required) ? object.required : [];
-  return <ul className={css.schemaTree}>{Object.entries(properties).map(([name, field]) => {
-    const value = schemaObject(field), type = typeof value?.type === 'string' ? value.type : '?';
+  const target = schemaTarget(address), keys = target ? orderedKeys(document, target, Object.keys(properties)) : Object.keys(properties);
+  return <ul className={css.schemaTree}>{keys.map(name => {
+    const value = schemaObject(properties[name]), type = typeof value?.type === 'string' ? value.type : '?';
     return <li key={name}>
       <span><b>{name}</b><code>{type}</code>{required.includes(name) && <small>{tx('workflows:schema.required')}</small>}</span>
-      {type === 'object' && <SchemaTree schema={value} />}
+      {type === 'object' && <SchemaTree schema={value} document={document} address={within(address, ['properties', { key: name }])} />}
     </li>;
   })}</ul>;
 }

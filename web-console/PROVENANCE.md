@@ -4605,6 +4605,13 @@ Harness-derived primitives and their notices remain authoritative for the shell.
 The image-generated concept is private design exploration, not upstream artwork
 or a shipped asset. Real browser captures are repository-authored test evidence.
 
+The Model structured-output dialog also studies Dify at `ea5e4e9e21`:
+`json-schema-config.tsx`, `json-importer.tsx`, and `visual-editor/` under
+`web/app/components/workflow/nodes/llm/components/json-schema-config-modal/`.
+The interaction is implemented with rustX's Modal, Switch, CodeMirror, schema
+commands and native candidate analysis. Dify's event bus, stores, source code,
+assets and AI schema-generation service are not included.
+
 The only new production dependency is **elkjs 0.12.1**, exact-pinned in
 `package.json`/`pnpm-lock.yaml`, unmodified and dynamically imported by explicit
 Organize. Its published package declares `EPL-2.0 OR GPL-3.0-or-later`; this

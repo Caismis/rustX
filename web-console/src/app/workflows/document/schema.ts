@@ -18,12 +18,15 @@ export function schemaTemplate(type: string): Schema {
 /** The metadata target of exactly this schema, independent of JSON map order. */
 export function schemaTarget(address: FieldAddress): Extract<WorkflowOrderTarget, { path: WorkflowSchemaStep[] }> | undefined {
   const parts = [...address.path], first = parts.shift();
+  const path: WorkflowSchemaStep[] = [];
   let kind: 'block_input' | 'block_output' | 'node_output';
   if (!address.node && (first === 'input' || first === 'output')) kind = first === 'input' ? 'block_input' : 'block_output';
-  else if (address.node && first === 'output') { kind = 'node_output'; if (parts[0] === 'schema') parts.shift(); }
+  else if (address.node && first === 'output') {
+    kind = 'node_output';
+    if (parts[0] === 'schema') { parts.shift(); path.push({ kind: 'property', name: 'structured_output' }); }
+  }
   else if (address.node && first === 'result' && parts.shift() === 'schema') kind = 'node_output';
   else return undefined;
-  const path: WorkflowSchemaStep[] = [];
   while (parts.length) {
     const step = parts.shift();
     if (step === 'items') path.push({ kind: 'items' });
@@ -31,6 +34,12 @@ export function schemaTarget(address: FieldAddress): Extract<WorkflowOrderTarget
     else return undefined;
   }
   return kind === 'node_output' ? { kind, address: { block: [...address.block], node: address.node! }, path } : { kind, block: [...address.block], path };
+}
+
+/** Model output metadata addresses the derived result envelope; schema edits
+ * address the declaration inside output.schema. */
+function declaredSchemaPath(address: FieldAddress, target: NonNullable<ReturnType<typeof schemaTarget>>): WorkflowSchemaStep[] {
+  return target.path.slice(address.node && address.path[0] === 'output' && address.path[1] === 'schema' ? 1 : 0);
 }
 
 export function patchSchema(document: WorkflowDocument, address: FieldAddress, patch: Schema): WorkflowDocument {
@@ -166,7 +175,7 @@ export function renameSchemaField(document: WorkflowDocument, address: FieldAddr
     const step = candidate.path[target.path.length];
     return candidate.path.length === target.path.length ? order.fields.includes(to) : step.kind === 'property' && step.name === to;
   })) throw new CommandRejected('duplicate_identifier');
-  const steps = target?.path ?? [], suffix = steps.reduce((length, step) => length + (step.kind === 'items' ? 1 : 2), 0);
+  const steps = target ? declaredSchemaPath(address, target) : [], suffix = steps.reduce((length, step) => length + (step.kind === 'items' ? 1 : 2), 0);
   const root = { ...address, path: address.path.slice(0, address.path.length - suffix) };
   let next = setField(document, root, renameContract(schemaObject(fieldValue(document, root)?.value)!, steps, from, to));
   if (!target) return next;

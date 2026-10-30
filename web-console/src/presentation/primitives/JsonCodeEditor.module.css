@@ -2,6 +2,7 @@
 .header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .root .header label { padding: 0; cursor: text; min-width: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .header button { flex: none; font-size: 12px; }
+.actions { display: flex; align-items: center; gap: 2px; }
 .root[data-empty=true] .header button { visibility: hidden; }
 .root :global(.cm-editor) { overflow: hidden; border: 1px solid var(--dsw-alias-border-l4); border-radius: 8px; background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); }
 .root :global(.cm-focused) { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -1px; }
@@ -29,3 +30,13 @@
 .status small { font-size: 11px; line-height: 16px; color: inherit; }
 .root .validity { position: absolute; width: 1px !important; height: 1px !important; min-height: 0 !important; padding: 0 !important; border: 0 !important; overflow: hidden; clip-path: inset(50%); }
 .loading { min-height: 144px; display: grid; place-items: center; color: var(--dsw-alias-label-secondary); border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; font-size: 12px; }
+.root[data-panel=true] { display: flex; flex-direction: column; flex: 1; min-height: 0; margin: 0; padding: 6px 8px; border-radius: 12px; background: var(--dsw-alias-interactive-bg-hover-solid); overflow: hidden; }
+.root[data-panel=true] .header { min-height: 22px; margin-bottom: 0; padding: 0 4px; }
+.root[data-panel=true] .header label { font-size: 12px; font-weight: 500; }
+.root[data-panel=true] .actions button { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; min-height: 0; padding: 3px; border: 0; border-radius: 5px; background: transparent; color: var(--dsw-alias-label-secondary); }
+.root[data-panel=true] .actions button:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.root[data-panel=true] > :global(.cm-theme) { flex: 1; min-height: 0; }
+.root[data-panel=true] :global(.cm-editor) { border: 0; border-radius: 0; background: transparent; }
+.root[data-panel=true] :global(.cm-gutters) { background: transparent; border: 0; }
+.root[data-panel=true] :global(.cm-content) { padding-top: 0; }
+.root[data-panel=true] .status[data-problem=false] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
