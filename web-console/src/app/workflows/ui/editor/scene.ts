@@ -30,9 +30,8 @@ export type SceneNode = Node<SceneData, 'workflow'>;
 export interface SceneEdgeData extends Record<string, unknown> { path: BlockPath; index: number }
 export type SceneEdge = Edge<SceneEdgeData>;
 
-const DESCRIPTION_HEIGHT = 40;
 const CARD_DESCRIPTION_HEIGHT = 32;
-const ENTRY_BADGE_HEIGHT = 22;
+const ENTRY_BADGE_HEIGHT = 20;
 const ERROR_ROW_HEIGHT = 32;
 
 /** The first six fields of an object schema, in `order` (sorted by default). */
@@ -55,10 +54,13 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
     const sources: VariableSources = { ...Object.fromEntries(Object.entries(block.nodes).map(([id, node]) => [id, { kind: node.type, title: nodePresentation(document, path, id)?.title || id }])),
       args: { kind: 'start', title: start?.title ?? '', nested: path.length > 0 } };
     const fields = schemaFields(block.input, keys => orderedKeys(document, { kind: 'block_input', block: [...path], path: [] }, keys));
-    // The Workflow's Start sits under its badge (EntryNodeContainer in Dify).
-    const extra = (start?.description?.trim() ? DESCRIPTION_HEIGHT : 0) + (path.length ? 0 : ENTRY_BADGE_HEIGHT);
-    if (startId) local.push({ id: entryId, type: 'workflow', parentId, position: start?.position ?? START_POSITION, width: NODE_WIDTH, height: Math.max(112, 76 + fields.length * 26) + extra, deletable: false,
-      data: { view: 'start', path, local: startId, title: start?.title ?? '', description: start?.description ?? undefined, fields, minSize: { width: NODE_WIDTH, height: 112 + extra } } });
+    // Start renders at its intrinsic height, as Dify's EntryNodeContainer does.
+    // Before measurement, estimate its header/padding, field rows and at most
+    // two description lines; Organize uses the actual measured footprint.
+    const startSize = { width: NODE_WIDTH, height: 57 + (fields.length ? 8 + fields.length * 26 : 0)
+      + (start?.description?.trim() ? 42 : 0) + (path.length ? 0 : ENTRY_BADGE_HEIGHT) };
+    if (startId) local.push({ id: entryId, type: 'workflow', parentId, position: start?.position ?? START_POSITION, width: NODE_WIDTH, height: measured.get(entryId)?.height ?? startSize.height, deletable: false,
+      data: { view: 'start', path, local: startId, title: start?.title ?? '', description: start?.description ?? undefined, fields, minSize: startSize } });
     let x = 360;
     const ids = [...new Set([...edgesOf(block).flatMap(edge => [edge.from, edge.to]), ...Object.keys(block.nodes).sort()])].filter(id => nodeAt(block, id) && block.nodes[id].type !== 'start');
     for (const id of ids) {

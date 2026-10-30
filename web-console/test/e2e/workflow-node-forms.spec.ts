@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
@@ -11,6 +11,33 @@ import type { NodeKind, WorkflowDocument } from '../../src/app/workflows/documen
 
 const canvas = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 const inspector = (page: Page) => page.getByRole('complementary', { name: 'Inspector' });
+
+/** Start must grow and shrink with its content; its description keeps the same
+ * bottom padding as the card, including inside a Loop without the Start badge. */
+async function checkStartHeight(page: Page, start: Locator, evidence: string, info: TestInfo) {
+  const description = inspector(page).getByRole('textbox', { name: 'Description', exact: true });
+  const height = () => start.evaluate(element => (element as HTMLElement).offsetHeight);
+  const baseline = await height();
+  const contentGap = () => start.locator('[data-node-description]').evaluate(element => {
+    const card = element.parentElement!, bounds = card.getBoundingClientRect(), scale = bounds.width / card.offsetWidth;
+    return (bounds.bottom - element.getBoundingClientRect().bottom) / scale;
+  });
+  await description.fill('Workflow input.'); await description.blur();
+  await expect(start.locator('[data-node-description]')).toBeVisible();
+  await expect.poll(height).toBeGreaterThan(baseline);
+  await expect.poll(height).toBeLessThanOrEqual(baseline + 28);
+  expect(await contentGap()).toBeGreaterThanOrEqual(11);
+  expect(await contentGap()).toBeLessThan(15);
+  await captureEvidence(page, `${evidence}-short-description`, info);
+  await description.fill('First line.\nSecond line.\nThird line.'); await description.blur();
+  await expect(start.locator('[data-node-description]')).toHaveCSS('-webkit-line-clamp', '2');
+  await expect.poll(height).toBeGreaterThan(baseline + 28);
+  await expect.poll(height).toBeLessThanOrEqual(baseline + 44);
+  expect(await contentGap()).toBeLessThan(15);
+  await description.fill(''); await description.blur();
+  await expect(start.locator('[data-node-description]')).toHaveCount(0);
+  await expect.poll(height).toBe(baseline);
+}
 
 test('shows each native node in the Dify-style card and grouped settings panel', async ({ page }, info) => {
   const fixture = await startDogfood('web_console_dogfood');
@@ -37,6 +64,7 @@ test('shows each native node in the Dify-style card and grouped settings panel',
     await expect(page).toHaveTitle(/rustX$/);
     const start = canvas(page).getByLabel('Workflow Start', { exact: true }); await start.focus(); await start.press('Enter');
     await expect(inspector(page).getByRole('heading', { name: 'Input fields' })).toBeVisible();
+    await checkStartHeight(page, start, 'start', info);
     await captureEvidence(page, 'start-panel', info);
     const cases: { id: string; kind: NodeKind; row: string; section: string }[] = [
       { id: 'agent', kind: 'agent', row: 'reviewer', section: 'Agent configuration' },
@@ -71,6 +99,12 @@ test('shows each native node in the Dify-style card and grouped settings panel',
         const limit = inspector(page).getByRole('textbox', { name: 'Maximum iterations' });
         await limit.fill('4'); await limit.blur();
         await expect(card.locator('[data-node-preview]')).toContainText(/Limit\s*4/);
+        await card.getByRole('button', { name: 'Expand loop', exact: true }).click();
+        const nestedStart = canvas(page).getByLabel(/^Block inputs ·/);
+        await nestedStart.focus(); await nestedStart.press('Enter');
+        await checkStartHeight(page, nestedStart, 'nested-start', info);
+        await card.focus(); await card.press('Enter');
+        await card.getByRole('button', { name: 'Collapse loop', exact: true }).click();
       }
     }
     await page.setViewportSize({ width: 390, height: 844 });

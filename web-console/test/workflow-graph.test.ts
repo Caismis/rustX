@@ -7,6 +7,7 @@ import { organizeDocument } from '../src/app/workflows/ui/editor/layout';
 import { branchGeometry } from '../src/app/workflows/document/branch';
 import { portsOf } from '../src/app/workflows/document/ports';
 import { projectScene } from '../src/app/workflows/ui/editor/scene';
+import { setNodePresentation } from '../src/app/workflows/document/geometry';
 import { viewId } from '../src/app/workflows/ui/editor/selection';
 
 function graph(): WorkflowDocument {
@@ -50,6 +51,13 @@ it('appends and reconnects Start edges using the same native connection command'
   const moved = applySceneConnection(document, nodes, connection, scene.edges[0]);
   expect(moved.block.edges?.filter(edge => edge.from === 'start').map(edge => edge.to)).toEqual(['other', 'right']);
   expect(document.block.edges?.[0]).toEqual({ from: 'start', to: 'left' });
+});
+
+it('organizes a described Start using its measured content height', () => {
+  const document = setNodePresentation(graph(), [], 'start', { description: 'Workflow input.' });
+  const id = viewId([], 'start');
+  const scene = projectScene(document, new Set(), new Map([[id, { width: 256, height: 103 }]]));
+  expect(scene.nodes.find(node => node.id === id)?.height).toBe(103);
 });
 
 it('inserts into one chosen edge and preserves every parallel sibling', () => {
