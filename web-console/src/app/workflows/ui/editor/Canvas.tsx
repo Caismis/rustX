@@ -85,9 +85,9 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
   }, [selectionKey, keyOfBlock(path)]);
   const scene = useMemo(() => projectScene(document, collapsed), [document, collapsed]);
   const projected = useMemo(() => scene.nodes.map(node => ({ ...node,
-    // Let React Flow observe Start's content instead of fixing the DOM to the
-    // scene's pre-measurement estimate (including its optional entry badge).
-    height: node.data.view === 'start' ? undefined : node.height,
+    // As Dify: ordinary cards size to their content. Only expanded containers
+    // and notes have an explicit, user-resizable height.
+    height: node.data.expanded || node.data.view === 'note' ? node.height : undefined,
     selected: selected.has(node.id) || node.id === selectedId,
     draggable: editable && node.draggable !== false, connectable: editable && node.connectable !== false,
     ...(node.parentId ? { extent: [[24, 64], [1_000_000, 1_000_000]] as [[number, number], [number, number]] } : {}),

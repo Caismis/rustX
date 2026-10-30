@@ -30,7 +30,7 @@ export type SceneNode = Node<SceneData, 'workflow'>;
 export interface SceneEdgeData extends Record<string, unknown> { path: BlockPath; index: number }
 export type SceneEdge = Edge<SceneEdgeData>;
 
-const CARD_DESCRIPTION_HEIGHT = 32;
+const CARD_DESCRIPTION_HEIGHT = 42;
 const ENTRY_BADGE_HEIGHT = 20;
 const ERROR_ROW_HEIGHT = 32;
 
@@ -71,7 +71,9 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
       const preview = node.type === 'branch' ? 0 : previewRowCount(node);
       // A Model handling errors shows its strategy on one more row.
       const handled = node.type === 'model' && !!node.on_error && node.on_error.type !== 'stop';
-      const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? branchGeometry(node).height : 100 + Math.max(0, preview - 1) * 27) + (described ? CARD_DESCRIPTION_HEIGHT : 0) + (handled ? ERROR_ROW_HEIGHT : 0) };
+      // Estimates are for initial placement only. Ordinary cards render at
+      // their intrinsic height, and Organize uses their measured footprint.
+      const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? branchGeometry(node).height : 57 + (preview ? 8 + preview * 27 : 0)) + (described ? CARD_DESCRIPTION_HEIGHT : 0) + (handled ? ERROR_ROW_HEIGHT : 0) };
       const projected: SceneNode = { id: qualified, type: 'workflow', parentId, position: metadata?.position ?? { x, y: 80 }, width: NODE_WIDTH, height: minimum.height,
         data: { view: 'node', path, local: id, definition: node, title: metadata?.title || id, description: metadata?.description ?? undefined, expanded, sources, minSize: minimum } };
       // Parents precede children, as React Flow requires.
@@ -81,7 +83,8 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
         minimum.width = Math.max(480, body.width + 32); minimum.height = Math.max(260, body.height + 32);
       }
       const size = expanded ? metadata?.dimensions : measured.get(qualified);
-      projected.width = Math.max(minimum.width, size?.width ?? 0); projected.height = Math.max(minimum.height, size?.height ?? 0);
+      projected.width = Math.max(minimum.width, size?.width ?? 0);
+      projected.height = expanded ? Math.max(minimum.height, size?.height ?? 0) : size?.height ?? minimum.height;
       local.push(projected); x += projected.width + 96;
     }
     for (const note of document.editor?.notes ?? []) if (sameBlockPath(note.block, path)) local.push({ id: viewId(path, 'note', note.id), type: 'workflow', parentId,

@@ -236,8 +236,7 @@
 
 .node {
   position: relative;
-  width: 256px;
-  min-height: 104px;
+  width: 100%;
   padding: 13px 14px 12px;
   box-sizing: border-box;
   border: 1px solid var(--dsw-alias-border-l3);
@@ -470,8 +469,6 @@
 .explainBlocks code { font-size: 11px; }
 
 /* File-backed visual authoring. The scene owns no executable state. */
-.node { width: 100%; height: 100%; }
-.startCard { height: auto; min-height: 0; }
 .nodeMenu { margin-left: auto; flex: none; opacity: 0.5; }
 .node:hover .nodeMenu, .nodeSelected .nodeMenu { opacity: 1; }
 .nodeFields { display: grid; gap: 2px; margin-top: 10px; font-size: 11px; }
@@ -480,7 +477,7 @@
 .nodeFields span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); }
 .nodeFields small { font-size: 9.5px; color: var(--dsw-alias-label-tertiary); }
 .nodeFields code { color: var(--dsw-alias-label-tertiary); font-size: 10px; }
-.containerNode { padding: 0; background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 3%, var(--dsw-alias-bg-base)); border-style: solid; box-shadow: none; }
+.containerNode { height: 100%; padding: 0; background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 3%, var(--dsw-alias-bg-base)); border-style: solid; box-shadow: none; }
 .containerNode:not(.nodeSelected):hover { box-shadow: none; }
 .containerHead { display: flex; align-items: center; justify-content: space-between; height: 54px; gap: 10px; padding: 0 14px; box-sizing: border-box; border-bottom: 1px solid var(--dsw-alias-border-l2); font-size: 12px; font-weight: 550; }
 .containerHead .nodeIcon { width: 26px; height: 26px; }

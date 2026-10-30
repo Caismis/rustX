@@ -60,6 +60,22 @@ it('organizes a described Start using its measured content height', () => {
   expect(scene.nodes.find(node => node.id === id)?.height).toBe(103);
 });
 
+it.each(['agent', 'model', 'tool', 'branch', 'review', 'loop', 'return'] as const)('uses the measured %s card height instead of its description estimate', kind => {
+  const document = setNodePresentation(addNode(graph(), [], kind, 'card'), [], 'card', { description: 'One line.' });
+  const id = viewId([], 'node', 'card');
+  const scene = projectScene(document, new Set([id]), new Map([[id, { width: 256, height: 103 }]]));
+  expect(scene.nodes.find(node => node.id === id)?.height).toBe(103);
+});
+
+it('keeps the expanded Loop container dimensions while sizing its collapsed card from content', () => {
+  const document = setNodePresentation(addNode(graph(), [], 'loop', 'repeat'), [], 'repeat', { dimensions: { width: 900, height: 800 } });
+  const id = viewId([], 'node', 'repeat'), measured = new Map([[id, { width: 256, height: 146 }]]);
+  const expanded = projectScene(document, new Set(), measured).nodes.find(node => node.id === id)!;
+  expect(expanded.width).toBe(900); expect(expanded.height).toBe(800);
+  const collapsed = projectScene(document, new Set([id]), measured).nodes.find(node => node.id === id)!;
+  expect(collapsed.width).toBe(256); expect(collapsed.height).toBe(146);
+});
+
 it('inserts into one chosen edge and preserves every parallel sibling', () => {
   const document = graph(), next = insertNode(document, [], 0, 'review', 'inspect');
   expect(next.block.edges).toEqual([{ from: 'start', to: 'right' }, { from: 'left', to: 'done' }, { from: 'right', to: 'done' }, { from: 'start', to: 'inspect' }, { from: 'inspect', to: 'left' }]);
@@ -111,7 +127,7 @@ it('keeps surviving CASE exits stable when an earlier case is removed', () => {
   const one = removeBranchCase(removed, [], 'choose', 'case_2');
   expect(() => removeBranchCase(one, [], 'choose', 'case_3')).toThrow('missing_field');
   const geometry = branchGeometry(node);
-  expect(geometry.cases.map(item => item.top)).toEqual([64, 88]);
-  expect(geometry.elseTop).toBe(112);
+  expect(geometry.cases.map(item => item.top)).toEqual([65, 89]);
+  expect(geometry.elseTop).toBe(113);
   expect(projectScene(removed).nodes.find(item => item.data.local === 'choose')?.height).toBe(geometry.height);
 });

@@ -12,31 +12,38 @@ import type { NodeKind, WorkflowDocument } from '../../src/app/workflows/documen
 const canvas = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 const inspector = (page: Page) => page.getByRole('complementary', { name: 'Inspector' });
 
-/** Start must grow and shrink with its content; its description keeps the same
- * bottom padding as the card, including inside a Loop without the Start badge. */
-async function checkStartHeight(page: Page, start: Locator, evidence: string, info: TestInfo) {
+/** Every ordinary card grows and shrinks with its visible content, retaining
+ * only its normal bottom padding. This also covers Start inside a Loop. */
+async function checkCardHeight(page: Page, card: Locator, evidence: string, info: TestInfo) {
   const description = inspector(page).getByRole('textbox', { name: 'Description', exact: true });
-  const height = () => start.evaluate(element => (element as HTMLElement).offsetHeight);
+  const original = await description.inputValue();
+  const height = () => card.evaluate(element => (element as HTMLElement).offsetHeight);
+  const initialHeight = await height();
+  await description.fill(''); await description.blur();
+  await expect(card.locator('[data-node-description]')).toHaveCount(0);
+  if (original.trim()) await expect.poll(height).toBeLessThan(initialHeight);
   const baseline = await height();
-  const contentGap = () => start.locator('[data-node-description]').evaluate(element => {
+  const contentGap = () => card.locator('[data-node-description]').evaluate(element => {
     const card = element.parentElement!, bounds = card.getBoundingClientRect(), scale = bounds.width / card.offsetWidth;
     return (bounds.bottom - element.getBoundingClientRect().bottom) / scale;
   });
-  await description.fill('Workflow input.'); await description.blur();
-  await expect(start.locator('[data-node-description]')).toBeVisible();
-  await expect.poll(height).toBeGreaterThan(baseline);
-  await expect.poll(height).toBeLessThanOrEqual(baseline + 28);
+  await description.fill('Short description.'); await description.blur();
+  await expect(card.locator('[data-node-description]')).toBeVisible();
+  await expect.poll(height).toBe(baseline + 26);
   expect(await contentGap()).toBeGreaterThanOrEqual(11);
   expect(await contentGap()).toBeLessThan(15);
   await captureEvidence(page, `${evidence}-short-description`, info);
   await description.fill('First line.\nSecond line.\nThird line.'); await description.blur();
-  await expect(start.locator('[data-node-description]')).toHaveCSS('-webkit-line-clamp', '2');
-  await expect.poll(height).toBeGreaterThan(baseline + 28);
-  await expect.poll(height).toBeLessThanOrEqual(baseline + 44);
+  await expect(card.locator('[data-node-description]')).toHaveCSS('-webkit-line-clamp', '2');
+  await expect.poll(height).toBe(baseline + 42);
   expect(await contentGap()).toBeLessThan(15);
+  await description.fill('A long description that wraps naturally as more text is entered into the node description field.'); await description.blur();
+  await expect.poll(height).toBe(baseline + 42);
   await description.fill(''); await description.blur();
-  await expect(start.locator('[data-node-description]')).toHaveCount(0);
+  await expect(card.locator('[data-node-description]')).toHaveCount(0);
   await expect.poll(height).toBe(baseline);
+  await description.fill(original); await description.blur();
+  await expect.poll(height).toBe(initialHeight);
 }
 
 test('shows each native node in the Dify-style card and grouped settings panel', async ({ page }, info) => {
@@ -64,7 +71,7 @@ test('shows each native node in the Dify-style card and grouped settings panel',
     await expect(page).toHaveTitle(/rustX$/);
     const start = canvas(page).getByLabel('Workflow Start', { exact: true }); await start.focus(); await start.press('Enter');
     await expect(inspector(page).getByRole('heading', { name: 'Input fields' })).toBeVisible();
-    await checkStartHeight(page, start, 'start', info);
+    await checkCardHeight(page, start, 'start', info);
     await captureEvidence(page, 'start-panel', info);
     const cases: { id: string; kind: NodeKind; row: string; section: string }[] = [
       { id: 'agent', kind: 'agent', row: 'reviewer', section: 'Agent configuration' },
@@ -83,6 +90,7 @@ test('shows each native node in the Dify-style card and grouped settings panel',
       await expect(inspector(page).getByRole(id === 'model' ? 'region' : 'heading', { name: section, exact: true }).first()).toBeVisible();
       await expect(inspector(page).getByLabel('Node ID', { exact: true })).toHaveCount(0);
       await expect(inspector(page).getByText('Native identity and rename', { exact: true })).toHaveCount(0);
+      await checkCardHeight(page, card, id, info);
       await expect(card).toContainText(`Configure ${id} here.`);
       const layout = await card.evaluate(element => {
         const preview = element.querySelector('[data-node-preview]')!, description = element.querySelector('[data-node-description]')!;
@@ -94,15 +102,41 @@ test('shows each native node in the Dify-style card and grouped settings panel',
       if (id === 'agent') {
         await inspector(page).getByRole('combobox', { name: 'Agent profile' }).fill('planner');
         await expect(card.locator('[data-node-preview]')).toContainText('planner');
+        const height = () => card.evaluate(element => (element as HTMLElement).offsetHeight);
+        const before = await height(), task = inspector(page).getByRole('textbox', { name: 'Task', exact: true });
+        await task.fill(''); await task.blur();
+        await expect.poll(height).toBe(before - 27);
+        await task.fill('Research the requested topic'); await task.blur();
+        await expect.poll(height).toBe(before);
+      }
+      if (id === 'model') {
+        const height = () => card.evaluate(element => (element as HTMLElement).offsetHeight), baseline = await height();
+        const strategy = inspector(page).getByRole('button', { name: 'Error handling strategy', exact: true });
+        for (const label of ['Default value', 'Fail branch']) {
+          await strategy.click(); await page.getByRole('menuitem', { name: new RegExp(`^${label}`) }).click();
+          await expect.poll(height).toBe(baseline + 32);
+          await checkCardHeight(page, card, `model-${label.toLowerCase().replaceAll(' ', '-')}`, info);
+          if (label === 'Fail branch') {
+            const port = card.locator('[data-handleid="fail"]');
+            await expect(port).toBeVisible();
+            const row = card.getByText('Fail branch', { exact: true });
+            const portBounds = (await port.boundingBox())!, rowBounds = (await row.boundingBox())!;
+            expect(Math.abs(portBounds.y + portBounds.height / 2 - rowBounds.y - rowBounds.height / 2)).toBeLessThan(2);
+          }
+        }
+        await strategy.click(); await page.getByRole('menuitem', { name: /^None/ }).click();
+        await expect.poll(height).toBe(baseline);
       }
       if (id === 'loop') {
         const limit = inspector(page).getByRole('textbox', { name: 'Maximum iterations' });
         await limit.fill('4'); await limit.blur();
         await expect(card.locator('[data-node-preview]')).toContainText(/Limit\s*4/);
         await card.getByRole('button', { name: 'Expand loop', exact: true }).click();
+        const container = await card.evaluate(element => ({ outer: (element as HTMLElement).offsetHeight, inner: (element.firstElementChild as HTMLElement).offsetHeight }));
+        expect(container.outer).toBeGreaterThanOrEqual(260); expect(container.inner).toBe(container.outer);
         const nestedStart = canvas(page).getByLabel(/^Block inputs ·/);
         await nestedStart.focus(); await nestedStart.press('Enter');
-        await checkStartHeight(page, nestedStart, 'nested-start', info);
+        await checkCardHeight(page, nestedStart, 'nested-start', info);
         await card.focus(); await card.press('Enter');
         await card.getByRole('button', { name: 'Collapse loop', exact: true }).click();
       }

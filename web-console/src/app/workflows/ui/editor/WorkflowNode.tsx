@@ -55,7 +55,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
   const adding = isConnectable && actions.editable, entered = connections.some(connection => connection.target === id);
   // A fail branch's port sits on the card's error row, not beside the head.
   const exits = ports.filter(port => port !== 'fail');
-  const card = <div className={clsx(css.node, data.view === 'start' && css.startCard, container && css.containerNode, node?.type === 'branch' && css.branchCard, selected && css.nodeSelected)} title={data.description}>
+  const card = <div className={clsx(css.node, container && css.containerNode, node?.type === 'branch' && css.branchCard, selected && css.nodeSelected)} title={data.description}>
     {container && <NodeResizer isVisible={selected && data.minSize.width <= 8192 && data.minSize.height <= 8192} minWidth={data.minSize.width} minHeight={data.minSize.height} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />}
     {/* As Dify's NodeTargetHandle: "+" adds a node ahead of an unconnected input. */}
     {node && <Handle type="target" position={Position.Left} id="in" className={clsx(css.handle, entered && css.handleConnected)} style={{ top: 28 }}>

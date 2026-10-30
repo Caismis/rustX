@@ -39,6 +39,11 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
     await expect(card).toContainText('IF'); await expect(card).toContainText('ELSE');
     await expect(card).not.toContainText('Select the first matching path.');
     expect((await card.boundingBox())!.height).toBeLessThan(130);
+    const height = () => card.evaluate(element => (element as HTMLElement).offsetHeight), emptyHeight = await height();
+    const description = inspector(page).getByRole('textbox', { name: 'Description', exact: true });
+    await description.fill('A branch description.\nIt remains in the panel.'); await description.blur();
+    await expect.poll(height).toBe(emptyHeight);
+    await description.fill('Select the first matching path.'); await description.blur();
     await captureEvidence(page, 'branch-empty', info);
     const settings = inspector(page).getByRole('region', { name: 'Settings', exact: true });
     const first = settings.getByRole('region', { name: 'IF', exact: true });
@@ -85,10 +90,13 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
     }
     await first.getByRole('button', { name: 'Add condition', exact: true }).scrollIntoViewIfNeeded();
     await captureEvidence(page, 'branch-configured', info);
+    const configuredHeight = await height();
     await settings.getByRole('button', { name: 'Remove CASE 1', exact: true }).click();
+    await expect.poll(height).toBeLessThan(configuredHeight);
     await expect(card.locator('[data-handleid="case_2"]')).toHaveCount(1);
     await expect(card.locator('[data-handleid="true"]')).toHaveCount(0);
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect.poll(height).toBe(configuredHeight);
     await expect(card.locator('[data-handleid="true"]')).toHaveCount(1);
     await page.getByRole('button', { name: 'Check', exact: true }).click(); await expect(inspector(page)).toContainText('Structure check passed');
     await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
