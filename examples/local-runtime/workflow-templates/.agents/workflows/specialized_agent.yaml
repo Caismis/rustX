@@ -23,7 +23,9 @@ block:
     describe:
       type: agent
       profile: reviewer
-      task: Describe the supplied topic in one short sentence.
+      task:
+      - type: literal
+        value: "Describe the supplied topic in one short sentence."
       input:
         topic:
           type: reference
@@ -34,7 +36,9 @@ block:
     inspect:
       type: agent
       profile: reviewer
-      task: Using the described topic, report what the repository files show.
+      task:
+      - type: literal
+        value: "Using the described topic, report what the repository files show."
       override:
         tools:
           builtin:

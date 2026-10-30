@@ -1,6 +1,6 @@
 import type { Translate } from '../../../../locale/translation';
 import type { NodeDefinition, Value } from '../../document/model';
-import { predicateText, toolText, valueText } from './summary';
+import { predicateText, promptText, toolText, valueText } from './summary';
 import { VariableLabel, type VariableSources } from './VariableLabel';
 import css from './Editor.module.css';
 
@@ -26,7 +26,7 @@ function rows(tx: Translate, node: PreviewNode): Row[] {
   switch (node.type) {
     case 'agent': return [
       { label: tx('workflows:card.profile'), value: node.profile || tx('workflows:summary.agent-unset') },
-      ...(node.task.trim() ? [{ label: tx('workflows:card.task'), value: node.task }] : []),
+      ...(node.task.length ? [{ label: tx('workflows:card.task'), value: promptText(node.task) }] : []),
     ];
     case 'model': return [{ label: tx('workflows:card.model'),
       value: node.model?.mode === 'explicit' ? node.model.model || tx('workflows:inspector.model-choose') : tx('workflows:inspector.model-session'),

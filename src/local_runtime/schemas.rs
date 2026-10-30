@@ -158,8 +158,10 @@ mod tests {
                 SourceToolSelection::Exact(vec!["get_issue".into()]),
             ),
         ] {
-            let document = workflow(&json!({"type":"agent","profile":"reviewer","task":"Review",
-                "output":{"type":"object"},"override":{"tools":{"sources":{"github":selection}}}}));
+            let document = workflow(
+                &json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],
+                "output":{"type":"object"},"override":{"tools":{"sources":{"github":selection}}}}),
+            );
             assert!(validator.is_valid(&document));
             let parsed: WorkflowDefinition =
                 serde_yaml::from_str(&serde_yaml::to_string(&document).unwrap()).unwrap();

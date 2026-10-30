@@ -1301,8 +1301,8 @@ export const fixtures = [
             "file_name": "typed_agent.yaml",
             "id": "typed_agent",
             "relative_path": ".agents/workflows/typed_agent.yaml",
-            "revision": "sha256:f84319255afba0d748b7d78c9813d63df95b3f89f1c73329c556f2f3ed3cc9d9",
-            "byte_length": "847",
+            "revision": "sha256:543983970ca62888b58124763f1a6b670e71bacac3f847ac4a00f7683d9a03aa",
+            "byte_length": "886",
             "modified_ms": 1790000000000,
             "description": "Summarize a topic with one typed Agent result.",
             "display": null,
@@ -1314,8 +1314,8 @@ export const fixtures = [
             "file_name": "specialized_agent.yaml",
             "id": "specialized_agent",
             "relative_path": ".agents/workflows/specialized_agent.yaml",
-            "revision": "sha256:93b02eabf355761e8c52cee22ebb483bf0e76b8e173dde2b68bd548a52f2f3b6",
-            "byte_length": "1247",
+            "revision": "sha256:9f4d55d262e410c6cd8ec9a5c8535445116ca8ef9facbbd0c1f44b6e50d72fe3",
+            "byte_length": "1325",
             "modified_ms": 1790000000000,
             "description": "Run one named role twice, specialized differently per node.",
             "display": null,
@@ -1327,8 +1327,8 @@ export const fixtures = [
             "file_name": "parallel_checks.yaml",
             "id": "parallel_checks",
             "relative_path": ".agents/workflows/parallel_checks.yaml",
-            "revision": "sha256:3f3676d4cc64e7e603000c433ac16ead26a58dcda1baa746ceb7ebedd1386e04",
-            "byte_length": "2003",
+            "revision": "sha256:0502d6e1732513b5b40444df62e8367b89df3f57524c510771bb887f1a6c885b",
+            "byte_length": "2081",
             "modified_ms": 1790000000000,
             "description": "Run two fixed keyed text checks and return both results.",
             "display": null,
@@ -1353,8 +1353,8 @@ export const fixtures = [
             "file_name": "parallel_review.yaml",
             "id": "parallel_review",
             "relative_path": ".agents/workflows/parallel_review.yaml",
-            "revision": "sha256:ee1de3ef072e4e8e69922a49ede7645bfaeb7d53ccfeb3f3fed2e106c4a033ac",
-            "byte_length": "4047",
+            "revision": "sha256:1404b66399b97dfcc8346b9a54e9b4026b01d387fb1a48ad1db1af57121f4b45",
+            "byte_length": "4156",
             "modified_ms": 1790000000000,
             "description": "Two scoped proposal reviews, including a fixed second quality pass; no Git required.",
             "display": null,
@@ -1366,8 +1366,8 @@ export const fixtures = [
             "file_name": "implement_and_review.yaml",
             "id": "implement_and_review",
             "relative_path": ".agents/workflows/implement_and_review.yaml",
-            "revision": "sha256:ac90d1fa53a37e3050475bcc5db80e027e609b0db647819aa6e6c15547657340",
-            "byte_length": "14331",
+            "revision": "sha256:edf98e365cc052086ab08efc6a0477dca9ff44757e78010f847ecd6b14da8e22",
+            "byte_length": "14349",
             "modified_ms": 1790000000000,
             "description": "Plan greeting.py, gate implementation on human plan acceptance, then implement and run real checks in the shared Session workspace up to three times.",
             "display": null,
@@ -1419,7 +1419,7 @@ export const fixtures = [
         "id": "typed_agent",
         "path": "/workspace/fixture/.agents/workflows/typed_agent.yaml",
         "relative_path": ".agents/workflows/typed_agent.yaml",
-        "revision": "sha256:f84319255afba0d748b7d78c9813d63df95b3f89f1c73329c556f2f3ed3cc9d9",
+        "revision": "sha256:543983970ca62888b58124763f1a6b670e71bacac3f847ac4a00f7683d9a03aa",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -1466,7 +1466,12 @@ export const fixtures = [
               "summarize": {
                 "type": "agent",
                 "profile": "reviewer",
-                "task": "Summarize the supplied topic in one short sentence.",
+                "task": [
+                  {
+                    "type": "literal",
+                    "value": "Summarize the supplied topic in one short sentence."
+                  }
+                ],
                 "input": {
                   "topic": {
                     "type": "reference",
@@ -1537,7 +1542,7 @@ export const fixtures = [
         "id": "specialized_agent",
         "path": "/workspace/fixture/.agents/workflows/specialized_agent.yaml",
         "relative_path": ".agents/workflows/specialized_agent.yaml",
-        "revision": "sha256:93b02eabf355761e8c52cee22ebb483bf0e76b8e173dde2b68bd548a52f2f3b6",
+        "revision": "sha256:9f4d55d262e410c6cd8ec9a5c8535445116ca8ef9facbbd0c1f44b6e50d72fe3",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -1572,7 +1577,12 @@ export const fixtures = [
               "describe": {
                 "type": "agent",
                 "profile": "reviewer",
-                "task": "Describe the supplied topic in one short sentence.",
+                "task": [
+                  {
+                    "type": "literal",
+                    "value": "Describe the supplied topic in one short sentence."
+                  }
+                ],
                 "input": {
                   "topic": {
                     "type": "reference",
@@ -1598,7 +1608,12 @@ export const fixtures = [
               "inspect": {
                 "type": "agent",
                 "profile": "reviewer",
-                "task": "Using the described topic, report what the repository files show.",
+                "task": [
+                  {
+                    "type": "literal",
+                    "value": "Using the described topic, report what the repository files show."
+                  }
+                ],
                 "input": {
                   "described": {
                     "type": "reference",
@@ -1695,7 +1710,7 @@ export const fixtures = [
         "id": "parallel_checks",
         "path": "/workspace/fixture/.agents/workflows/parallel_checks.yaml",
         "relative_path": ".agents/workflows/parallel_checks.yaml",
-        "revision": "sha256:3f3676d4cc64e7e603000c433ac16ead26a58dcda1baa746ceb7ebedd1386e04",
+        "revision": "sha256:0502d6e1732513b5b40444df62e8367b89df3f57524c510771bb887f1a6c885b",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -1752,7 +1767,12 @@ export const fixtures = [
               "check_text_brevity_assess_brevity": {
                 "type": "agent",
                 "profile": "reviewer",
-                "task": "Does the supplied text avoid unnecessary repetition?",
+                "task": [
+                  {
+                    "type": "literal",
+                    "value": "Does the supplied text avoid unnecessary repetition?"
+                  }
+                ],
                 "input": {
                   "text": {
                     "type": "reference",
@@ -1778,7 +1798,12 @@ export const fixtures = [
               "check_text_clarity_assess_clarity": {
                 "type": "agent",
                 "profile": "reviewer",
-                "task": "Is the supplied text understandable without unexplained jargon?",
+                "task": [
+                  {
+                    "type": "literal",
+                    "value": "Is the supplied text understandable without unexplained jargon?"
+                  }
+                ],
                 "input": {
                   "text": {
                     "type": "reference",
@@ -2001,7 +2026,7 @@ export const fixtures = [
         "id": "parallel_review",
         "path": "/workspace/fixture/.agents/workflows/parallel_review.yaml",
         "relative_path": ".agents/workflows/parallel_review.yaml",
-        "revision": "sha256:ee1de3ef072e4e8e69922a49ede7645bfaeb7d53ccfeb3f3fed2e106c4a033ac",
+        "revision": "sha256:1404b66399b97dfcc8346b9a54e9b4026b01d387fb1a48ad1db1af57121f4b45",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2145,7 +2170,12 @@ export const fixtures = [
               "reviews_quality_refine": {
                 "type": "agent",
                 "profile": "reviewer",
-                "task": "Independently check this quality assessment for unsupported claims. Return the corrected assessment.",
+                "task": [
+                  {
+                    "type": "literal",
+                    "value": "Independently check this quality assessment for unsupported claims. Return the corrected assessment."
+                  }
+                ],
                 "input": {
                   "assessment": {
                     "type": "reference",
@@ -2174,7 +2204,12 @@ export const fixtures = [
               "reviews_quality_review": {
                 "type": "agent",
                 "profile": "reviewer",
-                "task": "Review the supplied proposal for quality. No external research is required.",
+                "task": [
+                  {
+                    "type": "literal",
+                    "value": "Review the supplied proposal for quality. No external research is required."
+                  }
+                ],
                 "input": {
                   "proposal": {
                     "type": "reference",
@@ -2204,7 +2239,12 @@ export const fixtures = [
               "reviews_security_review": {
                 "type": "agent",
                 "profile": "reviewer",
-                "task": "Review the supplied proposal for security. No external research is required.",
+                "task": [
+                  {
+                    "type": "literal",
+                    "value": "Review the supplied proposal for security. No external research is required."
+                  }
+                ],
                 "input": {
                   "proposal": {
                     "type": "reference",
@@ -2336,7 +2376,7 @@ export const fixtures = [
         "id": "implement_and_review",
         "path": "/workspace/fixture/.agents/workflows/implement_and_review.yaml",
         "relative_path": ".agents/workflows/implement_and_review.yaml",
-        "revision": "sha256:ac90d1fa53a37e3050475bcc5db80e027e609b0db647819aa6e6c15547657340",
+        "revision": "sha256:edf98e365cc052086ab08efc6a0477dca9ff44757e78010f847ecd6b14da8e22",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2681,7 +2721,12 @@ export const fixtures = [
               "plan": {
                 "type": "agent",
                 "profile": "planner",
-                "task": "Produce a concise implementation plan for the fixed greeting contract and supplied priority. Do not edit files or run commands. The plan is business data, never executable Workflow structure.",
+                "task": [
+                  {
+                    "type": "literal",
+                    "value": "Produce a concise implementation plan for the fixed greeting contract and supplied priority. Do not edit files or run commands. The plan is business data, never executable Workflow structure."
+                  }
+                ],
                 "input": {
                   "brief": {
                     "type": "reference",
@@ -2918,7 +2963,12 @@ export const fixtures = [
                     "implement": {
                       "type": "agent",
                       "profile": "implementer",
-                      "task": "Implement or repair greeting.py so greeting(name) returns Hello, NAME! and uses friend for an empty name. Use the supplied plan and feedback as data. Change only greeting.py. Never claim verification from prose; the next fixed Tool runs the checker. Return the implemented plan as the declared output for the next iteration.",
+                      "task": [
+                        {
+                          "type": "literal",
+                          "value": "Implement or repair greeting.py so greeting(name) returns Hello, NAME! and uses friend for an empty name. Use the supplied plan and feedback as data. Change only greeting.py. Never claim verification from prose; the next fixed Tool runs the checker. Return the implemented plan as the declared output for the next iteration."
+                        }
+                      ],
                       "input": {
                         "feedback": {
                           "type": "reference",
@@ -3687,7 +3737,12 @@ export const fixtures = [
             "reviews_quality_refine": {
               "type": "agent",
               "profile": "reviewer",
-              "task": "Independently check this quality assessment for unsupported claims. Return the corrected assessment.",
+              "task": [
+                {
+                  "type": "literal",
+                  "value": "Independently check this quality assessment for unsupported claims. Return the corrected assessment."
+                }
+              ],
               "input": {
                 "assessment": {
                   "type": "reference",
@@ -3716,7 +3771,12 @@ export const fixtures = [
             "reviews_quality_review": {
               "type": "agent",
               "profile": "reviewer",
-              "task": "Review the supplied proposal for quality. No external research is required.",
+              "task": [
+                {
+                  "type": "literal",
+                  "value": "Review the supplied proposal for quality. No external research is required."
+                }
+              ],
               "input": {
                 "proposal": {
                   "type": "reference",
@@ -3746,7 +3806,12 @@ export const fixtures = [
             "reviews_security_review": {
               "type": "agent",
               "profile": "reviewer",
-              "task": "Review the supplied proposal for security. No external research is required.",
+              "task": [
+                {
+                  "type": "literal",
+                  "value": "Review the supplied proposal for security. No external research is required."
+                }
+              ],
               "input": {
                 "proposal": {
                   "type": "reference",
@@ -4000,7 +4065,12 @@ export const fixtures = [
             "reviews_quality_refine": {
               "type": "agent",
               "profile": "reviewer",
-              "task": "Independently check this quality assessment for unsupported claims. Return the corrected assessment.",
+              "task": [
+                {
+                  "type": "literal",
+                  "value": "Independently check this quality assessment for unsupported claims. Return the corrected assessment."
+                }
+              ],
               "input": {
                 "assessment": {
                   "type": "reference",
@@ -4029,7 +4099,12 @@ export const fixtures = [
             "reviews_quality_review": {
               "type": "agent",
               "profile": "reviewer",
-              "task": "Review the supplied proposal for quality. No external research is required.",
+              "task": [
+                {
+                  "type": "literal",
+                  "value": "Review the supplied proposal for quality. No external research is required."
+                }
+              ],
               "input": {
                 "proposal": {
                   "type": "reference",
@@ -4059,7 +4134,12 @@ export const fixtures = [
             "reviews_security_review": {
               "type": "agent",
               "profile": "reviewer",
-              "task": "Review the supplied proposal for security. No external research is required.",
+              "task": [
+                {
+                  "type": "literal",
+                  "value": "Review the supplied proposal for security. No external research is required."
+                }
+              ],
               "input": {
                 "proposal": {
                   "type": "reference",
@@ -4173,7 +4253,7 @@ export const fixtures = [
           "directory": "/workspace/fixture"
         },
         "id": "parallel_review",
-        "candidate_revision": "sha256:39e090527cf04e8c67a74dfbecf96bddb4ef87e529989bd432cbf4fb068ef396",
+        "candidate_revision": "sha256:d5634f2a0f57cd499298fae723fd16c2156c0c61d05d6ab56586efc107004a17",
         "generation": "7",
         "query": null,
         "analysis": {
@@ -4464,7 +4544,7 @@ export const fixtures = [
               "additionalProperties": false
             }
           },
-          "revision": "sha256:ee1de3ef072e4e8e69922a49ede7645bfaeb7d53ccfeb3f3fed2e106c4a033ac"
+          "revision": "sha256:1404b66399b97dfcc8346b9a54e9b4026b01d387fb1a48ad1db1af57121f4b45"
         },
         "dependencies": {
           "status": "admitted",
@@ -4473,7 +4553,7 @@ export const fixtures = [
         "explanation": {
           "identity": {
             "workflow_id": "parallel_review",
-            "program_digest": "c7d3c353dba030aedea6fe081d203919560b942d7b3774733b0b37128fee0a4f"
+            "program_digest": "b375c0aab474d4998109f1bb4648c7e20df8d6baedcc72191092fb086d12b37b"
           },
           "stage": "statically_compiled_online_admission_unresolved",
           "input_schema": {
@@ -4942,7 +5022,7 @@ export const fixtures = [
         "kind": "workspace",
         "directory": "/workspace/fixture"
       },
-      "expected_revision": "sha256:ee1de3ef072e4e8e69922a49ede7645bfaeb7d53ccfeb3f3fed2e106c4a033ac",
+      "expected_revision": "sha256:1404b66399b97dfcc8346b9a54e9b4026b01d387fb1a48ad1db1af57121f4b45",
       "mutation": {
         "kind": "workflow",
         "id": "parallel_review",
@@ -5089,7 +5169,12 @@ export const fixtures = [
                 "reviews_quality_refine": {
                   "type": "agent",
                   "profile": "reviewer",
-                  "task": "Independently check this quality assessment for unsupported claims. Return the corrected assessment.",
+                  "task": [
+                    {
+                      "type": "literal",
+                      "value": "Independently check this quality assessment for unsupported claims. Return the corrected assessment."
+                    }
+                  ],
                   "input": {
                     "assessment": {
                       "type": "reference",
@@ -5118,7 +5203,12 @@ export const fixtures = [
                 "reviews_quality_review": {
                   "type": "agent",
                   "profile": "reviewer",
-                  "task": "Review the supplied proposal for quality. No external research is required.",
+                  "task": [
+                    {
+                      "type": "literal",
+                      "value": "Review the supplied proposal for quality. No external research is required."
+                    }
+                  ],
                   "input": {
                     "proposal": {
                       "type": "reference",
@@ -5148,7 +5238,12 @@ export const fixtures = [
                 "reviews_security_review": {
                   "type": "agent",
                   "profile": "reviewer",
-                  "task": "Review the supplied proposal for security. No external research is required.",
+                  "task": [
+                    {
+                      "type": "literal",
+                      "value": "Review the supplied proposal for security. No external research is required."
+                    }
+                  ],
                   "input": {
                     "proposal": {
                       "type": "reference",

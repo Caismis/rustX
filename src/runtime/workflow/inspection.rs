@@ -450,6 +450,14 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                         .iter()
                         .map(|(key, value)| (format!("input.{key}"), binding(value))),
                 );
+                view.bindings.extend(
+                    agent
+                        .task
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, part)| matches!(part, super::WorkflowValue::Reference { .. }))
+                        .map(|(position, part)| (format!("task.{position}"), binding(part))),
+                );
             }
             WorkflowNodeProgram::Tool {
                 selector,

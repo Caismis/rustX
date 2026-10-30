@@ -47,9 +47,9 @@ block:
     plan:
       type: agent
       profile: planner
-      task: Produce a concise implementation plan for the fixed greeting contract
-        and supplied priority. Do not edit files or run commands. The plan is business
-        data, never executable Workflow structure.
+      task:
+      - type: literal
+        value: "Produce a concise implementation plan for the fixed greeting contract and supplied priority. Do not edit files or run commands. The plan is business data, never executable Workflow structure."
       input:
         brief:
           type: reference
@@ -190,11 +190,9 @@ block:
           implement:
             type: agent
             profile: implementer
-            task: Implement or repair greeting.py so greeting(name) returns Hello,
-              NAME! and uses friend for an empty name. Use the supplied plan and feedback
-              as data. Change only greeting.py. Never claim verification from prose;
-              the next fixed Tool runs the checker. Return the implemented plan as
-              the declared output for the next iteration.
+            task:
+            - type: literal
+              value: "Implement or repair greeting.py so greeting(name) returns Hello, NAME! and uses friend for an empty name. Use the supplied plan and feedback as data. Change only greeting.py. Never claim verification from prose; the next fixed Tool runs the checker. Return the implemented plan as the declared output for the next iteration."
             input:
               plan:
                 type: reference

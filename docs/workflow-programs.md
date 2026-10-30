@@ -445,8 +445,10 @@ Values are a closed tagged AST:
 | `array` | `items: [<value expression>, ...]` | Atomic array construction |
 
 An Agent's `input` is a map of names to value expressions. A branch's `input`
-and a Return's `output` are each one value expression. Tasks are fixed
-strings. There is no interpolation, truthiness, callback, Transform node,
+and a Return's `output` are each one value expression. An Agent's `task`,
+like a Model message's `content`, is a list of fixed string literals and
+references, rendered in order when the AgentRun starts: a string is inserted
+as itself, any other value as JSON text. There is no interpolation, truthiness, callback, Transform node,
 or embedded programming language. Unknown fields/tags and duplicate
 construction field keys are rejected. A failing construction commits no
 partial local value.

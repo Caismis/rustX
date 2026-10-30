@@ -739,8 +739,11 @@
               "type": "string"
             },
             "task": {
-              "description": "The fixed task instruction for this `AgentRun`.",
-              "type": "string"
+              "description": "The task instruction for this `AgentRun`: fixed text and explicit\nreferences, as a Model message's content.",
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "array"
             },
             "type": {
               "const": "agent",

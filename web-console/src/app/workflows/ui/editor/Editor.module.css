@@ -735,6 +735,9 @@
 .strategyItem[data-highlighted] { background: var(--dsw-alias-interactive-bg-hover); }
 .strategyItem b { font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-primary); }
 .strategyItem small { font-size: 11px; line-height: 1.4; color: var(--dsw-alias-label-tertiary); }
+.profilePopup { width: var(--anchor-width); max-height: 280px; overflow-y: auto; padding: 4px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 10px 28px rgba(0,0,0,.14); box-sizing: border-box; }
+.profilePopup .strategyItem[aria-checked='true'] b { color: var(--dsw-alias-state-business-primary); }
+.profileEmpty { margin: 0; padding: 8px 9px; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
 .failureDefaults { display: flex; flex-direction: column; gap: 4px; }
 .failBranchCard { padding: 10px 12px; border: 1px dashed var(--dsw-alias-border-l3); border-radius: 8px; }
 .failBranchCard b { display: block; font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary); }

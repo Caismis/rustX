@@ -6,6 +6,11 @@ const clip = (text: string) => text.length > LIMIT ? `${text.slice(0, LIMIT - 1)
 
 /** A presentation label of a value. Paths are shown joined; the document
  * keeps them as explicit components. */
+/** The text a prompt is copied and previewed as: variables in Dify's `{{…}}` form. */
+export function promptText(parts: readonly Value[]): string {
+  return parts.map(part => part.type === 'reference' ? `{{${part.path.join('.')}}}` : part.type === 'literal' && typeof part.value === 'string' ? part.value : '').join('');
+}
+
 export function valueText(value: Value): string {
   switch (value.type) {
     case 'reference': return value.path.join('.');
@@ -36,7 +41,7 @@ export function toolText(selector: Extract<NodeDefinition, { type: 'tool' }>['se
 /** Number of compact configuration rows a native node renders on its card. */
 export function previewRowCount(node: NodeDefinition): number {
   switch (node.type) {
-    case 'agent': return node.task.trim() ? 2 : 1;
+    case 'agent': return node.task.length ? 2 : 1;
     case 'model': return 1;
     case 'tool': return 1 + (node.arguments.type === 'object' ? Math.min(Object.keys(node.arguments.fields).length, 2) : 1);
     case 'review': return node.context.length ? 2 : 1;

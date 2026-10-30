@@ -96,7 +96,9 @@ block:
     reviews_quality_review:
       type: agent
       profile: reviewer
-      task: Review the supplied proposal for quality. No external research is required.
+      task:
+      - type: literal
+        value: "Review the supplied proposal for quality. No external research is required."
       input:
         proposal:
           type: reference
@@ -117,8 +119,9 @@ block:
     reviews_quality_refine:
       type: agent
       profile: reviewer
-      task: Independently check this quality assessment for unsupported claims. Return
-        the corrected assessment.
+      task:
+      - type: literal
+        value: "Independently check this quality assessment for unsupported claims. Return the corrected assessment."
       input:
         assessment:
           type: reference
@@ -138,7 +141,9 @@ block:
     reviews_security_review:
       type: agent
       profile: reviewer
-      task: Review the supplied proposal for security. No external research is required.
+      task:
+      - type: literal
+        value: "Review the supplied proposal for security. No external research is required."
       input:
         proposal:
           type: reference

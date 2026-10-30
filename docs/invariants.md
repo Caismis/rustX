@@ -3164,8 +3164,8 @@ the launch-boundary policy inheritance.
   JSON-compatible values and explicit artifact/reference identities cross
   nodes. An Agent's transcript, reasoning, diagnostics, provider/model
   identity, usage, timing, and parent canonical history never propagate
-  implicitly. Agent tasks are fixed strings and references do not contain an
-  interpolation or expression language.
+  implicitly. Agent tasks and Model messages are fixed text and explicit
+  references; there is no interpolation or expression language.
 - **Agent reasoning and control flow are separate.** Agent invokes one
   Workflow-admitted named Subagent profile with its frozen native resources;
   Branch consumes typed boolean/equality/composition predicates and chooses

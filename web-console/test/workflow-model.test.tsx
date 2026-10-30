@@ -46,7 +46,7 @@ async function open(analyze: WorkflowScopePort['analyze'] = () => new Promise(()
   const actor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: 'model_flow' } } }).start();
   await act(async () => { await Promise.resolve(); });
   render(<WorkflowEditor surface={surface} editor={actor} authority={authority} scopeLabel="Global" />);
-  select(node.type === 'tool' ? 'Tool node model' : 'Model node model');
+  select(`${node.type[0].toUpperCase()}${node.type.slice(1)} node model`);
   return actor;
 }
 function select(label: string) {
@@ -284,6 +284,19 @@ describe('Model native editing document', () => {
     fireEvent.click(dialog.getByRole('tab', { name: 'JSON Schema' }));
     const code = await screen.findByRole('textbox', { name: 'JSON' });
     expect(JSON.parse(readJson(code)).properties.status).toEqual({ type: 'string', enum: ['low, review', 'high'], description: 'Classify the result.' });
+  });
+
+  it('writes an Agent task in the prompt editor, its variables as tokens, and lists the scope\'s profiles', async () => {
+    const agent: NodeDefinition = { type: 'agent', profile: '', task: [{ type: 'literal', value: 'Review ' }, { type: 'reference', path: ['args'] }], input: {}, output: object };
+    await open(undefined, agent);
+    const task = inspector().getByRole('textbox', { name: 'Task' });
+    expect(task.textContent).toContain('Review ');
+    expect(within(task).getByRole('button', { name: 'Choose a variable' }).textContent).toContain('Whole value');
+    const trigger = inspector().getByRole('button', { name: 'Agent profile' });
+    expect(trigger.getAttribute('aria-invalid')).toBe('true');
+    expect(trigger.textContent).toContain('Choose an Agent profile');
+    await act(async () => fireEvent.click(trigger));
+    expect(await screen.findByText('No Agent profiles in this scope')).toBeTruthy();
   });
 
   it('handles failure as Dify: retries, then a default value or a fail branch whose connections leave with it', async () => {

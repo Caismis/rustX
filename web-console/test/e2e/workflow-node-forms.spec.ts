@@ -53,7 +53,7 @@ test('shows each native node in the Dify-style card and grouped settings panel',
   try {
     let document: WorkflowDocument = { description: 'Node surfaces', block: emptyBlock() };
     document.block.input = { type: 'object', properties: { topic: { type: 'string' } }, required: ['topic'], additionalProperties: false };
-    document.block.nodes.agent = { type: 'agent', profile: 'reviewer', task: 'Research the requested topic', input: {}, output: { type: 'object', properties: { summary: { type: 'string' } }, additionalProperties: false } };
+    document.block.nodes.agent = { type: 'agent', profile: 'reviewer', task: [{ type: 'literal', value: 'Research the requested topic' }], input: {}, output: { type: 'object', properties: { summary: { type: 'string' } }, additionalProperties: false } };
     document.block.nodes.model = { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Write a concise summary.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } };
     document.block.nodes.tool = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: { path: { type: 'reference', path: ['args', 'topic'] }, token: { type: 'literal', value: 'super-secret' } } }, result: { type: 'text', part: 0 } };
     document.block.nodes.review = { type: 'review', subject: { type: 'plan', value: { type: 'reference', path: ['model'] } }, context: [{ type: 'reference', path: ['args', 'topic'] }] };
@@ -100,8 +100,9 @@ test('shows each native node in the Dify-style card and grouped settings panel',
       expect(layout.description).toBeLessThanOrEqual(layout.card - 8);
       await captureEvidence(page, `${id}-panel`, info);
       if (id === 'agent') {
-        await inspector(page).getByRole('combobox', { name: 'Agent profile' }).fill('planner');
-        await expect(card.locator('[data-node-preview]')).toContainText('planner');
+        await inspector(page).getByRole('button', { name: 'Agent profile', exact: true }).click();
+        await expect(page.getByRole('menuitemradio', { name: 'reviewer', exact: true })).toHaveAttribute('aria-checked', 'true');
+        await page.keyboard.press('Escape');
         const height = () => card.evaluate(element => (element as HTMLElement).offsetHeight);
         const before = await height(), task = inspector(page).getByRole('textbox', { name: 'Task', exact: true });
         await task.fill(''); await task.blur();

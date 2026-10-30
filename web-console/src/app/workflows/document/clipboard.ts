@@ -105,7 +105,7 @@ function node(input: unknown): void {
   switch (record.type) {
     case 'start': keys(record, ['type']); return;
     case 'agent':
-      keys(record, ['type', 'profile', 'task', 'input', 'output', 'override']); text(record.profile); text(record.task); object(record.output);
+      keys(record, ['type', 'profile', 'task', 'input', 'output', 'override']); text(record.profile); array(record.task).forEach(value); object(record.output);
       if (record.override !== undefined) override(record.override);
       if (record.input !== undefined) Object.values(object(record.input)).forEach(value); return;
     case 'model': {

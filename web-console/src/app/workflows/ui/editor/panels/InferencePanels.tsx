@@ -1,4 +1,4 @@
-import { lazy, Suspense, useId, useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import { IconChevronDownOutline14, IconEditOutline16, IconQuestionOutline14 } from '../../../../../presentation/primitives/icons';
 import { schemaObject, schemaTarget } from '../../../document/schema';
@@ -10,12 +10,14 @@ import { orderedKeys } from '../../../document/presentation';
 import { edgePort } from '../../../document/ports';
 import { IconPlus } from '../../icons';
 import { PromptCard } from '../forms/PromptCard';
-import { PromptEditor, promptText, useInsertVariable } from '../forms/PromptEditor';
+import { PromptEditor, useInsertVariable } from '../forms/PromptEditor';
+import { promptText } from '../summary';
+import { KindIcon } from '../../icons';
 import { useTranslation } from '../../../../../locale/react';
 import { encodeField, within, type FieldAddress } from '../../../document/fields';
 import { ModelSelection } from '../forms/ModelSelection';
 import { SchemaEditor } from '../forms/SchemaEditor';
-import { DraftTextField, JsonField, Section, TextField } from '../forms/fields';
+import { DraftTextField, JsonField, Section } from '../forms/fields';
 import { Bindings, useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 
@@ -197,15 +199,13 @@ function InsertVariable() {
 }
 
 export function AgentPanel(props: PanelProps) {
-  const tx = useTranslation(), listId = useId(), { node, at, update } = useNode(props, 'agent');
+  const tx = useTranslation(), { node, at, update } = useNode(props, 'agent');
   return <>
+    {/* As Dify's Agent panel: the strategy is picked from a list, then the
+        instruction is written in the same prompt editor as the LLM node. */}
     <Section title={tx('workflows:panel.agent-config')}>
-      <TextField label={tx('workflows:inspector.agent-profile')} hint={tx('workflows:inspector.agent-profile-hint')} value={node.profile} list={listId} invalid={!node.profile} field={encodeField(at('profile'))}
-        onChange={(profile, session) => update(current => ({ ...current, profile }), at('profile'), undefined, session)} />
-      <datalist id={listId}>{props.vocabulary?.profiles.map(name => <option key={name} value={name} />)}</datalist>
-    </Section>
-    <Section title={tx('workflows:panel.prompt')}>
-      <TextField label={tx('workflows:inspector.agent-task')} value={node.task} multiline field={encodeField(at('task'))} onChange={(task, session) => update(current => ({ ...current, task }), at('task'), undefined, session)} />
+      <ProfileSelection {...props} />
+      <AgentTask {...props} />
     </Section>
     <Bindings {...props} />
     <Section title={tx('workflows:panel.output')}><SchemaEditor label={tx('workflows:inspector.agent-output')} value={node.output} address={at('output')} edit={props.edit} /></Section>
@@ -217,4 +217,38 @@ export function AgentPanel(props: PanelProps) {
       </details>
     </Section>
   </>;
+}
+
+/** The named profile, chosen from those discovered in this scope. */
+function ProfileSelection(props: PanelProps) {
+  const tx = useTranslation(), { node, at, update } = useNode(props, 'agent'), profiles = props.vocabulary?.profiles ?? [];
+  return <Menu.Root modal={false}>
+    <Menu.Trigger className={css.modelTrigger} aria-label={tx('workflows:inspector.agent-profile')} aria-invalid={!node.profile || undefined} title={tx('workflows:inspector.agent-profile-hint')}>
+      <span className={`${css.modelTriggerIcon} ${css.kind_agent}`}><KindIcon kind="agent" size={14} /></span>
+      <span className={css.modelTriggerName}>{node.profile || tx('workflows:inspector.agent-profile-choose')}</span>
+      <span className={css.modelTriggerSettings} aria-hidden><IconChevronDownOutline14 /></span>
+    </Menu.Trigger>
+    <Menu.Portal><Menu.Positioner side="bottom" align="start" sideOffset={4} className={css.branchOperatorPositioner}>
+      <Menu.Popup className={css.profilePopup}>
+        {profiles.length ? profiles.map(name => <Menu.Item key={name} className={css.strategyItem} aria-checked={name === node.profile} role="menuitemradio"
+          onClick={() => { if (name !== node.profile) update(current => ({ ...current, profile: name }), at('profile')); }}><b>{name}</b></Menu.Item>)
+          : <p className={css.profileEmpty}>{tx('workflows:inspector.agent-profile-none')}</p>}
+      </Menu.Popup>
+    </Menu.Positioner></Menu.Portal>
+  </Menu.Root>;
+}
+
+/** The Agent's task in the prompt editor, with the variables it inserts. */
+function AgentTask(props: PanelProps) {
+  const tx = useTranslation(), { node, at, update } = useNode(props, 'agent');
+  const [expanded, setExpanded] = useState(false), [session, setSession] = useState(0);
+  const address = at('task'), field = encodeField(address), label = tx('workflows:inspector.agent-task');
+  return <PromptEditor parts={node.task} address={address} edit={props.edit} label={label} expanded={expanded} invalid={!node.task.length}
+    placeholder={tx('workflows:prompt.task-placeholder')} variablePlaceholder={tx('workflows:branch.select-variable')}
+    onChange={task => update(current => ({ ...current, task }), address, undefined, `${field}:${session}`)}>
+    {editable => <PromptCard label={label} hint={tx('workflows:prompt.task-hint')} text={promptText(node.task)} expanded={expanded} onExpand={() => setExpanded(value => !value)}
+      role={<b className={css.promptRoleFixed}>{label}</b>} tools={<InsertVariable />}>
+      <div onFocus={() => setSession(value => value + 1)}>{editable}</div>
+    </PromptCard>}
+  </PromptEditor>;
 }

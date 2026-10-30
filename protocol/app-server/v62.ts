@@ -1942,9 +1942,10 @@ export type WorkflowNodeDefinition =
        */
       profile: string;
       /**
-       * The fixed task instruction for this `AgentRun`.
+       * The task instruction for this `AgentRun`: fixed text and explicit
+       * references, as a Model message's content.
        */
-      task: string;
+      task: WorkflowValue[];
       /**
        * Explicit input bindings from workflow-local values.
        */
@@ -2229,6 +2230,9 @@ export type WorkflowConsumerField =
   | {
       index: number;
       kind: 'message';
+    }
+  | {
+      kind: 'task';
     }
   | {
       kind: 'arguments';

@@ -648,7 +648,9 @@ block:
     work:
       type: agent
       profile: reviewer
-      task: Review the implementation.
+      task:
+      - type: literal
+        value: 'Review the implementation.'
       override:
         tools:
           builtin: [read, grep, bash]
@@ -778,7 +780,9 @@ block:
           work:
             type: agent
             profile: reviewer
-            task: Review the implementation.
+            task:
+            - type: literal
+              value: 'Review the implementation.'
             override:
               tools:
                 builtin:

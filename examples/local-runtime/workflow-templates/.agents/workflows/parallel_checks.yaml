@@ -44,7 +44,9 @@ block:
     check_text_clarity_assess_clarity:
       type: agent
       profile: reviewer
-      task: Is the supplied text understandable without unexplained jargon?
+      task:
+      - type: literal
+        value: "Is the supplied text understandable without unexplained jargon?"
       input:
         text:
           type: reference
@@ -62,7 +64,9 @@ block:
     check_text_brevity_assess_brevity:
       type: agent
       profile: reviewer
-      task: Does the supplied text avoid unnecessary repetition?
+      task:
+      - type: literal
+        value: "Does the supplied text avoid unnecessary repetition?"
       input:
         text:
           type: reference

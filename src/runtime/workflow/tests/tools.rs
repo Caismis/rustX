@@ -736,7 +736,7 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
         "agent".into(),
         WorkflowNodeDefinition::Agent {
             profile: "reviewer".into(),
-            task: "Return machine-compatible findings".into(),
+            task: vec![text("Return machine-compatible findings")],
             input: BTreeMap::new(),
             output: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
             invocation_override: None,

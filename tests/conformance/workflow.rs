@@ -351,7 +351,9 @@ block:
     review:
       type: agent
       profile: reviewer
-      task: Review the request and commit the result.
+      task:
+      - type: literal
+        value: 'Review the request and commit the result.'
       input:
         task:
           type: reference

@@ -211,7 +211,7 @@ impl Driver {
                 "block": {
                     "input": {"type":"object", "properties":{"task":{"type":"string"}}, "required":["task"], "additionalProperties":false},
                     "output": {"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false},"nodes": {"workflow_start":{"type":"start"},
-                        "review": {"type":"agent", "profile":"image_reviewer", "task":"Review the delegated text.",
+                        "review": {"type":"agent", "profile":"image_reviewer", "task":[{"type":"literal","value":"Review the delegated text."}],
                             "input":{"task":{"type":"reference","path":["args","task"]}},
                             "output":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}},
                         "done": {"type":"return","output":{"type":"reference","path":["review"]}}

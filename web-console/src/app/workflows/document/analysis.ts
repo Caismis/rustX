@@ -18,6 +18,8 @@ export function consumerAddress(document: WorkflowDocument, field: FieldAddress)
     // Every variable of a message shares its scope, inserted or not.
     const index = parts.shift(); if (typeof index !== 'number' || !node.messages[index]) return undefined;
     return { address: { block: [...field.block], node: field.node }, field: { kind: 'message', index }, path: [] };
+  } else if (first === 'task' && node.type === 'agent') {
+    return { address: { block: [...field.block], node: field.node }, field: { kind: 'task' }, path: [] };
   } else if (first === 'arguments' && node.type === 'tool') consumer = { kind: 'arguments' };
   else if (first === 'subject' && node.type === 'review' && parts.shift() === 'value') consumer = { kind: 'review_subject' };
   else if (first === 'context' && node.type === 'review') {

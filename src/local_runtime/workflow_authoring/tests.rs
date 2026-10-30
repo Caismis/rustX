@@ -302,7 +302,7 @@ fn unselected_authored_identities_round_trip_for_analysis_but_cannot_replace_a_f
     use serde_json::json;
     let roots = Roots::new();
     let nodes = [
-        json!({"type":"agent", "profile":"", "task":"Review", "input":{},
+        json!({"type":"agent", "profile":"", "task":[{"type":"literal","value":"Review"}], "input":{},
             "output":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}}),
         json!({"type":"model", "model":{"mode":"explicit","model":"","request_params":{}},
             "messages":[{"role":"system","content":[{"type":"literal","value":"Review"}]}], "output":{"type":"text"}}),
@@ -422,7 +422,9 @@ block:
     review:
       type: agent
       profile: reviewer
-      task: Review it.
+      task:
+      - type: literal
+        value: 'Review it.'
       input:
         proposal: {type: reference, path: [args, proposal]}
       output: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}

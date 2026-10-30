@@ -23,7 +23,9 @@ block:
     summarize:
       type: agent
       profile: reviewer
-      task: Summarize the supplied topic in one short sentence.
+      task:
+      - type: literal
+        value: "Summarize the supplied topic in one short sentence."
       input:
         topic:
           type: reference

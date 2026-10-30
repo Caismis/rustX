@@ -24,8 +24,9 @@ it('refuses an old Agent form command when its ID now belongs to a Tool, without
   await act(async () => { await Promise.resolve(); });
   const commands: ((document: WorkflowDocument) => WorkflowDocument)[] = [];
   render(<DraftOwner value={{ editor, commits: new FieldCommits() }}><AgentPanel port={port} document={editor.getSnapshot().context.document!} block={[]} id={id}
-    edit={apply => commands.push(apply)} navigate={() => {}} onSelect={() => {}} /></DraftOwner>);
-  fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'Retained Agent callback' } });
+    vocabulary={{ profiles: ['planner'], builtin_tools: [] }} edit={apply => commands.push(apply)} navigate={() => {}} onSelect={() => {}} /></DraftOwner>);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Agent profile' })));
+  await act(async () => fireEvent.click(await screen.findByRole('menuitemradio', { name: 'planner' })));
   expect(commands).toHaveLength(1);
   act(() => editor.send({ type: 'EDIT', apply: current => addNode(deleteNodes(current, [], [id]), [], 'tool', id) }));
   const before = editor.getSnapshot().context;

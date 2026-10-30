@@ -30,25 +30,30 @@ pub(super) struct RenderedPrompt {
     turns: Vec<(WorkflowModelRole, String)>,
 }
 
-/// Render each message's parts in order. Fixed text stays as written; a
+/// Render one prompt's parts in order. Fixed text stays as written; a
 /// referenced string is inserted as itself and any other value as JSON text.
+pub(super) fn render_parts(
+    parts: &[WorkflowValue],
+    mut resolve: impl FnMut(&WorkflowValue) -> Result<Value, WorkflowRunError>,
+) -> Result<String, WorkflowRunError> {
+    let mut text = String::new();
+    for part in parts {
+        match resolve(part)? {
+            Value::String(value) => text.push_str(&value),
+            value => text.push_str(&serde_json::to_string(&value).expect("JSON value serializes")),
+        }
+    }
+    Ok(text)
+}
+
+/// Render each message with [`render_parts`].
 pub(super) fn render_prompt(
     messages: &[WorkflowModelMessage],
     mut resolve: impl FnMut(&WorkflowValue) -> Result<Value, WorkflowRunError>,
 ) -> Result<RenderedPrompt, WorkflowRunError> {
     let mut rendered = messages
         .iter()
-        .map(|message| {
-            let mut text = String::new();
-            for part in &message.content {
-                match resolve(part)? {
-                    Value::String(value) => text.push_str(&value),
-                    value => text
-                        .push_str(&serde_json::to_string(&value).expect("JSON value serializes")),
-                }
-            }
-            Ok((message.role, text))
-        })
+        .map(|message| Ok((message.role, render_parts(&message.content, &mut resolve)?)))
         .collect::<Result<Vec<_>, WorkflowRunError>>()?;
     // The compiler admits exactly one leading system message.
     let (_, system) = rendered.remove(0);

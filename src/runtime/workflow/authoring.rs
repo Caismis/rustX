@@ -47,6 +47,8 @@ pub enum WorkflowConsumerField {
     Message {
         index: u32,
     },
+    /// A variable in an Agent's task, answered as for a Model message.
+    Task,
     Arguments,
     ReviewSubject,
     ReviewContext {
@@ -332,6 +334,7 @@ fn consumer<'a>(
             messages.get(*index as usize)?;
             (Expression::Value(&UNSET_REFERENCE), None, false)
         }
+        (N::Agent { .. }, F::Task) => (Expression::Value(&UNSET_REFERENCE), None, false),
         (N::Tool { arguments, .. }, F::Arguments) => (Expression::Value(arguments), None, false),
         (N::Review { subject, .. }, F::ReviewSubject) => (
             Expression::Value(subject.value()),

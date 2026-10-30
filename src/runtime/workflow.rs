@@ -411,8 +411,9 @@ pub enum WorkflowNodeDefinition {
     Agent {
         /// The native named profile to resolve at `AgentRun` admission.
         profile: String,
-        /// The fixed task instruction for this `AgentRun`.
-        task: String,
+        /// The task instruction for this `AgentRun`: fixed text and explicit
+        /// references, as a Model message's content.
+        task: Vec<WorkflowValue>,
         /// Explicit input bindings from workflow-local values.
         #[serde(default)]
         input: BTreeMap<String, WorkflowValue>,
@@ -904,8 +905,8 @@ pub struct WorkflowAgentProgram {
     pub(crate) resolved: Option<Arc<crate::runtime::subagent::resolver::FrozenAgentComposition>>,
     /// The admitted native profile.
     pub profile: SubagentName,
-    /// The fixed task string.
-    pub task: String,
+    /// The task's fixed text and references.
+    pub task: Vec<WorkflowValue>,
     /// Explicit input bindings.
     pub input: BTreeMap<String, WorkflowValue>,
     /// Frozen output contract.
@@ -2044,7 +2045,7 @@ fn validate_workflow_schema_at(
 
 #[allow(clippy::too_many_arguments)] // one Agent node's complete static contract
 fn validate_agent(
-    task: &str,
+    task: &[WorkflowValue],
     input: &BTreeMap<String, WorkflowValue>,
     output: &Value,
     invocation_override: Option<&crate::runtime::subagent::SubagentInvocationOverride>,
@@ -2063,17 +2064,16 @@ fn validate_agent(
             .at(crate::runtime::subagent::SubagentInvocationOverride::dimension_path(&error))
         })?;
     }
-    if task.trim().is_empty() || task.len() > 32 * 1024 {
-        return Err(WorkflowCompileError::InvalidField(format!(
-            "Agent {node:?} task must be a fixed non-empty string within its bound"
-        ))
-        .at("task"));
-    }
-    if task.contains("${") || task.contains("{{") {
-        return Err(WorkflowCompileError::InvalidField(format!(
-            "Agent {node:?} task cannot contain interpolation syntax"
-        ))
-        .at("task"));
+    if validate_prompt(
+        task,
+        available,
+        node,
+        &format!("Agent {node:?} task"),
+        "task",
+    )? {
+        return Err(
+            WorkflowCompileError::InvalidField(format!("Agent {node:?} task is empty")).at("task"),
+        );
     }
     validate_root_schema(output, &format!("Agent {node} output")).map_err(|e| e.at("output"))?;
     for (name, binding) in input {
@@ -2091,6 +2091,50 @@ fn validate_agent(
         value_schema(binding, available, node, 0).map_err(|e| e.at(format!("input.{name}")))?;
     }
     Ok(())
+}
+
+/// Check one prompt's parts, fixed text or references, against its bounds and
+/// the available scope. Returns whether it has no text and no variable.
+fn validate_prompt(
+    parts: &[WorkflowValue],
+    available: &SchemaMap,
+    node: &str,
+    what: &str,
+    at: &str,
+) -> Result<bool, WorkflowCompileError> {
+    if parts.len() > MAX_MODEL_MESSAGE_PARTS {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "{what} exceeds {MAX_MODEL_MESSAGE_PARTS} parts"
+        ))
+        .at(at));
+    }
+    let mut text = 0usize;
+    for (position, part) in parts.iter().enumerate() {
+        match part {
+            WorkflowValue::Literal {
+                value: Value::String(fixed),
+            } => text += fixed.len(),
+            WorkflowValue::Reference { .. } => {
+                value_schema(part, available, node, 0)
+                    .map_err(|e| e.at(format!("{at}.{position}")))?;
+            }
+            _ => {
+                return Err(WorkflowCompileError::InvalidField(format!(
+                    "{what} content is text or references only"
+                ))
+                .at(format!("{at}.{position}")));
+            }
+        }
+    }
+    if text > MAX_MODEL_MESSAGE_BYTES {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "{what} text exceeds {MAX_MODEL_MESSAGE_BYTES} bytes"
+        ))
+        .at(at));
+    }
+    Ok(parts.iter().all(|part| {
+        matches!(part, WorkflowValue::Literal { value: Value::String(fixed) } if fixed.trim().is_empty())
+    }))
 }
 
 fn validate_model(
@@ -2120,39 +2164,13 @@ fn validate_model(
             ))
             .at(format!("{at}.role")));
         }
-        if message.content.len() > MAX_MODEL_MESSAGE_PARTS {
-            return Err(WorkflowCompileError::InvalidField(format!(
-                "Model {node:?} message {index} exceeds {MAX_MODEL_MESSAGE_PARTS} parts"
-            ))
-            .at(format!("{at}.content")));
-        }
-        let mut text = 0usize;
-        for (position, part) in message.content.iter().enumerate() {
-            match part {
-                WorkflowValue::Literal {
-                    value: Value::String(fixed),
-                } => text += fixed.len(),
-                WorkflowValue::Reference { .. } => {
-                    value_schema(part, available, node, 0)
-                        .map_err(|e| e.at(format!("{at}.content.{position}")))?;
-                }
-                _ => {
-                    return Err(WorkflowCompileError::InvalidField(format!(
-                        "Model {node:?} message {index} content is text or references only"
-                    ))
-                    .at(format!("{at}.content.{position}")));
-                }
-            }
-        }
-        if text > MAX_MODEL_MESSAGE_BYTES {
-            return Err(WorkflowCompileError::InvalidField(format!(
-                "Model {node:?} message {index} text exceeds {MAX_MODEL_MESSAGE_BYTES} bytes"
-            ))
-            .at(format!("{at}.content")));
-        }
-        let empty = message.content.iter().all(|part| {
-            matches!(part, WorkflowValue::Literal { value: Value::String(fixed) } if fixed.trim().is_empty())
-        });
+        let empty = validate_prompt(
+            &message.content,
+            available,
+            node,
+            &format!("Model {node:?} message {index}"),
+            &format!("{at}.content"),
+        )?;
         if index > 0 && empty {
             return Err(WorkflowCompileError::InvalidField(format!(
                 "Model {node:?} message {index} is empty"
@@ -3180,6 +3198,7 @@ impl WorkflowRuntime {
                 node: node_id.to_string(),
                 detail: bound_workflow_diagnostic(error.to_string()),
             })?;
+        let task = model::render_parts(&agent.task, |part| evaluate_value(part, input, values))?;
         let mut bound = serde_json::Map::new();
         for (key, binding) in &agent.input {
             bound.insert(key.clone(), evaluate_value(binding, input, values)?);
@@ -3203,7 +3222,7 @@ impl WorkflowRuntime {
             },
             admission: crate::runtime::subagent::ActivationAdmission {
                 attachments: Vec::new(),
-                task: agent.task.clone(),
+                task,
                 context: Some(context_package),
                 origin: crate::runtime::subagent::AgentActivationOrigin::Workflow {
                     node_id: Box::new(node_id.clone()),
@@ -3807,7 +3826,7 @@ mod tests {
     fn agent(output: Value) -> WorkflowNodeDefinition {
         WorkflowNodeDefinition::Agent {
             profile: "reviewer".into(),
-            task: "Review the input.".to_owned(),
+            task: vec![text("Review the input.")],
             input: BTreeMap::from([("task".to_owned(), reference("args.task"))]),
             output,
             invocation_override: None,
@@ -4153,7 +4172,7 @@ chat_reasoning_replay = "omit"
                 (*key).into(),
                 WorkflowNodeDefinition::Agent {
                     profile: "reviewer".into(),
-                    task: format!("Run the {key} workflow branch."),
+                    task: vec![text(&format!("Run the {key} workflow branch."))],
                     input: BTreeMap::new(),
                     output: output.clone(),
                     invocation_override: None,
@@ -4189,7 +4208,7 @@ chat_reasoning_replay = "omit"
                     "work".into(),
                     WorkflowNodeDefinition::Agent {
                         profile: "reviewer".into(),
-                        task: format!("Run the {description} branch."),
+                        task: vec![text(&format!("Run the {description} branch."))],
                         input: BTreeMap::new(),
                         output: output.clone(),
                         invocation_override: None,
@@ -5498,7 +5517,7 @@ block:
                     "review".to_owned(),
                     WorkflowNodeDefinition::Agent {
                         profile: "reviewer".into(),
-                        task: "Review the input.".to_owned(),
+                        task: vec![text("Review the input.")],
                         input: BTreeMap::from([("later".to_owned(), reference("later.summary"))]),
                         output: output.clone(),
                         invocation_override: None,
@@ -5564,7 +5583,7 @@ block:
                     "join".to_owned(),
                     WorkflowNodeDefinition::Agent {
                         profile: "reviewer".into(),
-                        task: "Join the committed facts.".to_owned(),
+                        task: vec![text("Join the committed facts.")],
                         input: BTreeMap::from([("summary".to_owned(), reference("yes.summary"))]),
                         output: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
                         invocation_override: None,
@@ -5678,7 +5697,7 @@ block:
                             "review".to_owned(),
                             WorkflowNodeDefinition::Agent {
                                 profile: "reviewer".into(),
-                                task: "Review the input.".to_owned(),
+                                task: vec![text("Review the input.")],
                                 input: BTreeMap::from([(
                                     "detail".to_owned(),
                                     reference("args.task.detail"),

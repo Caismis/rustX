@@ -503,7 +503,7 @@ async fn scheduled_native_effect(kind: ScheduledEffectKind) {
         let (node,output)=match kind {
             ScheduledEffectKind::Tool=>(serde_json::json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":{"type":"literal","value":{"path":"rustx.toml"}},"result":{"type":"text","part":0}}),serde_json::json!({"type":"string"})),
             ScheduledEffectKind::Model=>(serde_json::json!({"type":"model","model":{"mode":"session"},"messages":[{"role":"system","content":[{"type":"literal","value":"Return done"}]},{"role":"user","content":[{"type":"literal","value":"Go."}]}],"output":{"type":"text"}}),serde_json::json!({"type":"string"})),
-            ScheduledEffectKind::Agent=>(serde_json::json!({"type":"agent","profile":"reviewer","task":"Return the Workflow output","output":empty}),empty.clone()),
+            ScheduledEffectKind::Agent=>(serde_json::json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Return the Workflow output"}],"output":empty}),empty.clone()),
             ScheduledEffectKind::Review=>unreachable!("Review has dedicated response/cancel/deadline tests"),
         };
         let returned=match kind {ScheduledEffectKind::Agent=>serde_json::json!({"type":"reference","path":["work"]}),ScheduledEffectKind::Model=>serde_json::json!({"type":"object","fields":{"value":{"type":"reference","path":["work","text"]}}}),_=>serde_json::json!({"type":"object","fields":{"value":{"type":"reference","path":["work"]}}})};

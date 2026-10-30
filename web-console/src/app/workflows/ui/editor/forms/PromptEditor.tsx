@@ -77,11 +77,6 @@ function $fill(parts: readonly Value[]) {
   $getRoot().clear().append(paragraph);
 }
 
-/** The text a message is copied as: variables in Dify's `{{…}}` form. */
-export function promptText(parts: readonly Value[]): string {
-  return parts.map(part => part.type === 'reference' ? `{{${part.path.join('.')}}}` : part.type === 'literal' && typeof part.value === 'string' ? part.value : '').join('');
-}
-
 /** Insert a token that opens its picker, as Dify's `/` and `{` triggers do. */
 export function useInsertVariable() {
   const [editor] = useLexicalComposerContext();

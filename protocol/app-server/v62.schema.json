@@ -12057,8 +12057,11 @@
               "type": "string"
             },
             "task": {
-              "description": "The fixed task instruction for this `AgentRun`.",
-              "type": "string"
+              "description": "The task instruction for this `AgentRun`: fixed text and explicit\nreferences, as a Model message's content.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              }
             },
             "input": {
               "description": "Explicit input bindings from workflow-local values.",
@@ -13460,6 +13463,20 @@
             "kind",
             "index"
           ]
+        },
+        {
+          "description": "A variable in an Agent's task, answered as for a Model message.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "task"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
         },
         {
           "type": "object",

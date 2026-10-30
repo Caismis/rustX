@@ -51,9 +51,9 @@ describe('native Workflow editing document', () => {
     const [id, node] = Object.entries(blockAt(document, ROOT)!.nodes).find(([, node]) => node.type === 'agent')!;
     expect(node.type).toBe('agent');
     expect(rejection(() => replaceNode(document, ROOT, id, { type: 'return', output: { type: 'literal', value: {} } }))).toBe('missing_node');
-    const edited = replaceNode(document, ROOT, id, { ...node, task: 'Different task' } as typeof node);
+    const edited = replaceNode(document, ROOT, id, { ...node, task: [{ type: 'literal', value: 'Different task' }] } as typeof node);
     const replaced = blockAt(edited, ROOT)!.nodes[id];
-    expect(replaced.type === 'agent' && replaced.task).toBe('Different task');
+    expect(replaced.type === 'agent' && replaced.task).toEqual([{ type: 'literal', value: 'Different task' }]);
   });
 });
 
