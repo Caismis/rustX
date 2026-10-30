@@ -21,7 +21,7 @@ const modelNode: NodeDefinition = { type: 'model', model: { mode: 'session' }, m
 const reviewNode: NodeDefinition = { type: 'review', subject: { type: 'plan', value: { type: 'reference', path: ['args'] } }, context: [] };
 const readTool: WorkflowToolChoice = { name: 'read', description: 'Read a file. Lines are numbered.', input_schema: { type: 'object', properties: {
   path: { type: 'string', description: 'The file to read.' }, offset: { type: 'integer' }, mode: { type: 'string', enum: ['text', 'lines'] },
-}, required: ['path'], additionalProperties: false } };
+}, required: ['path'], additionalProperties: false }, result: { type: 'text' } };
 function source(model = modelNode): WorkflowSource {
   return { ...exampleSource('typed_agent'), vocabulary: { profiles: [], builtin_tools: [readTool] }, document: {
     description: 'One model call.', block: { input: object, output: object,  nodes: {workflow_start:{type:'start'}, ...{
@@ -41,7 +41,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
 async function open(analyze: WorkflowScopePort['analyze'] = () => new Promise(() => {}), node = modelNode) {
   const port: WorkflowScopePort = {
     endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' }, list: () => new Promise(() => {}),
-    analyze, modelChoices: async query => query.type === 'models' ? { type: 'models', revision: 'catalog-1', models: ['fixture/model'], next_offset: null } : { type: 'profiles', revision: 'catalog-1', model: query.model, profiles: ['low'], next_offset: null },
+    analyze, toolCatalog: async () => ({ sources: [] }), modelChoices: async query => query.type === 'models' ? { type: 'models', revision: 'catalog-1', models: ['fixture/model'], next_offset: null } : { type: 'profiles', revision: 'catalog-1', model: query.model, profiles: ['low'], next_offset: null },
     read: async id => ({ ...source(node), id, revision: 'sha256:base' }), check: () => new Promise(() => {}),
     write: (_id, _revision, edit) => { writes.push(edit); return new Promise<WorkflowCommit>(() => {}); },
   };
@@ -208,8 +208,8 @@ describe('native candidate analysis presentation', () => {
     const schemas = { string_root: { type: 'string' }, array_root: { type: 'array', items: { type: 'string' } }, object_root: object };
     act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, block: { ...document.block,  nodes: {workflow_start:{type:'start'}, ...{
       ...document.block.nodes,
-      ...Object.fromEntries(Object.entries(schemas).map(([id, schema]) => [id, { type: 'tool' as const, selector: { origin: 'builtin' as const, name: 'read' }, arguments: { type: 'reference' as const, path: ['args'] }, result: { type: 'json' as const, part: 0, schema } }])),
-      model: { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'text', part: 0 } },
+      ...Object.fromEntries(Object.entries(schemas).map(([id, schema]) => [id, { type: 'tool' as const, selector: { origin: 'builtin' as const, name: 'read' }, arguments: { type: 'reference' as const, path: ['args'] }, result: { type: 'json' as const, schema } }])),
+      model: { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'text' } },
     }}, edges: [{from:'workflow_start',to:'string_root'}, ...[{ from: 'string_root', to: 'array_root' }, { from: 'array_root', to: 'object_root' }, { from: 'object_root', to: 'model' }, { from: 'model', to: 'done' }]] } }) }));
     fireEvent.click(inspector().getByRole('button', { name: 'Choose a variable' }));
     expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'model' }, field: { kind: 'arguments' }, path: [] });
@@ -342,7 +342,7 @@ describe('Model native editing document', () => {
   });
 
   it('forms a builtin Tool\'s parameters as Dify: text with variables, a {x} or constant switch, and absent unset fields', async () => {
-    const tool: NodeDefinition = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'text', part: 0 } };
+    const tool: NodeDefinition = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'text' } };
     const actor = await open(undefined, tool);
     const read = () => actor.getSnapshot().context.document!.block.nodes.model;
     const inputs = within(inspector().getByRole('region', { name: 'Input variables' }));
@@ -370,7 +370,7 @@ describe('Model native editing document', () => {
   });
 
   it('retries and handles a failed Tool as Dify: a retry switch, then a default value or a fail branch', async () => {
-    const tool: NodeDefinition = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'text', part: 0 } };
+    const tool: NodeDefinition = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'text' } };
     const actor = await open(undefined, tool);
     const read = () => actor.getSnapshot().context.document!.block.nodes.model;
     fireEvent.click(inspector().getByRole('switch', { name: 'Retry on failure' }));
@@ -387,7 +387,7 @@ describe('Model native editing document', () => {
   });
 
   it('names a source Tool by its source and tool, with its arguments as one value', async () => {
-    const tool: NodeDefinition = { type: 'tool', selector: { origin: 'source', source_id: '', name: '' }, arguments: { type: 'object', fields: {} }, result: { type: 'text', part: 0 } };
+    const tool: NodeDefinition = { type: 'tool', selector: { origin: 'source', source_id: '', name: '' }, arguments: { type: 'object', fields: {} }, result: { type: 'text' } };
     await open(undefined, tool);
     expect(inspector().getByRole('textbox', { name: 'Source ID' }).getAttribute('aria-invalid')).toBe('true');
     expect(inspector().getByRole('group', { name: 'Arguments' })).toBeTruthy();

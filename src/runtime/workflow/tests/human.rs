@@ -99,7 +99,7 @@ fn human_definition(question: bool) -> WorkflowDefinition {
         crate::runtime::workflow::review::result_schema()
     };
     let node = if question {
-        json!({"type":"tool","selector":{"origin":"builtin","name":"ask_user"},"arguments":{"type":"literal","value":{"questions":[{"question":"Choose target","header":"Target","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}},"result":{"type":"json","part":0,"schema":result}})
+        json!({"type":"tool","selector":{"origin":"builtin","name":"ask_user"},"arguments":{"type":"literal","value":{"questions":[{"question":"Choose target","header":"Target","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}},"result":{"type":"json","schema":result}})
     } else {
         json!({"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]})
     };

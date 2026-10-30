@@ -1214,17 +1214,12 @@
       ]
     },
     "WorkflowToolResult": {
-      "description": "Select exactly one native content part, never provider text or log heuristics.",
+      "description": "What a Tool node commits, fixed by the Tool: its declared structured\nresult, or its text. Never provider text heuristics or a part index.",
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "The indexed part must be native structured JSON satisfying this schema.",
+          "description": "The result's one native structured JSON part, satisfying this schema.",
           "properties": {
-            "part": {
-              "format": "uint",
-              "minimum": 0,
-              "type": "integer"
-            },
             "schema": true,
             "type": {
               "const": "json",
@@ -1233,28 +1228,21 @@
           },
           "required": [
             "type",
-            "part",
             "schema"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
-          "description": "The indexed part must be native text; retain it as a typed JSON string.",
+          "description": "`{text}`: the result's native text parts, joined by newlines.",
           "properties": {
-            "part": {
-              "format": "uint",
-              "minimum": 0,
-              "type": "integer"
-            },
             "type": {
               "const": "text",
               "type": "string"
             }
           },
           "required": [
-            "type",
-            "part"
+            "type"
           ],
           "type": "object"
         }

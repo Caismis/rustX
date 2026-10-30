@@ -8,13 +8,13 @@ import { encodeField } from '../../../document/fields';
 import { blockAt, nodeAt, type Value } from '../../../document/model';
 import { schemaObject } from '../../../document/schema';
 import { ReferencePicker } from '../forms/ReferencePicker';
-import { SchemaEditor } from '../forms/SchemaEditor';
 import { TemplateInput, templateParts, templateValue } from '../forms/TemplateInput';
 import { ValueEditor } from '../forms/ValueEditor';
-import { JsonField, NumberField, Section, SelectField, TextField } from '../forms/fields';
+import { JsonField, Section, SelectField, TextField } from '../forms/fields';
 import { CommandRejected, replaceNodeExits } from '../../../document/commands';
 import { ErrorStrategy, RetrySettings, type Retry } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
+import { useToolCatalog } from '../toolCatalog';
 import css from '../Editor.module.css';
 
 type ToolNode = ReturnType<typeof useNode<'tool'>>;
@@ -38,13 +38,17 @@ function argumentKind(schema: Record<string, unknown>): ArgumentKind {
 }
 
 /** As Dify's tool node: the selected Tool's parameters as an input form,
- * then its output variables. A Tool this scope does not describe (a source
- * Tool, or an unknown name) is configured by name with a raw value. */
+ * then its output variables. A source Tool is described by the scope's
+ * catalog; a Tool nothing describes is configured by name with a raw value. */
 export function ToolPanel(props: PanelProps) {
-  const tx = useTranslation(), tool = useNode(props, 'tool'), { node } = tool;
-  const choice = node.selector.origin === 'builtin' ? props.vocabulary?.builtin_tools.find(item => item.name === node.selector.name) : undefined;
+  const tx = useTranslation(), tool = useNode(props, 'tool'), { node } = tool, catalog = useToolCatalog();
+  const { selector } = node, source = selector.origin === 'source' ? selector.source_id : undefined;
+  useEffect(() => { if (source !== undefined && catalog.state.status === 'idle') catalog.load(); }, [source, catalog]);
+  const choice = source === undefined ? props.vocabulary?.builtin_tools.find(item => item.name === selector.name)
+    : catalog.state.status === 'ready' ? catalog.state.sources.find(item => item.source_id === source)?.tools.find(item => item.name === selector.name) : undefined;
   const fields = argumentFields(node.arguments);
   return <>
+    {source !== undefined && catalog.state.status === 'loading' && <p className={css.note} role="status">{tx('workflows:tool.loading')}</p>}
     {!choice && <ToolSelection {...props} tool={tool} />}
     {choice && fields ? <ToolInputs {...props} tool={tool} choice={choice} fields={fields} />
       : <Section title={tx('workflows:tool.inputs')}><ValueEditor label={tx('workflows:inspector.tool-arguments')} address={tool.at('arguments')} value={node.arguments} edit={props.edit} /></Section>}
@@ -169,22 +173,21 @@ function ConstantInput({ kind, name, value, invalid, set }: { kind: 'integer' | 
       onChange={event => { setText(event.target.value); commit(event.target.value); }} />;
 }
 
-/** Dify's collapsible "Output variables": what the node commits, chosen
- * as one native content part, as text or as declared JSON. */
+/** Dify's collapsible "Output variables": fixed by the Tool, its declared
+ * structured fields or its `text`. */
 function ToolOutputs(props: PanelProps & { tool: ToolNode }) {
-  const tx = useTranslation(), { node, at, update } = props.tool, [open, setOpen] = useState(false);
+  const tx = useTranslation(), { node } = props.tool, [open, setOpen] = useState(false);
+  const schema = node.result.type === 'json' ? schemaObject(node.result.schema) : undefined, fields = Object.entries(schemaObject(schema?.properties) ?? {});
   return <section className={css.group} aria-label={tx('workflows:prompt.output-variables')}>
     <h3 className={css.groupHeading}>
       <button type="button" className={css.outputToggle} aria-expanded={open} onClick={() => setOpen(value => !value)}>{tx('workflows:prompt.output-variables')}<IconChevronDownOutline14 /></button>
     </h3>
-    {open && <>
+    {open && <dl className={css.outputVars}>
       {node.result.type === 'text'
-        ? <dl className={css.outputVars}><div><dt><b>{/* i18n-raw: native output field name */ 'text'}</b><code>{/* i18n-raw: JSON Schema type name */ 'string'}</code></dt><dd>{tx('workflows:tool.output-text')}</dd></div></dl>
-        : <p className={css.note}>{tx('workflows:tool.output-json')}</p>}
-      <SelectField label={tx('workflows:inspector.tool-result')} value={node.result.type} options={[{ value: 'text', label: tx('workflows:inspector.tool-result-text') }, { value: 'json', label: tx('workflows:inspector.tool-result-json') }]}
-        onChange={type => { if (type !== node.result.type) update(current => ({ ...current, result: type === 'json' ? { type, part: current.result.part, schema: { type: 'object', properties: {}, additionalProperties: false } } : { type, part: current.result.part } }), at('result')); }} />
-      <NumberField label={tx('workflows:inspector.tool-part')} value={node.result.part} address={at('result', 'part')} />
-      {node.result.type === 'json' && <SchemaEditor label={tx('workflows:inspector.tool-schema')} value={node.result.schema} address={at('result', 'schema')} edit={props.edit} />}
-    </>}
+        ? <div><dt><b>{/* i18n-raw: native output field name */ 'text'}</b><code>{/* i18n-raw: JSON Schema type name */ 'string'}</code></dt><dd>{tx('workflows:tool.output-text')}</dd></div>
+        : fields.map(([name, value]) => { const field = schemaObject(value); return <div key={name}>
+          <dt><b>{name}</b><code>{String(field?.type ?? '?')}</code></dt>{typeof field?.description === 'string' && <dd>{field.description}</dd>}
+        </div>; })}
+    </dl>}
   </section>;
 }

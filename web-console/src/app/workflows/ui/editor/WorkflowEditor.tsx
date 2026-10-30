@@ -4,6 +4,7 @@ import { projectScene } from './scene';
 import '@xyflow/react/dist/base.css';
   import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
+import { ToolCatalogProvider } from './toolCatalog';
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
@@ -193,7 +194,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
       {base.source.diagnostic.line != null && <small>{tx('workflows:check.line', { p0: base.source.diagnostic.line, p1: base.source.diagnostic.column ?? 0 })}</small>}
       {base.source.diagnostic.correction && <small>{base.source.diagnostic.correction}</small>}</li></ul>}
   </div>;
-  else content = <div className={css.body}>
+  else content = <ToolCatalogProvider port={context.port}><div className={css.body}>
     <ReactFlowProvider>
       <div className={css.stage}>
         <nav className={css.crumbs} aria-label={tx('workflows:canvas.block-path')}>
@@ -212,7 +213,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
     {selection && selection.kind !== 'edge' && <DraftOwner.Provider value={owner$}><Inspector port={context.port} document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} navigate={navigate} collapsed={collapsed} toggleContainer={toggleContainer} focus={fieldFocus} onDuplicate={duplicate}
       vocabulary={base.source.vocabulary} check={check} generation={generation} rejection={context.rejection ? tx(`workflows:rejection.${context.rejection}`) : undefined}
       checks={<CheckResults check={check} generation={generation} global={target.scope.kind === 'user'} workspaces={workspaces} context={dependencyContext} setContext={setDependencyContext} run={() => runCheck()} go={go} />} /></DraftOwner.Provider>}
-  </div>;
+  </div></ToolCatalogProvider>;
 
   return <section className={css.editor} aria-labelledby="workflow-editor-title">
     <header className={css.head}>

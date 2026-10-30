@@ -62,3 +62,15 @@ export function ToolIcon({ name, size, className }: { name: string; size?: numbe
   const Icon = Object.hasOwn(TOOL_ICONS, name) ? TOOL_ICONS[name] : KIND_ICONS.tool;
   return <Icon size={size} className={className} />;
 }
+
+const SOURCE_ICONS = {
+  // A plug: one connected MCP server.
+  mcp: glyph(<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4" />),
+  // Two interlocked halves: one Managed Python package.
+  python: glyph(<path d="M12 3c-4 0-4 1.6-4 3v2h4.5M8 8H6c-2 0-3 1.6-3 4s1 4 3 4h2v-2.5a2.5 2.5 0 0 1 2.5-2.5h3A2.5 2.5 0 0 0 16 8.5V6c0-1.4-1-3-4-3zM16 10h2c2 0 3 1.6 3 4s-1 4-3 4h-2M12 21c4 0 4-1.6 4-3v-2h-4.5" />),
+};
+
+export function SourceIcon({ kind, size, className }: { kind: keyof typeof SOURCE_ICONS; size?: number; className?: string }) {
+  const Icon = SOURCE_ICONS[kind];
+  return <Icon size={size} className={className} />;
+}

@@ -137,8 +137,7 @@ function node(input: unknown): void {
       keys(record, ['type', 'selector', 'arguments', 'result', 'retry', 'on_error']); value(record.arguments); retry(record.retry); valueStrategy(record.on_error);
       const selector = keys(record.selector, ['origin', 'name', 'source_id']); text(selector.name);
       if (selector.origin === 'source') text(selector.source_id); else if (selector.origin !== 'builtin' || selector.source_id !== undefined) fail();
-      const result = keys(record.result, ['type', 'part', 'schema']);
-      unsigned(result.part);
+      const result = keys(record.result, ['type', 'schema']);
       if (result.type === 'json') object(result.schema); else if (result.type !== 'text' || result.schema !== undefined) fail(); return;
     }
     case 'branch': {

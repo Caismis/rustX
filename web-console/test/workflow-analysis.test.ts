@@ -15,7 +15,7 @@ const empty = { outputs: [], references: [], selected: null, diagnostic: null, i
 function scripted() {
   const pending: { id: string; generation: string; query?: WorkflowAnalysisQuery; result: ReturnType<typeof deferred<WorkflowAnalysisReport>> }[] = [];
   const port: WorkflowScopePort = {
-    endpoint: 'ws://fixture/', scope: { kind: 'user' }, list: () => new Promise(() => {}), read: () => new Promise(() => {}), check: () => new Promise(() => {}), write: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}),
+    endpoint: 'ws://fixture/', scope: { kind: 'user' }, list: () => new Promise(() => {}), read: () => new Promise(() => {}), check: () => new Promise(() => {}), write: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}),
     analyze: (id, _document, generation, query) => { const result = deferred<WorkflowAnalysisReport>(); pending.push({ id, generation, query, result }); return result.promise; },
   };
   const complete = (index: number, override: Partial<WorkflowAnalysisReport> = {}) => {

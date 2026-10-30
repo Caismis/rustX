@@ -17,7 +17,7 @@ it('refuses an old Agent form command when its ID now belongs to a Tool, without
   const id = Object.entries(source.document!.block.nodes).find(([, node]) => node.type === 'agent')![0];
   const port: WorkflowScopePort = {
     endpoint: 'ws://fixture/', scope: { kind: 'user' },
-    analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}), read: async () => source,
+    analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}), read: async () => source,
     check: () => new Promise(() => {}), write: () => new Promise(() => {}),
   };
   const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: source.id } } }).start();

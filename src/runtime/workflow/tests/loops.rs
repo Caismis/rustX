@@ -529,7 +529,7 @@ fn checker_definition(max: u32) -> WorkflowDefinition {
     );
     let body = serde_json::from_value(json!({"description":"feedback","block":{
         "input":state,"output":state,"nodes": {"workflow_start":{"type":"start"},
-            "check":{"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":{"type":"reference","path":["args"]},"result":{"type":"json","part":0,"schema":state}},
+            "check":{"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":{"type":"reference","path":["args"]},"result":{"type":"json","schema":state}},
             "done":{"type":"return","output":{"type":"reference","path":["check"]}}
         },"edges": [{"from":"workflow_start","to":"check"},{"from":"check","to":"done"}],}})).unwrap();
     wrap_definition(body, max)

@@ -154,6 +154,11 @@ fn agent_control_registrations(
 ///
 /// The Agent control group follows the same rule as the executable
 /// composition: present exactly when `admitted_agents` is nonempty.
+/// The structured result a native Tool declares; the others return text.
+pub(crate) fn output_schema(name: &str) -> Option<serde_json::Value> {
+    (name == "bash").then(bash::output_schema)
+}
+
 pub(crate) fn definitions(
     policies: NativeToolPolicies,
     admitted_agents: &crate::runtime::subagent::AgentCatalog,

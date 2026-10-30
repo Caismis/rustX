@@ -207,12 +207,20 @@ block:
                 raise ValueError("greeting must return bounded strings")
             sys.stdout.write("passed" if actual == ["Hello, Ada!", "Hello, friend!"] else "failed")
             PY
-      result: {type: json, part: 0, schema: *report}
+      result: {type: json, schema: *report}
     done:
       type: return
       output: {type: reference, path: [check]}
   edges: [{from: start, to: check}, {from: check, to: done}]
 ```
+
+A Tool node's `result` is fixed by its Tool, as Dify's tool outputs are:
+`{type: text}` commits `{text}`, the result's text parts joined by newlines;
+`{type: json, schema}` commits the result's one structured JSON part, which
+must satisfy the schema. A Tool declares the second through an object output
+schema that is a Workflow contract (bash's `{exit_code, stdout, stderr,
+combined}`, or an MCP tool's `outputSchema`); every other Tool returns text.
+The editor writes the declared result when it adds the node.
 
 Builtin selectors are `{origin: builtin, name: <name>}`. External Tool leaves
 use `{origin: source, source_id: <source>, name: <name>}` for both configured

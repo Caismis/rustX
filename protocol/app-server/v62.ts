@@ -1053,6 +1053,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'workflow/toolCatalog';
+      params: {
+        target: SourceTarget;
+        source?: string | null;
+      };
+    }
+  | {
       method: 'workflow/analyze';
       params: {
         target: SourceTarget;
@@ -2189,19 +2196,18 @@ export type WorkflowToolSelector =
       origin: 'source';
     };
 /**
- * Select exactly one native content part, never provider text or log heuristics.
+ * What a Tool node commits, fixed by the Tool: its declared structured
+ * result, or its text. Never provider text heuristics or a part index.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowToolResult".
  */
 export type WorkflowToolResult =
   | {
-      part: number;
       schema: unknown;
       type: 'json';
     }
   | {
-      part: number;
       type: 'text';
     };
 /**
@@ -3087,6 +3093,10 @@ export type MethodResult =
   | {
       choices: WorkflowModelChoices;
       type: 'workflow_model_choices';
+    }
+  | {
+      catalog: WorkflowToolCatalog;
+      type: 'workflow_tool_catalog';
     }
   | {
       report: WorkflowCheckReport;
@@ -6382,6 +6392,28 @@ export type WorkflowModelChoices =
       next_offset?: number | null;
       type: 'profiles';
     };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolSourceKind".
+ */
+export type WorkflowToolSourceKind = 'mcp' | 'python';
+/**
+ * Why a source lists no Tools, or that it listed them.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolSourceState".
+ */
+export type WorkflowToolSourceState =
+  | (
+      | 'listed'
+      | 'invalid'
+      | 'preparation_failed'
+      | 'connection_failed'
+      | 'list_failed'
+      | 'timed_out'
+      | 'cancelled'
+    )
+  | 'pending';
 /**
  * Whether the native compiler admits the candidate's structure.
  *
@@ -18362,6 +18394,41 @@ export interface WorkflowToolChoice {
   name: string;
   description: string;
   input_schema: unknown;
+  /**
+   * What a Tool node commits, fixed by the Tool: its declared structured
+   * result, or its text. Never provider text heuristics or a part index.
+   */
+  result:
+    | {
+        schema: unknown;
+        type: 'json';
+      }
+    | {
+        type: 'text';
+      };
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolCatalog".
+ */
+export interface WorkflowToolCatalog {
+  sources: WorkflowToolSource[];
+}
+/**
+ * One MCP server or Managed Python package and the Tools it lists.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolSource".
+ */
+export interface WorkflowToolSource {
+  /**
+   * The selector's `source_id`: an MCP server ID or `python:<package>`.
+   */
+  source_id: string;
+  kind: WorkflowToolSourceKind;
+  scope: SourceScope;
+  state: WorkflowToolSourceState;
+  tools: WorkflowToolChoice[];
 }
 /**
  * One offline check of one exact candidate document.
@@ -18435,7 +18502,6 @@ export interface NodeInspection {
   model?: ModelPolicyInspection | null;
   selector?: ExactToolSelector | null;
   output_schema?: unknown;
-  result_part?: number | null;
   result_kind?: string | null;
   max_iterations?: number | null;
   review_subject?: string | null;

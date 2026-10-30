@@ -1286,6 +1286,55 @@ export const fixtures = [
   },
   {
     "jsonrpc": "2.0",
+    "id": "workflow-tool-catalog",
+    "method": "workflow/toolCatalog",
+    "params": {
+      "target": {
+        "kind": "workspace",
+        "directory": "/workspace/fixture"
+      },
+      "source": "github"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "workflow-tool-catalog",
+    "result": {
+      "type": "workflow_tool_catalog",
+      "catalog": {
+        "sources": [
+          {
+            "source_id": "github",
+            "kind": "mcp",
+            "scope": "user",
+            "state": "listed",
+            "tools": [
+              {
+                "name": "search_issues",
+                "description": "Search issues.",
+                "input_schema": {
+                  "type": "object",
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ]
+                },
+                "result": {
+                  "type": "text"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": "workflow-list",
     "result": {
       "type": "workflow_library",
@@ -1353,8 +1402,8 @@ export const fixtures = [
             "file_name": "implement_and_review.yaml",
             "id": "implement_and_review",
             "relative_path": ".agents/workflows/implement_and_review.yaml",
-            "revision": "sha256:68f65a99d1a896f96812e41d067c9ed9ce5bbb1dd388b00da1870410de932143",
-            "byte_length": "14484",
+            "revision": "sha256:d0d40eb81bb0c4308e1e085f1dbe06a892c476043847004cf98430179524a256",
+            "byte_length": "14440",
             "modified_ms": 1790000000000,
             "description": "Plan greeting.py, gate implementation on human plan acceptance, then implement and run real checks in the shared Session workspace up to three times.",
             "display": null,
@@ -1508,87 +1557,6 @@ export const fixtures = [
           ],
           "builtin_tools": [
             {
-              "name": "ask_user",
-              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
-              "input_schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "questions": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "question": {
-                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 4096
-                        },
-                        "header": {
-                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 16
-                        },
-                        "options": {
-                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "label": {
-                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 60
-                              },
-                              "description": {
-                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 1024
-                              },
-                              "preview": {
-                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 8192
-                              }
-                            },
-                            "additionalProperties": false,
-                            "required": [
-                              "label",
-                              "description"
-                            ]
-                          },
-                          "minItems": 2,
-                          "maxItems": 4
-                        },
-                        "multi_select": {
-                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
-                          "type": "boolean",
-                          "default": false
-                        }
-                      },
-                      "additionalProperties": false,
-                      "required": [
-                        "question",
-                        "header",
-                        "options"
-                      ]
-                    },
-                    "description": "One to four related blocking questions with unique question text.",
-                    "minItems": 1,
-                    "maxItems": 4
-                  }
-                },
-                "required": [
-                  "questions"
-                ]
-              }
-            },
-            {
               "name": "read",
               "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
@@ -1615,6 +1583,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -1633,6 +1604,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -1672,6 +1646,9 @@ export const fixtures = [
                 "required": [
                   "files"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -1694,6 +1671,9 @@ export const fixtures = [
                   "path",
                   "content"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -1737,6 +1717,9 @@ export const fixtures = [
                   "path",
                   "edits"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -1764,6 +1747,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -1810,6 +1796,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -1840,6 +1829,33 @@ export const fixtures = [
                 "required": [
                   "command"
                 ]
+              },
+              "result": {
+                "type": "json",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "exit_code": {
+                      "type": "integer"
+                    },
+                    "stdout": {
+                      "type": "string"
+                    },
+                    "stderr": {
+                      "type": "string"
+                    },
+                    "combined": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "exit_code",
+                    "stdout",
+                    "stderr",
+                    "combined"
+                  ],
+                  "additionalProperties": false
+                }
               }
             }
           ]
@@ -2041,87 +2057,6 @@ export const fixtures = [
           ],
           "builtin_tools": [
             {
-              "name": "ask_user",
-              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
-              "input_schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "questions": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "question": {
-                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 4096
-                        },
-                        "header": {
-                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 16
-                        },
-                        "options": {
-                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "label": {
-                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 60
-                              },
-                              "description": {
-                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 1024
-                              },
-                              "preview": {
-                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 8192
-                              }
-                            },
-                            "additionalProperties": false,
-                            "required": [
-                              "label",
-                              "description"
-                            ]
-                          },
-                          "minItems": 2,
-                          "maxItems": 4
-                        },
-                        "multi_select": {
-                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
-                          "type": "boolean",
-                          "default": false
-                        }
-                      },
-                      "additionalProperties": false,
-                      "required": [
-                        "question",
-                        "header",
-                        "options"
-                      ]
-                    },
-                    "description": "One to four related blocking questions with unique question text.",
-                    "minItems": 1,
-                    "maxItems": 4
-                  }
-                },
-                "required": [
-                  "questions"
-                ]
-              }
-            },
-            {
               "name": "read",
               "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
@@ -2148,6 +2083,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2166,6 +2104,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2205,6 +2146,9 @@ export const fixtures = [
                 "required": [
                   "files"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2227,6 +2171,9 @@ export const fixtures = [
                   "path",
                   "content"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2270,6 +2217,9 @@ export const fixtures = [
                   "path",
                   "edits"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2297,6 +2247,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2343,6 +2296,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2373,6 +2329,33 @@ export const fixtures = [
                 "required": [
                   "command"
                 ]
+              },
+              "result": {
+                "type": "json",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "exit_code": {
+                      "type": "integer"
+                    },
+                    "stdout": {
+                      "type": "string"
+                    },
+                    "stderr": {
+                      "type": "string"
+                    },
+                    "combined": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "exit_code",
+                    "stdout",
+                    "stderr",
+                    "combined"
+                  ],
+                  "additionalProperties": false
+                }
               }
             }
           ]
@@ -2486,87 +2469,6 @@ export const fixtures = [
           ],
           "builtin_tools": [
             {
-              "name": "ask_user",
-              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
-              "input_schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "questions": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "question": {
-                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 4096
-                        },
-                        "header": {
-                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 16
-                        },
-                        "options": {
-                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "label": {
-                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 60
-                              },
-                              "description": {
-                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 1024
-                              },
-                              "preview": {
-                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 8192
-                              }
-                            },
-                            "additionalProperties": false,
-                            "required": [
-                              "label",
-                              "description"
-                            ]
-                          },
-                          "minItems": 2,
-                          "maxItems": 4
-                        },
-                        "multi_select": {
-                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
-                          "type": "boolean",
-                          "default": false
-                        }
-                      },
-                      "additionalProperties": false,
-                      "required": [
-                        "question",
-                        "header",
-                        "options"
-                      ]
-                    },
-                    "description": "One to four related blocking questions with unique question text.",
-                    "minItems": 1,
-                    "maxItems": 4
-                  }
-                },
-                "required": [
-                  "questions"
-                ]
-              }
-            },
-            {
               "name": "read",
               "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
@@ -2593,6 +2495,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2611,6 +2516,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2650,6 +2558,9 @@ export const fixtures = [
                 "required": [
                   "files"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2672,6 +2583,9 @@ export const fixtures = [
                   "path",
                   "content"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2715,6 +2629,9 @@ export const fixtures = [
                   "path",
                   "edits"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2742,6 +2659,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2788,6 +2708,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -2818,6 +2741,33 @@ export const fixtures = [
                 "required": [
                   "command"
                 ]
+              },
+              "result": {
+                "type": "json",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "exit_code": {
+                      "type": "integer"
+                    },
+                    "stdout": {
+                      "type": "string"
+                    },
+                    "stderr": {
+                      "type": "string"
+                    },
+                    "combined": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "exit_code",
+                    "stdout",
+                    "stderr",
+                    "combined"
+                  ],
+                  "additionalProperties": false
+                }
               }
             }
           ]
@@ -3177,87 +3127,6 @@ export const fixtures = [
           ],
           "builtin_tools": [
             {
-              "name": "ask_user",
-              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
-              "input_schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "questions": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "question": {
-                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 4096
-                        },
-                        "header": {
-                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 16
-                        },
-                        "options": {
-                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "label": {
-                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 60
-                              },
-                              "description": {
-                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 1024
-                              },
-                              "preview": {
-                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 8192
-                              }
-                            },
-                            "additionalProperties": false,
-                            "required": [
-                              "label",
-                              "description"
-                            ]
-                          },
-                          "minItems": 2,
-                          "maxItems": 4
-                        },
-                        "multi_select": {
-                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
-                          "type": "boolean",
-                          "default": false
-                        }
-                      },
-                      "additionalProperties": false,
-                      "required": [
-                        "question",
-                        "header",
-                        "options"
-                      ]
-                    },
-                    "description": "One to four related blocking questions with unique question text.",
-                    "minItems": 1,
-                    "maxItems": 4
-                  }
-                },
-                "required": [
-                  "questions"
-                ]
-              }
-            },
-            {
               "name": "read",
               "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
@@ -3284,6 +3153,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -3302,6 +3174,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -3341,6 +3216,9 @@ export const fixtures = [
                 "required": [
                   "files"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -3363,6 +3241,9 @@ export const fixtures = [
                   "path",
                   "content"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -3406,6 +3287,9 @@ export const fixtures = [
                   "path",
                   "edits"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -3433,6 +3317,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -3479,6 +3366,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -3509,6 +3399,33 @@ export const fixtures = [
                 "required": [
                   "command"
                 ]
+              },
+              "result": {
+                "type": "json",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "exit_code": {
+                      "type": "integer"
+                    },
+                    "stdout": {
+                      "type": "string"
+                    },
+                    "stderr": {
+                      "type": "string"
+                    },
+                    "combined": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "exit_code",
+                    "stdout",
+                    "stderr",
+                    "combined"
+                  ],
+                  "additionalProperties": false
+                }
               }
             }
           ]
@@ -3529,7 +3446,7 @@ export const fixtures = [
         "id": "implement_and_review",
         "path": "/workspace/fixture/.agents/workflows/implement_and_review.yaml",
         "relative_path": ".agents/workflows/implement_and_review.yaml",
-        "revision": "sha256:68f65a99d1a896f96812e41d067c9ed9ce5bbb1dd388b00da1870410de932143",
+        "revision": "sha256:d0d40eb81bb0c4308e1e085f1dbe06a892c476043847004cf98430179524a256",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -3775,7 +3692,6 @@ export const fixtures = [
                       },
                       "result": {
                         "type": "json",
-                        "part": 0,
                         "schema": {
                           "type": "object",
                           "properties": {
@@ -4085,7 +4001,6 @@ export const fixtures = [
                       },
                       "result": {
                         "type": "json",
-                        "part": 0,
                         "schema": {
                           "type": "object",
                           "properties": {
@@ -4433,87 +4348,6 @@ export const fixtures = [
           ],
           "builtin_tools": [
             {
-              "name": "ask_user",
-              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
-              "input_schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "questions": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "question": {
-                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 4096
-                        },
-                        "header": {
-                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 16
-                        },
-                        "options": {
-                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "label": {
-                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 60
-                              },
-                              "description": {
-                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 1024
-                              },
-                              "preview": {
-                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 8192
-                              }
-                            },
-                            "additionalProperties": false,
-                            "required": [
-                              "label",
-                              "description"
-                            ]
-                          },
-                          "minItems": 2,
-                          "maxItems": 4
-                        },
-                        "multi_select": {
-                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
-                          "type": "boolean",
-                          "default": false
-                        }
-                      },
-                      "additionalProperties": false,
-                      "required": [
-                        "question",
-                        "header",
-                        "options"
-                      ]
-                    },
-                    "description": "One to four related blocking questions with unique question text.",
-                    "minItems": 1,
-                    "maxItems": 4
-                  }
-                },
-                "required": [
-                  "questions"
-                ]
-              }
-            },
-            {
               "name": "read",
               "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
@@ -4540,6 +4374,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -4558,6 +4395,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -4597,6 +4437,9 @@ export const fixtures = [
                 "required": [
                   "files"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -4619,6 +4462,9 @@ export const fixtures = [
                   "path",
                   "content"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -4662,6 +4508,9 @@ export const fixtures = [
                   "path",
                   "edits"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -4689,6 +4538,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -4735,6 +4587,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -4765,6 +4620,33 @@ export const fixtures = [
                 "required": [
                   "command"
                 ]
+              },
+              "result": {
+                "type": "json",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "exit_code": {
+                      "type": "integer"
+                    },
+                    "stdout": {
+                      "type": "string"
+                    },
+                    "stderr": {
+                      "type": "string"
+                    },
+                    "combined": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "exit_code",
+                    "stdout",
+                    "stderr",
+                    "combined"
+                  ],
+                  "additionalProperties": false
+                }
               }
             }
           ]
@@ -4893,87 +4775,6 @@ export const fixtures = [
           ],
           "builtin_tools": [
             {
-              "name": "ask_user",
-              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
-              "input_schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "questions": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "question": {
-                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 4096
-                        },
-                        "header": {
-                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 16
-                        },
-                        "options": {
-                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "label": {
-                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 60
-                              },
-                              "description": {
-                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 1024
-                              },
-                              "preview": {
-                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 8192
-                              }
-                            },
-                            "additionalProperties": false,
-                            "required": [
-                              "label",
-                              "description"
-                            ]
-                          },
-                          "minItems": 2,
-                          "maxItems": 4
-                        },
-                        "multi_select": {
-                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
-                          "type": "boolean",
-                          "default": false
-                        }
-                      },
-                      "additionalProperties": false,
-                      "required": [
-                        "question",
-                        "header",
-                        "options"
-                      ]
-                    },
-                    "description": "One to four related blocking questions with unique question text.",
-                    "minItems": 1,
-                    "maxItems": 4
-                  }
-                },
-                "required": [
-                  "questions"
-                ]
-              }
-            },
-            {
               "name": "read",
               "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
@@ -5000,6 +4801,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5018,6 +4822,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5057,6 +4864,9 @@ export const fixtures = [
                 "required": [
                   "files"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5079,6 +4889,9 @@ export const fixtures = [
                   "path",
                   "content"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5122,6 +4935,9 @@ export const fixtures = [
                   "path",
                   "edits"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5149,6 +4965,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5195,6 +5014,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5225,6 +5047,33 @@ export const fixtures = [
                 "required": [
                   "command"
                 ]
+              },
+              "result": {
+                "type": "json",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "exit_code": {
+                      "type": "integer"
+                    },
+                    "stdout": {
+                      "type": "string"
+                    },
+                    "stderr": {
+                      "type": "string"
+                    },
+                    "combined": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "exit_code",
+                    "stdout",
+                    "stderr",
+                    "combined"
+                  ],
+                  "additionalProperties": false
+                }
               }
             }
           ]
@@ -5390,87 +5239,6 @@ export const fixtures = [
           ],
           "builtin_tools": [
             {
-              "name": "ask_user",
-              "description": "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.",
-              "input_schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "questions": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "question": {
-                          "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 4096
-                        },
-                        "header": {
-                          "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 16
-                        },
-                        "options": {
-                          "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "label": {
-                                "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 60
-                              },
-                              "description": {
-                                "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 1024
-                              },
-                              "preview": {
-                                "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 8192
-                              }
-                            },
-                            "additionalProperties": false,
-                            "required": [
-                              "label",
-                              "description"
-                            ]
-                          },
-                          "minItems": 2,
-                          "maxItems": 4
-                        },
-                        "multi_select": {
-                          "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
-                          "type": "boolean",
-                          "default": false
-                        }
-                      },
-                      "additionalProperties": false,
-                      "required": [
-                        "question",
-                        "header",
-                        "options"
-                      ]
-                    },
-                    "description": "One to four related blocking questions with unique question text.",
-                    "minItems": 1,
-                    "maxItems": 4
-                  }
-                },
-                "required": [
-                  "questions"
-                ]
-              }
-            },
-            {
               "name": "read",
               "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
@@ -5497,6 +5265,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5515,6 +5286,9 @@ export const fixtures = [
                 "required": [
                   "path"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5554,6 +5328,9 @@ export const fixtures = [
                 "required": [
                   "files"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5576,6 +5353,9 @@ export const fixtures = [
                   "path",
                   "content"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5619,6 +5399,9 @@ export const fixtures = [
                   "path",
                   "edits"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5646,6 +5429,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5692,6 +5478,9 @@ export const fixtures = [
                 "required": [
                   "pattern"
                 ]
+              },
+              "result": {
+                "type": "text"
               }
             },
             {
@@ -5722,6 +5511,33 @@ export const fixtures = [
                 "required": [
                   "command"
                 ]
+              },
+              "result": {
+                "type": "json",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "exit_code": {
+                      "type": "integer"
+                    },
+                    "stdout": {
+                      "type": "string"
+                    },
+                    "stderr": {
+                      "type": "string"
+                    },
+                    "combined": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "exit_code",
+                    "stdout",
+                    "stderr",
+                    "combined"
+                  ],
+                  "additionalProperties": false
+                }
               }
             }
           ]
@@ -6937,7 +6753,6 @@ export const fixtures = [
                   "model": null,
                   "selector": null,
                   "output_schema": null,
-                  "result_part": null,
                   "result_kind": null,
                   "max_iterations": null,
                   "review_subject": null
@@ -6978,7 +6793,6 @@ export const fixtures = [
                   "model": null,
                   "selector": null,
                   "output_schema": null,
-                  "result_part": null,
                   "result_kind": null,
                   "max_iterations": null,
                   "review_subject": null
@@ -7018,7 +6832,6 @@ export const fixtures = [
                     ],
                     "additionalProperties": false
                   },
-                  "result_part": null,
                   "result_kind": null,
                   "max_iterations": null,
                   "review_subject": null
@@ -7059,7 +6872,6 @@ export const fixtures = [
                     ],
                     "additionalProperties": false
                   },
-                  "result_part": null,
                   "result_kind": null,
                   "max_iterations": null,
                   "review_subject": null
@@ -7100,7 +6912,6 @@ export const fixtures = [
                     ],
                     "additionalProperties": false
                   },
-                  "result_part": null,
                   "result_kind": null,
                   "max_iterations": null,
                   "review_subject": null
@@ -7141,7 +6952,6 @@ export const fixtures = [
                   "model": null,
                   "selector": null,
                   "output_schema": null,
-                  "result_part": null,
                   "result_kind": null,
                   "max_iterations": null,
                   "review_subject": null
@@ -7163,7 +6973,6 @@ export const fixtures = [
                   "model": null,
                   "selector": null,
                   "output_schema": null,
-                  "result_part": null,
                   "result_kind": null,
                   "max_iterations": null,
                   "review_subject": null

@@ -873,6 +873,15 @@ pub enum Method {
         #[serde(default)]
         expected_revision: Option<String>,
     },
+    /// The MCP servers and Managed Python packages a Workflow of this scope
+    /// can choose Tools from, unlisted; or one `source` connected once,
+    /// listed and closed. Executes no Tool.
+    #[serde(rename = "workflow/toolCatalog")]
+    WorkflowToolCatalog {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        #[serde(default)]
+        source: Option<String>,
+    },
     /// Offline structural check, optional explanation, and dependency
     /// admission in an explicit Workspace context of one candidate document.
     /// Executes nothing; writes nothing.
@@ -1018,6 +1027,7 @@ impl Method {
             | Self::WorkflowList { .. }
             | Self::WorkflowRead { .. }
             | Self::WorkflowModelChoices { .. }
+            | Self::WorkflowToolCatalog { .. }
             | Self::WorkflowCheck { .. }
             | Self::WorkflowAnalyze { .. }
             | Self::McpProbe { .. }
@@ -1466,6 +1476,9 @@ pub enum MethodResult {
     },
     WorkflowModelChoices {
         choices: crate::local_runtime::workflow_authoring::WorkflowModelChoices,
+    },
+    WorkflowToolCatalog {
+        catalog: crate::local_runtime::workflow_tools::WorkflowToolCatalog,
     },
     WorkflowCheck {
         report: Box<crate::local_runtime::workflow_authoring::WorkflowCheckReport>,

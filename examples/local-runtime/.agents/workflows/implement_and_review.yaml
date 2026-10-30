@@ -229,7 +229,6 @@ block:
                   \ Ada!\", \"Hello, friend!\"] else \"failed\")\nPY\n"
             result:
               type: json
-              part: 0
               schema: *id002
           passed:
             type: branch
@@ -428,7 +427,6 @@ block:
                     description: Prefer explicit readable code.
             result:
               type: json
-              part: 0
               schema:
                 type: object
                 properties:

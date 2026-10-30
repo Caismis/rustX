@@ -50,7 +50,7 @@ function scripted(scope: WorkflowScope = USER_SCOPE): Scripted {
     ...state,
     port: {
       endpoint: 'ws://127.0.0.1:1/', scope,
-      analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), list: () => { const result = deferred<WorkflowLibrary>(); state.lists.push(result); return result.promise; },
+      analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => { const result = deferred<WorkflowLibrary>(); state.lists.push(result); return result.promise; },
       read: id => { const result = deferred<WorkflowSource>(); state.reads.push({ id, result }); return result.promise; },
       check: (id, document) => { const result = deferred<WorkflowCheckReport>(); state.checks.push({ id, document, result }); return result.promise; },
       write: (id, expected, edit) => { const result = deferred<WorkflowCommit>(); state.writes.push({ id, expected, edit, result }); return result.promise; },

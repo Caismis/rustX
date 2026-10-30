@@ -307,7 +307,7 @@ fn unselected_authored_identities_round_trip_for_analysis_but_cannot_replace_a_f
         json!({"type":"model", "model":{"mode":"explicit","model":"","request_params":{}},
             "messages":[{"role":"system","content":[{"type":"literal","value":"Review"}]}], "output":{"type":"text"}}),
         json!({"type":"tool", "selector":{"origin":"source","source_id":"","name":"read"},
-            "arguments":{"type":"reference","path":["args"]}, "result":{"type":"text","part":0}}),
+            "arguments":{"type":"reference","path":["args"]}, "result":{"type":"text"}}),
     ];
     for target in [SourceTarget::User, workspace(&roots.a)] {
         let saved = roots.create(&target, "unselected", "Original file");

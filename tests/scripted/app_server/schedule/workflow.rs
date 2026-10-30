@@ -501,12 +501,12 @@ async fn scheduled_native_effect(kind: ScheduledEffectKind) {
         f.gates[0].release();
         let empty=serde_json::json!({"type":"object","properties":{},"additionalProperties":false});
         let (node,output)=match kind {
-            ScheduledEffectKind::Tool=>(serde_json::json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":{"type":"literal","value":{"path":"rustx.toml"}},"result":{"type":"text","part":0}}),serde_json::json!({"type":"string"})),
+            ScheduledEffectKind::Tool=>(serde_json::json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":{"type":"literal","value":{"path":"rustx.toml"}},"result":{"type":"text"}}),serde_json::json!({"type":"string"})),
             ScheduledEffectKind::Model=>(serde_json::json!({"type":"model","model":{"mode":"session"},"messages":[{"role":"system","content":[{"type":"literal","value":"Return done"}]},{"role":"user","content":[{"type":"literal","value":"Go."}]}],"output":{"type":"text"}}),serde_json::json!({"type":"string"})),
             ScheduledEffectKind::Agent=>(serde_json::json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Return the Workflow output"}],"output":{"type":"json_schema","schema":empty}}),empty.clone()),
             ScheduledEffectKind::Review=>unreachable!("Review has dedicated response/cancel/deadline tests"),
         };
-        let returned=match kind {ScheduledEffectKind::Agent=>serde_json::json!({"type":"reference","path":["work"]}),ScheduledEffectKind::Model=>serde_json::json!({"type":"object","fields":{"value":{"type":"reference","path":["work","text"]}}}),_=>serde_json::json!({"type":"object","fields":{"value":{"type":"reference","path":["work"]}}})};
+        let returned=if kind==ScheduledEffectKind::Agent {serde_json::json!({"type":"reference","path":["work"]})} else {serde_json::json!({"type":"object","fields":{"value":{"type":"reference","path":["work","text"]}}})};
         let output=if kind==ScheduledEffectKind::Agent {output}else{serde_json::json!({"type":"object","properties":{"value":output},"required":["value"],"additionalProperties":false})};
         f.install_scheduled_workflow_definition(&serde_json::json!({"description":"Native scheduled effect","block":{"input":empty,"output":output,"nodes": {"workflow_start":{"type":"start"},"work":node,"done":{"type":"return","output":returned}},"edges": [{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}],}}));
         if kind==ScheduledEffectKind::Agent {

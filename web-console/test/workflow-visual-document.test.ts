@@ -179,7 +179,7 @@ describe('organize generation and native capacity', () => {
 
 it('keeps bounded metadata text drafts and their identity through node rename Undo/Redo', async () => {
   const source = exampleSource('typed_agent');
-  const port: WorkflowScopePort = { endpoint: 'ws://fixture', scope: { kind: 'user' }, read: async () => source, list: async () => { throw new Error('unused'); }, analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), check: () => new Promise(() => {}), write: () => { throw new Error('pending drafts must not write'); } };
+  const port: WorkflowScopePort = { endpoint: 'ws://fixture', scope: { kind: 'user' }, read: async () => source, list: async () => { throw new Error('unused'); }, analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), check: () => new Promise(() => {}), write: () => { throw new Error('pending drafts must not write'); } };
   const actor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: source.id } } }).start();
   await Promise.resolve(); await Promise.resolve();
   const id = Object.keys(actor.getSnapshot().context.document!.block.nodes)[0];

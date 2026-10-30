@@ -16,7 +16,7 @@ function scripted() {
   const port: WorkflowScopePort = {
     endpoint: 'ws://fixture/', scope: { kind: 'user' }, list: () => new Promise(() => {}), read: () => new Promise(() => {}),
     check: () => new Promise(() => {}), write: () => new Promise(() => {}),
-    analyze: () => new Promise(() => {}), modelChoices: (query, expected) => { const result = deferred<WorkflowModelChoices>(); requests.push({ query, expected, result }); return result.promise; },
+    analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: (query, expected) => { const result = deferred<WorkflowModelChoices>(); requests.push({ query, expected, result }); return result.promise; },
   };
   return { port, requests };
 }

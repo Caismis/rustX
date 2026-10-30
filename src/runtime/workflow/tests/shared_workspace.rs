@@ -34,7 +34,7 @@ fn check_node() -> Value {
     json!({"type":"tool","selector":{"origin":"builtin","name":"bash"},
         "arguments":{"type":"literal","value":{"command":
             format!("if [ \"$(cat {IMPLEMENT_FILE})\" = ok ]; then printf passed; else printf failed; fi")}},
-        "result":{"type":"json","part":0,"schema":check_report()}})
+        "result":{"type":"json","schema":check_report()}})
 }
 
 fn files_named(root: &std::path::Path, name: &str) -> Vec<std::path::PathBuf> {
@@ -314,7 +314,7 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
             "review":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},
             "write":{"type":"tool","selector":{"origin":"builtin","name":"bash"},
                 "arguments":{"type":"literal","value":{"command":format!("printf independent > {IMPLEMENT_FILE}")}},
-                "result":{"type":"json","part":0,"schema":check_report()}},
+                "result":{"type":"json","schema":check_report()}},
             "done":{"type":"return","output":{"type":"object","fields":{
                 "decision":{"type":"reference","path":["review"]},
                 "write":{"type":"reference","path":["write"]}

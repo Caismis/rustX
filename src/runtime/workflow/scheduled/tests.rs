@@ -104,7 +104,7 @@ fn program(input: &Inputs<'_>) -> WorkflowProgram {
         NodeKind::Tool => {
             json!({"type":"tool", "selector":{"origin":"builtin","name":"check"},
             "arguments":{"type":"literal","value":{}},
-            "result":{"type":"json","part":0,"schema":empty}})
+            "result":{"type":"json","schema":empty}})
         }
     };
     let mut definition: WorkflowDefinition = serde_json::from_value(json!({

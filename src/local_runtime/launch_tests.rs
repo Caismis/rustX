@@ -325,10 +325,10 @@ block:
       type: tool
       selector: {origin: source, source_id: external, name: inspect}
       arguments: {type: literal, value: {secret: SECRET_LITERAL}}
-      result: {type: text, part: 0}
+      result: {type: text}
     done:
       type: return
-      output: {type: object, fields: {text: {type: reference, path: [inspect]}}}
+      output: {type: object, fields: {text: {type: reference, path: [inspect, text]}}}
   edges: [{from: workflow_start, to: inspect}, {from: inspect, to: done}]
 ";
     install_workflow(&f, text);
@@ -2605,7 +2605,7 @@ fn cfg275_offline_generation_projects_native_facts_once_without_effects_or_secre
     .unwrap();
     install_workflow(
         &f,
-        "description: Missing tool\nblock:\n  input: {type: object}\n  output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}\n  nodes:\n    workflow_start:\n      type: start\n    inspect:\n      type: tool\n      selector: {origin: source, source_id: optional, name: inspect}\n      arguments: {type: literal, value: {}}\n      result: {type: text, part: 0}\n    done:\n      type: return\n      output: {type: object, fields: {text: {type: reference, path: [inspect]}}}\n  edges: [{from: workflow_start, to: inspect}, {from: inspect, to: done}]\n",
+        "description: Missing tool\nblock:\n  input: {type: object}\n  output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}\n  nodes:\n    workflow_start:\n      type: start\n    inspect:\n      type: tool\n      selector: {origin: source, source_id: optional, name: inspect}\n      arguments: {type: literal, value: {}}\n      result: {type: text}\n    done:\n      type: return\n      output: {type: object, fields: {text: {type: reference, path: [inspect, text]}}}\n  edges: [{from: workflow_start, to: inspect}, {from: inspect, to: done}]\n",
     );
     let ((report, launch), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_show", &f.request, &f.host)

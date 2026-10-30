@@ -888,6 +888,32 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             },
         },
     ));
+    fixtures.push(request(
+        "workflow-tool-catalog",
+        Method::WorkflowToolCatalog {
+            target: target.clone(),
+            source: Some("github".into()),
+        },
+    ));
+    fixtures.push(success(
+        "workflow-tool-catalog",
+        MethodResult::WorkflowToolCatalog {
+            catalog: crate::local_runtime::workflow_tools::WorkflowToolCatalog {
+                sources: vec![crate::local_runtime::workflow_tools::WorkflowToolSource {
+                    source_id: "github".into(),
+                    kind: crate::local_runtime::workflow_tools::WorkflowToolSourceKind::Mcp,
+                    scope: crate::runtime::resources::SourceScope::User,
+                    state: crate::local_runtime::workflow_tools::WorkflowToolSourceState::Listed,
+                    tools: vec![crate::runtime::workflow::WorkflowToolChoice {
+                        name: "search_issues".into(),
+                        description: "Search issues.".into(),
+                        input_schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}),
+                        result: crate::runtime::workflow::WorkflowToolResult::Text {},
+                    }],
+                }],
+            },
+        },
+    ));
     fixtures.push(success(
         "workflow-list",
         MethodResult::WorkflowLibrary {

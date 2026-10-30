@@ -112,7 +112,7 @@ mod tests {
         ] {
             let node = json!({"type":"tool","selector":selector,
                 "arguments":{"type":"literal","value":{}},
-                "result":{"type":"json","part":0,"schema":{"type":"object"}}});
+                "result":{"type":"json","schema":{"type":"object"}}});
             let document = workflow(&node);
             assert!(validator.is_valid(&document));
             let parsed: WorkflowDefinition =

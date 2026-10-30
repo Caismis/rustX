@@ -36,7 +36,7 @@ function portOf(authority: Authority, scope: WorkflowScope): WorkflowScopePort {
   const refuse = () => Promise.reject(new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_replaced' }));
   return {
     endpoint: `ws://${authority.name}/`, scope,
-    analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), list: () => { if (authority.replaced) return refuse(); const result = deferred<WorkflowLibrary>(); authority.lists.push(result); return result.promise; },
+    analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => { if (authority.replaced) return refuse(); const result = deferred<WorkflowLibrary>(); authority.lists.push(result); return result.promise; },
     read: () => authority.source ? Promise.resolve(authority.source) : new Promise(() => {}),
     check: () => new Promise(() => {}),
     write: (id, expected, edit) => {

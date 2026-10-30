@@ -44,18 +44,26 @@ glyph, consistently across cards, inspector headers, successor rows and pickers.
 
 The canvas **+** and the next-step popover share one chooser, as Dify's block
 selector: a **Nodes** tab classified into a default group and **Logic**, a
-**Tools** tab with one row per builtin Tool (the scope's vocabulary carries
-each Tool's description and argument schema) and an **MCP or Python tool**
-row for a source Tool named in the panel, and, for a next step, the
-**Existing** nodes. Each tab keeps its own search; hovering a row shows its
-description in a card beside it. A Tool row adds a Tool node for that Tool,
-titled by its name and described by its first sentence.
+**Tools** tab, and, for a next step, the **Existing** nodes. The Tools tab
+lists the builtin Tools (the scope's vocabulary carries each one's
+description, argument schema and result; `ask_user` is left out, as a
+Workflow asks a person through Review), then, as Dify's tool providers, each
+MCP server and Managed Python package a Workflow of this scope can use, with
+a Global or Workspace badge: a Global Workflow sees the User sources, a
+Workspace Workflow also the Workspace's. A provider folds its Tools; one that
+cannot be listed shows why. `workflow/toolCatalog` lists them when the tab
+first opens, connecting to each source once (preparing a package's
+environment first) and closing it. Each tab keeps its own search; hovering a
+row shows its description in a card beside it. A Tool row adds a Tool node for
+that Tool, titled by its name, described by its first sentence, and with the
+result its Tool declares.
 
-A builtin Tool node's panel is its parameters as a form: each name, required
+A Tool node's panel is its Tool's parameters as a form: each name, required
 mark and description above its control. Text parameters take typed text with
 `/` or `{` inserting variables (a `template` value); other types switch
 between a variable and a constant, as Dify's `{x}` / ✎ switch. Unset
-parameters are absent from the arguments. Output variables fold below. Below them, as on a Model, come retry on failure and
+parameters are absent from the arguments. Output variables fold below and
+are fixed by the Tool, never edited. Below them, as on a Model, come retry on failure and
 error handling; a fail branch adds the card's error row and `fail` port.
 
 Selecting a node type from the searchable popover creates a new sibling and

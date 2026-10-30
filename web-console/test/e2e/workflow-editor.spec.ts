@@ -61,7 +61,7 @@ test('unknown output contracts hide out-of-scope variables and keep pending upst
   try {
     await seed(fixture);
     const empty = { type: 'object', properties: {}, additionalProperties: false };
-    const tool = (schema: unknown) => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'json', part: 0, schema } });
+    const tool = (schema: unknown) => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'json', schema } });
     const unknown = { type: 'object', unknown: true };
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/scope_facts.yaml'), JSON.stringify({ description: 'Unknown schemas keep independent scope facts', block: {
       input: empty, output: empty,  nodes: {workflow_start:{type:'start'}, ...{
@@ -112,7 +112,7 @@ test('unfinished input schemas hide self, forward and alternate branch outputs',
   try {
     await seed(fixture);
     const empty = { type: 'object', properties: {}, additionalProperties: false };
-    const tool = () => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'json', part: 0, schema: empty } });
+    const tool = () => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'json', schema: empty } });
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/unfinished_input.yaml'), JSON.stringify({ description: 'Input types are separate from producer presence', block: {
       input: {}, output: empty,  nodes: {workflow_start:{type:'start'}, ...{ common: tool(), left: tool(), right: tool(), join: tool(),
         gate: { type: 'branch', cases: [{ id: 'true', condition: { type: 'boolean', value: { type: 'literal', value: true } } }] }, done: { type: 'return', output: { type: 'literal', value: {} } } }},

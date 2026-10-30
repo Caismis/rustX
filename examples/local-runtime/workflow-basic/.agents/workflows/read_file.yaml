@@ -35,7 +35,6 @@ block:
             - path
       result:
         type: text
-        part: 0
     done:
       type: return
       output:
@@ -45,6 +44,7 @@ block:
             type: reference
             path:
             - read
+            - text
   edges:
   - from: start
     to: read

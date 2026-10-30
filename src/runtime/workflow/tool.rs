@@ -37,6 +37,8 @@ pub struct WorkflowToolChoice {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+    /// The fixed result a node of this Tool commits.
+    pub result: WorkflowToolResult,
 }
 
 /// The builtin Tools a Workflow Tool node can select at all, in the native
@@ -52,9 +54,14 @@ pub fn selectable_builtin_tools() -> Vec<WorkflowToolChoice> {
     .filter(|(definition, policy)| {
         definition.origin == crate::tools::types::ToolOrigin::Builtin
             && *policy == crate::tools::deadline::ForegroundPolicy::Leaf
+            // A Workflow asks a person through its Review node.
+            && definition.name != "ask_user"
             && eligible(definition)
     })
     .map(|(definition, _)| WorkflowToolChoice {
+        result: WorkflowToolResult::declared(
+            crate::tools::native::output_schema(&definition.name).as_ref(),
+        ),
         name: definition.name,
         description: definition.description,
         input_schema: definition.input_schema,
@@ -327,22 +334,45 @@ fn bounded_status(status: &ToolExecutionStatus) -> ToolExecutionStatus {
     }
 }
 
-/// Select exactly one native content part, never provider text or log heuristics.
+/// What a Tool node commits, fixed by the Tool: its declared structured
+/// result, or its text. Never provider text heuristics or a part index.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowToolResult {
-    /// The indexed part must be native structured JSON satisfying this schema.
-    Json { part: usize, schema: Value },
-    /// The indexed part must be native text; retain it as a typed JSON string.
-    Text { part: usize },
+    /// The result's one native structured JSON part, satisfying this schema.
+    Json { schema: Value },
+    /// `{text}`: the result's native text parts, joined by newlines.
+    Text {},
 }
 
 impl WorkflowToolResult {
+    /// The result a Tool declares: structured when its output schema is a
+    /// Workflow object contract, otherwise its text.
+    #[must_use]
+    pub fn declared(output_schema: Option<&Value>) -> Self {
+        match output_schema {
+            Some(schema)
+                if super::schema_type(schema) == Some("object")
+                    && super::validate_workflow_schema(schema, "Tool result").is_ok() =>
+            {
+                Self::Json {
+                    schema: schema.clone(),
+                }
+            }
+            _ => Self::Text {},
+        }
+    }
+
     pub(super) fn schema(&self) -> Value {
         match self {
-            Self::Json { schema, .. } => schema.clone(),
-            Self::Text { .. } => serde_json::json!({"type":"string"}),
+            Self::Json { schema } => schema.clone(),
+            Self::Text {} => serde_json::json!({
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+                "additionalProperties": false,
+            }),
         }
     }
 
@@ -359,32 +389,40 @@ impl WorkflowToolResult {
             });
         }
         let value = match self {
-            Self::Json { part, .. } => match result.content.get(*part) {
-                Some(ToolResultContent::Json { value }) => {
-                    expressions::bounded_value_bytes(value)?;
-                    value.clone()
-                }
-                _ => {
-                    return Err(WorkflowRunError::InvalidValue(
-                        "selected result part is not structured JSON".into(),
-                    ));
-                }
-            },
-            Self::Text { part } => match result.content.get(*part) {
-                Some(ToolResultContent::Text(text)) => {
-                    if text.text.len() > super::MAX_VALUE_BYTES {
+            Self::Json { .. } => {
+                let mut parts = result.content.iter().filter_map(|part| match part {
+                    ToolResultContent::Json { value } => Some(value),
+                    _ => None,
+                });
+                match (parts.next(), parts.next()) {
+                    (Some(value), None) => {
+                        expressions::bounded_value_bytes(value)?;
+                        value.clone()
+                    }
+                    _ => {
                         return Err(WorkflowRunError::InvalidValue(
-                            "selected text exceeds Workflow value bound".into(),
+                            "Tool result has no single structured JSON part".into(),
                         ));
                     }
-                    Value::String(text.text.clone())
                 }
-                _ => {
-                    return Err(WorkflowRunError::InvalidValue(
-                        "selected result part is not text".into(),
-                    ));
+            }
+            Self::Text {} => {
+                let mut text = String::new();
+                for part in &result.content {
+                    if let ToolResultContent::Text(block) = part {
+                        if !text.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push_str(&block.text);
+                        if text.len() > super::MAX_VALUE_BYTES {
+                            return Err(WorkflowRunError::InvalidValue(
+                                "Tool text exceeds Workflow value bound".into(),
+                            ));
+                        }
+                    }
                 }
-            },
+                serde_json::json!({ "text": text })
+            }
         };
         expressions::bounded_value_bytes(&value)?;
         execution::validate_commit(&self.schema(), &value)?;

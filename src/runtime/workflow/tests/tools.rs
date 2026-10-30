@@ -118,7 +118,7 @@ fn program_definition() -> WorkflowDefinition {
                     "arguments":{"type":"object","fields":{
                         "passed":{"type":"reference","path":["args","passed"]},
                         "label":{"type":"literal","value":"fixed"}}},
-                    "result":{"type":"json","part":1,"schema":schema(json!({"passed":{"type":"boolean"}}), &["passed"])}},
+                    "result":{"type":"json","schema":schema(json!({"passed":{"type":"boolean"}}), &["passed"])}},
                 "branch":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["check","passed"]}}}]},
                 "yes":{"type":"return","output":{"type":"reference","path":["check"]}},
                 "no":{"type":"return","output":{"type":"reference","path":["check"]}}
@@ -342,7 +342,6 @@ async fn tool_only_inactive_capability_has_no_provider_or_canonical_history_and_
 #[test]
 fn native_failure_matrix_and_explicit_projection_commit_no_business_values() {
     let contract = WorkflowToolResult::Json {
-        part: 0,
         schema: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
     };
     for status in [
@@ -383,10 +382,10 @@ fn native_failure_matrix_and_explicit_projection_commit_no_business_values() {
         "JSON-looking logs are never parsed"
     );
     assert_eq!(
-        WorkflowToolResult::Text { part: 0 }
+        WorkflowToolResult::Text {}
             .project(&result, &test_instance("check", "check"))
             .unwrap(),
-        json!("{\"passed\":true}")
+        json!({"text": "{\"passed\":true}"})
     );
     result.content = vec![ToolResultContent::Json {
         value: json!({"passed": "yes"}),
@@ -956,7 +955,6 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
                             .into(),
                             arguments: WorkflowValue::Literal { value: json!({}) },
                             result: WorkflowToolResult::Json {
-                                part: 0,
                                 schema: json!({"type":"object"}),
                             },
                             retry: None,
@@ -1046,7 +1044,7 @@ fn failing_program(failure: &Value) -> Arc<WorkflowProgram> {
     let fail_branch = failure["on_error"]["type"] == "fail_branch";
     let mut tool = json!({"type":"tool","selector":{"origin":"builtin","name":"check"},
         "arguments":{"type":"object","fields":{"passed":{"type":"literal","value":true},"label":{"type":"literal","value":"fixed"}}},
-        "result":{"type":"json","part":0,"schema":passed}});
+        "result":{"type":"json","schema":passed}});
     tool.as_object_mut()
         .unwrap()
         .extend(failure.as_object().unwrap().clone());
@@ -1161,4 +1159,57 @@ fn tool_failure_handling_is_validated_at_compile() {
     assert!(compile(json!({"on_error":{"type":"default_value","value":{"passed":false}}})).is_ok());
     let error = compile(json!({"on_error":{"type":"fail_branch"}})).unwrap_err();
     assert!(error.to_string().contains("no fail connection"), "{error}");
+}
+
+/// As Dify's tool outputs: a node's result is fixed by its Tool. A Workflow
+/// object contract is structured; anything else is the Tool's `{text}`.
+#[test]
+fn tool_results_are_declared_by_the_tool() {
+    let choices = crate::runtime::workflow::selectable_builtin_tools();
+    assert!(choices.iter().all(|tool| tool.name != "ask_user"));
+    let result = |name: &str| {
+        choices
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap()
+            .result
+            .clone()
+    };
+    assert_eq!(result("read"), WorkflowToolResult::Text {});
+    let WorkflowToolResult::Json { schema } = result("bash") else {
+        panic!("bash declares its structured result")
+    };
+    assert_eq!(
+        schema["required"],
+        json!(["exit_code", "stdout", "stderr", "combined"])
+    );
+    // A schema outside the Workflow vocabulary (as FastMCP's wrapped
+    // results), or a non-object one, is not a node contract.
+    for open in [
+        json!({"type":"object","properties":{"result":{"type":"string"}},"required":["result"],"x-fastmcp-wrap-result":true}),
+        json!({"type":"string"}),
+    ] {
+        assert_eq!(
+            WorkflowToolResult::declared(Some(&open)),
+            WorkflowToolResult::Text {}
+        );
+    }
+    assert_eq!(
+        WorkflowToolResult::declared(None),
+        WorkflowToolResult::Text {}
+    );
+    let mut text = terminal(ToolExecutionStatus::Success);
+    text.content = vec![
+        ToolResultContent::Text(crate::message::content::TextBlock { text: "a".into() }),
+        ToolResultContent::Json {
+            value: json!({"ignored": true}),
+        },
+        ToolResultContent::Text(crate::message::content::TextBlock { text: "b".into() }),
+    ];
+    assert_eq!(
+        WorkflowToolResult::Text {}
+            .project(&text, &test_instance("check", "check"))
+            .unwrap(),
+        json!({"text": "a\nb"})
+    );
 }

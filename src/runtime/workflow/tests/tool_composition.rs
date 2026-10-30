@@ -155,27 +155,22 @@ fn projection_rejects_oversized_or_missing_parts_without_parsing_text() {
             text: "x".repeat(MAX_VALUE_BYTES + 1),
         },
     )];
-    assert!(
-        WorkflowToolResult::Text { part: 0 }
-            .project(&result, &node)
-            .is_err()
-    );
+    assert!(WorkflowToolResult::Text {}.project(&result, &node).is_err());
     result.content = vec![ToolResultContent::Json {
         value: json!("x".repeat(MAX_VALUE_BYTES + 1)),
     }];
-    assert!(
-        WorkflowToolResult::Json {
-            part: 0,
-            schema: json!({"type":"string"})
-        }
-        .project(&result, &node)
-        .is_err()
-    );
-    assert!(
-        WorkflowToolResult::Text { part: 1 }
-            .project(&result, &node)
-            .is_err()
-    );
+    let structured = WorkflowToolResult::Json {
+        schema: json!({"type":"string"}),
+    };
+    assert!(structured.project(&result, &node).is_err());
+    // Exactly one structured part: none or two are both refused.
+    result.content = Vec::new();
+    assert!(structured.project(&result, &node).is_err());
+    result.content = vec![
+        ToolResultContent::Json { value: json!("a") },
+        ToolResultContent::Json { value: json!("b") },
+    ];
+    assert!(structured.project(&result, &node).is_err());
 }
 
 struct BrokenComposite(Arc<Probe>);

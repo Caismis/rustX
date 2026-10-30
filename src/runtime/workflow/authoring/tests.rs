@@ -209,11 +209,11 @@ fn actual_editor_unselected_identities_are_analyzable_but_never_compiled() {
             WorkflowConsumerField::Message { index: 1 },
         ),
         (
-            json!({"type":"tool","selector":{"origin":"source","source_id":"","name":"read"},"arguments":reference(&["args"]),"result":{"type":"text","part":0}}),
+            json!({"type":"tool","selector":{"origin":"source","source_id":"","name":"read"},"arguments":reference(&["args"]),"result":{"type":"text"}}),
             WorkflowConsumerField::Arguments,
         ),
         (
-            json!({"type":"tool","selector":{"origin":"builtin","name":""},"arguments":reference(&["args"]),"result":{"type":"text","part":0}}),
+            json!({"type":"tool","selector":{"origin":"builtin","name":""},"arguments":reference(&["args"]),"result":{"type":"text"}}),
             WorkflowConsumerField::Arguments,
         ),
     ];
@@ -279,7 +279,7 @@ fn finite_join_candidate(
 ) -> (WorkflowDefinition, WorkflowConsumerField) {
     let tool = |schema: &Value, arguments: Value| {
         json!({"type":"tool", "selector":{"origin":"builtin","name":"read"},
-            "arguments":arguments, "result":{"type":"json","part":0,"schema":schema}})
+            "arguments":arguments, "result":{"type":"json","schema":schema}})
     };
     let mut nodes = json!({
         "source":tool(contract, json!({"type":"literal","value":{}}))
@@ -492,7 +492,7 @@ fn loop_initial_body_result_and_parent_scopes_are_distinct() {
 fn external_tool_expected_types_stay_unknown_and_bad_output_contracts_stay_pending() {
     let mut candidate = text_candidate();
     candidate.block.nodes.insert("text".into(), serde_json::from_value(json!({"type":"tool","selector":{"origin":"source","source_id":"unknown","name":"unknown"},
-        "arguments":reference(&["args"]),"result":{"type":"json","part":0,"schema":{"type":"object","unknown":true}}})).unwrap());
+        "arguments":reference(&["args"]),"result":{"type":"json","schema":{"type":"object","unknown":true}}})).unwrap());
     let args = selected(
         &candidate,
         &query("text", WorkflowConsumerField::Arguments, &["args"]),
@@ -535,7 +535,7 @@ fn unknown_output_contracts_preserve_producer_scope_facts() {
         let tool = || {
             json!({"type":"tool","selector":{"origin":"builtin","name":"read"},
                 "arguments":reference(&["args"]),
-                "result":{"type":"json","part":0,"schema":schema}})
+                "result":{"type":"json","schema":schema}})
         };
         let first = field(
             model(),
@@ -621,8 +621,8 @@ fn tool_argument_roots_enforce_necessary_object_type_without_claiming_full_compa
     ] {
         let mut candidate = definition(json!({
             "input":object(json!({}), &[]), "output":object(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},
-                "source":{"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["args"]),"result":{"type":"json","part":0,"schema":schema}},
-                "sink":{"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["source"]),"result":{"type":"text","part":0}},
+                "source":{"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["args"]),"result":{"type":"json","schema":schema}},
+                "sink":{"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["source"]),"result":{"type":"text"}},
                 "done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"source"},{"from":"source","to":"sink"},{"from":"sink","to":"done"}],}));
         let root = query("sink", WorkflowConsumerField::Arguments, &["source"]);
         let report = analyze(&candidate, Some(&root)).unwrap();
@@ -710,7 +710,7 @@ fn derived_aggregate_schemas_keep_native_proofs_at_the_authored_depth_boundary()
             let candidate = definition(json!({
                 "input":schema,"output":schema,"nodes": {"workflow_start":{"type":"start"},
                     "produce":node,
-                    "sink":{"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["produce"]),"result":{"type":"text","part":0}},
+                    "sink":{"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["produce"]),"result":{"type":"text"}},
                     "done":done(reference(&["args"]))},"edges": ({ let mut edges = serde_json::to_value(edges).unwrap(); edges.as_array_mut().unwrap().insert(0, serde_json::json!({"from":"workflow_start","to":"produce"})); edges }),}));
             super::super::WorkflowProgram::compile(
                 super::super::WorkflowId::parse("aggregate").unwrap(),
@@ -760,7 +760,7 @@ fn derived_aggregate_schemas_keep_native_proofs_at_the_authored_depth_boundary()
 #[test]
 fn unfinished_input_contracts_preserve_control_flow_presence_and_absence() {
     let empty = object(json!({}), &[]);
-    let tool = || json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["args"]),"result":{"type":"json","part":0,"schema":empty}});
+    let tool = || json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["args"]),"result":{"type":"json","schema":empty}});
     let linear = definition(
         json!({"input":empty,"output":empty,"nodes": {"workflow_start":{"type":"start"},
         "first":tool(),"later":tool(),"done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"later"},{"from":"later","to":"done"}],}),
@@ -1332,7 +1332,7 @@ fn array_schema_markers_stay_unknown_and_large_repeated_arrays_keep_bounded_sear
         &[reference(&["unfinished"]), a.clone()],
         &json!({"type":"object"}),
     );
-    candidate.block.nodes.insert("unfinished".into(), serde_json::from_value(json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["args"]),"result":{"type":"json","part":0,"schema":{"type":"object","unknown":true}}})).unwrap());
+    candidate.block.nodes.insert("unfinished".into(), serde_json::from_value(json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["args"]),"result":{"type":"json","schema":{"type":"object","unknown":true}}})).unwrap());
     candidate.block.edges = serde_json::from_value(json!([
         {"from":"workflow_start","to":"unfinished"},
         {"from":"unfinished","to":"receive"}
@@ -1893,7 +1893,7 @@ fn array_reference_candidate(
             destination.clone(),
         ),
         "tool" => (
-            json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":value,"result":{"type":"text","part":0}}),
+            json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":value,"result":{"type":"text"}}),
             WorkflowConsumerField::Arguments,
             empty.clone(),
         ),

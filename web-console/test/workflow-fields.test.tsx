@@ -16,7 +16,7 @@ import WorkflowEditor from '../src/app/workflows/ui/editor/WorkflowEditor';
 const writes: { expected: string; edit: WorkflowEdit }[] = [];
 const port: WorkflowScopePort = {
   endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' },
-  analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}),
+  analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}),
   read: async id => ({ ...exampleSource('parallel_review'), id, revision: 'sha256:base' }),
   check: () => new Promise(() => {}),
   write: (_id, expected, edit) => { writes.push({ expected, edit }); return new Promise<WorkflowCommit>(() => {}); },

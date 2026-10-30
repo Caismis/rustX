@@ -9183,6 +9183,39 @@
           ]
         },
         {
+          "description": "The MCP servers and Managed Python packages a Workflow of this scope\ncan choose Tools from, unlisted; or one `source` connected once,\nlisted and closed. Executes no Tool.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "workflow/toolCatalog"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "source": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "default": null
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "description": "Offline structural check, optional explanation, and dependency\nadmission in an explicit Workspace context of one candidate document.\nExecutes nothing; writes nothing.",
           "type": "object",
           "properties": {
@@ -12764,18 +12797,12 @@
       ]
     },
     "WorkflowToolResult": {
-      "description": "Select exactly one native content part, never provider text or log heuristics.",
+      "description": "What a Tool node commits, fixed by the Tool: its declared structured\nresult, or its text. Never provider text heuristics or a part index.",
       "oneOf": [
         {
-          "description": "The indexed part must be native structured JSON satisfying this schema.",
+          "description": "The result's one native structured JSON part, satisfying this schema.",
           "type": "object",
           "properties": {
-            "part": {
-              "type": "integer",
-              "format": "uint",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
             "schema": true,
             "type": {
               "type": "string",
@@ -12785,20 +12812,13 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "part",
             "schema"
           ]
         },
         {
-          "description": "The indexed part must be native text; retain it as a typed JSON string.",
+          "description": "`{text}`: the result's native text parts, joined by newlines.",
           "type": "object",
           "properties": {
-            "part": {
-              "type": "integer",
-              "format": "uint",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
             "type": {
               "type": "string",
               "const": "text"
@@ -12806,8 +12826,7 @@
           },
           "additionalProperties": false,
           "required": [
-            "type",
-            "part"
+            "type"
           ]
         }
       ]
@@ -17474,6 +17493,23 @@
           "required": [
             "type",
             "choices"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "catalog": {
+              "$ref": "#/$defs/WorkflowToolCatalog"
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow_tool_catalog"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "catalog"
           ]
         },
         {
@@ -33354,13 +33390,18 @@
         "description": {
           "type": "string"
         },
-        "input_schema": true
+        "input_schema": true,
+        "result": {
+          "description": "The fixed result a node of this Tool commits.",
+          "$ref": "#/$defs/WorkflowToolResult"
+        }
       },
       "additionalProperties": false,
       "required": [
         "name",
         "description",
-        "input_schema"
+        "input_schema",
+        "result"
       ]
     },
     "WorkflowModelChoices": {
@@ -33435,6 +33476,83 @@
             "model",
             "profiles"
           ]
+        }
+      ]
+    },
+    "WorkflowToolCatalog": {
+      "type": "object",
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkflowToolSource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sources"
+      ]
+    },
+    "WorkflowToolSource": {
+      "description": "One MCP server or Managed Python package and the Tools it lists.",
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "description": "The selector's `source_id`: an MCP server ID or `python:<package>`.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkflowToolSourceKind"
+        },
+        "scope": {
+          "$ref": "#/$defs/SourceScope"
+        },
+        "state": {
+          "$ref": "#/$defs/WorkflowToolSourceState"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkflowToolChoice"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "kind",
+        "scope",
+        "state",
+        "tools"
+      ]
+    },
+    "WorkflowToolSourceKind": {
+      "type": "string",
+      "enum": [
+        "mcp",
+        "python"
+      ]
+    },
+    "WorkflowToolSourceState": {
+      "description": "Why a source lists no Tools, or that it listed them.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "listed",
+            "invalid",
+            "preparation_failed",
+            "connection_failed",
+            "list_failed",
+            "timed_out",
+            "cancelled"
+          ]
+        },
+        {
+          "description": "Not listed yet: list it by its `source_id`.",
+          "type": "string",
+          "const": "pending"
         }
       ]
     },
@@ -33794,15 +33912,6 @@
           ]
         },
         "output_schema": true,
-        "result_part": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
         "result_kind": {
           "type": [
             "string",

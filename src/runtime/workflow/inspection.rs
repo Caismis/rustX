@@ -127,7 +127,6 @@ pub struct NodeInspection {
     pub model: Option<ModelPolicyInspection>,
     pub selector: Option<crate::capabilities::selection::ExactToolSelector>,
     pub output_schema: Option<Value>,
-    pub result_part: Option<usize>,
     pub result_kind: Option<Cow<'static, str>>,
     pub max_iterations: Option<u32>,
     pub review_subject: Option<Cow<'static, str>>,
@@ -297,7 +296,6 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             model: None,
             selector: None,
             output_schema: None,
-            result_part: None,
             result_kind: None,
             max_iterations: None,
             review_subject: None,
@@ -382,12 +380,13 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 view.selector = Some(selector.clone());
                 view.bindings.insert("arguments".into(), binding(arguments));
                 view.output_schema = Some(schema(&tool_result.schema()));
-                let (part, kind) = match tool_result {
-                    super::WorkflowToolResult::Json { part, .. } => (*part, "json"),
-                    super::WorkflowToolResult::Text { part } => (*part, "text"),
-                };
-                view.result_part = Some(part);
-                view.result_kind = Some(kind.into());
+                view.result_kind = Some(
+                    match tool_result {
+                        super::WorkflowToolResult::Json { .. } => "json",
+                        super::WorkflowToolResult::Text {} => "text",
+                    }
+                    .into(),
+                );
             }
             WorkflowNodeProgram::Start => {
                 view.kind = "start".into();

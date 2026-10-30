@@ -787,3 +787,16 @@
 .typeSwitch button { width: 30px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--dsw-alias-label-tertiary); font: inherit; font-family: var(--ds-font-family-code); font-size: 12px; cursor: pointer; }
 .typeSwitch button:hover { color: var(--dsw-alias-label-primary); }
 .typeSwitch .typeSwitchActive { background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); box-shadow: 0 1px 2px rgba(0,0,0,.18); }
+
+/* Dify's tool providers: a source folds its Tools under one row. */
+.chooserProvider { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 3px 8px; border: 0; border-radius: 7px; background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12.5px; font-weight: 500; text-align: left; cursor: pointer; }
+.chooserProvider:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.chooserProvider:disabled { cursor: default; }
+.chooserProvider:disabled .chooserIcon { opacity: .45; }
+.chooserBadge { flex: none; padding: 0 5px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 5px; color: var(--dsw-alias-label-tertiary); font-size: 10px; font-weight: 500; line-height: 16px; }
+.chooserCount { margin-left: auto; flex: none; color: var(--dsw-alias-label-tertiary); font-size: 11px; font-weight: 400; }
+.chooserChevron { flex: none; color: var(--dsw-alias-label-tertiary); transition: transform .15s; }
+.chooserProvider[aria-expanded='true'] .chooserChevron { transform: rotate(90deg); }
+.chooserNested { padding-left: 22px; }
+.chooserNote { display: flex; align-items: center; gap: 8px; margin: 8px; color: var(--dsw-alias-label-tertiary); font-size: 11.5px; line-height: 17px; }
+.chooserRetry { margin-left: auto; padding: 2px 8px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 6px; background: none; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; cursor: pointer; }

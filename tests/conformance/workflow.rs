@@ -54,12 +54,12 @@ block:
       arguments:
         type: literal
         value: {path: .agents/workflows, pattern: '*.yaml'}
-      result: {type: text, part: 0}
+      result: {type: text}
     done:
       type: return
       output:
         type: object
-        fields: {files: {type: reference, path: [inspect]}}
+        fields: {files: {type: reference, path: [inspect, text]}}
   edges: [{from: workflow_start, to: inspect}, {from: inspect, to: done}]
 ";
 
@@ -1640,7 +1640,7 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
         definition["block"]["nodes"]["question"] = serde_json::json!({
             "type":"tool","selector":{"origin":"builtin","name":"ask_user"},
             "arguments":{"type":"literal","value":{"questions":[{"question":"PRIVATE QUESTION: choose a priority","header":"Priority","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}},
-            "result":{"type":"json","part":0,"schema":{"type":"object","properties":{"cancelled":{"type":"boolean"},"answers":{"type":"array","items":{"type":"object"}}},"required":["cancelled","answers"],"additionalProperties":false}}
+            "result":{"type":"json","schema":{"type":"object","properties":{"cancelled":{"type":"boolean"},"answers":{"type":"array","items":{"type":"object"}}},"required":["cancelled","answers"],"additionalProperties":false}}
         });
         definition["block"]["nodes"]["human"] = serde_json::json!({"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[{"type":"reference","path":["question"]}]});
         definition["block"]["nodes"]["decision"] = serde_json::json!({"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["human","accepted"]}}}]});

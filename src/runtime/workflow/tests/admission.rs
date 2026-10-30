@@ -603,7 +603,7 @@ fn tool_node_admission_is_capability_plane_selection_without_agents() {
                 "input":schema(json!({}), &[]), "output":schema(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},
                     "check":{"type":"tool","selector":{"origin":"source","source_id":"github","name":name},
                         "arguments":{"type":"literal","value":{}},
-                        "result":{"type":"json","part":0,"schema":{"type":"object"}}},
+                        "result":{"type":"json","schema":{"type":"object"}}},
                     "done":{"type":"return","output":{"type":"literal","value":{}}}
                 },"edges": [{"from":"workflow_start","to":"check"},{"from":"check","to":"done"}],}
         })).unwrap()).unwrap()
