@@ -3,21 +3,123 @@
 //! and deferred evidence are always assembled from the current seed.
 use super::{ForegroundToolExecution, ForegroundToolState, InFlightBlock, RuntimeClientAttempt};
 use crate::model::session::{AttemptModelView, SummaryModelView};
-use crate::runtime_client::checkpoint::{CHECKPOINT_PAGE_ITEMS, PreparedCapture};
+use crate::runtime_client::checkpoint::{CHECKPOINT_PAGE_ITEMS, Capture, prepare_capture_item};
 use crate::runtime_client::settings::AdmittedSettings;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::sync::{Arc, Mutex, OnceLock};
 
-type Item<T> = Arc<OnceLock<PreparedCapture<T>>>;
+type Item<T> = Arc<OnceLock<T>>;
+
+/// Attempt fields contribute to the final attempt budget together. They need
+/// admission replay, but no separate structural-fit walk that is then discarded.
+pub(super) struct PreparedItem<T> {
+    value: T,
+    capture: Capture,
+}
+
+pub(super) fn capture<'a, T: Clone>(
+    capture: &mut Capture,
+    owner: &'a OnceLock<PreparedItem<T>>,
+    build: impl Fn(&mut Capture) -> T,
+) -> Cow<'a, T> {
+    let prepared = owner.get_or_init(|| {
+        let mut capture = Capture::new(0);
+        let value = build(&mut capture);
+        PreparedItem { value, capture }
+    });
+    if capture.try_replay(&prepared.capture) {
+        Cow::Borrowed(&prepared.value)
+    } else {
+        Cow::Owned(build(capture))
+    }
+}
+
+// Source is a proof about the actual serde-normalized result, not an assumption
+// that every future DTO deserializer is an identity function. No body is kept.
+pub(super) enum PreparedLiveBlock {
+    Source { encoded: usize, required: usize },
+    Rejected,
+    Normalize,
+}
+
+pub(super) fn live_block(
+    capture: &mut Capture,
+    owner: &OnceLock<PreparedLiveBlock>,
+    block: &InFlightBlock,
+) -> Option<InFlightBlock> {
+    live_block_with(capture, owner, block, || prepare_capture_item(block))
+}
+
+fn live_block_with(
+    capture: &mut Capture,
+    owner: &OnceLock<PreparedLiveBlock>,
+    block: &InFlightBlock,
+    prepare: impl Fn() -> Option<(InFlightBlock, usize, usize)>,
+) -> Option<InFlightBlock> {
+    let mut fresh = None;
+    let prepared = owner.get_or_init(|| {
+        let normalized = prepare();
+        #[cfg(test)]
+        NORMALIZED_ALLOCATION.with(|allocation| {
+            allocation.set(normalized.as_ref().map(|(value, _, _)| {
+                let text = match value {
+                    InFlightBlock::Text { text, .. }
+                    | InFlightBlock::Reasoning { text, .. }
+                    | InFlightBlock::Refusal { text, .. } => text,
+                    InFlightBlock::ToolCall { arguments, .. } => arguments,
+                };
+                (text.as_ptr() as usize, text.capacity())
+            }));
+        });
+        let value = match &normalized {
+            // These DTOs contain strings, identities and integer coordinates;
+            // native equality is exact for every field, including raw arguments.
+            Some((value, encoded, required)) if value == block => PreparedLiveBlock::Source {
+                encoded: *encoded,
+                required: *required,
+            },
+            Some(_) => PreparedLiveBlock::Normalize,
+            None => PreparedLiveBlock::Rejected,
+        };
+        // Move this allocation into the first output instead of cloning it from
+        // the cache. OnceLock contenders use the recorded proof below.
+        fresh = Some(normalized);
+        value
+    });
+    let normalized = if let Some(value) = fresh {
+        value
+    } else {
+        match prepared {
+            PreparedLiveBlock::Source { encoded, required } => {
+                return capture
+                    .admit_prepared(*encoded, *required)
+                    .then(|| block.clone());
+            }
+            // First-stage rejection must not touch the shared eviction state.
+            PreparedLiveBlock::Rejected => return None,
+            PreparedLiveBlock::Normalize => prepare(),
+        }
+    };
+    // Prepare exactly once even when the current shared budget cannot admit it.
+    // These are the same two stages as Capture::live_block, in the same order.
+    let (value, encoded, required) = normalized?;
+    capture.admit_prepared(encoded, required).then_some(value)
+}
+
+#[cfg(test)]
+thread_local! {
+    static NORMALIZED_ALLOCATION: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) };
+}
 
 #[derive(Default)]
 pub(super) struct Items {
-    pub model: Item<Option<Box<AttemptModelView>>>,
-    pub settings: Item<Option<AdmittedSettings>>,
-    pub blocks: Vec<Item<Option<InFlightBlock>>>,
+    pub model: Item<PreparedItem<Option<Box<AttemptModelView>>>>,
+    pub settings: Item<PreparedItem<Option<AdmittedSettings>>>,
+    pub blocks: Vec<Item<PreparedLiveBlock>>,
     // Reserve only: deferred source selection and the public Tool copy must
     // still use the current row, rather than a cached decorated result.
-    pub tools: Vec<Item<bool>>,
+    pub tools: Vec<Item<PreparedItem<bool>>>,
 }
 
 #[derive(Default)]
@@ -39,18 +141,22 @@ impl PreparedAttemptItems {
         let after = source.as_ref().as_ref();
         let old_blocks = before.and_then(|a| a.in_flight.as_ref()).map(|f| &f.blocks);
         let blocks = after.and_then(|a| a.in_flight.as_ref()).map(|f| &f.blocks);
-        let mut items = Items::default();
-        if same_model(
-            before.and_then(|a| a.model.as_deref()),
-            after.and_then(|a| a.model.as_deref()),
-        ) {
-            items.model = Arc::clone(&latest.items.model);
-        }
-        if before.and_then(|a| a.execution_settings.as_ref())
-            == after.and_then(|a| a.execution_settings.as_ref())
-        {
-            items.settings = Arc::clone(&latest.items.settings);
-        }
+        let mut items = Items {
+            model: reused(
+                Some(&latest.items.model),
+                same_model(
+                    before.and_then(|a| a.model.as_deref()),
+                    after.and_then(|a| a.model.as_deref()),
+                ),
+            ),
+            settings: reused(
+                Some(&latest.items.settings),
+                before.and_then(|a| a.execution_settings.as_ref())
+                    == after.and_then(|a| a.execution_settings.as_ref()),
+            ),
+            blocks: Vec::new(),
+            tools: Vec::new(),
+        };
         if let Some(blocks) = blocks {
             items.blocks = blocks
                 .iter()
