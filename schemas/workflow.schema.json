@@ -1,5 +1,54 @@
 {
   "$defs": {
+    "WorkflowAgentErrorStrategy": {
+      "description": "As Dify's error handling on its Agent node, for a child run that failed\nor timed out once its termination is proven. Agents are not retried: a\nworkflow child writes the shared Session workspace directly, so another\nrun could repeat effects the failed one already made. Cancellation, an\nunknown outcome, unproven termination and a refused start still stop\nthe run.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The run stops with the node's failure.",
+          "properties": {
+            "type": {
+              "const": "stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The node succeeds with this value, which satisfies the node's own\nvalue contract; a routed node leaves through its `switch`.",
+          "properties": {
+            "type": {
+              "const": "default_value",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The node leaves through its `fail` port with `error_type` and\n`error_message`; only nodes reached through that port see them.",
+          "properties": {
+            "type": {
+              "const": "fail_branch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "WorkflowAgentOutput": {
       "description": "The authored output contract of a Workflow Agent node, as Dify's Agent:\nthe final reply is the `text` variable, or a declared schema adds the\nreserved `workflow_output` terminal and its fields are the variables.",
       "oneOf": [
@@ -34,6 +83,23 @@
           "type": "object"
         }
       ]
+    },
+    "WorkflowAgentRoute": {
+      "additionalProperties": false,
+      "description": "One exit an Agent may choose, as Dify's Agent output route. The child\nsees every route's ID and description when it picks one.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "description"
+      ],
+      "type": "object"
     },
     "WorkflowBlock": {
       "additionalProperties": false,
@@ -593,6 +659,10 @@
           "additionalProperties": false,
           "description": "One execution of an admitted named Subagent profile.",
           "properties": {
+            "on_error": {
+              "$ref": "#/$defs/WorkflowAgentErrorStrategy",
+              "description": "What a failed or timed-out child run leaves behind."
+            },
             "output": {
               "$ref": "#/$defs/WorkflowAgentOutput",
               "description": "What the `AgentRun` returns: its final reply text, or a\nstructured value committed through `workflow_output`."
@@ -600,6 +670,13 @@
             "profile": {
               "description": "The native named profile to resolve at `AgentRun` admission.",
               "type": "string"
+            },
+            "routes": {
+              "description": "As Dify's Agent output routes: the child picks one of these\nexits through its required `switch` value.",
+              "items": {
+                "$ref": "#/$defs/WorkflowAgentRoute"
+              },
+              "type": "array"
             },
             "task": {
               "description": "The task instruction for this `AgentRun`: fixed text and explicit\nreferences, as a Model message's content.",

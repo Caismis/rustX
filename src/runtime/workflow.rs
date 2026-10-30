@@ -417,6 +417,13 @@ pub enum WorkflowNodeDefinition {
         /// What the `AgentRun` returns: its final reply text, or a
         /// structured value committed through `workflow_output`.
         output: WorkflowAgentOutput,
+        /// As Dify's Agent output routes: the child picks one of these
+        /// exits through its required `switch` value.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        routes: Vec<WorkflowAgentRoute>,
+        /// What a failed or timed-out child run leaves behind.
+        #[serde(default, skip_serializing_if = "WorkflowAgentErrorStrategy::is_stop")]
+        on_error: WorkflowAgentErrorStrategy,
     },
     /// Ordered IF / ELIF cases, followed by the false (ELSE) port.
     Branch { cases: Vec<WorkflowBranchCase> },
@@ -489,8 +496,7 @@ pub enum WorkflowAgentOutput {
 }
 
 impl WorkflowAgentOutput {
-    /// The schema the child's `workflow_output` terminal must satisfy, when
-    /// one is declared.
+    /// The declared schema, when structured output is on.
     #[must_use]
     pub fn structured(&self) -> Option<&Value> {
         match self {
@@ -498,31 +504,95 @@ impl WorkflowAgentOutput {
             Self::JsonSchema { schema } => Some(schema),
         }
     }
+}
 
-    /// The derived static node value contract: `{text}`, or the declared
-    /// schema itself.
+/// One exit an Agent may choose, as Dify's Agent output route. The child
+/// sees every route's ID and description when it picks one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowAgentRoute {
+    pub id: String,
+    pub description: String,
+}
+
+/// The reserved field through which a routed child picks its exit.
+pub const AGENT_ROUTE_FIELD: &str = "switch";
+pub const MAX_AGENT_ROUTES: usize = 32;
+pub const MAX_AGENT_ROUTE_DESCRIPTION_BYTES: usize = 1024;
+
+/// As Dify's error handling on its Agent node, for a child run that failed
+/// or timed out once its termination is proven. Agents are not retried: a
+/// workflow child writes the shared Session workspace directly, so another
+/// run could repeat effects the failed one already made. Cancellation, an
+/// unknown outcome, unproven termination and a refused start still stop
+/// the run.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowAgentErrorStrategy {
+    /// The run stops with the node's failure.
+    #[default]
+    Stop,
+    /// The node succeeds with this value, which satisfies the node's own
+    /// value contract; a routed node leaves through its `switch`.
+    DefaultValue { value: Value },
+    /// The node leaves through its `fail` port with `error_type` and
+    /// `error_message`; only nodes reached through that port see them.
+    FailBranch,
+}
+
+impl WorkflowAgentErrorStrategy {
     #[must_use]
-    pub fn schema(&self) -> Value {
-        match self {
-            Self::Text {} => serde_json::json!({
-                "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"],
-                "additionalProperties": false,
-            }),
-            Self::JsonSchema { schema } => schema.clone(),
-        }
+    pub const fn is_stop(&self) -> bool {
+        matches!(self, Self::Stop)
     }
+}
 
-    /// The node value of one settled child: its reply text, or its
-    /// committed value.
-    fn value(&self, settled: Value) -> Option<Value> {
-        match (self, settled) {
-            (Self::Text {}, Value::String(text)) => Some(serde_json::json!({"text": text})),
-            (Self::JsonSchema { .. }, value) if !value.is_string() => Some(value),
-            _ => None,
+fn agent_text_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
+        "additionalProperties": false,
+    })
+}
+
+/// The schema the child's `workflow_output` terminal must satisfy, when it
+/// has one: the declared schema, or `{text}` once routes need a commit,
+/// plus the required `switch` naming one route.
+#[must_use]
+pub fn agent_terminal_schema(
+    output: &WorkflowAgentOutput,
+    routes: &[WorkflowAgentRoute],
+) -> Option<Value> {
+    let mut schema = match (output.structured(), routes.is_empty()) {
+        (None, true) => return None,
+        (None, false) => agent_text_schema(),
+        (Some(schema), _) => schema.clone(),
+    };
+    if !routes.is_empty() {
+        let choices = routes
+            .iter()
+            .map(|route| format!("- {}: {}", route.id, route.description))
+            .collect::<Vec<_>>()
+            .join("\n");
+        schema["properties"][AGENT_ROUTE_FIELD] = serde_json::json!({
+            "type": "string",
+            "enum": routes.iter().map(|route| route.id.as_str()).collect::<Vec<_>>(),
+            "description": format!("Select exactly one route ID based on the task result:\n{choices}"),
+        });
+        match schema.get_mut("required").and_then(Value::as_array_mut) {
+            Some(required) => required.push(AGENT_ROUTE_FIELD.into()),
+            None => schema["required"] = serde_json::json!([AGENT_ROUTE_FIELD]),
         }
     }
+    Some(schema)
+}
+
+/// The derived static node value contract: the terminal schema, or `{text}`
+/// for a plain final reply.
+#[must_use]
+pub fn agent_value_schema(output: &WorkflowAgentOutput, routes: &[WorkflowAgentRoute]) -> Value {
+    agent_terminal_schema(output, routes).unwrap_or_else(agent_text_schema)
 }
 
 /// As Dify's retry on failure: a failed or timed-out call is made again, up
@@ -938,6 +1008,38 @@ pub struct WorkflowAgentProgram {
     pub task: Vec<WorkflowValue>,
     /// Frozen output contract.
     pub output: WorkflowAgentOutput,
+    /// The exits the child chooses among; empty for one `next` exit.
+    pub routes: Vec<WorkflowAgentRoute>,
+    pub on_error: WorkflowAgentErrorStrategy,
+}
+
+impl WorkflowAgentProgram {
+    /// The schema of the child's `workflow_output` terminal, when it has one.
+    #[must_use]
+    pub fn terminal_schema(&self) -> Option<Value> {
+        agent_terminal_schema(&self.output, &self.routes)
+    }
+
+    /// The node's value contract on its success exits.
+    #[must_use]
+    pub fn value_schema(&self) -> Value {
+        agent_value_schema(&self.output, &self.routes)
+    }
+
+    /// The node value of one settled child: its reply text, or its
+    /// committed value.
+    fn value(&self, settled: Value) -> Option<Value> {
+        match (self.terminal_schema(), settled) {
+            (None, Value::String(text)) => Some(serde_json::json!({"text": text})),
+            (Some(_), value) if value.is_object() => Some(value),
+            _ => None,
+        }
+    }
+
+    /// The route a validated routed value chose.
+    pub(super) fn chosen_route(value: &Value) -> WorkflowPort {
+        WorkflowPort::case(value[AGENT_ROUTE_FIELD].as_str().unwrap_or_default())
+    }
 }
 
 /// A compiled edge.
@@ -1467,18 +1569,29 @@ fn compile_block(
                 profile,
                 task,
                 output,
+                routes,
+                on_error,
             } => {
                 let profile = SubagentName::parse(profile).map_err(|_| WorkflowCompileError::InvalidField("Agent selection requires a valid named profile".into()).at("profile"))?;
-                validate_agent(task, output, &available_before, &node_id)?;
+                validate_agent(task, output, routes, on_error, &available_before, &node_id)?;
+                let exits = routes.iter().map(|route| WorkflowPort::case(&route.id))
+                    .chain(on_error.eq(&WorkflowAgentErrorStrategy::FailBranch).then_some(WorkflowPort::Fail));
+                if exits.into_iter().any(|port| !outgoing[&node_id].iter().any(|edge| edge.port == port)) {
+                    return Err(WorkflowCompileError::InvalidBranch(format!(
+                        "Agent {node_id:?} requires a successor for every route and its fail branch"
+                    )));
+                }
                 let agent = WorkflowAgentProgram {
                     resolved: None,
                     profile,
                     task: task.clone(),
                     output: output.clone(),
+                    routes: routes.clone(),
+                    on_error: on_error.clone(),
                 };
                 available_after.insert(
                     node_id.clone(),
-                    available_before.with_prefix(&node_id, &output.schema()),
+                    available_before.with_prefix(&node_id, &agent.value_schema()),
                 );
                 WorkflowNodeProgram::Agent(agent)
             }
@@ -1595,12 +1708,7 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
             }
             let mut ids = BTreeSet::new();
             for (index, case) in cases.iter().enumerate() {
-                if !valid_local_key(&case.id)
-                    || matches!(
-                        case.id.as_str(),
-                        "false" | "next" | "satisfied" | "exhausted" | "fail"
-                    )
-                    || !ids.insert(&case.id)
+                if !valid_local_key(&case.id) || is_reserved_port(&case.id) || !ids.insert(&case.id)
                 {
                     return Err(WorkflowCompileError::InvalidBranch(
                         "case IDs must be unique valid local keys and cannot name a reserved port"
@@ -1670,9 +1778,27 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
                 WorkflowNodeDefinition::Model {
                     on_error: WorkflowModelErrorStrategy::FailBranch,
                     ..
+                }
+                | WorkflowNodeDefinition::Agent {
+                    on_error: WorkflowAgentErrorStrategy::FailBranch,
+                    ..
                 },
                 Some(WorkflowPort::Fail),
             ) => WorkflowPort::Fail,
+            (WorkflowNodeDefinition::Agent { routes, .. }, Some(port))
+                if routes
+                    .iter()
+                    .any(|route| WorkflowPort::case(&route.id) == port) =>
+            {
+                port
+            }
+            (WorkflowNodeDefinition::Agent { routes, .. }, _) if !routes.is_empty() => {
+                return Err(WorkflowCompileError::InvalidBranch(format!(
+                    "routed Agent node {:?} must use one of its route IDs",
+                    edge.from
+                ))
+                .at(format!("edges.{edge_index}.port")));
+            }
             (_, None) => WorkflowPort::Next,
             (_, Some(port)) => {
                 return Err(WorkflowCompileError::InvalidField(format!(
@@ -1711,13 +1837,16 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
             WorkflowNodeDefinition::Model {
                 on_error: WorkflowModelErrorStrategy::FailBranch,
                 ..
+            } | WorkflowNodeDefinition::Agent {
+                on_error: WorkflowAgentErrorStrategy::FailBranch,
+                ..
             }
         ) && !outgoing[id]
             .iter()
             .any(|edge| edge.port == WorkflowPort::Fail)
         {
             return Err(WorkflowCompileError::InvalidField(format!(
-                "Model {id:?} handles errors with a fail branch but has no fail connection"
+                "node {id:?} handles errors with a fail branch but has no fail connection"
             ))
             .at(format!("nodes.{id}.on_error")));
         }
@@ -2057,6 +2186,8 @@ fn validate_workflow_schema_at(
 fn validate_agent(
     task: &[WorkflowValue],
     output: &WorkflowAgentOutput,
+    routes: &[WorkflowAgentRoute],
+    on_error: &WorkflowAgentErrorStrategy,
     available: &SchemaMap,
     node: &str,
 ) -> Result<(), WorkflowCompileError> {
@@ -2071,11 +2202,58 @@ fn validate_agent(
             WorkflowCompileError::InvalidField(format!("Agent {node:?} task is empty")).at("task"),
         );
     }
-    match output.structured() {
-        Some(schema) => validate_root_schema(schema, &format!("Agent {node} output"))
-            .map_err(|e| e.at("output.schema")),
-        None => Ok(()),
+    if let Some(schema) = output.structured() {
+        validate_root_schema(schema, &format!("Agent {node} output"))
+            .map_err(|e| e.at("output.schema"))?;
+        if !routes.is_empty()
+            && schema
+                .pointer(&format!("/properties/{AGENT_ROUTE_FIELD}"))
+                .is_some()
+        {
+            return Err(WorkflowCompileError::InvalidSchema(format!(
+                "Agent {node:?} routes reserve the {AGENT_ROUTE_FIELD:?} output field"
+            ))
+            .at("output.schema"));
+        }
     }
+    if routes.len() > MAX_AGENT_ROUTES {
+        return Err(WorkflowCompileError::InvalidBranch(format!(
+            "Agent {node:?} has at most {MAX_AGENT_ROUTES} routes"
+        ))
+        .at("routes"));
+    }
+    let mut ids = BTreeSet::new();
+    for (index, route) in routes.iter().enumerate() {
+        if !valid_local_key(&route.id) || is_reserved_port(&route.id) || !ids.insert(&route.id) {
+            return Err(WorkflowCompileError::InvalidBranch(
+                "route IDs must be unique valid local keys and cannot name a reserved port".into(),
+            )
+            .at(format!("routes.{index}.id")));
+        }
+        if route.description.trim().is_empty()
+            || route.description.len() > MAX_AGENT_ROUTE_DESCRIPTION_BYTES
+        {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "Agent {node:?} route descriptions tell the child when to choose them, within {MAX_AGENT_ROUTE_DESCRIPTION_BYTES} bytes"
+            ))
+            .at(format!("routes.{index}.description")));
+        }
+    }
+    if let WorkflowAgentErrorStrategy::DefaultValue { value } = on_error {
+        let schema = agent_value_schema(output, routes);
+        if !jsonschema::Validator::new(&schema).is_ok_and(|validator| validator.is_valid(value)) {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "Agent {node:?} default value must satisfy the node's own value contract"
+            ))
+            .at("on_error.value"));
+        }
+    }
+    Ok(())
+}
+
+/// Ports a Branch case or an Agent route cannot be named after.
+fn is_reserved_port(id: &str) -> bool {
+    matches!(id, "false" | "next" | "satisfied" | "exhausted" | "fail")
 }
 
 /// Check one prompt's parts, fixed text or references, against its bounds and
@@ -3216,7 +3394,7 @@ impl WorkflowRuntime {
                     node_id: Box::new(node_id.clone()),
                 },
                 terminal: crate::runtime::subagent::SubagentTerminalMode::WorkflowOutput {
-                    output_schema: agent.output.structured().cloned(),
+                    output_schema: agent.terminal_schema(),
                     workflow_id: run.program.id().clone(),
                     run_id: run.run_id.clone(),
                     node_id: Box::new(node_id.clone()),
@@ -3324,7 +3502,7 @@ impl WorkflowRuntime {
         run: &WorkflowRun,
         subagent_id: crate::runtime::identity::SubagentId,
         node_id: &WorkflowNodeInstance,
-        output: &WorkflowAgentOutput,
+        agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
         let mut wait = Box::pin(self.subagents.wait_until_settled(&subagent_id));
@@ -3349,7 +3527,7 @@ impl WorkflowRuntime {
                             run, snapshot,
                             &subagent_id,
                             node_id,
-                            output,
+                            agent,
                             cancellation,
                         );
                 }
@@ -3363,7 +3541,7 @@ impl WorkflowRuntime {
                 detail: "the native SubagentRegistry lost the child record".to_owned(),
             },
         })?;
-        self.settled_agent_value(run, snapshot, &subagent_id, node_id, output, cancellation)
+        self.settled_agent_value(run, snapshot, &subagent_id, node_id, agent, cancellation)
     }
 
     fn settled_agent_value(
@@ -3372,7 +3550,7 @@ impl WorkflowRuntime {
         snapshot: crate::runtime::subagent::SubagentSnapshot,
         subagent_id: &crate::runtime::identity::SubagentId,
         node_id: &WorkflowNodeInstance,
-        output: &WorkflowAgentOutput,
+        agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
         use crate::runtime::subagent::{SubagentPhysicalSettlement, SubagentPublication};
@@ -3427,8 +3605,8 @@ impl WorkflowRuntime {
                 // result against the node's own frozen output authority at
                 // consumption time. The two checks guard different trust
                 // boundaries; both stay.
-                if let Some(schema) = output.structured() {
-                    let validator = jsonschema::Validator::new(schema).map_err(|error| {
+                if let Some(schema) = agent.terminal_schema() {
+                    let validator = jsonschema::Validator::new(&schema).map_err(|error| {
                         WorkflowRunError::ChildFailed {
                             node: node_id.to_string(),
                             detail: format!("workflow Agent output schema became invalid: {error}"),
@@ -3442,7 +3620,7 @@ impl WorkflowRuntime {
                         });
                     }
                 }
-                let value = output
+                let value = agent
                     .value(value)
                     .ok_or_else(|| WorkflowRunError::ChildFailed {
                         node: node_id.to_string(),
@@ -3723,6 +3901,7 @@ fn bound_workflow_diagnostic(value: impl AsRef<str>) -> String {
 #[cfg(test)]
 mod tests {
     use crate::durable::{CanonicalStore, JournalStore};
+    mod agents;
     mod authored_paths;
     mod compiler_models;
     mod graph;
@@ -3817,6 +3996,8 @@ mod tests {
             profile: "reviewer".into(),
             task: vec![text("Review the input."), reference("args.task")],
             output: WorkflowAgentOutput::JsonSchema { schema: output },
+            routes: Vec::new(),
+            on_error: WorkflowAgentErrorStrategy::default(),
         }
     }
 
@@ -4163,6 +4344,8 @@ chat_reasoning_replay = "omit"
                     output: WorkflowAgentOutput::JsonSchema {
                         schema: output.clone(),
                     },
+                    routes: Vec::new(),
+                    on_error: WorkflowAgentErrorStrategy::default(),
                 },
             );
             edges.extend([edge("workflow_start", key), edge(key, "done")]);
@@ -4199,6 +4382,8 @@ chat_reasoning_replay = "omit"
                         output: WorkflowAgentOutput::JsonSchema {
                             schema: output.clone(),
                         },
+                        routes: Vec::new(),
+                        on_error: WorkflowAgentErrorStrategy::default(),
                     },
                 ),
                 (
@@ -5508,6 +5693,8 @@ block:
                         output: WorkflowAgentOutput::JsonSchema {
                             schema: output.clone(),
                         },
+                        routes: Vec::new(),
+                        on_error: WorkflowAgentErrorStrategy::default(),
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),
@@ -5574,6 +5761,8 @@ block:
                         output: WorkflowAgentOutput::JsonSchema {
                             schema: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
                         },
+                        routes: Vec::new(),
+                        on_error: WorkflowAgentErrorStrategy::default(),
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),
@@ -5618,6 +5807,7 @@ block:
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one nested-schema rejection table
     fn rejects_nested_schema_mismatches_and_optional_nested_references() {
         let nested_boolean = schema(
             json!({
@@ -5691,6 +5881,8 @@ block:
                                 output: WorkflowAgentOutput::JsonSchema {
                                     schema: schema(json!({}), &[]),
                                 },
+                                routes: Vec::new(),
+                                on_error: WorkflowAgentErrorStrategy::default(),
                             },
                         ),
                         ("done".to_owned(), return_node(BTreeMap::new())),

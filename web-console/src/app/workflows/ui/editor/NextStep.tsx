@@ -88,7 +88,9 @@ export function NextStep({ document, block, source, edit, onSelect }: {
   if (!ports.length) return null;
 
   const targetsFor = (port: Port) => edgesOf(owner).filter(edge => edge.from === sourceId && edgePort(edge) === port).map(edge => edge.to);
-  const portLabel = (port: Port) => sourceNode?.type === 'branch' ? branchPortLabel(sourceNode, port) : tx(`workflows:port.${port as BuiltinPort}`);
+  // An Agent route is named by its own ID, as the child answers with it.
+  const portLabel = (port: Port) => sourceNode?.type === 'branch' ? branchPortLabel(sourceNode, port)
+    : sourceNode?.type === 'agent' && sourceNode.routes?.some(route => route.id === port) ? port : tx(`workflows:port.${port as BuiltinPort}`);
   const groups: { label: string; kinds: readonly NodeKind[] }[] = [
     { label: tx('workflows:next-step.group-ai'), kinds: ['agent', 'model'] },
     { label: tx('workflows:next-step.group-control'), kinds: ['branch', 'loop'] },

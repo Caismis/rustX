@@ -146,7 +146,7 @@ pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
         schema_value_bound(&block.input_schema) + schema_value_bound(&block.output_schema);
     for node in block.nodes.values() {
         bytes = bytes.saturating_add(match node {
-            WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.output.schema()),
+            WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.value_schema()),
             WorkflowNodeProgram::Model(model) => schema_value_bound(&model.output.schema()),
             WorkflowNodeProgram::Tool { result, .. } => schema_value_bound(&result.schema()),
             WorkflowNodeProgram::Start | WorkflowNodeProgram::Branch { .. } => 0,
@@ -729,9 +729,35 @@ impl WorkflowRuntime {
                             cancellation,
                         )
                         .await?;
-                    let value = self
-                        .settle_agent(run, child, &node_instance, &agent.output, cancellation)
-                        .await?;
+                    // Only a proven-settled child's own failure or deadline is
+                    // handled; cancellation, unknown outcomes and unproven
+                    // termination stop the run.
+                    let failure = match self.settle_agent(run, child, &node_instance, agent, cancellation).await {
+                        Ok(value) => Ok(value),
+                        Err(WorkflowRunError::ChildFailed { detail, .. }) if !agent.on_error.is_stop() && !cancellation.is_cancelled() => Err(("failed", detail)),
+                        Err(WorkflowRunError::ChildOutcome { status: crate::tools::types::ToolExecutionStatus::TimedOut, .. })
+                            if !agent.on_error.is_stop() && !cancellation.is_cancelled() => Err(("timed_out", "Agent run timed out".to_owned())),
+                        Err(error) => return Err(error),
+                    };
+                    let (value, schema) = match (failure, &agent.on_error) {
+                        (Ok(value), _) => (value, agent.value_schema()),
+                        (Err(_), super::WorkflowAgentErrorStrategy::DefaultValue { value }) => (value.clone(), agent.value_schema()),
+                        (Err((kind, message)), _) => {
+                            selected = WorkflowPort::Fail;
+                            (serde_json::json!({"error_type": kind, "error_message": message}), super::WorkflowModelErrorStrategy::error_schema())
+                        }
+                    };
+                    validate_commit(&schema, &value)?;
+                    // As a Branch, a routed Agent records which exit it chose.
+                    if selected != WorkflowPort::Fail && !agent.routes.is_empty() {
+                        selected = super::WorkflowAgentProgram::chosen_route(&value);
+                        for successor in block.outgoing[node_id].iter().filter(|edge| edge.port == selected) {
+                            self.emit_observability(run, RuntimeEvent::WorkflowBranchSelected {
+                                workflow_id: run.program.id.clone(), run_id: run.run_id.clone(),
+                                node_id: node_instance.clone(), port: selected.clone(), successor: successor.to.clone(),
+                            });
+                        }
+                    }
                     reservation.retain(&value)?;
                     values.insert(node_id.to_owned(), value);
                     Ok(None)

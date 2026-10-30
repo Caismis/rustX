@@ -312,6 +312,32 @@ describe('Model native editing document', () => {
     expect(inspector().queryByText('Invocation override')).toBeNull();
   });
 
+  it('routes an Agent as Dify: each route is a card exit, renamed with its connections, and errors take a fail branch', async () => {
+    const agent: NodeDefinition = { type: 'agent', profile: 'reviewer', task: [{ type: 'literal', value: 'Triage.' }], output: { type: 'text' } };
+    const actor = await open(undefined, agent);
+    const routes = within(inspector().getByRole('region', { name: 'Output routes' }));
+    await act(async () => fireEvent.click(routes.getByRole('switch', { name: 'Output routes' })));
+    const triage = () => actor.getSnapshot().context.document!.block.nodes.model;
+    expect(triage()).toMatchObject({ routes: [{ id: 'route_1', description: '' }, { id: 'route_2', description: '' }] });
+    // The old `next` connection had no route to move to, so it went.
+    expect(actor.getSnapshot().context.document!.block.edges!.filter(edge => edge.from === 'model')).toEqual([]);
+    const card = document.querySelector<HTMLElement>('.react-flow__node[aria-label="Agent node model"]')!;
+    expect(within(card).getByText('route_1')).toBeTruthy();
+    expect(card.querySelector('[data-handleid="route_2"]')).toBeTruthy();
+    const id = routes.getAllByRole('textbox', { name: 'Route ID' })[0];
+    fireEvent.change(id, { target: { value: 'approve' } });
+    await act(async () => fireEvent.blur(id));
+    expect(triage()).toMatchObject({ routes: [{ id: 'approve' }, { id: 'route_2' }] });
+    expect(within(inspector().getByRole('region', { name: 'Output variables' })).getByText('switch')).toBeTruthy();
+    await act(async () => fireEvent.click(inspector().getByRole('button', { name: 'Error handling strategy' })));
+    await act(async () => fireEvent.click(await screen.findByRole('menuitem', { name: /^Fail branch/ })));
+    expect(triage()).toMatchObject({ on_error: { type: 'fail_branch' } });
+    expect(card.querySelector('[data-handleid="fail"]')).toBeTruthy();
+    await act(async () => fireEvent.click(inspector().getByRole('button', { name: 'Error handling strategy' })));
+    await act(async () => fireEvent.click(await screen.findByRole('menuitem', { name: /^Default value/ })));
+    expect(triage()).toMatchObject({ on_error: { type: 'default_value', value: { text: '', switch: 'approve' } } });
+  });
+
   it('handles failure as Dify: retries, then a default value or a fail branch whose connections leave with it', async () => {
     const actor = await open();
     const model = () => actor.getSnapshot().context.document!.block.nodes.model;

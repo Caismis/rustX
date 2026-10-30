@@ -31,9 +31,13 @@ export function authoredEdge(from: string, port: ControlPort, to: string): Edge 
   return port === 'next' ? { from, to } : { from, to, port };
 }
 
+/** Exits a Branch case or an Agent route cannot be named after. */
+export const RESERVED_PORTS: readonly string[] = ['false', 'next', 'satisfied', 'exhausted', 'fail'];
+
 export function portsOf(node: NodeDefinition): readonly ControlPort[] {
   if (node.type === 'branch') return [...node.cases.map(item => item.id), 'false'];
-  // As Dify's fail branch: a Model handling errors that way also exits on `fail`.
-  if (node.type === 'model' && node.on_error?.type === 'fail_branch') return ['next', 'fail'];
-  return outputPorts(node.type);
+  // As Dify's Agent output routes: each route replaces `next` as an exit.
+  const exits = node.type === 'agent' && node.routes?.length ? node.routes.map(route => route.id) : outputPorts(node.type);
+  // As Dify's fail branch: a Model or Agent handling errors that way also exits on `fail`.
+  return (node.type === 'model' || node.type === 'agent') && node.on_error?.type === 'fail_branch' ? [...exits, 'fail'] : exits;
 }

@@ -2,8 +2,9 @@
 //! settle; only selected paths run. A producer is in scope exactly when it is
 //! an ancestor and every activation of the consumer also activates it.
 use super::{
-    BTreeMap, BTreeSet, SchemaMap, Value, WorkflowBlock, WorkflowCompileError, WorkflowEdgeProgram,
-    WorkflowModelErrorStrategy, WorkflowNodeDefinition, WorkflowPort,
+    BTreeMap, BTreeSet, SchemaMap, Value, WorkflowAgentErrorStrategy, WorkflowBlock,
+    WorkflowCompileError, WorkflowEdgeProgram, WorkflowModelErrorStrategy, WorkflowNodeDefinition,
+    WorkflowPort,
 };
 use biodivine_lib_bdd::{Bdd, BddVariableSet, op_function};
 
@@ -12,7 +13,7 @@ const MAX_ACTIVATION_NODES: usize = 65_536;
 pub(super) struct ActivationScopes {
     active: BTreeMap<String, Bdd>,
     ancestors: BTreeMap<String, BTreeSet<String>>,
-    /// For a Model with a fail branch: true exactly when its call succeeded.
+    /// For a Model or Agent with a fail branch: true exactly when it succeeded.
     succeeded: BTreeMap<String, Bdd>,
 }
 impl ActivationScopes {
@@ -28,6 +29,13 @@ impl ActivationScopes {
             .values()
             .map(|node| match node {
                 WorkflowNodeDefinition::Branch { cases } => cases.len(),
+                // Routes are mutually exclusive: the last takes what remains.
+                WorkflowNodeDefinition::Agent {
+                    routes, on_error, ..
+                } => {
+                    routes.len().saturating_sub(1)
+                        + usize::from(*on_error == WorkflowAgentErrorStrategy::FailBranch)
+                }
                 WorkflowNodeDefinition::Loop { .. }
                 | WorkflowNodeDefinition::Model {
                     on_error: WorkflowModelErrorStrategy::FailBranch,
@@ -78,6 +86,43 @@ impl ActivationScopes {
                     ports.insert(WorkflowPort::Next, ok.clone());
                     ports.insert(WorkflowPort::Fail, ok.not());
                     succeeded.insert(id.clone(), ok);
+                }
+                WorkflowNodeDefinition::Agent {
+                    routes, on_error, ..
+                } => {
+                    let ok = (*on_error == WorkflowAgentErrorStrategy::FailBranch).then(|| {
+                        variables.mk_var(allocated.next().expect("allocated Agent outcome"))
+                    });
+                    let mut remaining = ok.clone().unwrap_or_else(|| variables.mk_true());
+                    for (index, route) in routes.iter().enumerate() {
+                        let guard = if index + 1 == routes.len() {
+                            remaining.clone()
+                        } else {
+                            let selected =
+                                variables.mk_var(allocated.next().expect("allocated route"));
+                            let guard = Bdd::binary_op_with_limit(
+                                MAX_ACTIVATION_NODES,
+                                &remaining,
+                                &selected,
+                                op_function::and,
+                            )
+                            .ok_or_else(too_complex)?;
+                            remaining = Bdd::binary_op_with_limit(
+                                MAX_ACTIVATION_NODES,
+                                &remaining,
+                                &selected.not(),
+                                op_function::and,
+                            )
+                            .ok_or_else(too_complex)?;
+                            guard
+                        };
+                        ports.insert(WorkflowPort::case(&route.id), guard);
+                    }
+                    if let Some(ok) = ok {
+                        ports.insert(WorkflowPort::Next, ok.clone());
+                        ports.insert(WorkflowPort::Fail, ok.not());
+                        succeeded.insert(id.clone(), ok);
+                    }
                 }
                 _ => {}
             }
@@ -148,7 +193,7 @@ impl ActivationScopes {
                     Bdd::binary_op_with_limit(2, &self.active[node], outcome, op_function::imp)
                         .is_some_and(|proof| proof.is_true())
                 };
-                // A fail-branch Model's value depends on which port was
+                // A fail-branch node's value depends on which port was
                 // taken: success fields only where success is proven, its
                 // error only where failure is.
                 match self.succeeded.get(producer) {

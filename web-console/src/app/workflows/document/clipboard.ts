@@ -7,6 +7,7 @@ import { MAX_COORDINATE, dimensions, freshNote, position, presentationEdit, utf8
 import { blockReferences, rewriteBlockReferences } from './references';
 import { schemaObject } from './schema';
 import { requireVacantNodePresentation } from './presentation';
+import { RESERVED_PORTS } from './ports';
 
 const MAX_BYTES = 768 * 1024;
 export interface Fragment {
@@ -91,7 +92,22 @@ function node(input: unknown): void {
   switch (record.type) {
     case 'start': keys(record, ['type']); return;
     case 'agent':
-      keys(record, ['type', 'profile', 'task', 'output']); text(record.profile); array(record.task).forEach(value); output(record.output); return;
+      keys(record, ['type', 'profile', 'task', 'output', 'routes', 'on_error']); text(record.profile); array(record.task).forEach(value); output(record.output);
+      if (record.routes !== undefined) {
+        const ids = new Set<string>();
+        for (const item of array(record.routes)) {
+          const route = keys(item, ['id', 'description']); text(route.id); text(route.description);
+          if (validLocalKey(route.id as string) || RESERVED_PORTS.includes(route.id as string) || ids.has(route.id as string)) fail();
+          ids.add(route.id as string);
+        }
+      }
+      if (record.on_error !== undefined) {
+        const strategy = object(record.on_error);
+        if (strategy.type === 'stop' || strategy.type === 'fail_branch') keys(strategy, ['type']);
+        else if (strategy.type === 'default_value') { keys(strategy, ['type', 'value']); if (!Object.hasOwn(strategy, 'value')) fail(); }
+        else fail();
+      }
+      return;
     case 'model': {
       keys(record, ['type', 'model', 'messages', 'output', 'retry', 'on_error']);
       if (record.retry !== undefined) { const retry = keys(record.retry, ['max_retries', 'interval_ms']); unsigned(retry.max_retries); unsigned(retry.interval_ms); }
@@ -128,7 +144,7 @@ function node(input: unknown): void {
       const ids = new Set<string>();
       for (const item of cases) {
         const entry = keys(item, ['id', 'condition']); text(entry.id);
-        if (validLocalKey(entry.id as string) || ['false', 'next', 'satisfied', 'exhausted', 'fail'].includes(entry.id as string) || ids.has(entry.id as string)) fail();
+        if (validLocalKey(entry.id as string) || RESERVED_PORTS.includes(entry.id as string) || ids.has(entry.id as string)) fail();
         ids.add(entry.id as string); predicate(entry.condition);
       }
       return;

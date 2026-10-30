@@ -702,6 +702,7 @@
 .outputVars dt code, .structuredHead code, .schemaTree code { font-size: 11px; color: var(--dsw-alias-label-tertiary); }
 .outputVars dd { margin: 2px 0 0; font-size: 11.5px; color: var(--dsw-alias-label-tertiary); }
 .agentStructured { display: flex; flex-direction: column; }
+.agentSwitch { margin-top: 12px; }
 .structuredOutput { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--dsw-alias-border-l2); }
 .structuredHead { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 .structuredHead button { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
@@ -714,6 +715,16 @@
 
 /* Dify's ErrorHandleOnNode: the error strategy row, whose fail port sits on
    the card's right border (14px padding + 1px border away). */
+.routeList { display: flex; flex-direction: column; gap: 8px; }
+.routeItem { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
+.routeItemHead { display: flex; align-items: center; gap: 6px; }
+.routeIdInput { flex: 1; min-width: 0; height: 26px; padding: 0 8px; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l3); border-radius: 7px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-family: var(--ds-font-family-code); font-size: 12px; }
+.routeIdInput:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 0; }
+.routeRows { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.routeRow { position: relative; display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 6px; border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover-solid); font-size: 11px; }
+.routeRow b { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code); font-weight: 600; color: var(--dsw-alias-label-primary); }
+.routeRow span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary); }
+.routeHandle { top: 50% !important; right: -15px !important; }
 .errorRow { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 24px; margin-top: 8px; padding: 0 6px; border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover-solid); font-size: 11px; }
 .errorRow small { font-size: 10px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--dsw-alias-label-tertiary); }
 .errorRow > span { color: var(--dsw-alias-label-secondary); font-weight: 500; }

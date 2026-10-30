@@ -1958,6 +1958,25 @@ export type WorkflowNodeDefinition =
             schema: unknown;
             type: 'json_schema';
           };
+      /**
+       * As Dify's Agent output routes: the child picks one of these
+       * exits through its required `switch` value.
+       */
+      routes?: WorkflowAgentRoute[];
+      /**
+       * What a failed or timed-out child run leaves behind.
+       */
+      on_error?:
+        | {
+            type: 'stop';
+          }
+        | {
+            value: unknown;
+            type: 'default_value';
+          }
+        | {
+            type: 'fail_branch';
+          };
       type: 'agent';
     }
   | {
@@ -7174,6 +7193,28 @@ export type WorkflowAgentOutput =
       type: 'json_schema';
     };
 /**
+ * As Dify's error handling on its Agent node, for a child run that failed
+ * or timed out once its termination is proven. Agents are not retried: a
+ * workflow child writes the shared Session workspace directly, so another
+ * run could repeat effects the failed one already made. Cancellation, an
+ * unknown outcome, unproven termination and a refused start still stop
+ * the run.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAgentErrorStrategy".
+ */
+export type WorkflowAgentErrorStrategy =
+  | {
+      type: 'stop';
+    }
+  | {
+      value: unknown;
+      type: 'default_value';
+    }
+  | {
+      type: 'fail_branch';
+    };
+/**
  * The configurable execution-ownership policy of one tool.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9375,6 +9416,17 @@ export interface WorkflowEdgeDefinition {
    * Required Branch/Loop outcome port. Ordinary nodes must omit it.
    */
   port?: WorkflowPort | null;
+}
+/**
+ * One exit an Agent may choose, as Dify's Agent output route. The child
+ * sees every route's ID and description when it picks one.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAgentRoute".
+ */
+export interface WorkflowAgentRoute {
+  id: string;
+  description: string;
 }
 /**
  * A stable exit identity and its condition. The first matching case wins.

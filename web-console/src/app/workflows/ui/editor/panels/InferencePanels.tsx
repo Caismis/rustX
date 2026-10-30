@@ -1,13 +1,13 @@
-import { lazy, Suspense, useState } from 'react';
+import clsx from 'clsx';
+import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import { IconChevronDownOutline14, IconEditOutline16, IconQuestionOutline14 } from '../../../../../presentation/primitives/icons';
 import { schemaObject, schemaTarget } from '../../../document/schema';
 import { Switch } from '../../../../../presentation/primitives/Switch';
 import { Tooltip } from '../../../../../presentation/primitives/Tooltip';
-import { CommandRejected, disconnect, replaceNode } from '../../../document/commands';
-import { blockAt, edgesOf, nodeAt, type NodeDefinition, type WorkflowDocument } from '../../../document/model';
+import { CommandRejected, freshIdentifier, renameAgentRoute, replaceNode, replaceNodeExits } from '../../../document/commands';
+import { blockAt, nodeAt, type NodeDefinition, type WorkflowDocument } from '../../../document/model';
 import { orderedKeys } from '../../../document/presentation';
-import { edgePort } from '../../../document/ports';
 import { IconPlus } from '../../icons';
 import { PromptCard } from '../forms/PromptCard';
 import { PromptEditor, useInsertVariable } from '../forms/PromptEditor';
@@ -93,11 +93,8 @@ function ModelFailure(props: PanelProps) {
       const { on_error: _previous, ...rest } = current;
       const next: Strategy | undefined = type === 'stop' ? undefined : type === 'fail_branch' ? { type }
         : { type, text: '', ...(current.output.type === 'json_schema' ? { structured_output: {} } : {}) };
-      let changed = replaceNode(document, props.block, props.id, next ? { ...rest, on_error: next } : rest);
       // Without a fail branch the node has no fail port, so its connections go.
-      const failing = edgesOf(blockAt(changed, props.block)!).flatMap((edge, index) => edge.from === props.id && edgePort(edge) === 'fail' ? [index] : []);
-      if (type !== 'fail_branch' && failing.length) changed = disconnect(changed, props.block, failing);
-      return changed;
+      return replaceNodeExits(document, props.block, props.id, next ? { ...rest, on_error: next } : rest);
     });
   };
   return <>
@@ -109,28 +106,38 @@ function ModelFailure(props: PanelProps) {
         <RetryField label={tx('workflows:failure.interval')} unit={tx('workflows:failure.ms')} min={100} max={5000} step={100} value={retry.interval_ms} onChange={interval_ms => setRetry({ ...retry, interval_ms })} />
       </div>}
     </section>
-    <section className={css.group} aria-label={tx('workflows:failure.title')}>
-      <h3 className={css.groupHeading}>
-        <span className={css.headingText}>{tx('workflows:failure.title')}
-          <Tooltip label={tx('workflows:failure.tip')} side="bottom" maxWidth={240}><span className={css.promptHint} tabIndex={0} aria-label={tx('workflows:failure.tip')}><IconQuestionOutline14 /></span></Tooltip></span>
-        <Menu.Root modal={false}>
-          <Menu.Trigger className={css.strategyTrigger} aria-label={tx('workflows:failure.strategy')}>{tx(`workflows:failure.${STRATEGY_TEXT[strategy.type]}`)}<IconChevronDownOutline14 /></Menu.Trigger>
-          <Menu.Portal><Menu.Positioner side="bottom" align="end" sideOffset={4} className={css.branchOperatorPositioner}>
-            <Menu.Popup className={css.strategyPopup}>
-              {STRATEGIES.map(type => <Menu.Item key={type} className={css.strategyItem} onClick={() => choose(type)}>
-                <b>{tx(`workflows:failure.${STRATEGY_TEXT[type]}`)}</b><small>{tx(`workflows:failure.${STRATEGY_TEXT[type]}-desc`)}</small>
-              </Menu.Item>)}
-            </Menu.Popup>
-          </Menu.Positioner></Menu.Portal>
-        </Menu.Root>
-      </h3>
+    <ErrorStrategy strategy={strategy.type} choose={choose}>
       {strategy.type === 'default_value' && <div className={css.failureDefaults}>
         <DraftTextField label={/* i18n-raw: native output field name */ 'text'} value={strategy.text} address={at('on_error', 'text')} multiline />
         {node.output.type === 'json_schema' && <JsonField label={/* i18n-raw: native output field name */ 'structured_output'} value={strategy.structured_output ?? {}} rows={4} address={at('on_error', 'structured_output')} />}
       </div>}
-      {strategy.type === 'fail_branch' && <div className={css.failBranchCard}><b>{tx('workflows:failure.branch-customize')}</b><p>{tx('workflows:failure.branch-tip')}</p></div>}
-    </section>
+    </ErrorStrategy>
   </>;
+}
+
+/** As Dify's error handling: the strategy menu, what it leaves behind, and
+ * the fail branch's card. */
+function ErrorStrategy({ strategy, choose, note, children }: { strategy: Strategy['type']; choose: (type: Strategy['type']) => void; note?: string; children?: ReactNode }) {
+  const tx = useTranslation();
+  return <section className={css.group} aria-label={tx('workflows:failure.title')}>
+    <h3 className={css.groupHeading}>
+      <span className={css.headingText}>{tx('workflows:failure.title')}
+        <Tooltip label={tx('workflows:failure.tip')} side="bottom" maxWidth={240}><span className={css.promptHint} tabIndex={0} aria-label={tx('workflows:failure.tip')}><IconQuestionOutline14 /></span></Tooltip></span>
+      <Menu.Root modal={false}>
+        <Menu.Trigger className={css.strategyTrigger} aria-label={tx('workflows:failure.strategy')}>{tx(`workflows:failure.${STRATEGY_TEXT[strategy]}`)}<IconChevronDownOutline14 /></Menu.Trigger>
+        <Menu.Portal><Menu.Positioner side="bottom" align="end" sideOffset={4} className={css.branchOperatorPositioner}>
+          <Menu.Popup className={css.strategyPopup}>
+            {STRATEGIES.map(type => <Menu.Item key={type} className={css.strategyItem} onClick={() => choose(type)}>
+              <b>{tx(`workflows:failure.${STRATEGY_TEXT[type]}`)}</b><small>{tx(`workflows:failure.${STRATEGY_TEXT[type]}-desc`)}</small>
+            </Menu.Item>)}
+          </Menu.Popup>
+        </Menu.Positioner></Menu.Portal>
+      </Menu.Root>
+    </h3>
+    {note && <p className={css.note}>{note}</p>}
+    {children}
+    {strategy === 'fail_branch' && <div className={css.failBranchCard}><b>{tx('workflows:failure.branch-customize')}</b><p>{tx('workflows:failure.branch-tip')}</p></div>}
+  </section>;
 }
 
 /** As Dify's retry fields: a slider with its exact number beside it. */
@@ -211,7 +218,83 @@ export function AgentPanel(props: PanelProps) {
     </section>
     <section className={css.group}><AgentTask {...props} /></section>
     <AgentOutputs {...props} />
+    <AgentRoutes {...props} />
+    <AgentFailure {...props} />
   </>;
+}
+
+type Agent = Extract<NodeDefinition, { type: 'agent' }>;
+
+/** Replace this Agent and drop connections on exits it no longer has. */
+function useAgentExits(props: PanelProps) {
+  return (change: (agent: Agent) => Agent) => props.edit(document => {
+    const owner = blockAt(document, props.block), current = owner && nodeAt(owner, props.id);
+    if (current?.type !== 'agent') throw new CommandRejected('missing_node');
+    return replaceNodeExits(document, props.block, props.id, change(current));
+  });
+}
+
+/** As Dify's Agent output routes: the Agent picks one when it finishes,
+ * and each route is an exit of its own. */
+function AgentRoutes(props: PanelProps) {
+  const tx = useTranslation(), { node, at } = useNode(props, 'agent'), exits = useAgentExits(props);
+  const routes = node.routes ?? [];
+  const withRoutes = (agent: Agent, next: Agent['routes']) => {
+    const { routes: _previous, ...rest } = agent;
+    return next?.length ? { ...rest, routes: next } : rest;
+  };
+  const fresh = (taken: readonly { id: string }[]) => freshIdentifier({ input: {}, output: {}, nodes: Object.fromEntries(taken.map(route => [route.id, { type: 'start' }])), edges: [] }, 'route');
+  return <section className={css.group} aria-label={tx('workflows:routes.title')}>
+    <h3 className={css.groupHeading}>
+      <span className={css.headingText}>{tx('workflows:routes.title')}
+        <Tooltip label={tx('workflows:routes.tip')} side="bottom" maxWidth={260}><span className={css.promptHint} tabIndex={0} aria-label={tx('workflows:routes.tip')}><IconQuestionOutline14 /></span></Tooltip></span>
+      <Switch checked={!!routes.length} label={tx('workflows:routes.title')} onChange={on => exits(agent => withRoutes(agent, on ? [{ id: 'route_1', description: '' }, { id: 'route_2', description: '' }] : undefined))} />
+    </h3>
+    {!!routes.length && <div className={css.routeList}>
+      {routes.map((route, index) => <div key={route.id} className={css.routeItem}>
+        <div className={css.routeItemHead}>
+          <RouteId value={route.id} label={tx('workflows:routes.id')} onCommit={to => props.edit(document => renameAgentRoute(document, props.block, props.id, route.id, to))} />
+          <button type="button" className={css.smallButton} disabled={routes.length < 2} aria-label={tx('workflows:routes.remove', { p0: route.id })} title={tx('workflows:routes.remove', { p0: route.id })}
+            onClick={() => exits(agent => withRoutes(agent, (agent.routes ?? []).filter(item => item.id !== route.id)))}>×</button>
+        </div>
+        <DraftTextField label={tx('workflows:routes.description')} value={route.description} address={at('routes', index, 'description')} multiline />
+      </div>)}
+      <button type="button" className={css.promptAddMessage} disabled={routes.length >= 32}
+        onClick={() => exits(agent => withRoutes(agent, [...(agent.routes ?? []), { id: fresh(agent.routes ?? []), description: '' }]))}><IconPlus size={13} />{tx('workflows:routes.add')}</button>
+    </div>}
+  </section>;
+}
+
+/** A route ID commits on blur or Enter, moving its connections with it. */
+function RouteId({ value, label, onCommit }: { value: string; label: string; onCommit: (value: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  const commit = () => { const next = draft.trim(); if (next && next !== value) onCommit(next); else setDraft(value); };
+  return <input className={css.routeIdInput} aria-label={label} value={draft} onChange={event => setDraft(event.target.value)} onBlur={commit}
+    onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { setDraft(value); event.currentTarget.blur(); } }} />;
+}
+
+/** As Dify's Agent error handling. There is no retry: a workflow child
+ * writes the shared workspace directly, so another run could repeat it. */
+function AgentFailure(props: PanelProps) {
+  const tx = useTranslation(), { node, at } = useNode(props, 'agent'), exits = useAgentExits(props);
+  const strategy = node.on_error ?? { type: 'stop' as const };
+  const choose = (type: Strategy['type']) => {
+    if (type === strategy.type) return;
+    exits(agent => {
+      const { on_error: _previous, ...rest } = agent;
+      if (type === 'stop') return rest;
+      if (type === 'fail_branch') return { ...rest, on_error: { type } };
+      // A starting default the node's own contract can accept once filled in.
+      const base = agent.output.type === 'text' ? { text: '' } : {};
+      const route = agent.routes?.[0]?.id;
+      return { ...rest, on_error: { type, value: route ? { ...base, switch: route } : base } };
+    });
+  };
+  return <ErrorStrategy strategy={strategy.type} choose={choose} note={tx('workflows:failure.agent-no-retry')}>
+    {strategy.type === 'default_value' && <div className={css.failureDefaults}>
+      <JsonField label={tx('workflows:failure.default-value')} value={strategy.value} rows={4} address={at('on_error', 'value')} />
+    </div>}
+  </ErrorStrategy>;
 }
 
 /** As Dify's Agent output variables: the final reply is `text`; with
@@ -220,6 +303,8 @@ function AgentOutputs(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'agent');
   const [open, setOpen] = useState(true), [configuring, setConfiguring] = useState(false);
   const schema = node.output.type === 'json_schema' ? node.output.schema : undefined;
+  // Routes add the chosen route's ID to either mode.
+  const switchRow = node.routes?.length ? <div><dt><b>{/* i18n-raw: native output field name */ 'switch'}</b><code>{/* i18n-raw: JSON Schema type name */ 'string'}</code></dt><dd>{tx('workflows:prompt.agent-switch')}</dd></div> : undefined;
   return <section className={css.group} aria-label={tx('workflows:prompt.output-variables')}>
     <h3 className={css.groupHeading}>
       <button type="button" className={css.outputToggle} aria-expanded={open} onClick={() => setOpen(value => !value)}>{tx('workflows:prompt.output-variables')}<IconChevronDownOutline14 /></button>
@@ -230,12 +315,13 @@ function AgentOutputs(props: PanelProps) {
       </span>
     </h3>
     {open && (schema === undefined
-      ? <dl className={css.outputVars}><div><dt><b>{/* i18n-raw: native output field name */ 'text'}</b><code>{/* i18n-raw: JSON Schema type name */ 'string'}</code></dt><dd>{tx('workflows:prompt.agent-text')}</dd></div></dl>
+      ? <dl className={css.outputVars}><div><dt><b>{/* i18n-raw: native output field name */ 'text'}</b><code>{/* i18n-raw: JSON Schema type name */ 'string'}</code></dt><dd>{tx('workflows:prompt.agent-text')}</dd></div>{switchRow}</dl>
       : <div className={css.agentStructured}>
         <div className={css.structuredHead}><b>{props.id}</b><code>{/* i18n-raw: JSON Schema type name */ 'object'}</code>
           <button type="button" className={css.smallButton} onClick={() => setConfiguring(true)}><IconEditOutline16 />{tx('workflows:prompt.configure')}</button>
         </div>
         <StructuredFields schema={schema} document={props.document} address={at('output', 'schema')} />
+        {switchRow && <dl className={clsx(css.outputVars, css.agentSwitch)}>{switchRow}</dl>}
       </div>)}
     {configuring && schema !== undefined && <Suspense fallback={null}><StructuredOutputDialog document={props.document} address={at('output', 'schema')} root={props.id} edit={props.edit} onClose={() => setConfiguring(false)} /></Suspense>}
   </section>;

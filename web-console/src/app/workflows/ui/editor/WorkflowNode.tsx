@@ -53,8 +53,10 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
     <div className={clsx(css.notePreview, 'nowheel nodrag')}><MarkdownText text={data.note.text || tx('workflows:note.empty')} variant="compact" /></div>
   </div>;
   const adding = isConnectable && actions.editable, entered = connections.some(connection => connection.target === id);
-  // A fail branch's port sits on the card's error row, not beside the head.
-  const exits = ports.filter(port => port !== 'fail');
+  // A fail branch's port sits on the card's error row and each Agent route's
+  // on its own row, not beside the head.
+  const routes = node?.type === 'agent' ? node.routes ?? [] : [];
+  const exits = ports.filter(port => port !== 'fail' && !routes.some(route => route.id === port));
   const card = <div className={clsx(css.node, container && css.containerNode, node?.type === 'branch' && css.branchCard, selected && css.nodeSelected)} title={data.description}>
     {container && <NodeResizer isVisible={selected && data.minSize.width <= 8192 && data.minSize.height <= 8192} minWidth={data.minSize.width} minHeight={data.minSize.height} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />}
     {/* As Dify's NodeTargetHandle: "+" adds a node ahead of an unconnected input. */}
@@ -81,8 +83,13 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
       </div>}
 
       {!!data.fields?.length && <div className={css.nodeFields}>{data.fields.map(field => <div key={field.name}><b aria-hidden>{'{x}'}</b><span>{field.name}</span>{data.view === 'start' && field.required && <small>{tx('workflows:schema.required')}</small>}<code>{field.type}</code></div>)}</div>}
+      {/* As Dify's Agent output routes: one row and exit per route. */}
+      {!!routes.length && <div className={css.routeRows}>{routes.map(route => <div key={route.id} className={css.routeRow} title={route.description}>
+        <b>{route.id}</b><span>{route.description}</span>
+        <SourcePort id={id} port={route.id} label={route.id} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === route.id)} title={data.local} className={css.routeHandle} />
+      </div>)}</div>}
       {/* As Dify's ErrorHandleOnNode: the strategy, and the fail branch's port. */}
-      {node?.type === 'model' && node.on_error && node.on_error.type !== 'stop' && <div className={css.errorRow}>
+      {(node?.type === 'model' || node?.type === 'agent') && node.on_error && node.on_error.type !== 'stop' && <div className={css.errorRow}>
         <small>{tx('workflows:port.fail')}</small>
         <span>{tx(node.on_error.type === 'fail_branch' ? 'workflows:failure.branch' : 'workflows:failure.default-output')}</span>
         {node.on_error.type === 'fail_branch' && <SourcePort id={id} port="fail" label={tx('workflows:port.fail')} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === 'fail')} title={data.local} className={css.errorHandle} />}

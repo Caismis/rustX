@@ -12067,6 +12067,17 @@
               "description": "What the `AgentRun` returns: its final reply text, or a\nstructured value committed through `workflow_output`.",
               "$ref": "#/$defs/WorkflowAgentOutput"
             },
+            "routes": {
+              "description": "As Dify's Agent output routes: the child picks one of these\nexits through its required `switch` value.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowAgentRoute"
+              }
+            },
+            "on_error": {
+              "description": "What a failed or timed-out child run leaves behind.",
+              "$ref": "#/$defs/WorkflowAgentErrorStrategy"
+            },
             "type": {
               "type": "string",
               "const": "agent"
@@ -12790,6 +12801,72 @@
             "type",
             "schema"
           ]
+        }
+      ]
+    },
+    "WorkflowAgentRoute": {
+      "description": "One exit an Agent may choose, as Dify's Agent output route. The child\nsees every route's ID and description when it picks one.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "description"
+      ]
+    },
+    "WorkflowAgentErrorStrategy": {
+      "description": "As Dify's error handling on its Agent node, for a child run that failed\nor timed out once its termination is proven. Agents are not retried: a\nworkflow child writes the shared Session workspace directly, so another\nrun could repeat effects the failed one already made. Cancellation, an\nunknown outcome, unproven termination and a refused start still stop\nthe run.",
+      "oneOf": [
+        {
+          "description": "The run stops with the node's failure.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "stop"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The node succeeds with this value, which satisfies the node's own\nvalue contract; a routed node leaves through its `switch`.",
+          "type": "object",
+          "properties": {
+            "value": true,
+            "type": {
+              "type": "string",
+              "const": "default_value"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "description": "The node leaves through its `fail` port with `error_type` and\n`error_message`; only nodes reached through that port see them.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "fail_branch"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
         }
       ]
     },

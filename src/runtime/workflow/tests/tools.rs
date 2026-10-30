@@ -740,6 +740,8 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
             output: WorkflowAgentOutput::JsonSchema {
                 schema: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
             },
+            routes: Vec::new(),
+            on_error: WorkflowAgentErrorStrategy::default(),
         },
     );
     if let WorkflowNodeDefinition::Tool {

@@ -661,8 +661,29 @@ terminal Tool: the child's final reply is the node's value `{text}`, and the
 child is told that later steps see only that reply. `{type: json_schema,
 schema}` requires the sole native `workflow_output` protocol with that root
 object schema, and the committed object is the node's value, its fields read
-as `[agent, field]`. WorkflowRuntime makes no model requests and orchestration
-stays outside ToolExecutor.
+as `[agent, field]`.
+
+As Dify's Agent output routes, an Agent may declare up to 32 `routes`, each an
+`id` (a local key that cannot name a reserved port) and a non-empty
+`description` of when to choose it. Routes replace the `next` exit: every route
+needs a successor. The child's terminal schema gains a required `switch` whose
+enum is the route IDs and whose description lists them, so a text Agent with
+routes commits `{text, switch}` through `workflow_output`. The node leaves
+through the route its validated value names; a `switch` outside them fails the
+child. Each route is a selected path like a Branch case, and `switch` is an
+ordinary field of the node value.
+
+As Dify's Agent error handling, `on_error` is `stop` (the default),
+`default_value` with a `value` satisfying the node's own value contract (a
+routed default leaves through its `switch`), or `fail_branch`, which adds a
+`fail` exit whose value is `{error_type, error_message}`; only nodes reached
+through it see that value. Only a proven-settled child's own failure
+(`failed`) or deadline (`timed_out`) is handled. Cancellation, an unknown
+outcome, unproven physical termination and a refused start still stop the run.
+Agents are not retried: a workflow child writes the shared Session workspace
+directly, so another run could repeat effects the failed one already made.
+WorkflowRuntime makes no model requests and orchestration stays outside
+ToolExecutor.
 
 Canonical history remains main ToolCall → native Workflow/child execution →
 one main Tool result. Private values and child transcripts are never appended

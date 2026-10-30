@@ -178,11 +178,11 @@ pub fn declared_output(
             super::validate_model_output(output, "candidate")?;
             output.schema()
         }
-        WorkflowNodeDefinition::Agent { output, .. } => {
+        WorkflowNodeDefinition::Agent { output, routes, .. } => {
             if let Some(schema) = output.structured() {
                 validate_root_schema(schema, "output.schema")?;
             }
-            output.schema()
+            super::agent_value_schema(output, routes)
         }
         WorkflowNodeDefinition::Tool { result, .. } => {
             let schema = result.schema();

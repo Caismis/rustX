@@ -3,13 +3,13 @@ import {
   blockAt, edgesOf, nodeAt, sameBlockPath, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
   type WorkflowDocument,
 } from './model';
-import { authoredEdge, edgePort, outputPorts, portsOf, type ControlPort } from './ports';
+import { authoredEdge, edgePort, outputPorts, portsOf, RESERVED_PORTS, type ControlPort } from './ports';
 import { renameProducer, rewriteBlockReferences } from './references';
 
 /** Why an editing command was refused. The document is unchanged. These are
  * canvas ergonomics only; the native compiler remains the graph authority. */
 export type RejectionCode =
-  | 'invalid_identifier' | 'reserved_identifier' | 'duplicate_identifier' | 'missing_node'
+  | 'invalid_identifier' | 'reserved_identifier' | 'reserved_port' | 'duplicate_identifier' | 'missing_node'
   | 'missing_edge' | 'return_has_no_successor' | 'invalid_port' | 'duplicate_edge' | 'self_edge'
   | 'last_node' | 'missing_field' | 'invalid_fragment' | 'cross_scope' | 'limit_exceeded' | 'invalid_geometry' | 'unsupported_insertion' | 'unsupported_schema_rename' | 'pending_input';
 
@@ -220,5 +220,27 @@ export function removeBranchCase(document: WorkflowDocument, path: BlockPath, id
     if (node?.type !== 'branch' || node.cases.length < 2 || !node.cases.some(item => item.id === caseId)) throw new CommandRejected('missing_field');
     return { ...block, nodes: { ...block.nodes, [id]: { ...node, cases: node.cases.filter(item => item.id !== caseId) } },
       edges: edgesOf(block).filter(edge => edge.from !== id || edgePort(edge) !== caseId) };
+  });
+}
+
+/** Replace one node and drop its connections on exits it no longer has, as
+ * Dify does when routes or a fail branch go away. */
+export function replaceNodeExits(document: WorkflowDocument, path: BlockPath, id: string, node: NodeDefinition): WorkflowDocument {
+  const next = replaceNode(document, path, id, node), ports = new Set(portsOf(node));
+  return updateBlock(next, path, block => withEdges(block, edgesOf(block).filter(edge => edge.from !== id || ports.has(edgePort(edge)))));
+}
+
+/** A route ID is what the child answers with, so it moves its connections. */
+export function renameAgentRoute(document: WorkflowDocument, path: BlockPath, id: string, from: string, to: string): WorkflowDocument {
+  return updateBlock(document, path, block => {
+    const node = nodeAt(block, id);
+    if (node?.type !== 'agent' || !node.routes?.some(route => route.id === from)) throw new CommandRejected('missing_field');
+    if (from === to) return block;
+    const invalid = validLocalKey(to);
+    if (invalid) throw new CommandRejected(invalid);
+    if (RESERVED_PORTS.includes(to)) throw new CommandRejected('reserved_port');
+    if (node.routes.some(route => route.id === to)) throw new CommandRejected('duplicate_identifier');
+    return { ...block, nodes: { ...block.nodes, [id]: { ...node, routes: node.routes.map(route => route.id === from ? { ...route, id: to } : route) } },
+      edges: edgesOf(block).map(edge => edge.from === id && edgePort(edge) === from ? authoredEdge(id, to, edge.to) : edge) };
   });
 }
