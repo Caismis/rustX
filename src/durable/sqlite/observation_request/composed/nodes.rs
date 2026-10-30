@@ -29,12 +29,12 @@ fn find_stored_hash(
 
 /// A construction proof is owned by one recursive result, not the `created`
 /// map. At most one completed sibling per native tree level retains its bytes.
-struct CapturedNode {
-    digest: index::Hash,
+pub(super) struct CapturedNode {
+    pub(super) digest: index::Hash,
     prepared: Option<(Augmentation, Vec<u8>)>,
 }
 impl CapturedNode {
-    fn into_node(
+    pub(super) fn into_node(
         self,
         connection: &Connection,
         native: manifest::NodeRef,
@@ -325,7 +325,7 @@ pub(super) fn capture(
     input: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
     selection: &manifest::Selection,
-) -> Result<Option<index::Hash>, ConversationStoreError> {
+) -> Result<Option<CapturedNode>, ConversationStoreError> {
     let mut capture = Capture {
         connection,
         scope,
@@ -335,7 +335,7 @@ pub(super) fn capture(
     };
     selection
         .root
-        .map(|root| capture.ensure(root, 0).map(|node| node.digest))
+        .map(|root| capture.ensure(root, 0))
         .transpose()
 }
 
@@ -346,9 +346,23 @@ pub(super) fn length(
     rank: u64,
     sequence: u64,
 ) -> Result<u64, ConversationStoreError> {
-    let node = load(connection, native, digest)?;
+    length_from_node(
+        connection,
+        &load(connection, native, digest)?,
+        rank,
+        sequence,
+    )
+}
+/// The caller already read this node in the same transaction. Child traversals
+/// retain their independent native and stored-byte validation.
+pub(super) fn length_from_node(
+    connection: &Connection,
+    node: &Augmentation,
+    rank: u64,
+    sequence: u64,
+) -> Result<u64, ConversationStoreError> {
     let last = rank
-        .checked_add(native.count)
+        .checked_add(node.native.count)
         .and_then(|end| end.checked_sub(1))
         .ok_or_else(|| storage("native selected interval invalid"))?;
     let first_class = weights::class(sequence, rank)?;
@@ -356,7 +370,7 @@ pub(super) fn length(
     if first_class == last_class {
         return node.widths.length(first_class);
     }
-    match node.content {
+    match &node.content {
         Content::Branch {
             left,
             left_hash,
@@ -364,8 +378,8 @@ pub(super) fn length(
             right_hash,
         } => add(
             add(
-                length(connection, left, left_hash, rank, sequence)?,
-                length(connection, right, right_hash, rank + left.count, sequence)?,
+                length(connection, *left, *left_hash, rank, sequence)?,
+                length(connection, *right, *right_hash, rank + left.count, sequence)?,
             )?,
             1,
         ),
@@ -441,15 +455,21 @@ pub(super) fn select(
 
 // Full producer paths include the current occurrence prefix. Width crossings
 // recurse at most the fixed decimal thresholds through the native AVL tree.
-pub(super) fn validate_paths(
+fn validate_paths(
     connection: &Connection,
     native: manifest::NodeRef,
     digest: index::Hash,
     rank: u64,
 ) -> Result<(), ConversationStoreError> {
-    let node = load(connection, native, digest)?;
+    validate_node_paths(connection, &load(connection, native, digest)?, rank)
+}
+pub(super) fn validate_node_paths(
+    connection: &Connection,
+    node: &Augmentation,
+    rank: u64,
+) -> Result<(), ConversationStoreError> {
     let last = rank
-        .checked_add(native.count)
+        .checked_add(node.native.count)
         .and_then(|end| end.checked_sub(1))
         .ok_or_else(|| storage("request rank range invalid"))?;
     if weights::digits(rank) == weights::digits(last) {
@@ -462,15 +482,15 @@ pub(super) fn validate_paths(
         }
         return Ok(());
     }
-    match node.content {
+    match &node.content {
         Content::Branch {
             left,
             left_hash,
             right,
             right_hash,
         } => {
-            validate_paths(connection, left, left_hash, rank)?;
-            validate_paths(connection, right, right_hash, rank + left.count)
+            validate_paths(connection, *left, *left_hash, rank)?;
+            validate_paths(connection, *right, *right_hash, rank + left.count)
         }
         Content::Leaf { .. } => Err(storage("request path width interval invalid")),
     }
@@ -479,3 +499,7 @@ pub(super) fn validate_paths(
 #[cfg(test)]
 #[path = "template_metrics_tests.rs"]
 mod template_metrics_tests;
+
+#[cfg(test)]
+#[path = "root_geometry_tests.rs"]
+mod root_geometry_tests;

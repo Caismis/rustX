@@ -231,7 +231,7 @@ pub(super) fn index_selection(
     #[cfg(test)]
     let _measurement =
         measurement::Measurement::new(crate::agent::execution::attribution::SourceScope::Request);
-    let source_hash = {
+    let captured_root = {
         #[cfg(feature = "issue-387-profile")]
         let _profile = profile::Timer::new(profile::Phase::Capture);
         #[cfg(test)]
@@ -240,6 +240,7 @@ pub(super) fn index_selection(
         );
         nodes::capture(connection, scope, input, snapshot, selection)?
     };
+    let source_hash = captured_root.as_ref().map(|node| node.digest);
     let captured = {
         #[cfg(feature = "issue-387-profile")]
         let _profile = profile::Timer::new(profile::Phase::Scalar);
@@ -249,17 +250,26 @@ pub(super) fn index_selection(
         );
         scalar::capture(connection, snapshot)?
     };
-    {
+    let root_node = {
         #[cfg(feature = "issue-387-profile")]
         let _profile = profile::Timer::new(profile::Phase::Paths);
         #[cfg(test)]
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourcePaths,
         );
-        if let (Some(native), Some(digest)) = (selection.root, source_hash) {
-            nodes::validate_paths(connection, native, digest, 0)?;
+        match (selection.root, captured_root) {
+            (Some(native), Some(captured)) => {
+                // Scalar capture writes can trigger changes to the root. Check
+                // actual storage now, then finish every path check before any
+                // length traversal. No writes occur between these two stages.
+                let node = captured.into_node(connection, native)?;
+                nodes::validate_node_paths(connection, &node, 0)?;
+                Some(node)
+            }
+            (None, None) => None,
+            _ => return Err(storage("composed selected root unavailable")),
         }
-    }
+    };
     let messages_length = {
         #[cfg(feature = "issue-387-profile")]
         let _profile = profile::Timer::new(profile::Phase::Length);
@@ -267,12 +277,9 @@ pub(super) fn index_selection(
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourceLength,
         );
-        match (selection.root, source_hash) {
-            (Some(native), Some(digest)) => {
-                add(nodes::length(connection, native, digest, 0, sequence)?, 2)?
-            }
-            (None, None) => 2,
-            _ => return Err(storage("composed selected root unavailable")),
+        match &root_node {
+            Some(node) => add(nodes::length_from_node(connection, node, 0, sequence)?, 2)?,
+            None => 2,
         }
     };
     let length = add(

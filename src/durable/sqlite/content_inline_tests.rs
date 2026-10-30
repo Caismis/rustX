@@ -69,9 +69,12 @@ fn immutable_inline_first_preserves_empty_boundary_and_two_slice_reads() {
         assert_eq!(connection.total_changes() - before, 1 + overflow as u64);
         for offset in [0, length.min(65_535), length.min(65_536), length] {
             let end = length.min(offset + SEGMENT_BYTES);
+            let actual = range_bytes(&connection, key, offset as u64, end as u64).unwrap();
+            assert_eq!(actual, bytes[offset..end]);
             assert_eq!(
-                range_bytes(&connection, key, offset as u64, end as u64).unwrap(),
-                bytes[offset..end]
+                actual.capacity(),
+                end - offset,
+                "one bounded output allocation even across physical stores"
             );
             let expected_rows = if offset == end {
                 0
