@@ -397,13 +397,13 @@ fn bounded_response_page_does_not_read_retry_for_running_response() {
         {
             let connection = store.lock().unwrap();
             let (sequence, bytes): (u64, Vec<u8>) = connection.query_row("SELECT sequence,observation_execution FROM events WHERE observation_assistant_ledger IS NOT NULL", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
-            let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let mut value: serde_json::Value = observation_codec::decode(&bytes).unwrap();
             // Private execution tuple: request group, last request sequence.
             value[3][4] = serde_json::json!(999_999);
             connection
                 .execute(
                     "UPDATE events SET observation_execution=?2 WHERE sequence=?1",
-                    params![sequence, serde_json::to_vec(&value).unwrap()],
+                    params![sequence, observation_codec::encode_admitted(&value).unwrap()],
                 )
                 .unwrap();
         }

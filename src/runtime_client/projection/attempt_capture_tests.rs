@@ -335,3 +335,176 @@ fn live_attempt_keeps_32_descriptors_and_reuses_binding_owners_across_unchanged_
     assert_eq!(original.capture_attempt(&mut historical).unwrap(), old);
     assert_eq!(serde_json::to_vec(&historical.content).unwrap(), old_bytes);
 }
+
+#[test]
+fn prepared_tool_results_invalidate_order_and_signed_zero_at_shared_budget_boundaries() {
+    use crate::tools::types::ToolResultContent;
+    for committed in [false, true] {
+        for reorder in [false, true] {
+            let mut result = tool_result(0);
+            result.content = vec![ToolResultContent::Json {
+                value: serde_json::json!({"zero": -0.0, "nested": {"a": 1, "b": 2}}),
+            }];
+            let mut tool = foreground(
+                ForegroundToolState::Settled {
+                    arguments: "{}".into(),
+                    result: result.clone(),
+                },
+                false,
+            );
+            if committed {
+                tool.committed_result = Some(result);
+            }
+            let mut projection = projection();
+            projection.ensure_attempt(&attempt());
+            projection.snapshot.attempt.as_mut().unwrap().foreground = vec![tool];
+            let original = projection.capture_working_seed();
+            let mut warm = Capture::new(17);
+            let old_bytes = serde_json::to_vec(&original.capture_attempt(&mut warm)).unwrap();
+            let old_items = original
+                .prepared_attempt
+                .select(original.snapshot.attempt.owner());
+            let mut changed = original.clone();
+            let row = &mut changed.snapshot.attempt.as_mut().unwrap().foreground[0];
+            let result = if committed {
+                row.committed_result.as_mut().unwrap()
+            } else {
+                let ForegroundToolState::Settled { result, .. } = &mut row.state else {
+                    unreachable!()
+                };
+                result
+            };
+            let ToolResultContent::Json { value } = &mut result.content[0] else {
+                unreachable!()
+            };
+            let values = value.as_object_mut().unwrap();
+            if reorder {
+                let value = values.shift_remove("zero").unwrap();
+                values.insert("zero".into(), value);
+            } else {
+                values.insert("zero".into(), serde_json::json!(0.0));
+            }
+            let items = changed
+                .prepared_attempt
+                .select(changed.snapshot.attempt.owner());
+            assert!(!Arc::ptr_eq(&old_items.tools[0], &items.tools[0]));
+            for pressure in 0..=40 {
+                let mut expected = Capture::new(17);
+                let mut actual = Capture::new(17);
+                for _ in 0..pressure {
+                    expected.reserve(&"x".repeat(4000));
+                    actual.reserve(&"x".repeat(4000));
+                }
+                let rows = &changed.snapshot.attempt.as_ref().unwrap().foreground;
+                let mut expected_bindings = Vec::new();
+                let mut actual_bindings = Vec::new();
+                let expected_rows =
+                    changed.capture_foreground(&mut expected, rows, &mut expected_bindings);
+                let actual_rows = changed.capture_foreground_prepared(
+                    &mut actual,
+                    rows,
+                    &mut actual_bindings,
+                    Some(&items),
+                );
+                assert_eq!(
+                    serde_json::to_vec(&actual_rows).unwrap(),
+                    serde_json::to_vec(&expected_rows).unwrap()
+                );
+                assert_eq!(actual.admission_state(), expected.admission_state());
+                assert_eq!(actual.collections, expected.collections);
+                assert_eq!(actual_bindings, expected_bindings);
+            }
+            let mut current = Capture::new(17);
+            assert_ne!(
+                serde_json::to_vec(&changed.capture_attempt(&mut current)).unwrap(),
+                old_bytes
+            );
+            let mut historical = Capture::new(17);
+            assert_eq!(
+                serde_json::to_vec(&original.capture_attempt(&mut historical)).unwrap(),
+                old_bytes
+            );
+        }
+    }
+}
+
+#[test]
+fn prepared_tool_admission_reads_current_result_sources_with_unchanged_attempt_owner() {
+    let tool = foreground(
+        ForegroundToolState::Settled {
+            arguments: "x".repeat(32_768),
+            result: tool_result(32_768),
+        },
+        true,
+    );
+    let mut projection = projection();
+    projection.ensure_attempt(&attempt());
+    projection.snapshot.attempt.as_mut().unwrap().foreground = vec![tool.clone()];
+    let mut original = projection.capture_working_seed();
+    original.foreground_content = vec![super::super::ForegroundResultContent {
+        occurrence: tool.occurrence.clone(),
+        metadata: content_reference(),
+        content: vec![ContentBinding {
+            source_path: None,
+            path: vec!["tool".into(), "result".into(), "content".into(), "0".into()],
+            content_ref: content_reference(),
+            deferred: true,
+        }],
+        frontier: checkpoint::CollectionFrontier {
+            domain: "result.content".into(),
+            revision: 1,
+            total: 9,
+            loaded: 1,
+            next_offset: Some(1),
+        },
+    }];
+    let mut warm = Capture::new(17);
+    let old = original.capture_attempt(&mut warm).unwrap();
+    let old_bytes = serde_json::to_vec(&(&old, &warm.content, &warm.collections)).unwrap();
+    let mut changed = original.clone();
+    changed.foreground_content[0].metadata.content_revision += 1;
+    changed.foreground_content[0].metadata.readable_end += 10;
+    changed.foreground_content[0].frontier.revision += 1;
+    changed.foreground_content[0].content[0]
+        .content_ref
+        .content_revision += 1;
+    assert!(Arc::ptr_eq(
+        original.snapshot.attempt.owner(),
+        changed.snapshot.attempt.owner()
+    ));
+    let mut current_capture = Capture::new(17);
+    let current = changed.capture_attempt(&mut current_capture).unwrap();
+    assert_eq!(
+        current.foreground[0].result_metadata_ref.as_ref(),
+        Some(&changed.foreground_content[0].metadata)
+    );
+    let current_bytes = serde_json::to_vec(&(
+        &current,
+        &current_capture.content,
+        &current_capture.collections,
+    ))
+    .unwrap();
+    assert_ne!(current_bytes, old_bytes);
+    changed.prepared_attempt = super::super::prepared_attempt::PreparedAttemptItems::default();
+    let mut cold_capture = Capture::new(17);
+    let cold = changed.capture_attempt(&mut cold_capture).unwrap();
+    assert_eq!(
+        serde_json::to_vec(&(&cold, &cold_capture.content, &cold_capture.collections)).unwrap(),
+        current_bytes
+    );
+    assert_eq!(
+        cold_capture.admission_state(),
+        current_capture.admission_state()
+    );
+    let mut historical_capture = Capture::new(17);
+    let historical = original.capture_attempt(&mut historical_capture).unwrap();
+    assert_eq!(
+        serde_json::to_vec(&(
+            &historical,
+            &historical_capture.content,
+            &historical_capture.collections
+        ))
+        .unwrap(),
+        old_bytes
+    );
+}

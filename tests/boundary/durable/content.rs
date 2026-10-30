@@ -627,7 +627,7 @@ fn t15_t20_journal_witness_and_statistics_use_bounded_native_evidence() {
     assert!(
         connection
             .execute(
-                "UPDATE events SET observation_statistics=zeroblob(16385)",
+                "UPDATE events SET observation_statistics=zeroblob(49153)",
                 []
             )
             .is_err()

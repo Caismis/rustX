@@ -580,3 +580,88 @@ fn compact_observation_read_certificate_preserves_exact_public_byte_boundary() {
         );
     }
 }
+
+#[test]
+fn compact_tuple_reader_counts_actual_json_before_ignoring_fields() {
+    #[derive(Deserialize)]
+    struct Selected {
+        keep: u64,
+    }
+    for ignored in [
+        serde_json::json!(null),
+        serde_json::json!("水\n\u{0000}"),
+        serde_json::json!(vec![1.0_f64; 3900]),
+    ] {
+        let record = (serde_json::json!({"keep":u64::MAX,"ignored":ignored}),);
+        let json = serde_json::to_vec(&record).unwrap();
+        let binary = encode_admitted(&record).unwrap();
+        let selected: (Selected,) = decode_json_tuple(&binary, json.len()).unwrap();
+        assert_eq!(selected.0.keep, u64::MAX);
+        assert!(decode_json_tuple::<(Selected,)>(&binary, json.len() - 1).is_err());
+        let selected_json = serde_json::to_vec(&(serde_json::json!({"keep":u64::MAX}),)).unwrap();
+        assert!(decode_json_tuple::<(Selected,)>(&binary, selected_json.len()).is_err());
+    }
+    let ordered = (
+        std::collections::BTreeMap::from([
+            ("z".to_owned(), vec![-0.0, 1.0, f64::MIN_POSITIVE]),
+            ("a".to_owned(), vec![f64::MAX]),
+        ]),
+        i64::MIN,
+        u64::MAX,
+    );
+    let json = serde_json::to_vec(&ordered).unwrap();
+    let binary = encode_admitted(&ordered).unwrap();
+    let restored: (std::collections::BTreeMap<String, Vec<f64>>, i64, u64) =
+        decode_json_tuple(&binary, json.len()).unwrap();
+    assert_eq!(serde_json::to_vec(&restored).unwrap(), json);
+    assert_eq!(restored.0["z"][0].to_bits(), (-0.0_f64).to_bits());
+}
+
+#[test]
+fn compact_tuple_reader_prescans_hostile_values_and_rejects_every_suffix() {
+    thread_local! { static TYPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+    struct Probe;
+    impl<'de> Deserialize<'de> for Probe {
+        fn deserialize<D: de::Deserializer<'de>>(decoder: D) -> Result<Self, D::Error> {
+            TYPED.with(|calls| calls.set(calls.get() + 1));
+            de::IgnoredAny::deserialize(decoder).map(|_| Self)
+        }
+    }
+    let mut depth = vec![0x91; 130];
+    depth.push(0xc0);
+    for bytes in [
+        vec![0x91, 0xdd, 0xff, 0xff, 0xff, 0xff],
+        vec![0x91, 0xdf, 0xff, 0xff, 0xff, 0xff],
+        vec![0x91, 0xdb, 0xff, 0xff, 0xff, 0xff],
+        vec![0x91, 0xc4, 0x01, 0x41],
+        vec![0x91, 0xd4, 0, 0],
+        vec![0x91, 0x81, 0x01, 0xc0],
+        vec![0x91, 0x81, 0xc0, 0xc0],
+        vec![0x91, 0x81, 0xc4, 0x01, b'x', 0xc0],
+        depth,
+    ] {
+        assert!(decode_json_tuple::<Probe>(&bytes, 16_384).is_err());
+        assert_eq!(TYPED.with(std::cell::Cell::get), 0);
+    }
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let bytes = encode_admitted(&(value,)).unwrap();
+        assert!(decode_json_tuple::<Probe>(&bytes, 16_384).is_err());
+        assert_eq!(TYPED.with(std::cell::Cell::get), 0);
+    }
+    let bytes = encode_admitted(&(u64::MAX,)).unwrap();
+    for length in 0..bytes.len() {
+        assert!(decode_json_tuple::<(u64,)>(&bytes[..length], 16_384).is_err());
+    }
+    for marker in 0..=255 {
+        let mut trailing = bytes.clone();
+        trailing.push(marker);
+        assert!(
+            decode_json_tuple::<(u64,)>(&trailing, 16_384).is_err(),
+            "marker {marker}"
+        );
+    }
+    assert_eq!(
+        decode_json_tuple::<(u64,)>(&bytes, 16_384).unwrap(),
+        (u64::MAX,)
+    );
+}

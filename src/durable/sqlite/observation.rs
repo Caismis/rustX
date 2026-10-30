@@ -13,6 +13,10 @@ use crate::runtime::identity::ConversationId;
 use crate::runtime_client::checkpoint::{Capture, ContentBinding, bounded_bytes};
 use crate::runtime_client::snapshot::RuntimeClientTranscriptEntry;
 
+#[cfg(test)]
+#[path = "observation_source_read_tests.rs"]
+mod source_read_tests;
+
 pub(super) fn cut(
     connection: &Connection,
     conversation: &ConversationId,
@@ -1411,6 +1415,8 @@ fn block_bytes(
     let block_index = crate::message::types::ContentBlockIndex::new(
         u32::try_from(index).map_err(|_| storage("canonical block index exhausted"))?,
     );
+    #[cfg(test)]
+    super::content::record_canonical_lookup();
     let position = connection
         .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
@@ -1431,9 +1437,13 @@ fn block_bytes(
         Rep::CanonicalJsonV1,
         Rep::BinaryBytes,
     ] {
-        if let Some(reference) =
-            super::content::descriptor(connection, &conversation, &source, representation)?
-        {
+        if let Some(reference) = super::content::canonical_descriptor_at_position(
+            connection,
+            &conversation,
+            &source,
+            representation,
+            position,
+        )? {
             let mut path = vec!["value".into()];
             if representation == Rep::BinaryBytes {
                 path.push("binary".into());
@@ -1454,11 +1464,12 @@ fn block_bytes(
             locator,
             block_index,
         };
-        if let Some(reference) = super::content::descriptor(
+        if let Some(reference) = super::content::canonical_descriptor_at_position(
             connection,
             &conversation,
             &metadata_source,
             Rep::CanonicalJsonV1,
+            position,
         )? {
             content.push(crate::runtime_client::checkpoint::ContentBinding {
                 source_path: None,

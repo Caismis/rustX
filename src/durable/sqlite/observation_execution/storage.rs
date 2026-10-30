@@ -2,6 +2,7 @@
 //! every native event. All coordinates, optional values and timing flags remain
 //! explicit; an absent or extra tuple element is corrupt evidence.
 use super::{AttemptExecutionSummary, ConversationStoreError, ExecutionLayout, storage};
+use crate::durable::sqlite::observation_codec as codec;
 use crate::runtime::identity::{EventId, MessageId, RequestId};
 
 type Failure = (
@@ -37,65 +38,97 @@ type Request = (
 type Timing = (Option<u64>, Option<u64>, u64, bool, bool, bool, u64, u64);
 type Stored = (u64, Failure, Terminal, Request, Timing);
 
+fn fields<'a, T: serde::Serialize + 'a>(
+    state: &'a ExecutionLayout,
+    timing: T,
+) -> impl serde::Serialize + 'a {
+    let s = &state.summary;
+    (
+        state.owner_anchor,
+        (&s.failure, s.failure_deferred, s.failure_readable_end),
+        (
+            &s.started_at,
+            &s.ended_at,
+            &s.terminal_event_id,
+            s.terminal_sequence,
+            &s.terminal_kind,
+            &s.finish_reason,
+            s.finish_reason_deferred,
+            s.finish_reason_sequence,
+        ),
+        (
+            &s.closing_message_id,
+            s.closing_ledger_position,
+            s.closing_identity_sequence,
+            &s.last_request_id,
+            s.last_request_sequence,
+            &s.last_request_id_source,
+            s.requests,
+            s.reports,
+            &s.usage,
+            timing,
+            &s.models,
+            s.models_total,
+            s.models_next_offset,
+        ),
+        (
+            state.first_request_sequence,
+            state.first_ttft,
+            state.terminals,
+            state.duration_invalid,
+            state.output_invalid,
+            state.observed_output,
+            state.generation_ms,
+            state.output_tokens,
+        ),
+    )
+}
+
+#[derive(serde::Serialize)]
+struct JsonTiming {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ttft_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation_ms: Option<u64>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "codec::json_optional_float"
+    )]
+    output_tokens_per_second: Option<f64>,
+}
+impl From<&crate::durable::response::CompletedResponseTiming> for JsonTiming {
+    fn from(value: &crate::durable::response::CompletedResponseTiming) -> Self {
+        Self {
+            total_duration_ms: value.total_duration_ms,
+            ttft_ms: value.ttft_ms,
+            generation_ms: value.generation_ms,
+            output_tokens_per_second: value.output_tokens_per_second,
+        }
+    }
+}
+
 pub(super) fn encode(state: &ExecutionLayout) -> Option<Vec<u8>> {
-    // Keep the existing structural admission over the public-shaped summary:
-    // a smaller storage encoding must not broaden its finite header allowance.
+    // The public-shaped preflight and original tuple admission are distinct.
+    // Neither may use the smaller binary form or normalized nonfinite timings.
     if !crate::runtime_client::preflight::fits(
         state,
         crate::durable::observation::HEADER_ENCODED_MAX,
     ) {
         return None;
     }
-    let s = &state.summary;
-    crate::runtime_client::checkpoint::bounded_bytes(
-        &(
-            state.owner_anchor,
-            (&s.failure, s.failure_deferred, s.failure_readable_end),
-            (
-                &s.started_at,
-                &s.ended_at,
-                &s.terminal_event_id,
-                s.terminal_sequence,
-                &s.terminal_kind,
-                &s.finish_reason,
-                s.finish_reason_deferred,
-                s.finish_reason_sequence,
-            ),
-            (
-                &s.closing_message_id,
-                s.closing_ledger_position,
-                s.closing_identity_sequence,
-                &s.last_request_id,
-                s.last_request_sequence,
-                &s.last_request_id_source,
-                s.requests,
-                s.reports,
-                &s.usage,
-                &s.timing,
-                &s.models,
-                s.models_total,
-                s.models_next_offset,
-            ),
-            (
-                state.first_request_sequence,
-                state.first_ttft,
-                state.terminals,
-                state.duration_invalid,
-                state.output_invalid,
-                state.observed_output,
-                state.generation_ms,
-                state.output_tokens,
-            ),
-        ),
+    codec::encode(
+        &fields(state, &state.summary.timing),
+        &fields(state, state.summary.timing.as_ref().map(JsonTiming::from)),
         crate::durable::observation::HEADER_ENCODED_MAX,
     )
+    .ok()
 }
 pub(super) fn decode(bytes: &[u8]) -> Result<ExecutionLayout, ConversationStoreError> {
-    if bytes.len() > crate::durable::observation::HEADER_ENCODED_MAX {
-        return Err(storage("native execution header exceeds bound"));
-    }
     let (owner_anchor, failure, terminal, request, timing): Stored =
-        serde_json::from_slice(bytes).map_err(|_| storage("native execution header corrupt"))?;
+        codec::decode_json_tuple(bytes, crate::durable::observation::HEADER_ENCODED_MAX)
+            .map_err(|_| storage("native execution header corrupt"))?;
     let (failure, failure_deferred, failure_readable_end) = failure;
     let (
         started_at,
@@ -175,6 +208,17 @@ pub(super) fn decode(bytes: &[u8]) -> Result<ExecutionLayout, ConversationStoreE
 mod tests {
     use super::*;
 
+    fn original_encode(state: &ExecutionLayout) -> Option<Vec<u8>> {
+        crate::runtime_client::preflight::fits(state, 16_384)
+            .then(|| {
+                crate::runtime_client::checkpoint::bounded_bytes(
+                    &fields(state, &state.summary.timing),
+                    16_384,
+                )
+            })
+            .flatten()
+    }
+
     fn populated() -> ExecutionLayout {
         let timestamp = chrono::DateTime::from_timestamp(1_700_000_000, 123).unwrap();
         ExecutionLayout {
@@ -247,12 +291,16 @@ mod tests {
                 original
             );
             assert!(decode(&serde_json::to_vec(&state).unwrap()).is_err());
-            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let value: serde_json::Value = codec::decode(&bytes).unwrap();
             for group in 1..5 {
                 let mut missing = value.clone();
                 missing[group].as_array_mut().unwrap().pop();
-                assert!(decode(&serde_json::to_vec(&missing).unwrap()).is_err());
+                assert!(decode(&codec::encode_admitted(&missing).unwrap()).is_err());
             }
+            assert!(
+                decode(&serde_json::to_vec(&fields(&state, &state.summary.timing)).unwrap())
+                    .is_err()
+            );
         }
     }
 
@@ -274,5 +322,117 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn binary_execution_preserves_both_admission_stages_and_json_timing() {
+        for rate in [
+            0.0,
+            -0.0,
+            1.0,
+            f64::MIN_POSITIVE,
+            f64::MAX,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let mut state = populated();
+            state
+                .summary
+                .timing
+                .as_mut()
+                .unwrap()
+                .output_tokens_per_second = Some(rate);
+            let json = original_encode(&state).unwrap();
+            let bytes = encode(&state).unwrap();
+            let expected: Stored = serde_json::from_slice(&json).unwrap();
+            let actual: Stored = codec::decode_json_tuple(&bytes, 16_384).unwrap();
+            assert_eq!(
+                serde_json::to_vec(&actual).unwrap(),
+                serde_json::to_vec(&expected).unwrap()
+            );
+            let read_rate = decode(&bytes)
+                .unwrap()
+                .summary
+                .timing
+                .unwrap()
+                .output_tokens_per_second;
+            if rate.is_finite() {
+                assert_eq!(read_rate.unwrap().to_bits(), rate.to_bits());
+            } else {
+                assert_eq!(read_rate, None);
+            }
+        }
+        let mut state = populated();
+        let mut lower = 0;
+        let mut upper = 20_000;
+        while lower + 1 < upper {
+            let size = usize::midpoint(lower, upper);
+            state.summary.models = vec!["x".repeat(size)];
+            if original_encode(&state).is_some() {
+                lower = size;
+            } else {
+                upper = size;
+            }
+        }
+        for size in [lower, upper] {
+            state.summary.models = vec!["x".repeat(size)];
+            assert_eq!(encode(&state).is_some(), original_encode(&state).is_some());
+        }
+    }
+
+    #[test]
+    fn binary_execution_read_preserves_tuple_budget_without_writer_preflight() {
+        let mut state = populated();
+        state.summary.models = vec![String::new()];
+        let base = serde_json::to_vec(&fields(&state, &state.summary.timing))
+            .unwrap()
+            .len();
+        for length in [16_383, 16_384, 16_385] {
+            state.summary.models = vec!["x".repeat(length - base)];
+            let tuple = fields(&state, &state.summary.timing);
+            assert_eq!(serde_json::to_vec(&tuple).unwrap().len(), length);
+            let bytes = codec::encode_admitted(&tuple).unwrap();
+            assert_eq!(decode(&bytes).is_ok(), length <= 16_384);
+            assert!(
+                encode(&state).is_none(),
+                "reader must not reapply stricter writer admission"
+            );
+        }
+        let state = populated();
+        let mut value = serde_json::to_value(fields(&state, &state.summary.timing)).unwrap();
+        value[3][8]["ignored"] = serde_json::json!(vec![1.0_f64; 3700]);
+        let json = serde_json::to_vec(&value).unwrap();
+        assert!(json.len() < 16_384);
+        let bytes = codec::encode_admitted(&value).unwrap();
+        assert!(bytes.len() > 16_384 && bytes.len() <= codec::MAX_BYTES);
+        assert_eq!(
+            serde_json::to_value(decode(&bytes).unwrap()).unwrap(),
+            serde_json::to_value(&state).unwrap()
+        );
+        let store = crate::durable::SqliteConversationStore::in_memory(
+            crate::runtime::identity::ConversationId::generate(),
+        )
+        .unwrap();
+        let connection = store.lock().unwrap();
+        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_execution) VALUES(1,'wide-execution',1,'test','time','{}',?1)", [&bytes]).unwrap();
+        let retained: Vec<u8> = connection
+            .query_row(
+                "SELECT observation_execution FROM events WHERE sequence=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(decode(&retained).unwrap()).unwrap(),
+            serde_json::to_value(&state).unwrap()
+        );
+        value[3][8]["ignored"] = serde_json::json!("\u{0000}".repeat(4000));
+        let bytes = codec::encode_admitted(&value).unwrap();
+        assert!(
+            bytes.len() < 16_384,
+            "small physical cell can exceed its JSON byte allowance"
+        );
+        assert!(decode(&bytes).is_err());
     }
 }

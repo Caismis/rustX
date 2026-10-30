@@ -1,6 +1,6 @@
 use super::super::{
     DomainSources, EncodedPublication, PublicationDraft, encoded_event_bytes, event_kind,
-    set_checkpoint_transition_cursor, stamp_event_trace_cut, stamp_trace_cut,
+    set_checkpoint_transition_cursor, stamp_event_trace_cut,
 };
 use crate::runtime_client::checkpoint::{
     CHECKPOINT_TARGET_BYTES, ContentBinding, ProjectionMetadata, fit_checkpoint,
@@ -36,7 +36,7 @@ fn baseline_encode(
     if let Some(cut) = &mut draft.seed.read_domains {
         cut.revision = next;
     }
-    stamp_trace_cut(&mut draft.seed.snapshot.trace, &draft.seed.read_cut);
+    draft.seed.snapshot.trace.stamp_cut(&draft.seed.read_cut);
     for event in &mut draft.events {
         stamp_event_trace_cut(event, &draft.seed.read_cut);
     }
@@ -619,7 +619,7 @@ fn native_metadata_heads_reuse_fragments_across_publication_and_keep_old_paths()
         &draft.seed.snapshot.messages[0],
         vec!["entries".into(), "0".into(), "text".into()],
     );
-    draft.seed.snapshot.transcript.content = vec![transcript_raw.clone()];
+    draft.seed.snapshot.transcript.content = vec![transcript_raw.clone()].into();
     draft.seed.transcript_bindings = vec![transcript_raw].into();
     draft.seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
     let first = copy_draft(&draft).encode().unwrap();

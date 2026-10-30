@@ -1,8 +1,8 @@
 //! Immutable capture fragments belong to one exact installed domain value.
-//! Reuse compares the existing frozen native heads, never serialized witnesses.
+//! Reuse compares immutable domain owners, never values or serialized witnesses.
 use super::CheckpointSeed;
 use crate::runtime_client::checkpoint;
-use serde::{Serialize, Serializer, ser};
+use serde::Serialize;
 use std::{
     any::Any,
     collections::BTreeMap,
@@ -65,10 +65,7 @@ impl PreparedCaptures {
         }
         macro_rules! field {
             ($field:ident) => {
-                reuse!(
-                    stringify!($field),
-                    encoding_equal(&left.$field, &right.$field)
-                );
+                reuse!(stringify!($field), left.$field.same_owner(&right.$field));
             };
         }
         // Capture of native message bodies uses the conversation identity in
@@ -76,19 +73,20 @@ impl PreparedCaptures {
         reuse!(
             "messages",
             left.conversation_id == right.conversation_id
-                && encoding_equal(&left.messages, &right.messages)
+                && left.messages.same_owner(&right.messages)
         );
 
         reuse!(
             "transcript_deferred_entries",
-            encoding_equal(
-                &left.transcript.deferred_entries,
-                &right.transcript.deferred_entries
-            )
+            left.transcript
+                .deferred_entries
+                .same_owner(&right.transcript.deferred_entries)
         );
         reuse!(
             "transcript_statistics",
-            encoding_equal(&left.transcript.statistics, &right.transcript.statistics)
+            left.transcript
+                .statistics
+                .same_owner(&right.transcript.statistics)
         );
         field!(context);
         field!(effective_plugins);
@@ -106,7 +104,7 @@ impl PreparedCaptures {
         field!(goal);
         reuse!(
             "trace_page_updates",
-            encoding_equal(&left.trace.updates, &right.trace.updates)
+            left.trace.updates.same_owner(&right.trace.updates)
         );
         reuse!(
             "trace_records",
@@ -396,194 +394,6 @@ impl<S: FnOnce() -> crate::runtime_client::RuntimeClientSnapshot> CapturedCheckp
     }
 }
 
-/// Native DTO equality does not distinguish signed zero or the insertion
-/// order of `serde_json` objects. Rebuild float-bearing or nonempty map-bearing
-/// values; immutable native owner identities do not require this witness.
-/// This visitor neither scans strings nor allocates JSON.
-fn encoding_equal<T: PartialEq + Serialize>(left: &T, right: &T) -> bool {
-    left == right && left.serialize(UnambiguousEquality).is_ok()
-}
-#[derive(Clone, Copy)]
-struct UnambiguousEquality;
-#[derive(Debug)]
-struct Ambiguous;
-impl std::fmt::Display for Ambiguous {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("floating point or ordered map")
-    }
-}
-impl std::error::Error for Ambiguous {}
-impl ser::Error for Ambiguous {
-    fn custom<T: std::fmt::Display>(_: T) -> Self {
-        Self
-    }
-}
-macro_rules! scalar {
-    ($($method:ident($type:ty)),* $(,)?) => { $(
-        fn $method(self, _: $type) -> Result<(), Ambiguous> { Ok(()) }
-    )* };
-}
-impl Serializer for UnambiguousEquality {
-    type Ok = ();
-    type Error = Ambiguous;
-    type SerializeSeq = Self;
-    type SerializeTuple = Self;
-    type SerializeTupleStruct = Self;
-    type SerializeTupleVariant = Self;
-    type SerializeMap = Self;
-    type SerializeStruct = Self;
-    type SerializeStructVariant = Self;
-    scalar!(
-        serialize_bool(bool),
-        serialize_i8(i8),
-        serialize_i16(i16),
-        serialize_i32(i32),
-        serialize_i64(i64),
-        serialize_i128(i128),
-        serialize_u8(u8),
-        serialize_u16(u16),
-        serialize_u32(u32),
-        serialize_u64(u64),
-        serialize_u128(u128),
-        serialize_char(char),
-        serialize_str(&str),
-        serialize_bytes(&[u8])
-    );
-    fn serialize_f32(self, _: f32) -> Result<(), Ambiguous> {
-        Err(Ambiguous)
-    }
-    fn serialize_f64(self, _: f64) -> Result<(), Ambiguous> {
-        Err(Ambiguous)
-    }
-    fn serialize_none(self) -> Result<(), Ambiguous> {
-        Ok(())
-    }
-    fn serialize_unit(self) -> Result<(), Ambiguous> {
-        Ok(())
-    }
-    fn serialize_some<T: Serialize + ?Sized>(self, value: &T) -> Result<(), Ambiguous> {
-        value.serialize(self)
-    }
-    fn serialize_unit_struct(self, _: &'static str) -> Result<(), Ambiguous> {
-        Ok(())
-    }
-    fn serialize_unit_variant(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-    ) -> Result<(), Ambiguous> {
-        Ok(())
-    }
-    fn serialize_newtype_struct<T: Serialize + ?Sized>(
-        self,
-        _: &'static str,
-        value: &T,
-    ) -> Result<(), Ambiguous> {
-        value.serialize(self)
-    }
-    fn serialize_newtype_variant<T: Serialize + ?Sized>(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        value: &T,
-    ) -> Result<(), Ambiguous> {
-        value.serialize(self)
-    }
-    fn serialize_seq(self, _: Option<usize>) -> Result<Self, Ambiguous> {
-        Ok(self)
-    }
-    fn serialize_tuple(self, _: usize) -> Result<Self, Ambiguous> {
-        Ok(self)
-    }
-    fn serialize_tuple_struct(self, _: &'static str, _: usize) -> Result<Self, Ambiguous> {
-        Ok(self)
-    }
-    fn serialize_tuple_variant(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self, Ambiguous> {
-        Ok(self)
-    }
-    fn serialize_map(self, len: Option<usize>) -> Result<Self, Ambiguous> {
-        if len == Some(0) {
-            Ok(self)
-        } else {
-            Err(Ambiguous)
-        }
-    }
-    fn serialize_struct(self, _: &'static str, _: usize) -> Result<Self, Ambiguous> {
-        Ok(self)
-    }
-    fn serialize_struct_variant(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self, Ambiguous> {
-        Ok(self)
-    }
-    fn collect_str<T: std::fmt::Display + ?Sized>(self, _: &T) -> Result<(), Ambiguous> {
-        Ok(())
-    }
-}
-macro_rules! compound {
-    ($trait:ident, $method:ident) => {
-        impl ser::$trait for UnambiguousEquality {
-            type Ok = ();
-            type Error = Ambiguous;
-            fn $method<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Ambiguous> {
-                value.serialize(*self)
-            }
-            fn end(self) -> Result<(), Ambiguous> {
-                Ok(())
-            }
-        }
-    };
-}
-compound!(SerializeSeq, serialize_element);
-compound!(SerializeTuple, serialize_element);
-compound!(SerializeTupleStruct, serialize_field);
-compound!(SerializeTupleVariant, serialize_field);
-impl ser::SerializeMap for UnambiguousEquality {
-    type Ok = ();
-    type Error = Ambiguous;
-    fn serialize_key<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Ambiguous> {
-        value.serialize(*self)
-    }
-    fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Ambiguous> {
-        value.serialize(*self)
-    }
-    fn end(self) -> Result<(), Ambiguous> {
-        Ok(())
-    }
-}
-macro_rules! structure {
-    ($trait:ident) => {
-        impl ser::$trait for UnambiguousEquality {
-            type Ok = ();
-            type Error = Ambiguous;
-            fn serialize_field<T: Serialize + ?Sized>(
-                &mut self,
-                _: &'static str,
-                value: &T,
-            ) -> Result<(), Ambiguous> {
-                value.serialize(*self)
-            }
-            fn end(self) -> Result<(), Ambiguous> {
-                Ok(())
-            }
-        }
-    };
-}
-structure!(SerializeStruct);
-structure!(SerializeStructVariant);
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,34 +426,5 @@ mod tests {
             assert_ne!(serde_json::to_vec(&current).unwrap(), before);
         }
         assert_eq!(serde_json::to_vec(&first).unwrap(), before);
-    }
-
-    #[test]
-    #[allow(clippy::float_cmp)] // The test exercises exact native equality of signed zeros.
-    fn incremental_checkpoint_reuse_rejects_signed_zero_nan_and_reordered_maps() {
-        assert_eq!(0.0_f64, -0.0_f64);
-        assert!(!encoding_equal(&0.0_f64, &-0.0_f64));
-        assert!(!encoding_equal(&f64::NAN, &f64::NAN));
-        let mut first = serde_json::Map::new();
-        first.insert("alpha".into(), serde_json::json!(1));
-        first.insert("beta".into(), serde_json::json!(2));
-        let mut second = serde_json::Map::new();
-        second.insert("beta".into(), serde_json::json!(2));
-        second.insert("alpha".into(), serde_json::json!(1));
-        let first = serde_json::Value::Object(first);
-        let second = serde_json::Value::Object(second);
-        assert_eq!(
-            first, second,
-            "native equality ignores object insertion order"
-        );
-        assert_ne!(
-            serde_json::to_vec(&first).unwrap(),
-            serde_json::to_vec(&second).unwrap()
-        );
-        assert!(!encoding_equal(&first, &second));
-        assert!(encoding_equal(
-            &vec!["large unchanged body".repeat(100)],
-            &vec!["large unchanged body".repeat(100)]
-        ));
     }
 }

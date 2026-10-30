@@ -49,7 +49,13 @@ pub(super) fn page(
         offset,
         limit,
     )?;
-    page_at(connection, conversation, cut, locator, page, None)
+    #[cfg(test)]
+    AFTER_ASSOCIATIONS.with(|probe| {
+        if let Some(probe) = probe.borrow_mut().take() {
+            probe();
+        }
+    });
+    page_at(connection, conversation, cut, page, None)
 }
 
 pub(super) fn page_validated(
@@ -66,7 +72,6 @@ pub(super) fn page_validated(
         connection,
         &cut.read.conversation_id,
         cut,
-        locator,
         page,
         Some(&mut headers),
     )?;
@@ -85,11 +90,15 @@ fn page_at(
     connection: &Connection,
     conversation: &ConversationId,
     cut: &ObservationReadCut,
-    locator: &CanonicalContentLocator,
     page: crate::durable::observation::ToolAssociationHeaderPage,
     mut proof: Option<&mut Vec<Vec<u8>>>,
 ) -> Result<NativeToolObservationPage, ConversationStoreError> {
-    let ledger = super::content::canonical_position(connection, locator)?;
+    // tools_by_locator_at just resolved this locator in the same read
+    // transaction; no writes occur between that lookup and these native reads.
+    let CanonicalContentLocator::ByLedgerPosition { position: ledger } = &page.locator else {
+        return Err(storage("native Tool page lacks resolved ledger position"));
+    };
+    let ledger = *ledger;
     let mut remaining = 786_432usize - 1024;
     let mut next_offset = page.next_offset;
     let mut headers = Vec::new();
@@ -116,7 +125,7 @@ fn page_at(
         }
         let header = NativeToolObservationHeader {
             name,
-            arguments_json: arguments(connection, conversation, argument_ref.as_ref())?,
+            arguments_json: arguments(connection, conversation, argument_ref.as_ref(), ledger)?,
             committed_result: association
                 .result
                 .as_ref()
@@ -163,6 +172,11 @@ fn page_at(
 #[cfg(test)]
 thread_local! {
     static PAGE_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static AFTER_ASSOCIATIONS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+pub(super) fn probe_after_associations(probe: impl FnOnce() + 'static) {
+    AFTER_ASSOCIATIONS.with(|slot| *slot.borrow_mut() = Some(Box::new(probe)));
 }
 /// Mandatory native Tool header encodes, shared by public and proven reads.
 #[cfg(test)]
@@ -248,19 +262,21 @@ fn argument_reference(
         block_index: crate::message::types::ContentBlockIndex::new(block),
         component: CanonicalContentComponent::Payload,
     };
-    let raw = super::content::descriptor(
+    let raw = super::content::canonical_descriptor_at_position(
         connection,
         conversation,
         &source,
         ContentRepresentation::RawJsonUtf8,
+        ledger,
     )?;
     let reference = match raw.filter(|reference| reference.readable_end > 0) {
         Some(raw) => Some(raw),
-        None => super::content::descriptor(
+        None => super::content::canonical_descriptor_at_position(
             connection,
             conversation,
             &source,
             ContentRepresentation::CanonicalJsonV1,
+            ledger,
         )?,
     };
     Ok(reference)
@@ -269,16 +285,19 @@ fn arguments(
     connection: &Connection,
     conversation: &ConversationId,
     reference: Option<&crate::runtime_client::content::ContentRef>,
+    ledger: u64,
 ) -> Result<Option<String>, ConversationStoreError> {
     let Some(reference) = reference.filter(|reference| reference.readable_end <= 1024) else {
         return Ok(None);
     };
-    let chunk = super::content::read(connection, conversation, reference, 0, 1024)?;
-    let bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        chunk.data_base64,
-    )
-    .map_err(|error| storage(error.to_string()))?;
+    let (bytes, _) = super::content::canonical_read_bytes_at_position(
+        connection,
+        conversation,
+        reference,
+        0,
+        1024,
+        ledger,
+    )?;
     String::from_utf8(bytes)
         .map(Some)
         .map_err(|error| storage(error.to_string()))

@@ -200,12 +200,12 @@ fn append_facts_reuse_observes_changed_and_corrupt_stored_cells() {
         .unwrap(),
         Some(ordinary)
     );
-    let mut value: serde_json::Value = serde_json::from_slice(&execution.bytes).unwrap();
+    let mut value: serde_json::Value = observation_codec::decode(&execution.bytes).unwrap();
     value[3][6] = serde_json::json!(7);
     transaction
         .execute(
             "UPDATE events SET observation_execution=?2 WHERE sequence=?1",
-            params![sequence, serde_json::to_vec(&value).unwrap()],
+            params![sequence, observation_codec::encode_admitted(&value).unwrap()],
         )
         .unwrap();
     let changed = observation_execution::summary_at_sequence_prepared(
@@ -290,12 +290,12 @@ fn append_statistics_reuse_keeps_actual_cut_and_hole_checks() {
         observation_statistics::read(&connection, 1).unwrap()
     );
     let mut changed: serde_json::Value =
-        serde_json::from_slice(&prepared.statistics.as_ref().unwrap().bytes).unwrap();
+        observation_codec::decode(&prepared.statistics.as_ref().unwrap().bytes).unwrap();
     changed[0][0] = serde_json::json!(99);
     connection
         .execute(
             "UPDATE events SET observation_statistics=?1 WHERE sequence=1",
-            [serde_json::to_vec(&changed).unwrap()],
+            [observation_codec::encode_admitted(&changed).unwrap()],
         )
         .unwrap();
     let actual = observation_statistics::read_prepared(&connection, 1, Some(&prepared)).unwrap();

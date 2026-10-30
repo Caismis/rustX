@@ -652,6 +652,11 @@ pub(crate) struct Capture {
     pub(crate) evicted: bool,
 }
 impl Capture {
+    #[cfg(test)]
+    pub(super) fn admission_state(&self) -> (usize, usize, bool) {
+        (self.remaining, self.required, self.evicted)
+    }
+
     pub fn new(revision: u64) -> Self {
         Self {
             collections: Vec::new(),

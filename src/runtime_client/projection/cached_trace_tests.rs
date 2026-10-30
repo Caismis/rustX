@@ -335,10 +335,10 @@ fn t08_t14_cached_trace_cut_is_not_retagged_by_todo_or_unchanged_installation() 
     publish_source_fact(&mut projection, |projection| {
         projection.publish(RuntimeClientEvent::ReadDomainsUpdated {
             projection_head: projection.snapshot.context.projection_head.clone(),
-            transcript: projection.snapshot.transcript.clone(),
-            trace: Some(projection.snapshot.trace.clone()),
+            transcript: projection.snapshot.transcript.owned(),
+            trace: Some(projection.snapshot.trace.owned()),
             occupancy: projection.snapshot.context.occupancy.clone(),
-            todos: projection.snapshot.todos.clone(),
+            todos: projection.snapshot.todos.owned(),
         });
     });
     assert_eq!(

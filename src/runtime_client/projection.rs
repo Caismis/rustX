@@ -94,7 +94,10 @@
 //! Goal event, and no snapshot or event can represent an Active-but-inert Goal.
 
 mod canonical_tools;
+mod prepared_attempt;
 mod prepared_capture;
+pub(crate) mod shared_snapshot;
+use shared_snapshot::SharedSnapshot;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -344,7 +347,7 @@ pub(crate) struct RuntimeClientProjection {
     /// snapshot/subscribe fail explicitly. Never wraps.
     exhausted: bool,
     /// The deterministic snapshot read model.
-    snapshot: RuntimeClientSnapshot,
+    snapshot: SharedSnapshot,
     capability_head: super::capability_source::PreparedCapabilityHead,
     trace_head: super::checkpoint::PreparedTraceHead,
     /// The bounded projection replay ring, oldest first.
@@ -396,10 +399,11 @@ struct ForegroundResultContent {
 pub(crate) struct CheckpointSeed {
     prepared: prepared_capture::PreparedCaptures,
     attempt_bindings: prepared_capture::PreparedAttemptBindings,
+    prepared_attempt: prepared_attempt::PreparedAttemptItems,
     metadata_frontiers: prepared_capture::MetadataFrontiers,
     metadata_arrays: super::checkpoint::metadata_fragment::MetadataArrays,
     read_domains: Option<ReadDomainCut>,
-    snapshot: RuntimeClientSnapshot,
+    snapshot: SharedSnapshot,
     capability_head: super::capability_source::PreparedCapabilityHead,
     trace_head: super::checkpoint::PreparedTraceHead,
     cursor: RuntimeClientCursor,
@@ -536,7 +540,7 @@ impl PublicationDraft {
         if let Some(cut) = &mut self.seed.read_domains {
             cut.revision = next;
         }
-        stamp_trace_cut(&mut self.seed.snapshot.trace, &self.seed.read_cut);
+        self.seed.snapshot.trace.stamp_cut(&self.seed.read_cut);
         for event in &mut self.events {
             stamp_event_trace_cut(event, &self.seed.read_cut);
         }
@@ -702,7 +706,7 @@ impl CheckpointSeed {
         if page.read_cut != self.read_cut {
             return Ok(());
         }
-        let Some(attempt) = &self.snapshot.attempt else {
+        let Some(attempt) = self.snapshot.attempt.as_ref() else {
             return Ok(());
         };
         for item in &mut page.items {
@@ -777,6 +781,7 @@ impl CheckpointSeed {
         &self,
         capture: &mut super::checkpoint::Capture,
     ) -> Option<super::snapshot::RuntimeClientAttempt> {
+        let prepared = self.prepared_attempt.select(self.snapshot.attempt.owner());
         let mut bindings = Vec::new();
         let result =
             self.snapshot
@@ -806,22 +811,34 @@ impl CheckpointSeed {
                     in_flight: attempt.in_flight.as_ref().map(|flight| {
                         super::snapshot::InFlightAssistantMessage {
                             message_id: flight.message_id.clone(),
-                            blocks: self.capture_live_blocks(
+                            blocks: self.capture_live_blocks_prepared(
                                 capture,
                                 &flight.blocks,
                                 &mut bindings,
+                                Some(&prepared),
                             ),
                         }
                     }),
-                    foreground: self.capture_foreground(
+                    foreground: self.capture_foreground_prepared(
                         capture,
                         &attempt.foreground,
                         &mut bindings,
+                        Some(&prepared),
                     ),
-                    model: capture.item("attempt.model", &attempt.model).flatten(),
+                    model: capture
+                        .prepared(&prepared.model, |capture| {
+                            capture.item("attempt.model", &attempt.model).flatten()
+                        })
+                        .0
+                        .into_owned(),
                     execution_settings: capture
-                        .item("attempt.execution_settings", &attempt.execution_settings)
-                        .flatten(),
+                        .prepared(&prepared.settings, |capture| {
+                            capture
+                                .item("attempt.execution_settings", &attempt.execution_settings)
+                                .flatten()
+                        })
+                        .0
+                        .into_owned(),
                 });
         self.attempt_bindings.append(bindings, &mut capture.content);
         result
@@ -872,11 +889,11 @@ impl CheckpointSeed {
             ),
         );
         seed.transcript_bindings = transcript.content.clone().into();
-        seed.snapshot.transcript = transcript;
+        seed.snapshot.transcript = (transcript).into();
         seed.transcript_head = transcript_rows;
         seed.snapshot.context.occupancy = occupancy;
         seed.snapshot.context.projection_head = projection_head;
-        seed.snapshot.trace = trace;
+        seed.snapshot.trace = (trace).into();
         seed.trace_head = super::checkpoint::PreparedTraceHead::default();
         seed.prepared = prepared_capture::PreparedCaptures::default();
         seed.checkpoint_candidate()
@@ -946,7 +963,7 @@ impl CheckpointSeed {
         budget.value("attempt", &attempt);
         budget.value("settings_evidence", &source.settings_evidence);
         let effective_plugins = cached!(effective_plugins, |capture| capture
-            .item("effective_plugins", &source.effective_plugins)
+            .item("effective_plugins", source.effective_plugins.value())
             .flatten());
         let workflows = cached!(workflows, |capture| {
             crate::runtime::workflow::read_model::WorkflowSnapshot {
@@ -992,7 +1009,10 @@ impl CheckpointSeed {
             self.prepared
                 .capture("transcript_statistics", &mut capture, |capture| {
                     capture
-                        .item("transcript.statistics", &source.transcript.statistics)
+                        .item(
+                            "transcript.statistics",
+                            source.transcript.statistics.value(),
+                        )
                         .flatten()
                 });
         let (transcript_entries, entries_budget) = self.transcript_head.capture(&mut capture);
@@ -1049,7 +1069,7 @@ impl CheckpointSeed {
             }
         });
         let model = cached!(model, |capture| capture
-            .item("model", &source.model)
+            .item("model", source.model.value())
             .flatten());
         budget.value("model_status", &source.model_status);
         let todos = cached!(todos, |capture| source.todos.as_ref().map(|todos| {
@@ -1058,7 +1078,9 @@ impl CheckpointSeed {
                 next_id: todos.next_id,
             }
         }));
-        let goal = cached!(goal, |capture| capture.item("goal", &source.goal).flatten());
+        let goal = cached!(goal, |capture| capture
+            .item("goal", source.goal.value())
+            .flatten());
         self.capture_evidence(&messages, &mut capture);
         let metadata = ProjectionMetadata {
             read_cut: self.checkpoint_read_cut(),
@@ -1088,11 +1110,11 @@ impl CheckpointSeed {
                     durability_failure,
                     messages: messages.into_owned(),
                     message_descriptors: message_descriptors.into_owned(),
-                    publication_settlements: source.publication_settlements.clone(),
+                    publication_settlements: source.publication_settlements.owned(),
                     transcript: super::snapshot::RuntimeClientTranscriptPage {
                         source_cut: source.transcript.source_cut.clone(),
-                        content: source.transcript.content.clone(),
-                        collections: source.transcript.collections.clone(),
+                        content: source.transcript.content.owned(),
+                        collections: source.transcript.collections.owned(),
                         deferred_entries: transcript_deferred_entries.into_owned(),
                         inherited_through: source.transcript.inherited_through,
                         statistics: transcript_statistics.into_owned(),
@@ -1149,7 +1171,7 @@ impl CheckpointSeed {
         let snapshot = RuntimeClientSnapshot {
             settings_evidence: source.settings_evidence,
             effective_plugins: capture
-                .item("effective_plugins", &source.effective_plugins)
+                .item("effective_plugins", source.effective_plugins.value())
                 .flatten(),
             workflows: crate::runtime::workflow::read_model::WorkflowSnapshot {
                 revision: source.workflows.revision,
@@ -1168,7 +1190,7 @@ impl CheckpointSeed {
             }),
             messages: capture.message_page("messages", &source.messages, &source.conversation_id),
             message_descriptors: self.capture_message_descriptors(&mut capture),
-            publication_settlements: source.publication_settlements.clone(),
+            publication_settlements: source.publication_settlements.owned(),
             transcript: self.capture_transcript(&mut capture),
             trace: super::trace::TracePage {
                 read_cut: source.trace.read_cut.clone(),
@@ -1199,7 +1221,7 @@ impl CheckpointSeed {
                     .page("resources.context_files", &source.resources.context_files),
                 agent_profile: source.resources.agent_profile,
             },
-            model: capture.item("model", &source.model).flatten(),
+            model: capture.item("model", source.model.value()).flatten(),
             model_status: source.model_status,
             todos: source
                 .todos
@@ -1208,7 +1230,7 @@ impl CheckpointSeed {
                     tasks: capture.page("todos.tasks", &todos.tasks),
                     next_id: todos.next_id,
                 }),
-            goal: capture.item("goal", &source.goal).flatten(),
+            goal: capture.item("goal", source.goal.value()).flatten(),
         };
         self.capture_evidence(&snapshot.messages, &mut capture);
         Ok((
@@ -1283,15 +1305,18 @@ impl CheckpointSeed {
         let source = &self.snapshot;
         super::snapshot::RuntimeClientTranscriptPage {
             source_cut: source.transcript.source_cut.clone(),
-            content: source.transcript.content.clone(),
-            collections: source.transcript.collections.clone(),
+            content: source.transcript.content.owned(),
+            collections: source.transcript.collections.owned(),
             deferred_entries: capture.page(
                 "transcript.deferred_entries",
                 &source.transcript.deferred_entries,
             ),
             inherited_through: source.transcript.inherited_through,
             statistics: capture
-                .item("transcript.statistics", &source.transcript.statistics)
+                .item(
+                    "transcript.statistics",
+                    source.transcript.statistics.value(),
+                )
                 .flatten(),
             entries: capture.transcript_page(&source.transcript.entries, &source.conversation_id),
             next_cursor: source.transcript.next_cursor,
@@ -1413,17 +1438,34 @@ impl CheckpointSeed {
         }
     }
 
+    #[cfg(test)]
     fn capture_foreground(
         &self,
         capture: &mut super::checkpoint::Capture,
         foreground: &[ForegroundToolExecution],
         bindings: &mut Vec<super::checkpoint::ContentBinding>,
     ) -> Vec<ForegroundToolExecution> {
+        self.capture_foreground_prepared(capture, foreground, bindings, None)
+    }
+
+    fn capture_foreground_prepared(
+        &self,
+        capture: &mut super::checkpoint::Capture,
+        foreground: &[ForegroundToolExecution],
+        bindings: &mut Vec<super::checkpoint::ContentBinding>,
+        prepared: Option<&prepared_attempt::Items>,
+    ) -> Vec<ForegroundToolExecution> {
         let head: Vec<_> = foreground
             .iter()
             .take(super::checkpoint::CHECKPOINT_PAGE_ITEMS)
-            .map(|tool| {
-                if capture.reserve(tool) {
+            .enumerate()
+            .map(|(index, tool)| {
+                let admitted = if let Some(owner) = prepared.and_then(|p| p.tools.get(index)) {
+                    *capture.prepared(owner, |capture| capture.reserve(tool)).0
+                } else {
+                    capture.reserve(tool)
+                };
+                if admitted {
                     tool.clone()
                 } else {
                     let source = self
@@ -1526,11 +1568,12 @@ impl CheckpointSeed {
         }
     }
 
-    fn capture_live_blocks(
+    fn capture_live_blocks_prepared(
         &self,
         capture: &mut super::checkpoint::Capture,
         blocks: &[InFlightBlock],
         bindings: &mut Vec<super::checkpoint::ContentBinding>,
+        prepared: Option<&prepared_attempt::Items>,
     ) -> Vec<InFlightBlock> {
         let mut result = Vec::new();
         for (index, block) in blocks
@@ -1552,7 +1595,14 @@ impl CheckpointSeed {
                     "arguments",
                 ),
             };
-            let copied = capture.live_block(block);
+            let copied = if let Some(owner) = prepared.and_then(|p| p.blocks.get(index)) {
+                capture
+                    .prepared(owner, |capture| capture.live_block(block))
+                    .0
+                    .into_owned()
+            } else {
+                capture.live_block(block)
+            };
             let deferred = copied.is_none();
             let bounded = copied.unwrap_or_else(|| deferred_live_block(block));
             // Optional bytes share a budget; the first 32 structural descriptors
@@ -1708,7 +1758,7 @@ impl CheckpointSeed {
                 |_item: &&crate::model::session::SessionModelView| "model".into()
             ),
             "context" => list!(
-                std::slice::from_ref(&source.context),
+                std::slice::from_ref(source.context.value()),
                 |_item: &super::snapshot::RuntimeClientContextView| "context".into()
             ),
             "capabilities" => list!(
@@ -2570,7 +2620,8 @@ impl RuntimeClientProjection {
                 initial_messages,
                 initial_capabilities,
                 initial_model,
-            ),
+            )
+            .into(),
             replay: VecDeque::new(),
             replay_cut_cursors: HashMap::new(),
             initial_read_cut: None,
@@ -2627,7 +2678,7 @@ impl RuntimeClientProjection {
     /// There is no later mutation seam: the projected composition changes
     /// only when the runtime behind the projection is a different one.
     pub(crate) fn set_effective_plugins(&mut self, extensions: super::settings::EffectivePlugins) {
-        self.snapshot.effective_plugins = Some(extensions);
+        self.snapshot.effective_plugins = (Some(extensions)).into();
     }
 
     fn bootstrap_agents(
@@ -2661,9 +2712,10 @@ impl RuntimeClientProjection {
         self.journal_through = seed.journal_through;
         self.native_journal_highwater = seed.journal_through;
         self.read_through = seed.journal_through;
-        self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
-            .expect("runtime bootstrap transcript is valid");
-        self.transcript_bindings = self.snapshot.transcript.content.clone().into();
+        self.snapshot.transcript = (super::snapshot::transcript_page_view(seed.transcript.clone())
+            .expect("runtime bootstrap transcript is valid"))
+        .into();
+        self.transcript_bindings = self.snapshot.transcript.content.owned().into();
         self.transcript_head = super::checkpoint::PreparedTranscriptHead::from_entries(
             &self.snapshot.conversation_id,
             &self.snapshot.transcript.entries,
@@ -2719,8 +2771,8 @@ impl RuntimeClientProjection {
         // enters this projection: `None` here means the attached runtime
         // composes no Todo extension, and the live fold below deliberately
         // cannot turn that back into a list.
-        self.snapshot.todos.clone_from(&seed.todos);
-        self.snapshot.goal.clone_from(&seed.goal);
+        self.snapshot.todos.replace_from(&seed.todos);
+        self.snapshot.goal.replace_from(&seed.goal);
         self.snapshot.model_status = Some(seed.model.status());
         // An inactive runtime has never admitted an attempt, composed an
         // Agent Status, or compacted, so `attempt`, `statuses`, and
@@ -2734,8 +2786,8 @@ impl RuntimeClientProjection {
         context: super::snapshot::RuntimeClientContextView,
         tools: Vec<PreparedDurableToolReading>,
     ) {
-        self.snapshot.attempt = attempt;
-        self.snapshot.context = context;
+        self.snapshot.attempt = (attempt).into();
+        self.snapshot.context = (context).into();
         for tool in tools {
             let PreparedDurableToolReading {
                 occurrence,
@@ -2855,7 +2907,7 @@ impl RuntimeClientProjection {
         let mut head: Vec<_> = self.pending_heads.values().flatten().cloned().collect();
         head.sort_by_key(|header| header.source_offset);
         head.truncate(32);
-        self.snapshot.pending_interactions = head;
+        self.snapshot.pending_interactions = (head).into();
     }
 
     /// Applies one authoritative observation: fold the snapshot read
@@ -3219,7 +3271,7 @@ impl RuntimeClientProjection {
                 Vec::new()
             }
             ConversationObservation::GoalChanged(view) => {
-                self.snapshot.goal = Some(view.clone());
+                self.snapshot.goal = (Some(view.clone())).into();
                 vec![RuntimeClientEvent::GoalChanged { view }]
             }
             ConversationObservation::PendingReceipt(_) => {
@@ -3250,7 +3302,7 @@ impl RuntimeClientProjection {
                         settled.managed_output = None;
                     }
                 });
-                let Some(attempt) = &mut self.snapshot.attempt else {
+                let Some(attempt) = self.snapshot.attempt.as_mut() else {
                     return Vec::new();
                 };
                 self.foreground_content.retain(|known| {
@@ -3397,7 +3449,7 @@ impl RuntimeClientProjection {
                         .publication_start
                         .as_ref()
                         .is_some_and(|start| &start.message_id == block.id())
-                    && let Some(attempt) = &mut self.snapshot.attempt
+                    && let Some(attempt) = self.snapshot.attempt.as_mut()
                 {
                     attempt.in_flight = None;
                     self.publication_start = None;
@@ -3442,7 +3494,7 @@ impl RuntimeClientProjection {
                                     total: header.tool_call_count,
                                 });
                             self.native_tool_occurrences.clear();
-                            if let Some(attempt) = &self.snapshot.attempt {
+                            if let Some(attempt) = self.snapshot.attempt.as_ref() {
                                 for slot in &attempt.foreground {
                                     if slot.message_id.as_ref() != Some(&assistant.id) {
                                         continue;
@@ -3532,7 +3584,7 @@ impl RuntimeClientProjection {
                         events.push(RuntimeClientEvent::MessageDescriptorCommitted {
                             attempt_id,
                             descriptor,
-                            head: self.snapshot.message_descriptors.clone(),
+                            head: self.snapshot.message_descriptors.owned(),
                             transcript_cursor,
                             evicted_message_id,
                         });
@@ -3542,7 +3594,7 @@ impl RuntimeClientProjection {
                         events.push(RuntimeClientEvent::MessageDescriptorCommitted {
                             attempt_id: attempt_id.clone(),
                             descriptor,
-                            head: self.snapshot.message_descriptors.clone(),
+                            head: self.snapshot.message_descriptors.owned(),
                             transcript_cursor,
                             evicted_message_id: evicted_message_id.clone(),
                         });
@@ -3705,7 +3757,7 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::PendingHeadChanged {
                     owner: owner.into(),
                     cut,
-                    head: self.snapshot.pending_interactions.clone(),
+                    head: self.snapshot.pending_interactions.owned(),
                 }]
             }
             ConversationObservation::InteractionPending { interaction, audit } => {
@@ -3797,7 +3849,7 @@ impl RuntimeClientProjection {
                             .find(|slot| Some(&slot.occurrence) == occurrence.as_ref())
                     })
                     .and_then(|slot| slot.metadata_ref.clone());
-                if let Some(attempt) = &mut self.snapshot.attempt
+                if let Some(attempt) = self.snapshot.attempt.as_mut()
                     && attempt.attempt_id.as_ref() == Some(&attempt_id)
                     && let Some(slot) = attempt
                         .foreground
@@ -3956,10 +4008,10 @@ impl RuntimeClientProjection {
                 let plugins = snapshot
                     .root_profile()
                     .map(|profile| super::settings::EffectivePlugins::project(&profile.extensions));
-                self.snapshot.effective_plugins.clone_from(&plugins);
+                self.snapshot.effective_plugins.replace_from(&plugins);
                 self.snapshot.capabilities = Arc::new(capabilities.clone());
-                self.snapshot.resources.clone_from(&resources);
-                self.snapshot.model = model.as_deref().cloned();
+                self.snapshot.resources.replace_from(&resources);
+                self.snapshot.model = (model.as_deref().cloned()).into();
                 self.snapshot.model_status = Some(model_status);
                 self.snapshot.effective_approval_mode = approval_mode;
                 vec![RuntimeClientEvent::ResourceGenerationUpdated {
@@ -3998,7 +4050,7 @@ impl RuntimeClientProjection {
                     .attempt
                     .take()
                     .filter(|current| current.attempt_id.as_ref() == Some(&attempt_id));
-                self.snapshot.attempt = Some(RuntimeClientAttempt {
+                self.snapshot.attempt = (Some(RuntimeClientAttempt {
                     attempt_id: Some(attempt_id),
                     attempt_id_source: None,
                     phase: retained
@@ -4018,7 +4070,8 @@ impl RuntimeClientProjection {
                         resource_revision,
                         approval_mode,
                     }),
-                });
+                }))
+                .into();
                 // Admission changes frozen attempt/model authority before
                 // execution starts. Publish that complete state at its own cut.
                 if let Some(staged) = &mut self.staged_publication {
@@ -4056,7 +4109,7 @@ impl RuntimeClientProjection {
                 let model_status = model.status();
                 let model = model.inline().map(Box::new);
                 self.install_model_frontier(model.is_some());
-                self.snapshot.model = model.as_deref().cloned();
+                self.snapshot.model = (model.as_deref().cloned()).into();
                 self.snapshot.model_status = Some(model_status);
                 vec![
                     RuntimeClientEvent::SessionModelChanged {
@@ -4083,10 +4136,11 @@ impl RuntimeClientProjection {
                 diagnostic,
             } => {
                 self.snapshot.durability_failure =
-                    Some(super::snapshot::RuntimeDurabilityFailure {
+                    (Some(super::snapshot::RuntimeDurabilityFailure {
                         operation: operation.clone(),
                         diagnostic: diagnostic.clone(),
-                    });
+                    }))
+                    .into();
                 vec![RuntimeClientEvent::RuntimeDurabilityFailed {
                     operation,
                     diagnostic,
@@ -5112,7 +5166,7 @@ impl RuntimeClientProjection {
             RuntimeEvent::AttemptStarted { .. } => {
                 let model = self.frozen_attempt_model(attempt_id);
                 let execution_settings = self.frozen_execution_settings(attempt_id);
-                self.snapshot.attempt = Some(RuntimeClientAttempt {
+                self.snapshot.attempt = (Some(RuntimeClientAttempt {
                     attempt_id: Some(attempt_id.clone()),
                     attempt_id_source: None,
                     phase: RuntimeClientAttemptPhase::Running,
@@ -5122,7 +5176,8 @@ impl RuntimeClientProjection {
                     foreground: Vec::new(),
                     model: model.clone(),
                     execution_settings: execution_settings.clone(),
-                });
+                }))
+                .into();
                 // The Agent Status window is deliberately untouched: a status
                 // composed by an earlier attempt is a historical fact of this
                 // conversation, not attempt-scoped live state, so a new
@@ -5165,7 +5220,7 @@ impl RuntimeClientProjection {
                 },
             ),
             RuntimeEvent::TurnStarted => {
-                if let Some(attempt) = &mut self.snapshot.attempt
+                if let Some(attempt) = self.snapshot.attempt.as_mut()
                     && attempt.attempt_id.as_ref() == Some(attempt_id)
                 {
                     attempt.turn = attempt.turn.saturating_add(1);
@@ -5185,7 +5240,7 @@ impl RuntimeClientProjection {
             RuntimeEvent::ContextContributionEmitted { .. } => Vec::new(),
             RuntimeEvent::ModelRequestCompleted { usage, .. } => {
                 if let Some(usage) = usage
-                    && let Some(attempt) = &mut self.snapshot.attempt
+                    && let Some(attempt) = self.snapshot.attempt.as_mut()
                     && attempt.attempt_id.as_ref() == Some(attempt_id)
                 {
                     attempt.last_usage = Some(usage.clone());
@@ -5209,7 +5264,7 @@ impl RuntimeClientProjection {
                 tool_call_id,
                 tool_id,
             } => {
-                if let Some(attempt) = &mut self.snapshot.attempt
+                if let Some(attempt) = self.snapshot.attempt.as_mut()
                     && attempt.attempt_id.as_ref() == Some(attempt_id)
                     && let Some(slot) = foreground_slot_for_event(
                         &mut attempt.foreground,
@@ -5240,7 +5295,7 @@ impl RuntimeClientProjection {
                 if execution_id.is_some() {
                     return Vec::new();
                 }
-                if let Some(attempt) = &mut self.snapshot.attempt
+                if let Some(attempt) = self.snapshot.attempt.as_mut()
                     && attempt.attempt_id.as_ref() == Some(attempt_id)
                     && let Some(slot) = foreground_slot_for_event(
                         &mut attempt.foreground,
@@ -5415,7 +5470,7 @@ impl RuntimeClientProjection {
                 self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = true;
                 vec![RuntimeClientEvent::ContextCompactionStarted {
-                    context: self.snapshot.context.clone(),
+                    context: self.snapshot.context.owned(),
                     attempt_id: attempt_id.cloned(),
                 }]
             }
@@ -5423,7 +5478,7 @@ impl RuntimeClientProjection {
                 self.snapshot.context.compaction_error = Some(error.clone());
                 self.snapshot.context.compaction_in_progress = false;
                 vec![RuntimeClientEvent::ContextCompactionFailed {
-                    context: self.snapshot.context.clone(),
+                    context: self.snapshot.context.owned(),
                     attempt_id: attempt_id.cloned(),
                     error: error.clone(),
                 }]
@@ -5486,7 +5541,7 @@ impl RuntimeClientProjection {
         self.snapshot.context.latest_compaction = Some(compaction.clone());
         vec![RuntimeClientEvent::ContextCompacted {
             attempt_id: attempt_id.cloned(),
-            context: self.snapshot.context.clone(),
+            context: self.snapshot.context.owned(),
         }]
     }
 
@@ -5497,7 +5552,7 @@ impl RuntimeClientProjection {
         attempt_id: &AttemptId,
         outcome: RuntimeClientOutcome,
     ) -> Vec<RuntimeClientEvent> {
-        if let Some(attempt) = &mut self.snapshot.attempt
+        if let Some(attempt) = self.snapshot.attempt.as_mut()
             && attempt.attempt_id.as_ref() == Some(attempt_id)
         {
             attempt.phase = RuntimeClientAttemptPhase::Settled {
@@ -5521,7 +5576,7 @@ impl RuntimeClientProjection {
             .is_none_or(|attempt| attempt.attempt_id.as_ref() != Some(attempt_id))
         {
             let model = self.frozen_attempt_model(attempt_id);
-            self.snapshot.attempt = Some(RuntimeClientAttempt {
+            self.snapshot.attempt = (Some(RuntimeClientAttempt {
                 attempt_id: Some(attempt_id.clone()),
                 attempt_id_source: None,
                 phase: RuntimeClientAttemptPhase::Running,
@@ -5531,7 +5586,8 @@ impl RuntimeClientProjection {
                 foreground: Vec::new(),
                 model,
                 execution_settings: None,
-            });
+            }))
+            .into();
         }
     }
 
@@ -5565,7 +5621,7 @@ impl RuntimeClientProjection {
     }
 
     fn install_todo_head(&mut self, todos: &crate::durable::inbox::NativeTodoObservation) {
-        self.snapshot.todos = Some(todos.snapshot.clone());
+        self.snapshot.todos = (Some(todos.snapshot.clone())).into();
         self.source_frontiers.insert(
             "todos.tasks".into(),
             super::checkpoint::CollectionFrontier {
@@ -5652,10 +5708,10 @@ impl RuntimeClientProjection {
             self.install_todo_head(todos);
             events.push(RuntimeClientEvent::ReadDomainsUpdated {
                 projection_head: self.snapshot.context.projection_head.clone(),
-                transcript: self.snapshot.transcript.clone(),
+                transcript: self.snapshot.transcript.owned(),
                 trace: None,
                 occupancy: self.snapshot.context.occupancy.clone(),
-                todos: self.snapshot.todos.clone(),
+                todos: self.snapshot.todos.owned(),
             });
         }
         events
@@ -5770,7 +5826,7 @@ impl RuntimeClientProjection {
         events.push(RuntimeClientEvent::MessageDescriptorCommitted {
             attempt_id: attempt_id.clone(),
             descriptor,
-            head: self.snapshot.message_descriptors.clone(),
+            head: self.snapshot.message_descriptors.owned(),
             transcript_cursor,
             evicted_message_id: evicted_message_id.clone(),
         });
@@ -5994,7 +6050,7 @@ impl RuntimeClientProjection {
             return vec![RuntimeClientEvent::AssistantPublicationDeferredSettled {
                 attempt_id,
                 settlement: receipt.summary.into(),
-                settlement_head: self.snapshot.publication_settlements.clone(),
+                settlement_head: self.snapshot.publication_settlements.owned(),
                 audit: audit.map(Box::new),
                 transcript_cursor: receipt.transcript_cursor.into(),
                 read_cut: receipt.read_cut,
@@ -6007,7 +6063,7 @@ impl RuntimeClientProjection {
             attempt_id,
             audit: Box::new(audit),
             transcript_cursor: receipt.transcript_cursor.into(),
-            settlement_head: self.snapshot.publication_settlements.clone(),
+            settlement_head: self.snapshot.publication_settlements.owned(),
         }]
     }
 
@@ -6239,10 +6295,10 @@ impl RuntimeClientProjection {
             }
         }
         let previous = self.snapshot.workflows.revision.0;
-        if workflows.revision.0 < previous || workflows == self.snapshot.workflows {
+        if workflows.revision.0 < previous || workflows == *self.snapshot.workflows {
             return;
         }
-        self.snapshot.workflows.clone_from(&workflows);
+        self.snapshot.workflows.replace_from(&workflows);
         self.publish(RuntimeClientEvent::WorkflowsUpdated { workflows });
     }
 
@@ -6556,7 +6612,7 @@ impl RuntimeClientProjection {
         };
         let mut cut = self.working_read_cut();
         cut.revision = next_value;
-        stamp_trace_cut(&mut self.snapshot.trace, &cut);
+        self.snapshot.trace.stamp_cut(&cut);
         let mut event = event;
         stamp_event_trace_cut(&mut event, &cut);
         let mut event = if super::checkpoint::bounded_bytes(
@@ -6713,7 +6769,7 @@ impl RuntimeClientProjection {
     pub(crate) fn initialize_publication_view(&mut self) {
         self.retire_initial_read_cut();
         let cut = self.working_read_cut();
-        stamp_trace_cut(&mut self.snapshot.trace, &cut);
+        self.snapshot.trace.stamp_cut(&cut);
         let seed = Arc::new(self.capture_working_seed());
         if self.cursor.get() == 0 && self.replay.is_empty() {
             self.initial_read_cut = Some(seed.read_cut.clone());
@@ -6737,6 +6793,12 @@ impl RuntimeClientProjection {
                 .as_ref()
                 .map_or_else(prepared_capture::PreparedAttemptBindings::default, |seed| {
                     seed.attempt_bindings.clone()
+                }),
+            prepared_attempt: self
+                .published_seed
+                .as_ref()
+                .map_or_else(prepared_attempt::PreparedAttemptItems::default, |seed| {
+                    seed.prepared_attempt.clone()
                 }),
             metadata_frontiers: prepared_capture::MetadataFrontiers::inherit(
                 self.published_seed.as_deref(),
@@ -6893,25 +6955,28 @@ impl RuntimeClientProjection {
                     .map(|identity| (identity.clone(), header.content.clone().into()))
             })
             .collect();
-        self.snapshot.message_descriptors = messages
+        self.snapshot.message_descriptors = (messages
             .headers
             .iter()
             .filter_map(super::snapshot::RuntimeClientMessageDescriptor::from_header)
-            .collect();
-        self.snapshot.messages = messages
+            .collect::<Vec<_>>())
+        .into();
+        self.snapshot.messages = (messages
             .headers
             .iter()
             .filter_map(|header| header.display.clone())
-            .collect();
-        self.snapshot.transcript = super::snapshot::transcript_header_view(transcript);
-        self.transcript_bindings = self.snapshot.transcript.content.clone().into();
+            .collect::<Vec<_>>())
+        .into();
+        self.snapshot.transcript = (super::snapshot::transcript_header_view(transcript)).into();
+        self.transcript_bindings = self.snapshot.transcript.content.owned().into();
         self.transcript_head = super::checkpoint::PreparedTranscriptHead::from_entries(
             &self.snapshot.conversation_id,
             &self.snapshot.transcript.entries,
         );
-        self.snapshot.publication_settlements = store
+        self.snapshot.publication_settlements = (store
             .publication_settlement_head(&cut)
-            .map_err(RuntimeClientError::observation_store_error)?;
+            .map_err(RuntimeClientError::observation_store_error)?)
+        .into();
         let references = messages
             .headers
             .iter()
@@ -7347,7 +7412,7 @@ impl RuntimeClientProjection {
         &mut self,
         header: super::snapshot::RuntimeClientResourcesView,
     ) {
-        self.snapshot.resources = header;
+        self.snapshot.resources = (header).into();
     }
     pub(crate) fn install_source_frontiers(
         &mut self,
@@ -7695,17 +7760,19 @@ impl RuntimeClientProjection {
                 ),
             );
         }
+        let occupancy_changed = self.snapshot.context.occupancy != occupancy;
+        let projection_head_changed = self.snapshot.context.projection_head != projection_head;
         if recovered_failure
             || self.snapshot.transcript != transcript
-            || self.snapshot.context.occupancy != occupancy
-            || self.snapshot.context.projection_head != projection_head
+            || occupancy_changed
+            || projection_head_changed
             || trace_changed
         {
             if self.transcript_bindings.values() != transcript.content.as_slice() {
                 self.transcript_bindings = transcript.content.clone().into();
             }
             self.transcript_head.replace(transcript_rows);
-            self.snapshot.transcript.clone_from(&transcript);
+            self.snapshot.transcript.install(&transcript);
             if let Some(trace) = &mut trace {
                 if trace_changed {
                     trace.read_cut = None;
@@ -7713,20 +7780,24 @@ impl RuntimeClientProjection {
                 if self.snapshot.trace.records != trace.records {
                     self.trace_head = super::checkpoint::PreparedTraceHead::default();
                 }
-                self.snapshot.trace.clone_from(trace);
+                self.snapshot.trace.install(trace);
             }
-            self.snapshot.context.occupancy.clone_from(&occupancy);
-            self.snapshot
-                .context
-                .projection_head
-                .clone_from(&projection_head);
+            if occupancy_changed {
+                self.snapshot.context.occupancy.clone_from(&occupancy);
+            }
+            if projection_head_changed {
+                self.snapshot
+                    .context
+                    .projection_head
+                    .clone_from(&projection_head);
+            }
             if publish {
                 self.publish(RuntimeClientEvent::ReadDomainsUpdated {
                     projection_head,
                     transcript,
                     trace: trace_changed.then_some(trace).flatten(),
                     occupancy,
-                    todos: self.snapshot.todos.clone(),
+                    todos: self.snapshot.todos.owned(),
                 });
             }
         }
@@ -7765,7 +7836,7 @@ impl RuntimeClientProjection {
                 message: message.clone(),
             });
         }
-        Ok((self.snapshot_ref().clone(), self.cursor))
+        Ok((self.snapshot_ref().materialize(), self.cursor))
     }
 
     /// Captured under the same host lock as the snapshot and subscription.
@@ -7925,7 +7996,7 @@ impl RuntimeClientProjection {
     }
 
     /// The current snapshot read model reference (host/tests).
-    pub(crate) fn snapshot_ref(&self) -> &RuntimeClientSnapshot {
+    pub(crate) fn snapshot_ref(&self) -> &SharedSnapshot {
         self.published_seed
             .as_ref()
             .map_or(&self.snapshot, |seed| &seed.snapshot)
@@ -7933,9 +8004,7 @@ impl RuntimeClientProjection {
 
     /// The current snapshot read model reference, failing explicitly once
     /// the observation stream is exhausted.
-    pub(crate) fn snapshot_ref_checked(
-        &self,
-    ) -> Result<&RuntimeClientSnapshot, RuntimeClientError> {
+    pub(crate) fn snapshot_ref_checked(&self) -> Result<&SharedSnapshot, RuntimeClientError> {
         if self.exhausted {
             return Err(RuntimeClientError::ProjectionExhausted);
         }
@@ -8033,24 +8102,42 @@ fn foreground_slot_mut<'a>(
 }
 
 fn update_stored_tool_slots(
-    snapshot: &mut RuntimeClientSnapshot,
+    snapshot: &mut SharedSnapshot,
     occurrence: &super::snapshot::RuntimeClientToolOccurrence,
     mut update: impl FnMut(&mut super::snapshot::ForegroundToolExecution),
 ) {
-    for slot in snapshot
-        .message_descriptors
-        .iter_mut()
-        .flat_map(|descriptor| &mut descriptor.tool_calls)
-        .chain(
-            snapshot
-                .transcript
-                .entries
-                .iter_mut()
-                .flat_map(|entry| &mut entry.tool_calls),
-        )
-    {
-        if &slot.occurrence == occurrence {
-            update(slot);
+    // An absent occurrence must not detach and clone an unrelated frozen head.
+    if snapshot.message_descriptors.iter().any(|descriptor| {
+        descriptor
+            .tool_calls
+            .iter()
+            .any(|slot| &slot.occurrence == occurrence)
+    }) {
+        for slot in snapshot
+            .message_descriptors
+            .iter_mut()
+            .flat_map(|descriptor| &mut descriptor.tool_calls)
+        {
+            if &slot.occurrence == occurrence {
+                update(slot);
+            }
+        }
+    }
+    if snapshot.transcript.entries.iter().any(|entry| {
+        entry
+            .tool_calls
+            .iter()
+            .any(|slot| &slot.occurrence == occurrence)
+    }) {
+        for slot in snapshot
+            .transcript
+            .entries
+            .iter_mut()
+            .flat_map(|entry| &mut entry.tool_calls)
+        {
+            if &slot.occurrence == occurrence {
+                update(slot);
+            }
         }
     }
 }
@@ -10961,10 +11048,10 @@ mod tests {
         );
         let domains = super::ReadDomainValues {
             projection_head: projection.snapshot.context.projection_head.clone(),
-            transcript: projection.snapshot.transcript.clone(),
+            transcript: projection.snapshot.transcript.owned(),
             transcript_rows: projection.transcript_head.clone(),
             occupancy: projection.snapshot.context.occupancy.clone(),
-            trace: Some(projection.snapshot.trace.clone()),
+            trace: Some(projection.snapshot.trace.owned()),
             trace_total: 0,
         };
         assert!(projection.install_read_domains(&cut, Ok(domains), false));
@@ -11056,7 +11143,7 @@ mod tests {
         );
         let domains = super::ReadDomainValues {
             projection_head: projection.snapshot.context.projection_head.clone(),
-            transcript: projection.snapshot.transcript.clone(),
+            transcript: projection.snapshot.transcript.owned(),
             transcript_rows: projection.transcript_head.clone(),
             occupancy: None,
             trace: Some(super::super::trace::TracePage::default()),
@@ -11190,7 +11277,7 @@ mod tests {
                 .is_none()
         );
         assert!(
-            matches!(&events[0],RuntimeClientEvent::AssistantPublicationDeferredSettled {settlement_head,..} if settlement_head==&projection.snapshot.publication_settlements)
+            matches!(&events[0],RuntimeClientEvent::AssistantPublicationDeferredSettled {settlement_head,..} if settlement_head==projection.snapshot.publication_settlements.value())
         );
         assert_eq!(projection.snapshot.publication_settlements.len(), 2);
         assert_eq!(
@@ -13498,6 +13585,16 @@ mod tests {
         include!("projection/metadata_root_tests.rs");
     }
 
+    mod shared_snapshot_tests {
+        use super::*;
+        include!("projection/shared_snapshot_tests.rs");
+    }
+
+    mod shared_domain_detach_tests {
+        use super::*;
+        include!("projection/shared_domain_detach_tests.rs");
+    }
+
     mod incremental_checkpoint_tests {
         use super::*;
         include!("projection/incremental_checkpoint_tests.rs");
@@ -14772,7 +14869,7 @@ mod tests {
     #[test]
     fn t15_many_small_message_pages_advance_under_both_native_budgets() {
         let mut projection = projection();
-        projection.snapshot.messages = (0..1000)
+        projection.snapshot.messages = ((0..1000)
             .map(|index| {
                 MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {
                     id: MessageId::new(format!("message-{index}")),
@@ -14781,7 +14878,8 @@ mod tests {
                     )],
                 })
             })
-            .collect();
+            .collect::<Vec<_>>())
+        .into();
         let checkpoint = projection.checkpoint_candidate().unwrap();
         assert!(checkpoint.snapshot.messages.len() <= 32);
         assert!(

@@ -343,7 +343,8 @@ fn count_conversation_store_open() {
 /// Version 83 stores compact independent event evidence and prefix-compressed request pages.
 /// Version 84 merges chronological attempt reads through the shared attempt-kind index.
 /// Version 85 stores immutable first content chunks alongside their exact frontier.
-pub const SQLITE_SCHEMA_VERSION: i64 = 85;
+/// Version 86 stores bounded binary Statistics and Execution tuples with unchanged JSON admission.
+pub const SQLITE_SCHEMA_VERSION: i64 = 86;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -2736,15 +2737,22 @@ impl ConversationStore for SqliteConversationStore {
         limit: usize,
     ) -> Result<crate::durable::observation::NativeToolObservationPage, ConversationStoreError>
     {
-        let connection = self.lock()?;
-        observation_tools::page(
-            &connection,
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let result = observation_tools::page(
+            &transaction,
             &self.conversation_id,
             cut,
             locator,
             offset,
             limit,
-        )
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(result)
     }
 
     fn ordinary_user_message(
@@ -8502,7 +8510,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 next_transcript_position INTEGER NOT NULL CHECK(next_transcript_position >= 0),
                 retained_transcript_count INTEGER NOT NULL DEFAULT 0 CHECK(retained_transcript_count >= 0),
                 pending_observation_count INTEGER NOT NULL DEFAULT 0 CHECK(pending_observation_count >= 0),
-                observation_statistics BLOB CHECK(observation_statistics IS NULL OR length(observation_statistics)<=16384),
+                observation_statistics BLOB CHECK(observation_statistics IS NULL OR length(observation_statistics)<=49152),
                 reading_mutation_revision INTEGER NOT NULL DEFAULT 0 CHECK(reading_mutation_revision >= 0),
                 logical_step_sequence INTEGER NOT NULL CHECK(logical_step_sequence >= 0),
                 pending_unresolved_output_stream_id TEXT,
@@ -8859,11 +8867,11 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 observation_turn_prompt_positive INTEGER NOT NULL DEFAULT 0 CHECK(observation_turn_prompt_positive IN (0,1)),
                 observation_execution_owner INTEGER,
                 observation_execution_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_execution_required IN(0,1)),
-                observation_execution BLOB CHECK(observation_execution IS NULL OR length(observation_execution)<=16384),
+                observation_execution BLOB CHECK(observation_execution IS NULL OR length(observation_execution)<=49152),
                 observation_members BLOB CHECK(observation_members IS NULL OR length(observation_members)<=49152),
                 event_timestamp TEXT NOT NULL,
                 observation_member_anchor INTEGER,
-                observation_statistics BLOB CHECK(observation_statistics IS NULL OR length(observation_statistics)<=16384),
+                observation_statistics BLOB CHECK(observation_statistics IS NULL OR length(observation_statistics)<=49152),
                 observation_occupancy BLOB CHECK(observation_occupancy IS NULL OR length(observation_occupancy)<=16384),
                 observation_readiness_missing INTEGER NOT NULL DEFAULT 1 CHECK(observation_readiness_missing IN (0,1)),
                 observation_statistics_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_statistics_required IN (0,1)),
@@ -19774,7 +19782,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 85);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 86);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19843,7 +19851,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 85);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 86);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
