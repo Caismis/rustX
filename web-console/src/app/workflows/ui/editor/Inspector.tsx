@@ -4,7 +4,7 @@ import clsx from 'clsx';
 import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../locale/react';
 import { IconCheckOutline14, IconCloseOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
-import { deleteNodes, renameNode } from '../../document/commands';
+import { deleteNodes } from '../../document/commands';
 import { nodePresentation, putNote, removeNotes } from '../../document/geometry';
 import { nodeField } from '../../document/fields';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
@@ -15,7 +15,7 @@ import { IconBlock, IconEntry, KindIcon } from '../icons';
 import type { Duplicate, Selection } from './selection';
 import { BlockForm } from './forms/BlockForm';
 import { NodePanel } from './panels/NodePanel';
-import { DraftTextField, KeyField, NumberField, SelectField } from './forms/fields';
+import { DraftTextField, NumberField, SelectField } from './forms/fields';
 import { readInspectorWidth, writeInspectorWidth } from './view-store';
 import { viewId } from './selection';
 import css from './Editor.module.css';
@@ -79,9 +79,6 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     body = <>
       {node.type === 'loop' && <button type="button" className={css.smallButton} onClick={() => toggleContainer(path, id)}>{tx(collapsed.has(viewId(path, 'node', id)) ? 'workflows:canvas.expand' : 'workflows:canvas.collapse', { p0: metadata?.title ?? id })}</button>}
       <NodePanel document={document} block={path} id={id} port={port} vocabulary={vocabulary} edit={edit} navigate={navigate} onSelect={onSelect} />
-      <details className={css.advanced}><summary>{tx('workflows:panel.identity')}</summary>
-        <KeyField label={tx('workflows:inspector.node-id')} hint={tx('workflows:inspector.rename-hint')} value={id} address={nodeField(path, id, [], 'key')} rename={(document, from, to) => renameNode(document, path, from, to)} />
-      </details>
       <div className={css.row}><button type="button" className={css.smallButton} onClick={() => onDuplicate(path, [id], [])}>{tx('workflows:canvas.duplicate')}</button>
         <button type="button" className={clsx(css.smallButton, css.dangerText)} onClick={() => edit(document => deleteNodes(document, path, [id]))}>{tx('workflows:inspector.delete-node')}</button></div>
     </>;

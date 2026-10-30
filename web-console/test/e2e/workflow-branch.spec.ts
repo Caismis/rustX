@@ -131,15 +131,15 @@ test('branch variable picker shows upstream outputs and excludes parallel siblin
     await activate(page);
     await inspector(page).getByRole('region', { name: 'IF', exact: true }).getByRole('button', { name: 'Add condition', exact: true }).click();
     const picker = page.getByRole('dialog', { name: 'Choose a variable', exact: true });
-    await expect(picker.getByRole('button', { name: /^before ·/ })).toBeEnabled();
+    await expect(picker.getByRole('button', { name: /^before \/ text ·/ })).toBeEnabled();
     await expect(picker.getByRole('button', { name: /^args \/ status ·/ })).toBeEnabled();
-    await expect(picker.getByRole('button', { name: /^later ·/ })).toHaveCount(0);
+    await expect(picker.getByRole('button', { name: /^later(?: \/| ·)/ })).toHaveCount(0);
     await captureEvidence(page, 'branch-upstream-variables-only', info);
     await picker.getByRole('textbox', { name: 'Search reference paths…' }).fill('later');
-    await expect(picker.getByRole('button', { name: /^later ·/ })).toHaveCount(0);
+    await expect(picker.getByRole('button', { name: /^later(?: \/| ·)/ })).toHaveCount(0);
     await expect(picker).toContainText('No matching variables in this field’s scope.');
     await picker.getByRole('textbox', { name: 'Search reference paths…' }).fill('before');
-    await picker.getByRole('button', { name: /^before ·/ }).click();
+    await picker.getByRole('button', { name: /^before \/ text ·/ }).click();
     await expect(picker).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally { await fixture.stop(false); }

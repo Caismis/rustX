@@ -6,6 +6,7 @@ import type { WorkflowFileDocument, WorkflowEdit, WorkflowSource } from '../../p
 import type { WorkflowCommit } from '../src/workspaces/host';
 import type { WorkspaceAuthority } from '../src/workspaces/authority';
 import { blockAt } from '../src/app/workflows/document/model';
+import { renameNode } from '../src/app/workflows/document/commands';
 import { describeField, encodeField, nodeField } from '../src/app/workflows/document/fields';
 import { isDirty, workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import { workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
@@ -53,6 +54,16 @@ const inspector = () => within(screen.getByRole('complementary', { name: 'Inspec
 const literals = () => inspector().getAllByLabelText('Literal JSON') as HTMLTextAreaElement[];
 const save = () => fireEvent.keyDown(document.activeElement ?? document.body, { key: 's', ctrlKey: true });
 const written = () => (writes[0].edit as { document: WorkflowFileDocument }).document;
+
+/** Exercise the document's rename boundary independently of the inspector UI. */
+function rename(editor: Awaited<ReturnType<typeof open>>, from: string, to: string) {
+  const address = nodeField([], from, [], 'key'), field = encodeField(address);
+  act(() => {
+    editor.send({ type: 'DRAFT', address, text: to });
+    editor.send({ type: 'APPLY_DRAFT', field, version: editor.getSnapshot().context.drafts[field].version,
+      command: document => ({ status: 'applied', document: renameNode(document, [], from, to) }) });
+  });
+}
 
 describe('field identity (F1)', () => {
   it('edits and saves a direct key spelled like a nested path without touching the nested field', async () => {
@@ -125,17 +136,17 @@ describe('drafts across selection (F3)', () => {
 
 describe('field application (F4)', () => {
 
-  it('renames a node through the same boundary and the inspector follows it', async () => {
+  it('edits the display title while keeping node IDs out of the inspector', async () => {
     const editor = await open(exampleSource('parallel_review'));
     select('Return node ready');
-    const id = inspector().getByLabelText('Node ID') as HTMLInputElement;
-    fireEvent.change(id, { target: { value: 'revise' } });
-    fireEvent.keyDown(id, { key: 'Enter' });
-    expect(inspector().getByText('That ID is already used in this block.')).toBeTruthy();
+    expect(inspector().queryByLabelText('Node ID')).toBeNull();
+    expect(inspector().queryByText('Native identity and rename')).toBeNull();
+    const title = inspector().getByRole('textbox', { name: 'Node title' });
+    fireEvent.change(title, { target: { value: 'Accepted result' } });
+    fireEvent.keyDown(title, { key: 'Enter' });
     expect(Object.keys(blockAt(editor.getSnapshot().context.document!, [])!.nodes)).toContain('ready');
-    fireEvent.change(inspector().getByLabelText('Node ID'), { target: { value: 'accepted' } });
-    fireEvent.keyDown(inspector().getByLabelText('Node ID'), { key: 'Enter' });
-    expect((inspector().getByLabelText('Node ID') as HTMLInputElement).value).toBe('accepted');
+    expect((inspector().getByRole('textbox', { name: 'Node title' }) as HTMLInputElement).value).toBe('Accepted result');
+    expect(editor.getSnapshot().context.document!.editor?.nodes?.find(node => node.address.node === 'ready')?.title).toBe('Accepted result');
     expect(editor.getSnapshot().context.drafts).toEqual({});
   });
 });
@@ -160,15 +171,13 @@ describe('rename with retained drafts (repair B)', () => {
     select('Return node ready');
     fireEvent.click(inspector().getByRole('button', { name: 'Delete node' }));
     select('Return node revise');
-    const id = inspector().getByLabelText('Node ID') as HTMLInputElement;
-    fireEvent.change(id, { target: { value: 'ready' } });
-    fireEvent.keyDown(id, { key: 'Enter' });
+    rename(editor, 'revise', 'ready');
     // The rename is accepted; the inspector follows the node, which shows
     // its own kept text and never the deleted node's.
     const nodes = blockAt(editor.getSnapshot().context.document!, [])!.nodes;
     expect(Object.keys(nodes).sort()).toEqual(['decision', 'ready', 'reviews_quality_refine', 'reviews_quality_review', 'reviews_security_review', 'start']);
     expect(nodes.ready).toMatchObject({ output: { fields: { status: { type: 'literal', value: 'needs_revision' } } } });
-    expect((inspector().getByLabelText('Node ID') as HTMLInputElement).value).toBe('ready');
+    expect(inspector().queryByLabelText('Node ID')).toBeNull();
     expect(literals()[0].value).toBe('"live_revise');
     expect(retained(editor)).toEqual([
       ['"live_revise', 'ready · output.fields["status"].value', false],
@@ -186,9 +195,7 @@ describe('rename with retained drafts (repair B)', () => {
     const editor = await open(exampleSource('parallel_review'));
     select('Return node revise');
     type(literals()[0], '"still typing');
-    const id = inspector().getByLabelText('Node ID') as HTMLInputElement;
-    fireEvent.change(id, { target: { value: 'rework' } });
-    fireEvent.keyDown(id, { key: 'Enter' });
+    rename(editor, 'revise', 'rework');
     expect(Object.keys(blockAt(editor.getSnapshot().context.document!, [])!.nodes)).toContain('rework');
     expect(retained(editor)).toEqual([['"still typing', 'rework · output.fields["status"].value', false]]);
     expect(literals()[0].value).toBe('"still typing');
@@ -417,9 +424,7 @@ describe('recovering detached text (F4)', () => {
     const editor = await open(exampleSource('parallel_review'));
     select('Return node ready');
     type(literals()[0], kept);
-    const id = inspector().getByLabelText('Node ID') as HTMLInputElement;
-    fireEvent.change(id, { target: { value: 'accepted' } });
-    fireEvent.keyDown(id, { key: 'Enter' });
+    rename(editor, 'ready', 'accepted');
     undo();
     select('Return node ready');
     expect(literals()[0].value).toBe(kept);

@@ -43,10 +43,6 @@ async function accessible(page: Page, scope: string) {
 const editor = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 const card = (page: Page, id: string) => page.getByRole('listitem').filter({ has: page.getByRole('button', { name: id, exact: true }) });
 
-async function showIdentity(inspector: Locator) {
-  const details = inspector.locator('details').filter({ has: inspector.page().getByText('Native identity and rename', { exact: true }) });
-  if (!(await details.evaluate(element => (element as HTMLDetailsElement).open))) await details.locator('summary').click();
-}
 async function showSchemaJson(inspector: Locator, label: string) {
   const section = inspector.locator(`[data-schema-label="${label}"]`).first();
   const button = section.locator(':scope > h3').getByRole('button', { name: 'Advanced JSON', exact: true });
@@ -98,11 +94,12 @@ test('unknown output contracts hide out-of-scope variables and keep pending upst
     await expect(inspector.getByRole('button', { name: 'Choose a variable', exact: true })).toHaveAttribute('aria-expanded', 'false');
     await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
     await editor(page).getByLabel('Model node common', { exact: true }).focus(); await editor(page).getByLabel('Model node common', { exact: true }).press('Enter');
-    await expect(inspector.getByRole('status')).toHaveText('The output declaration is incomplete or violates the Workflow schema contract.');
+    await expect(inspector.getByRole('switch', { name: 'Structured output', exact: true })).toHaveAttribute('aria-checked', 'true');
+    await expect(inspector).toContainText('Structured output is not configured');
     await page.screenshot({ path: testInfo.outputPath('incomplete-output.png') });
     await editor(page).getByLabel('Model node skip', { exact: true }).focus(); await editor(page).getByLabel('Model node skip', { exact: true }).press('Enter');
-    await expect(inspector).toContainText('Declared or derived by native candidate analysis.');
-    await expect(inspector.locator('pre')).toContainText('"type": "string"');
+    await expect(inspector.getByRole('region', { name: 'Output variables', exact: true })).toBeVisible();
+    await expect(inspector.getByRole('switch', { name: 'Structured output', exact: true })).toHaveAttribute('aria-checked', 'false');
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     expect(errors).toEqual([]);
@@ -203,7 +200,7 @@ test('native array item choices preserve a common element contract and admit bro
   } finally { await fixture.stop(false); }
 });
 
-test('node rename cannot adopt a lone orphan title when the source has no metadata', async ({ page }) => {
+test('display titles keep node identity and orphan metadata separate', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
@@ -217,14 +214,14 @@ test('node rename cannot adopt a lone orphan title when the source has no metada
     await card(page, 'orphan_node').getByRole('button', { name: 'orphan_node', exact: true }).click();
     await editor(page).getByLabel('Return node done', { exact: true }).focus(); await editor(page).getByLabel('Return node done', { exact: true }).press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
-    await showIdentity(inspector);
-    await inspector.getByLabel('Node ID', { exact: true }).fill('renamed'); await inspector.getByLabel('Node ID', { exact: true }).press('Enter');
-    await expect(inspector.getByText('That ID is already used in this block.', { exact: true }).first()).toBeVisible();
+    await expect(inspector.getByLabel('Node ID', { exact: true })).toHaveCount(0);
+    await expect(inspector.getByText('Native identity and rename', { exact: true })).toHaveCount(0);
+    await inspector.getByRole('textbox', { name: 'Node title', exact: true }).fill('Reviewed result');
+    await inspector.getByRole('textbox', { name: 'Node title', exact: true }).press('Enter');
     await expect(editor(page).getByLabel('Return node done', { exact: true })).toBeVisible();
     await expect(editor(page).getByLabel('Return node renamed', { exact: true })).toHaveCount(0);
     await expect(editor(page).getByText('old deleted node title', { exact: true })).toHaveCount(0);
-    await showIdentity(inspector);
-    await inspector.getByLabel('Node ID', { exact: true }).fill('done'); await inspector.getByLabel('Node ID', { exact: true }).press('Enter');
+    await expect(editor(page).getByLabel('Return node done', { exact: true })).toContainText('Reviewed result');
     await page.getByRole('button', { name: 'Check', exact: true }).first().click();
     await expect(inspector).toContainText('Structure check passed');
     await expect(inspector.getByText('editor.nodes.0', { exact: true })).toBeVisible();
@@ -290,8 +287,8 @@ test('incomplete candidate variable picking and file-owned keyboard positions pr
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
     await inspector.getByRole('textbox', { name: 'Search reference paths…' }).fill('text');
-    await expect(inspector.getByRole('button', { name: 'text · Available here · Compatible type', exact: true })).toBeEnabled();
-    await inspector.getByRole('button', { name: 'text · Available here · Compatible type', exact: true }).click();
+    await expect(inspector.getByRole('button', { name: 'text / text · Available here · Compatible type', exact: true })).toBeEnabled();
+    await inspector.getByRole('button', { name: 'text / text · Available here · Compatible type', exact: true }).click();
     // Declarations and lexical proof were usable before the Model instruction
     // was complete. Save still requires the ordinary native compiler rules.
     const text = editor(page).getByLabel('Model node text', { exact: true });
@@ -351,21 +348,21 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await accessible(page, '[data-workflows-level="editor"] header');
     await accessible(page, '[aria-label="Inspector"]');
 
-    // A producer rename rewrites the structured references at the join.
+    // Reference chips show the producer's new title while its identity stays intact.
     await editor(page).getByLabel('Agent node reviews_quality_refine', { exact: true }).focus();
     await editor(page).getByLabel('Agent node reviews_quality_refine', { exact: true }).press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
-    await showIdentity(inspector);
-    await inspector.getByLabel('Node ID', { exact: true }).fill('clarity');
-    await inspector.getByLabel('Node ID', { exact: true }).press('Enter');
-    await expect(editor(page).getByLabel('Branch node decision')).toContainText('clarity.acceptable');
+    await inspector.getByRole('textbox', { name: 'Node title', exact: true }).fill('Clarity');
+    await inspector.getByRole('textbox', { name: 'Node title', exact: true }).press('Enter');
+    await expect(editor(page).getByLabel('Agent node reviews_quality_refine', { exact: true })).toContainText('Clarity');
+    await expect(editor(page).getByLabel('Branch node decision')).toContainText('Clarity');
 
     // An external edit since opening is a conflict; local edits are kept.
     const path = join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml');
     writeFileSync(path, `${readFileSync(path, 'utf8')}\n# external edit\n`);
     await page.getByRole('button', { name: 'Save File', exact: true }).click();
     await expect(page.getByRole('alert').filter({ hasText: 'The file changed on disk since it was opened' })).toBeVisible();
-    await expect(editor(page).getByLabel('Branch node decision')).toContainText('clarity.acceptable');
+    await expect(editor(page).getByLabel('Branch node decision')).toContainText('Clarity');
     expect(readFileSync(path, 'utf8')).toContain('# external edit');
     await captureEvidence(page, '21-source-conflict', info);
 
@@ -438,10 +435,8 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     await ready.focus();
     await page.keyboard.press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
-    await showIdentity(inspector);
-    await expect(inspector.getByLabel('Node ID')).toHaveValue('ready');
-    // Move before renaming: the new identity must keep the authored layout,
-    // and Undo/Redo must carry it back and forward instead of relaying out.
+    await expect(inspector.getByRole('textbox', { name: 'Node title', exact: true })).toHaveValue('ready');
+    // Moving and changing the display title keep the same node identity and layout.
     const initial = (await ready.boundingBox())!;
     await page.mouse.move(initial.x + 40, initial.y + 20);
     await page.mouse.down();
@@ -449,15 +444,13 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     await page.mouse.up();
     const authored = (await ready.boundingBox())!;
     expect(Math.round(authored.y - initial.y)).toBeGreaterThan(40);
-    await showIdentity(inspector);
-    await inspector.getByLabel('Node ID').fill('accepted');
-    await showIdentity(inspector);
-    await inspector.getByLabel('Node ID').press('Enter');
-    await expect(editor(page).getByLabel('Return node accepted')).toBeVisible();
-    await expect.poll(async () => Math.round((await editor(page).getByLabel('Return node accepted').boundingBox())!.y)).toBe(Math.round(authored.y));
+    await inspector.getByRole('textbox', { name: 'Node title', exact: true }).fill('Accepted');
+    await inspector.getByRole('textbox', { name: 'Node title', exact: true }).press('Enter');
+    await expect(ready).toContainText('Accepted');
+    await expect.poll(async () => Math.round((await ready.boundingBox())!.y)).toBe(Math.round(authored.y));
 
     // One completed drag is one document step: Undo reverts it before the
-    // older rename. The complete document reaches the file only on Save.
+    // older title edit. The complete document reaches the file only on Save.
     const decision = editor(page).getByLabel('Branch node decision');
     const start = (await decision.boundingBox())!;
     await page.mouse.move(start.x + 40, start.y + 20);
@@ -468,23 +461,23 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     expect(Math.round(moved.y - start.y)).toBeGreaterThan(60);
     await page.keyboard.press('Control+z');
     await expect.poll(async () => Math.round((await decision.boundingBox())!.y)).toBe(Math.round(start.y));
-    await expect(editor(page).getByLabel('Return node accepted')).toBeVisible();
+    await expect(ready).toContainText('Accepted');
     await page.keyboard.press('Control+z');
-    await expect(editor(page).getByLabel('Return node ready')).toBeVisible();
+    await expect(ready).not.toContainText('Accepted');
     await expect.poll(async () => Math.round((await ready.boundingBox())!.y)).toBe(Math.round(authored.y));
     await page.keyboard.press('Control+Shift+z');
-    await expect(editor(page).getByLabel('Return node accepted')).toBeVisible();
-    await expect.poll(async () => Math.round((await editor(page).getByLabel('Return node accepted').boundingBox())!.y)).toBe(Math.round(authored.y));
+    await expect(ready).toContainText('Accepted');
+    await expect.poll(async () => Math.round((await ready.boundingBox())!.y)).toBe(Math.round(authored.y));
     await page.keyboard.press('Control+Shift+z');
     await expect.poll(async () => Math.round((await decision.boundingBox())!.y)).toBe(Math.round(moved.y));
     await editor(page).getByRole('toolbar', { name: 'Canvas tools' }).getByRole('button', { name: 'Fit view', exact: true }).click();
     await expect.poll(async () => {
-      const node = (await editor(page).getByLabel('Return node accepted').boundingBox())!;
+      const node = (await ready.boundingBox())!;
       const canvas = (await editor(page).boundingBox())!;
       return node.x >= canvas.x && node.y >= canvas.y
         && node.x + node.width <= canvas.x + canvas.width && node.y + node.height <= canvas.y + canvas.height;
     }).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath('workflow-renamed-layout.png') });
+    await page.screenshot({ path: testInfo.outputPath('workflow-title-layout.png') });
 
     // Ctrl/Cmd+S in a focused JSON field saves exactly the visible text.
     const path = join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml');
@@ -497,7 +490,7 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     await expect(input).toBeFocused();
     await page.keyboard.press('Control+s');
     await expect.poll(() => readFileSync(path, 'utf8')).toContain('rubric');
-    expect(readFileSync(path, 'utf8')).toContain('accepted');
+    expect(readFileSync(path, 'utf8')).toContain('Accepted');
     await expect(page.getByRole('status').filter({ hasText: 'No unsaved changes' })).toBeVisible();
 
     // A number the browser would round is refused in the field; nothing is
@@ -559,22 +552,6 @@ test('object keys spelled like paths stay separate fields, and rejected field te
     await expect(page.getByRole('status').filter({ hasText: 'No unsaved changes' })).toBeVisible();
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
 
-    // A rename to a key the node already has is refused; its text and error
-    // are kept, and Save sends nothing.
-    await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
-    const reviews = editor(page).getByLabel('Agent node reviews_quality_refine', { exact: true });
-    await reviews.focus();
-    await page.keyboard.press('Enter');
-    await showIdentity(inspector);
-    const key = inspector.getByLabel('Node ID', { exact: true });
-    const review = join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml');
-    const original = readFileSync(review, 'utf8');
-    await key.fill('reviews_security_review');
-    await page.keyboard.press('Control+s');
-    await expect(inspector.getByText('That ID is already used in this block.')).toBeVisible();
-    await expect(key).toHaveValue('reviews_security_review');
-    await expect(page.getByRole('list', { name: 'Fields with unapplied text' })).toContainText('reviews_quality_refine');
-    expect(readFileSync(review, 'utf8')).toBe(original);
     expect(errors).toEqual([]);
   } finally { await fixture.stop(false); }
 });

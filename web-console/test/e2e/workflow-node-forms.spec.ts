@@ -52,7 +52,9 @@ test('shows each native node in the Dify-style card and grouped settings panel',
       if (id === 'loop') await card.getByRole('button', { name: 'Collapse loop' }).click();
       await expect(card.locator('[data-node-preview]')).toContainText(row);
       if (id === 'tool') await expect(card).not.toContainText('super-secret');
-      await expect(inspector(page).getByRole('heading', { name: section, exact: true }).first()).toBeVisible();
+      await expect(inspector(page).getByRole(id === 'model' ? 'region' : 'heading', { name: section, exact: true }).first()).toBeVisible();
+      await expect(inspector(page).getByLabel('Node ID', { exact: true })).toHaveCount(0);
+      await expect(inspector(page).getByText('Native identity and rename', { exact: true })).toHaveCount(0);
       await expect(card).toContainText(`Configure ${id} here.`);
       const layout = await card.evaluate(element => {
         const preview = element.querySelector('[data-node-preview]')!, description = element.querySelector('[data-node-description]')!;
