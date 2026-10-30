@@ -27,6 +27,10 @@ use rustx::runtime_client::{
     RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientEvent, RuntimeClientOutcome,
 };
 
+/// A hang guard for the next event, not a latency bound: a reference run
+/// spawns real child processes while the whole suite shares the machine.
+const EVENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 const MODEL: &str = "workflow-model";
 const TOOL_WORKFLOW: &str = r"description: Inspect discovered workflow files.
 timeout_ms: 10000
@@ -1089,10 +1093,9 @@ impl Driver {
                 .clone()
         });
         loop {
-            let delivery =
-                tokio::time::timeout(std::time::Duration::from_secs(30), self.events.next())
-                    .await
-                    .expect("Workflow attempt settles");
+            let delivery = tokio::time::timeout(EVENT_TIMEOUT, self.events.next())
+                .await
+                .expect("Workflow attempt settles");
             match delivery {
                 EventDelivery::Event(published) => {
                     let outcome = workflow_terminal(
@@ -1105,7 +1108,7 @@ impl Driver {
                         // The client terminal observation precedes transfer
                         // back to the runtime's idle slot. Await the native
                         // handoff notification before attempting reload.
-                        tokio::time::timeout(std::time::Duration::from_secs(30), handoff)
+                        tokio::time::timeout(EVENT_TIMEOUT, handoff)
                             .await
                             .expect("Workflow native handoff completes");
                         return (events, outcome);
@@ -1658,10 +1661,9 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
         let mut seen = 0;
         let mut answered = Vec::new();
         while seen < 2 {
-            let delivery =
-                tokio::time::timeout(std::time::Duration::from_secs(30), driver.events.next())
-                    .await
-                    .expect("human publication liveness guard");
+            let delivery = tokio::time::timeout(EVENT_TIMEOUT, driver.events.next())
+                .await
+                .expect("human publication liveness guard");
             let EventDelivery::Event(event) = delivery else {
                 panic!("live event stream")
             };
@@ -2165,7 +2167,7 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
         assert!(check_commands.iter().all(|command| command == frozen));
     };
     tokio::join!(release_writers, interact);
-    tokio::time::timeout(std::time::Duration::from_secs(30), handoff)
+    tokio::time::timeout(EVENT_TIMEOUT, handoff)
         .await
         .expect("Workflow native handoff completes");
     assert_eq!(emulator.requests().await.len(), 4 + 2 * iterations);
@@ -2278,10 +2280,9 @@ async fn shipped_parallel_reverses_completion_without_git_or_parent_orchestratio
     // The native owner publication, not elapsed time, proves the second child
     // settled while the first provider response is still held.
     loop {
-        let EventDelivery::Event(_) =
-            tokio::time::timeout(std::time::Duration::from_secs(30), driver.events.next())
-                .await
-                .unwrap()
+        let EventDelivery::Event(_) = tokio::time::timeout(EVENT_TIMEOUT, driver.events.next())
+            .await
+            .unwrap()
         else {
             panic!("events")
         };
