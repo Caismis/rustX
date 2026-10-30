@@ -982,7 +982,6 @@ pub(super) fn transcript(
 /// Tool bytes come from their existing bounded encoding, never a second pass.
 pub(super) const TRANSCRIPT_ROW_PROOF_BYTES: usize = 786_432;
 
-#[derive(PartialEq, Eq)]
 pub(super) struct TranscriptRowProof {
     cursor: u64,
     kind: String,
@@ -992,13 +991,56 @@ pub(super) struct TranscriptRowProof {
     bytes: Vec<u8>,
     tools: Option<super::observation_tools::PageProof>,
     admitted_tools: usize,
+    descriptor: std::sync::Arc<TranscriptDescriptor>,
 }
+
+/// Only the descriptor metadata is retained here. The body already belongs to
+/// the prepared row; retaining another decoded message would duplicate it.
+pub(super) struct TranscriptDescriptor {
+    header: TranscriptHeader,
+    tool_locator: Option<crate::runtime_client::content::CanonicalContentLocator>,
+    retained_bytes: usize,
+}
+pub(super) struct TranscriptDescriptorSource<'a> {
+    pub cursor: u64,
+    pub kind: &'a str,
+    pub identity: &'a str,
+    pub ledger: Option<u64>,
+    pub journal: u64,
+    pub bytes: &'a [u8],
+}
+impl PartialEq for TranscriptRowProof {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches_descriptor(&TranscriptDescriptorSource {
+            cursor: other.cursor,
+            kind: &other.kind,
+            identity: &other.identity,
+            ledger: other.ledger,
+            journal: other.journal,
+            bytes: &other.bytes,
+        }) && self.tools == other.tools
+            && self.admitted_tools == other.admitted_tools
+    }
+}
+impl Eq for TranscriptRowProof {}
 impl TranscriptRowProof {
+    pub(super) fn matches_descriptor(&self, source: &TranscriptDescriptorSource<'_>) -> bool {
+        self.cursor == source.cursor
+            && self.kind == source.kind
+            && self.identity == source.identity
+            && self.ledger == source.ledger
+            && self.journal == source.journal
+            && self.bytes == source.bytes
+    }
+    pub(super) fn descriptor(&self) -> std::sync::Arc<TranscriptDescriptor> {
+        self.descriptor.clone()
+    }
     pub(super) fn cursor(&self) -> u64 {
         self.cursor
     }
     pub(super) fn retained_bytes(&self) -> usize {
         self.bytes.len()
+            + self.descriptor.retained_bytes
             + self.kind.len()
             + self.identity.len()
             + self
@@ -1011,6 +1053,7 @@ impl TranscriptRowProof {
 pub(super) fn transcript_validated(
     validated: &ValidatedCut<'_, '_>,
     requested: usize,
+    owner: &super::observation_response::Owner,
 ) -> Result<(TranscriptHeaderPage, Vec<TranscriptRowProof>), ConversationStoreError> {
     let mut proofs = Vec::new();
     let page = transcript_at(
@@ -1019,7 +1062,7 @@ pub(super) fn transcript_validated(
         validated.expected(),
         None,
         requested,
-        Some((validated, &mut proofs)),
+        Some((validated, owner, &mut proofs)),
     )?;
     Ok((page, proofs))
 }
@@ -1031,7 +1074,11 @@ fn transcript_at(
     at: &ObservationReadCut,
     before: Option<crate::durable::TranscriptCursor>,
     requested: usize,
-    mut reuse: Option<(&ValidatedCut<'_, '_>, &mut Vec<TranscriptRowProof>)>,
+    mut reuse: Option<(
+        &ValidatedCut<'_, '_>,
+        &super::observation_response::Owner,
+        &mut Vec<TranscriptRowProof>,
+    )>,
 ) -> Result<TranscriptHeaderPage, ConversationStoreError> {
     let limit = limit(requested)?;
     let before = before.map_or(
@@ -1087,7 +1134,33 @@ fn transcript_at(
         let mut tool_locator = None;
         let mut tool_proof = None;
         let mut reusable = false;
-        let mut header = if kind == "message" {
+        let cached = reuse
+            .as_ref()
+            .map(|(_, owner, _)| {
+                owner.transcript_descriptor(&TranscriptDescriptorSource {
+                    cursor: cursor.get(),
+                    kind: &kind,
+                    identity: &id,
+                    ledger,
+                    journal,
+                    bytes: &bytes,
+                })
+            })
+            .transpose()?
+            .flatten();
+        let mut descriptor = None;
+        let mut header = if let Some((prior, body)) = cached {
+            #[cfg(test)]
+            record_descriptor_work(true);
+            let mut header = prior.header.clone();
+            header.display = Some(body.undecorated_value());
+            tool_locator.clone_from(&prior.tool_locator);
+            descriptor = Some(prior);
+            reusable = true;
+            header
+        } else if kind == "message" {
+            #[cfg(test)]
+            record_descriptor_work(false);
             let message: MessageHeader =
                 serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
             if message.ledger_position != ledger {
@@ -1101,14 +1174,32 @@ fn transcript_at(
             reusable = message.display.is_some();
             transcript_message_header(cursor, kind.clone(), id.clone(), message)
         } else {
+            #[cfg(test)]
+            record_descriptor_work(false);
             serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?
         };
         header.cursor = cursor;
         if let Some(display) = &mut header.display {
             display.cursor = cursor.into();
         }
+        if reusable && reuse.is_some() && descriptor.is_none() {
+            // Move the body aside while cloning only the small descriptor
+            // metadata. The current Tool page is enriched after this point.
+            let display = header.display.take();
+            // Charge the retained metadata to the same bounded proof cache.
+            // This body-free length is measured only when a new descriptor
+            // owner is created; unchanged reads reuse its certificate.
+            let retained_bytes =
+                super::observation_codec::public_length(&(&header, &tool_locator), usize::MAX)?;
+            descriptor = Some(std::sync::Arc::new(TranscriptDescriptor {
+                header: header.clone(),
+                tool_locator: tool_locator.clone(),
+                retained_bytes,
+            }));
+            header.display = display;
+        }
         if let Some(locator) = tool_locator {
-            let tools = if let Some((validated, _)) = &reuse {
+            let tools = if let Some((validated, _, _)) = &reuse {
                 let (tools, proof) =
                     super::observation_tools::page_validated(validated, &locator, 0, 32)?;
                 tool_proof = Some(proof);
@@ -1118,7 +1209,7 @@ fn transcript_at(
             };
             enrich_transcript_tools(&mut header, &tools)?;
         }
-        if reusable && let Some((_, proofs)) = &mut reuse {
+        if reusable && let Some((_, _, proofs)) = &mut reuse {
             // Current-cut collection revisions participate in the existing
             // header budget. Reuse only the actually admitted Tool prefix;
             // metadata itself is still produced freshly for the current cut.
@@ -1135,6 +1226,7 @@ fn transcript_at(
                 bytes,
                 tools: tool_proof,
                 admitted_tools,
+                descriptor: descriptor.expect("display row retains descriptor metadata"),
             };
             let retained_bytes = proof.retained_bytes();
             if retained_proof_bytes + retained_bytes <= TRANSCRIPT_ROW_PROOF_BYTES {
@@ -1832,7 +1924,7 @@ pub(super) fn pending_value(
         return Err(ConversationStoreError::ObservationCutExpired);
     }
     let retained:Option<(u64,u64)>=connection.query_row("SELECT p.revision,f.readable_end FROM pending_inbound p JOIN content_frontiers f ON f.source_kind='pending' AND f.source_id=CAST(p.sequence AS TEXT) AND f.block_index=0 AND f.representation='canonical_json_v1' AND f.revision=p.revision+1 WHERE p.sequence=?1 AND p.sequence<=?2",params![sequence,at.pending_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
-    let (_, readable_end) = retained
+    let (revision, readable_end) = retained
         .ok_or_else(|| ConversationStoreError::InvalidReference("pending source expired".into()))?;
     if offset > readable_end {
         return Err(ConversationStoreError::InvalidContentRange);
@@ -1841,7 +1933,15 @@ pub(super) fn pending_value(
         .checked_add(u64::from(max_bytes))
         .ok_or(ConversationStoreError::InvalidContentRange)?
         .min(readable_end);
-    let bytes = super::content::pending_range_bytes(connection, sequence, offset, end_offset)?;
+    let bytes = super::content::pending_range_bytes(
+        connection,
+        sequence,
+        revision
+            .checked_add(1)
+            .ok_or_else(|| storage("pending revision exhausted"))?,
+        offset,
+        end_offset,
+    )?;
     Ok(crate::durable::observation::ObservationValueChunk {
         bytes,
         end_offset,
@@ -2338,4 +2438,20 @@ thread_local! { static PUBLICATION_CAPTURE_WORK: std::cell::Cell<(usize, usize, 
 #[cfg(test)]
 pub(super) fn take_publication_capture_work() -> (usize, usize, usize) {
     PUBLICATION_CAPTURE_WORK.with(|work| work.replace((0, 0, 0)))
+}
+
+#[cfg(test)]
+thread_local! {
+    static DESCRIPTOR_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+#[cfg(test)]
+fn record_descriptor_work(hit: bool) {
+    DESCRIPTOR_WORK.with(|work| {
+        let (decodes, hits) = work.get();
+        work.set((decodes + usize::from(!hit), hits + usize::from(hit)));
+    });
+}
+#[cfg(test)]
+pub(super) fn descriptor_work() -> (usize, usize) {
+    DESCRIPTOR_WORK.with(|work| work.replace((0, 0)))
 }

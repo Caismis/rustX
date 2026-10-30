@@ -234,6 +234,34 @@ pub(super) fn take_binding_work() -> usize {
     BINDING_WORK.with(|work| work.replace(0))
 }
 
+/// Only the latest finite attempt evidence is retained. Exact value equality
+/// includes position, source revision, readable end and deferred state; cache
+/// ownership never grants authority to an older cut. Issued owners stay frozen.
+#[derive(Clone, Default)]
+pub(super) struct PreparedAttemptBindings(
+    Arc<std::sync::Mutex<Vec<checkpoint::MetadataFragment<checkpoint::ContentBinding>>>>,
+);
+impl PreparedAttemptBindings {
+    pub(super) fn append(
+        &self,
+        values: Vec<checkpoint::ContentBinding>,
+        output: &mut Vec<checkpoint::MetadataFragment<checkpoint::ContentBinding>>,
+    ) {
+        let mut current = self.0.lock().expect("immutable attempt binding cache");
+        current.truncate(values.len());
+        for (index, value) in values.into_iter().enumerate() {
+            if let Some(owner) = current.get_mut(index) {
+                if **owner != value {
+                    *owner = value.into();
+                }
+            } else {
+                current.push(value.into());
+            }
+        }
+        output.extend(current.iter().cloned());
+    }
+}
+
 type FrontierOwners =
     BTreeMap<String, checkpoint::MetadataFragment<checkpoint::CollectionFrontier>>;
 /// The most recently issued finite frontier set. Comparison touches only a

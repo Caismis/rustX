@@ -70,7 +70,7 @@ fn checkpoint_tool_proof_observes_exact_arguments_without_response_cache_invalid
     // JSON meaning but changing map order. The response owner does not depend
     // on this payload; the Tool proof must independently see its current bytes.
     assert_eq!(store.lock().unwrap().execute(
-        "UPDATE content_segments SET bytes=?1 WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='canonical_json_v1' AND segment=0",
+        "UPDATE content_frontiers SET bytes=?1 WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='canonical_json_v1' AND revision=1",
         [br#"{"b":2,"a":1}"#.as_slice()],
     ).unwrap(), 1);
     super::super::observation_response::cache_work();
@@ -85,13 +85,13 @@ fn checkpoint_tool_proof_observes_exact_arguments_without_response_cache_invalid
     {
         let connection = store.lock().unwrap();
         connection.execute_batch("SAVEPOINT tool_payload_rollback").unwrap();
-        assert_eq!(connection.execute("UPDATE content_segments SET bytes=x'ff' WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='canonical_json_v1'", []).unwrap(), 1);
+        assert_eq!(connection.execute("UPDATE content_frontiers SET bytes=x'ff' WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='canonical_json_v1'", []).unwrap(), 1);
         connection.execute_batch("ROLLBACK TO tool_payload_rollback; RELEASE tool_payload_rollback").unwrap();
     }
     let restored = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
     assert_eq!(restored, changed);
     assert!(restored.transcript_rows[0].same_owner(&changed.transcript_rows[0]));
-    assert_eq!(store.lock().unwrap().execute("UPDATE content_segments SET bytes=x'ff' WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='canonical_json_v1'", []).unwrap(), 1);
+    assert_eq!(store.lock().unwrap().execute("UPDATE content_frontiers SET bytes=x'ff' WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='canonical_json_v1'", []).unwrap(), 1);
     let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap_err();
     let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap_err();
     assert_eq!(actual.to_string(), expected.to_string());

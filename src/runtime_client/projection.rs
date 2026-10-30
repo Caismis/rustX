@@ -395,6 +395,7 @@ struct ForegroundResultContent {
 #[derive(Clone)]
 pub(crate) struct CheckpointSeed {
     prepared: prepared_capture::PreparedCaptures,
+    attempt_bindings: prepared_capture::PreparedAttemptBindings,
     metadata_frontiers: prepared_capture::MetadataFrontiers,
     metadata_arrays: super::checkpoint::metadata_fragment::MetadataArrays,
     read_domains: Option<ReadDomainCut>,
@@ -776,42 +777,54 @@ impl CheckpointSeed {
         &self,
         capture: &mut super::checkpoint::Capture,
     ) -> Option<super::snapshot::RuntimeClientAttempt> {
-        self.snapshot
-            .attempt
-            .as_ref()
-            .map(|attempt| super::snapshot::RuntimeClientAttempt {
-                attempt_id: attempt.attempt_id.clone(),
-                attempt_id_source: attempt.attempt_id_source.clone(),
-                phase: match &attempt.phase {
-                    super::snapshot::RuntimeClientAttemptPhase::Incomplete => {
-                        super::snapshot::RuntimeClientAttemptPhase::Incomplete
-                    }
-                    super::snapshot::RuntimeClientAttemptPhase::Admitted => {
-                        super::snapshot::RuntimeClientAttemptPhase::Admitted
-                    }
-                    super::snapshot::RuntimeClientAttemptPhase::Running => {
-                        super::snapshot::RuntimeClientAttemptPhase::Running
-                    }
-                    super::snapshot::RuntimeClientAttemptPhase::Settled { outcome } => {
-                        super::snapshot::RuntimeClientAttemptPhase::Settled {
-                            outcome: bounded_outcome(outcome),
+        let mut bindings = Vec::new();
+        let result =
+            self.snapshot
+                .attempt
+                .as_ref()
+                .map(|attempt| super::snapshot::RuntimeClientAttempt {
+                    attempt_id: attempt.attempt_id.clone(),
+                    attempt_id_source: attempt.attempt_id_source.clone(),
+                    phase: match &attempt.phase {
+                        super::snapshot::RuntimeClientAttemptPhase::Incomplete => {
+                            super::snapshot::RuntimeClientAttemptPhase::Incomplete
                         }
-                    }
-                },
-                turn: attempt.turn,
-                last_usage: attempt.last_usage.clone(),
-                in_flight: attempt.in_flight.as_ref().map(|flight| {
-                    super::snapshot::InFlightAssistantMessage {
-                        message_id: flight.message_id.clone(),
-                        blocks: self.capture_live_blocks(capture, &flight.blocks),
-                    }
-                }),
-                foreground: self.capture_foreground(capture, &attempt.foreground),
-                model: capture.item("attempt.model", &attempt.model).flatten(),
-                execution_settings: capture
-                    .item("attempt.execution_settings", &attempt.execution_settings)
-                    .flatten(),
-            })
+                        super::snapshot::RuntimeClientAttemptPhase::Admitted => {
+                            super::snapshot::RuntimeClientAttemptPhase::Admitted
+                        }
+                        super::snapshot::RuntimeClientAttemptPhase::Running => {
+                            super::snapshot::RuntimeClientAttemptPhase::Running
+                        }
+                        super::snapshot::RuntimeClientAttemptPhase::Settled { outcome } => {
+                            super::snapshot::RuntimeClientAttemptPhase::Settled {
+                                outcome: bounded_outcome(outcome),
+                            }
+                        }
+                    },
+                    turn: attempt.turn,
+                    last_usage: attempt.last_usage.clone(),
+                    in_flight: attempt.in_flight.as_ref().map(|flight| {
+                        super::snapshot::InFlightAssistantMessage {
+                            message_id: flight.message_id.clone(),
+                            blocks: self.capture_live_blocks(
+                                capture,
+                                &flight.blocks,
+                                &mut bindings,
+                            ),
+                        }
+                    }),
+                    foreground: self.capture_foreground(
+                        capture,
+                        &attempt.foreground,
+                        &mut bindings,
+                    ),
+                    model: capture.item("attempt.model", &attempt.model).flatten(),
+                    execution_settings: capture
+                        .item("attempt.execution_settings", &attempt.execution_settings)
+                        .flatten(),
+                });
+        self.attempt_bindings.append(bindings, &mut capture.content);
+        result
     }
 
     pub(crate) fn native_read_cut(
@@ -1404,34 +1417,21 @@ impl CheckpointSeed {
         &self,
         capture: &mut super::checkpoint::Capture,
         foreground: &[ForegroundToolExecution],
+        bindings: &mut Vec<super::checkpoint::ContentBinding>,
     ) -> Vec<ForegroundToolExecution> {
         let head: Vec<_> = foreground
             .iter()
             .take(super::checkpoint::CHECKPOINT_PAGE_ITEMS)
             .map(|tool| {
-                let mut bounded = tool.clone();
-                if !capture.reserve(&bounded) {
-                    match &mut bounded.state {
-                        ForegroundToolState::Assembled { arguments }
-                        | ForegroundToolState::Running { arguments, .. }
-                        | ForegroundToolState::Settled { arguments, .. } => arguments.clear(),
-                    }
-                    if let Some(source) = self
+                if capture.reserve(tool) {
+                    tool.clone()
+                } else {
+                    let source = self
                         .foreground_content
                         .iter()
-                        .find(|source| source.occurrence == tool.occurrence)
-                    {
-                        bounded.result_metadata_ref = Some(source.metadata.clone());
-                        bounded.committed_result_deferred = bounded.committed_result.is_some();
-                        if let Some(result) = &mut bounded.committed_result {
-                            defer_result_content(result);
-                        }
-                        if let ForegroundToolState::Settled { result, .. } = &mut bounded.state {
-                            defer_result_content(result);
-                        }
-                    }
+                        .find(|source| source.occurrence == tool.occurrence);
+                    deferred_foreground_tool(tool, source)
                 }
-                bounded
             })
             .collect();
         capture.frontier(
@@ -1440,7 +1440,7 @@ impl CheckpointSeed {
             head.len() as u64,
             (head.len() < foreground.len()).then_some(head.len() as u64),
         );
-        self.capture_foreground_evidence(capture, &head);
+        self.capture_foreground_evidence(capture, &head, bindings);
         head
     }
 
@@ -1448,6 +1448,7 @@ impl CheckpointSeed {
         &self,
         capture: &mut super::checkpoint::Capture,
         head: &[ForegroundToolExecution],
+        bindings: &mut Vec<super::checkpoint::ContentBinding>,
     ) {
         for (index, tool) in head.iter().enumerate() {
             let live_arguments = self.publication_start.as_ref().and_then(|start| {
@@ -1473,21 +1474,18 @@ impl CheckpointSeed {
                     | ForegroundToolState::Running { arguments, .. }
                     | ForegroundToolState::Settled { arguments, .. } => arguments,
                 };
-                capture.content.push(
-                    super::checkpoint::ContentBinding {
-                        source_path: None,
-                        path: vec![
-                            "attempt".into(),
-                            "foreground".into(),
-                            index.to_string(),
-                            "state".into(),
-                            "arguments".into(),
-                        ],
-                        content_ref: reference.clone(),
-                        deferred: arguments.len() as u64 != reference.readable_end,
-                    }
-                    .into(),
-                );
+                bindings.push(super::checkpoint::ContentBinding {
+                    source_path: None,
+                    path: vec![
+                        "attempt".into(),
+                        "foreground".into(),
+                        index.to_string(),
+                        "state".into(),
+                        "arguments".into(),
+                    ],
+                    content_ref: reference.clone(),
+                    deferred: arguments.len() as u64 != reference.readable_end,
+                });
             }
             if let Some(source) = self
                 .foreground_content
@@ -1509,24 +1507,21 @@ impl CheckpointSeed {
                     ];
                     path.extend(binding.path.into_iter().skip(2));
                     binding.path = path;
-                    capture.content.push(binding.into());
+                    bindings.push(binding);
                 }
             }
             if let Some(reference) = &tool.result_metadata_ref {
-                capture.content.push(
-                    super::checkpoint::ContentBinding {
-                        source_path: Some(vec!["result".into()]),
-                        path: vec![
-                            "attempt".into(),
-                            "foreground".into(),
-                            index.to_string(),
-                            "committed_result".into(),
-                        ],
-                        content_ref: reference.clone(),
-                        deferred: tool.committed_result_deferred,
-                    }
-                    .into(),
-                );
+                bindings.push(super::checkpoint::ContentBinding {
+                    source_path: Some(vec!["result".into()]),
+                    path: vec![
+                        "attempt".into(),
+                        "foreground".into(),
+                        index.to_string(),
+                        "committed_result".into(),
+                    ],
+                    content_ref: reference.clone(),
+                    deferred: tool.committed_result_deferred,
+                });
             }
         }
     }
@@ -1535,6 +1530,7 @@ impl CheckpointSeed {
         &self,
         capture: &mut super::checkpoint::Capture,
         blocks: &[InFlightBlock],
+        bindings: &mut Vec<super::checkpoint::ContentBinding>,
     ) -> Vec<InFlightBlock> {
         let mut result = Vec::new();
         for (index, block) in blocks
@@ -1556,9 +1552,7 @@ impl CheckpointSeed {
                     "arguments",
                 ),
             };
-            let copied =
-                super::checkpoint::bounded_clone(block, super::checkpoint::CHECKPOINT_ITEM_BYTES);
-            let copied = copied.filter(|value| capture.reserve(value));
+            let copied = capture.live_block(block);
             let deferred = copied.is_none();
             let bounded = copied.unwrap_or_else(|| deferred_live_block(block));
             // Optional bytes share a budget; the first 32 structural descriptors
@@ -1586,22 +1580,19 @@ impl CheckpointSeed {
                             .flatten()
                     });
                 if let Some(reference) = reference {
-                    capture.content.push(
-                        super::checkpoint::ContentBinding {
-                            source_path: None,
-                            path: vec![
-                                "attempt".into(),
-                                "in_flight".into(),
-                                "blocks".into(),
-                                index.to_string(),
-                                field.into(),
-                            ],
-                            content_ref: reference.clone(),
-                            deferred: deferred
-                                || reference.readable_end > inline_block_bytes(&bounded, field),
-                        }
-                        .into(),
-                    );
+                    bindings.push(super::checkpoint::ContentBinding {
+                        source_path: None,
+                        path: vec![
+                            "attempt".into(),
+                            "in_flight".into(),
+                            "blocks".into(),
+                            index.to_string(),
+                            field.into(),
+                        ],
+                        content_ref: reference.clone(),
+                        deferred: deferred
+                            || reference.readable_end > inline_block_bytes(&bounded, field),
+                    });
                 }
                 if let Some(reference) = self.live_frontiers.get(&(
                     start.stream_id.clone(),
@@ -1609,20 +1600,17 @@ impl CheckpointSeed {
                     super::content::ContentRepresentation::CanonicalJsonV1.key(),
                     "live_block_metadata",
                 )) {
-                    capture.content.push(
-                        super::checkpoint::ContentBinding {
-                            source_path: Some(vec!["name".into()]),
-                            path: vec![
-                                "attempt".into(),
-                                "in_flight".into(),
-                                "blocks".into(),
-                                index.to_string(),
-                            ],
-                            content_ref: reference.clone(),
-                            deferred: true,
-                        }
-                        .into(),
-                    );
+                    bindings.push(super::checkpoint::ContentBinding {
+                        source_path: Some(vec!["name".into()]),
+                        path: vec![
+                            "attempt".into(),
+                            "in_flight".into(),
+                            "blocks".into(),
+                            index.to_string(),
+                        ],
+                        content_ref: reference.clone(),
+                        deferred: true,
+                    });
                 }
             }
             result.push(bounded);
@@ -2199,11 +2187,66 @@ fn event_kind(event: &RuntimeClientEvent) -> &'static str {
     }
 }
 
-fn defer_result_content(result: &mut ToolExecutionResult) {
-    result.content.clear();
-    result.artifacts.clear();
-    result.deliveries.clear();
-    result.workflow = None;
+fn deferred_result_content(result: &ToolExecutionResult) -> ToolExecutionResult {
+    ToolExecutionResult {
+        workflow: None,
+        status: result.status.clone(),
+        content: Vec::new(),
+        duration_ms: result.duration_ms,
+        exit_code: result.exit_code,
+        artifacts: Vec::new(),
+        deliveries: Vec::new(),
+        truncation: result.truncation.clone(),
+        managed_output: result.managed_output.clone(),
+    }
+}
+
+fn deferred_foreground_tool(
+    tool: &ForegroundToolExecution,
+    source: Option<&ForegroundResultContent>,
+) -> ForegroundToolExecution {
+    let result = |result: &ToolExecutionResult| {
+        if source.is_some() {
+            deferred_result_content(result)
+        } else {
+            result.clone()
+        }
+    };
+    ForegroundToolExecution {
+        occurrence: tool.occurrence.clone(),
+        message_id: tool.message_id.clone(),
+        block_index: tool.block_index,
+        call_id: tool.call_id.clone(),
+        metadata_ref: tool.metadata_ref.clone(),
+        assembly_complete: tool.assembly_complete,
+        result_source: tool.result_source.clone(),
+        result_metadata_ref: source
+            .map(|source| source.metadata.clone())
+            .or_else(|| tool.result_metadata_ref.clone()),
+        committed_result: tool.committed_result.as_ref().map(result),
+        committed_result_deferred: if source.is_some() {
+            tool.committed_result.is_some()
+        } else {
+            tool.committed_result_deferred
+        },
+        tool_id: tool.tool_id.clone(),
+        name: tool.name.clone(),
+        state: match &tool.state {
+            ForegroundToolState::Assembled { .. } => ForegroundToolState::Assembled {
+                arguments: String::new(),
+            },
+            ForegroundToolState::Running { progress, .. } => ForegroundToolState::Running {
+                arguments: String::new(),
+                progress: progress.clone(),
+            },
+            ForegroundToolState::Settled {
+                result: settled, ..
+            } => ForegroundToolState::Settled {
+                arguments: String::new(),
+                result: result(settled),
+            },
+        },
+    }
 }
 
 fn inline_label(value: &str) -> String {
@@ -6689,6 +6732,12 @@ impl RuntimeClientProjection {
         let read_cut = self.working_read_cut();
         let mut seed = CheckpointSeed {
             prepared: prepared_capture::PreparedCaptures::empty(),
+            attempt_bindings: self
+                .published_seed
+                .as_ref()
+                .map_or_else(prepared_capture::PreparedAttemptBindings::default, |seed| {
+                    seed.attempt_bindings.clone()
+                }),
             metadata_frontiers: prepared_capture::MetadataFrontiers::inherit(
                 self.published_seed.as_deref(),
             ),
@@ -13452,6 +13501,11 @@ mod tests {
     mod incremental_checkpoint_tests {
         use super::*;
         include!("projection/incremental_checkpoint_tests.rs");
+    }
+
+    mod attempt_capture_tests {
+        use super::*;
+        include!("projection/attempt_capture_tests.rs");
     }
 
     mod capability_owner_tests {

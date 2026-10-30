@@ -23,16 +23,25 @@ struct SourceWriter<'a> {
     id: &'a str,
     kind: &'static str,
     buffer: Vec<u8>,
+    first: Vec<u8>,
     written: u64,
     segment: u64,
 }
 impl SourceWriter<'_> {
     fn drain(&mut self) -> std::io::Result<()> {
         if !self.buffer.is_empty() {
-            self.connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES(?1,?2,0,'canonical_json_v1',?3,?4)",params![self.kind,self.id,self.segment,self.buffer]).map_err(std::io::Error::other)?;
+            if self.segment == 0 {
+                self.first = std::mem::take(&mut self.buffer);
+            } else {
+                self.connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES(?1,?2,0,'canonical_json_v1',?3,?4)",params![self.kind,self.id,self.segment,self.buffer]).map_err(std::io::Error::other)?;
+            }
             self.written = self
                 .written
-                .checked_add(self.buffer.len() as u64)
+                .checked_add(if self.segment == 0 {
+                    self.first.len()
+                } else {
+                    self.buffer.len()
+                } as u64)
                 .filter(|value| *value <= crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX)
                 .ok_or_else(|| {
                     std::io::Error::other("native structural source exceeds safe offsets")
@@ -51,6 +60,11 @@ impl Write for SourceWriter<'_> {
         for part in bytes.chunks(SEGMENT) {
             let mut at = 0;
             while at < part.len() {
+                if self.buffer.capacity() == 0 {
+                    // The first chunk owns the old allocation. Do not let
+                    // fragmented writes grow the overflow buffer past 64 KiB.
+                    self.buffer.reserve_exact(SEGMENT);
+                }
                 let count = (SEGMENT - self.buffer.len()).min(part.len() - at);
                 self.buffer.extend_from_slice(&part[at..at + count]);
                 at += count;
@@ -65,6 +79,7 @@ impl Write for SourceWriter<'_> {
         self.drain()
     }
 }
+
 fn encoded_path(path: &[String]) -> Result<String, ConversationStoreError> {
     serde_json::to_string(path).map_err(|error| storage(error.to_string()))
 }
@@ -106,6 +121,7 @@ pub(super) fn index_state_source(
         id,
         kind,
         buffer: Vec::with_capacity(SEGMENT),
+        first: Vec::new(),
         written: 0,
         segment: 0,
     };
@@ -116,8 +132,8 @@ pub(super) fn index_state_source(
     state_preview::index_fields(&writer, source)?;
     connection
         .execute(
-            "INSERT INTO content_frontiers VALUES(?1,?2,0,'canonical_json_v1',1,?3)",
-            params![kind, id, writer.written],
+            "INSERT INTO content_frontiers VALUES(?1,?2,0,'canonical_json_v1',1,?3,?4)",
+            params![kind, id, writer.written, writer.first],
         )
         .map_err(|error| storage(error.to_string()))?;
     Ok(())
@@ -1300,4 +1316,33 @@ fn index_key(
         )
         .map_err(|error| storage(error.to_string()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod source_buffer_tests {
+    use super::*;
+
+    #[test]
+    fn state_source_lazily_allocates_a_bounded_second_buffer() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        super::super::create_schema(&mut connection).unwrap();
+        let mut writer = SourceWriter {
+            connection: &connection,
+            id: "fragmented-source",
+            kind: "state",
+            buffer: Vec::with_capacity(SEGMENT),
+            first: Vec::new(),
+            written: 0,
+            segment: 0,
+        };
+        writer.write_all(&vec![b'a'; SEGMENT]).unwrap();
+        assert_eq!(writer.buffer.capacity(), 0);
+        for _ in 0..12_000 {
+            writer.write_all(b"01234567890").unwrap();
+            assert!(writer.buffer.capacity() <= SEGMENT);
+            assert!(writer.first.capacity() <= SEGMENT);
+        }
+        writer.flush().unwrap();
+        assert_eq!(writer.written, (SEGMENT + 12_000 * 11) as u64);
+    }
 }

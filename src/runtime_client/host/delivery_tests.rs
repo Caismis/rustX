@@ -353,7 +353,7 @@ async fn t08_t14_t19_delivery_corruption_and_failed_tool_keep_native_authority()
         Err(RuntimeClientError::ContentSourceUnavailable)
     ));
     let diagnostic = rusqlite::Connection::open(&path).unwrap();
-    let changed = diagnostic.execute("DELETE FROM content_segments WHERE source_kind='canonical_file_delivery' AND source_id='ledger:2' AND block_index=0 AND representation='canonical_json_v1'", []).unwrap();
+    let changed = diagnostic.execute("UPDATE content_frontiers SET bytes=NULL WHERE source_kind='canonical_file_delivery' AND source_id='ledger:2' AND block_index=0 AND representation='canonical_json_v1'", []).unwrap();
     assert_eq!(changed, 1, "one original selected span");
     assert!(matches!(
         host.inner.session_file_reference(&source, 0),

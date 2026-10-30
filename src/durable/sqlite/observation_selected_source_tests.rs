@@ -294,7 +294,7 @@ fn t08_t12_t14_t19_selected_delivery_uses_numeric_giant_c_without_body_reads() {
     store
         .lock()
         .unwrap()
-        .execute_batch("DELETE FROM content_segments WHERE source_kind='canonical_file_delivery';")
+        .execute_batch("UPDATE content_frontiers SET bytes=NULL WHERE source_kind='canonical_file_delivery';")
         .unwrap();
     assert!(matches!(
         store.observation_file_delivery(&locator, 0),
@@ -305,7 +305,7 @@ fn t08_t12_t14_t19_selected_delivery_uses_numeric_giant_c_without_body_reads() {
 fn t10_t14_t19_selected_delivery_auxiliary_failure_preserves_original_successful_c() {
     let store = store();
     let message = selected_delivery_fixture(&store, "selected-file-fault");
-    store.lock().unwrap().execute_batch("CREATE TRIGGER selected_delivery_fault BEFORE INSERT ON content_segments WHEN NEW.source_kind='canonical_file_delivery' BEGIN SELECT RAISE(FAIL,'optional delivery span'); END;").unwrap();
+    store.lock().unwrap().execute_batch("CREATE TRIGGER selected_delivery_fault BEFORE INSERT ON content_frontiers WHEN NEW.source_kind='canonical_file_delivery' BEGIN SELECT RAISE(FAIL,'optional delivery span'); END;").unwrap();
     store.append_canonical(&message).unwrap();
     assert_eq!(store.load_canonical().unwrap()[1], message);
     let locator =

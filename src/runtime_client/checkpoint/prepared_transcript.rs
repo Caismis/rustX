@@ -47,6 +47,11 @@ impl PreparedTranscriptRow {
     pub(crate) fn value(&self) -> RuntimeClientTranscriptEntry {
         self.0.body.entry(&self.0.decoration)
     }
+    /// Materialize the descriptor body after its exact native bytes are read
+    /// again. Tool and response decoration must still come from the current read.
+    pub(crate) fn undecorated_value(&self) -> RuntimeClientTranscriptEntry {
+        self.0.body.undecorated_entry()
+    }
     /// Called only after a native reader proved the current body bytes again.
     /// Current response decoration never inherits the older owner's authority.
     pub(crate) fn with_decoration(&self, value: &RuntimeClientTranscriptEntry) -> Self {

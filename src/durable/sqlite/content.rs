@@ -27,6 +27,9 @@ pub(super) use binary::{
 #[path = "content_binary_tests.rs"]
 mod binary_tests;
 #[cfg(test)]
+#[path = "content_inline_tests.rs"]
+mod inline_tests;
+#[cfg(test)]
 thread_local! { static LAST_READ_WORK: std::cell::Cell<(usize,usize)> = const { std::cell::Cell::new((0,0)) }; }
 #[cfg(test)]
 pub(super) fn last_read_work() -> (usize, usize) {
@@ -324,9 +327,10 @@ pub(super) fn read(
             reference.readable_end,
         )?
     } else {
-        range_bytes(
+        range_bytes_at(
             connection,
             (kind, id.as_ref(), block, reference.representation),
+            reference.content_revision,
             offset,
             end,
         )?
@@ -347,7 +351,55 @@ pub(super) fn range_bytes(
     offset: u64,
     end: u64,
 ) -> Result<Vec<u8>, ConversationStoreError> {
+    range_bytes_at(connection, key, 1, offset, end)
+}
+fn range_bytes_at(
+    connection: &Connection,
+    key: (&str, &str, u32, Rep),
+    revision: u64,
+    offset: u64,
+    end: u64,
+) -> Result<Vec<u8>, ConversationStoreError> {
+    #[cfg(test)]
+    LAST_READ_WORK.with(|work| work.set((0, 0)));
+    range_bytes_inner(connection, key, revision, offset, end)
+}
+fn range_bytes_inner(
+    connection: &Connection,
+    key: (&str, &str, u32, Rep),
+    revision: u64,
+    offset: u64,
+    end: u64,
+) -> Result<Vec<u8>, ConversationStoreError> {
+    if offset > end || end - offset > u64::from(CONTENT_READ_MAX_BYTES) {
+        return Err(ConversationStoreError::InvalidContentRange);
+    }
     let (kind, id, block, representation) = key;
+    if super::content_encoding::inline_first(kind, representation)
+        && offset < SEGMENT
+        && offset < end
+    {
+        let first_end = end.min(SEGMENT);
+        let mut first = range_bytes_query(
+            connection,
+            "SELECT 0,substr(bytes,?5+1,?6-?5) FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision=?7",
+            &[
+                &kind,
+                &id,
+                &block,
+                &representation.key(),
+                &offset,
+                &first_end,
+                &revision,
+            ],
+            offset,
+            first_end,
+        )?;
+        if end > SEGMENT {
+            first.extend(range_bytes_inner(connection, key, revision, SEGMENT, end)?);
+        }
+        return Ok(first);
+    }
     range_bytes_query(
         connection,
         "SELECT segment,substr(bytes,MAX(0,?7-segment*65536)+1,MIN(65536,?8-segment*65536)-MAX(0,?7-segment*65536)) FROM content_segments WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND segment>=?5 AND segment<=?6 ORDER BY segment LIMIT 2",
@@ -368,23 +420,19 @@ pub(super) fn range_bytes(
 pub(super) fn pending_range_bytes(
     connection: &Connection,
     sequence: u64,
+    revision: u64,
     offset: u64,
     end: u64,
 ) -> Result<Vec<u8>, ConversationStoreError> {
-    range_bytes_query(
+    range_bytes_at(
         connection,
-        "SELECT segment,substr(bytes,MAX(0,?4-segment*65536)+1,MIN(65536,?5-segment*65536)-MAX(0,?4-segment*65536)) FROM content_segments WHERE source_kind='pending' AND source_id=CAST(?1 AS TEXT) AND block_index=0 AND representation='canonical_json_v1' AND segment>=?2 AND segment<=?3 ORDER BY segment LIMIT 2",
-        &[
-            &sequence,
-            &(offset / SEGMENT),
-            &((end.saturating_sub(1)) / SEGMENT),
-            &offset,
-            &end,
-        ],
+        ("pending", &sequence.to_string(), 0, Rep::CanonicalJsonV1),
+        revision,
         offset,
         end,
     )
 }
+
 fn range_bytes_query(
     connection: &Connection,
     sql: &str,
@@ -392,8 +440,6 @@ fn range_bytes_query(
     offset: u64,
     end: u64,
 ) -> Result<Vec<u8>, ConversationStoreError> {
-    #[cfg(test)]
-    LAST_READ_WORK.with(|work| work.set((0, 0)));
     let mut bytes = Vec::with_capacity(usize::try_from(end - offset).map_err(|_| invalid())?);
     if end > offset {
         // The primary-key range visits at most two finite BLOBs. SQL returns
@@ -471,6 +517,24 @@ fn put(
     if revision > CONTENT_SAFE_INTEGER_MAX {
         return Err(invalid());
     }
+    if !append && super::content_encoding::inline_first(kind, representation) {
+        let end = u64::try_from(bytes.len())
+            .ok()
+            .filter(|end| *end <= CONTENT_SAFE_INTEGER_MAX)
+            .ok_or_else(invalid)?;
+        // These bytes already exist in the native value. Bind borrowed slices
+        // directly, keeping overflow inserts before the authoritative frontier.
+        if bytes.len() > SEGMENT_BYTES {
+            append_segments(connection, key, SEGMENT, &bytes[SEGMENT_BYTES..])?;
+        }
+        connection
+            .execute_cached(
+                "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end,bytes) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                params![kind, id, block, representation.key(), revision, end, &bytes[..bytes.len().min(SEGMENT_BYTES)]],
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        return Ok(());
+    }
     let prior: u64 = if append {
         connection.query_row("SELECT COALESCE(MAX(readable_end),0) FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4",params![kind,id,block,representation.key()],|r|r.get(0)).map_err(|e|storage(e.to_string()))?
     } else {
@@ -479,7 +543,7 @@ fn put(
     let end = append_segments(connection, key, prior, bytes)?;
     connection
         .execute_cached(
-            "INSERT INTO content_frontiers VALUES(?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES(?1,?2,?3,?4,?5,?6)",
             params![kind, id, block, representation.key(), revision, end],
         )
         .map_err(|e| storage(e.to_string()))?;
@@ -544,7 +608,7 @@ fn append_canonical_raw(
         bytes,
     )?;
     connection.execute(
-        "INSERT INTO content_frontiers VALUES('canonical',?1,?2,'raw_json_utf8',1,?3) ON CONFLICT(source_kind,source_id,block_index,representation,revision) DO UPDATE SET readable_end=excluded.readable_end",
+        "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical',?1,?2,'raw_json_utf8',1,?3) ON CONFLICT(source_kind,source_id,block_index,representation,revision) DO UPDATE SET readable_end=excluded.readable_end",
         params![id, block, end],
     ).map_err(|error| storage(error.to_string()))?;
     Ok(())
@@ -1221,8 +1285,8 @@ fn transfer(
     kind: &str,
     id: &str,
 ) -> Result<(), ConversationStoreError> {
-    connection.execute("INSERT INTO content_segments SELECT ?2,?3,block_index,representation,segment,bytes FROM content_segments WHERE source_kind=?4 AND source_id=?1",params![stream.as_str(),kind,id,source_kind]).map_err(|e|storage(e.to_string()))?;
-    connection.execute("INSERT INTO content_frontiers SELECT ?2,?3,block_index,representation,1,MAX(readable_end) FROM content_frontiers WHERE source_kind=?4 AND source_id=?1 GROUP BY block_index,representation",params![stream.as_str(),kind,id,source_kind]).map_err(|e|storage(e.to_string()))?;
+    connection.execute("INSERT INTO content_segments SELECT ?2,?3,block_index,representation,segment,bytes FROM content_segments WHERE source_kind=?4 AND source_id=?1 AND (representation='raw_json_utf8' OR segment>0)",params![stream.as_str(),kind,id,source_kind]).map_err(|e|storage(e.to_string()))?;
+    connection.execute("INSERT INTO content_frontiers SELECT ?2,?3,f.block_index,f.representation,1,MAX(f.readable_end),CASE WHEN f.representation='raw_json_utf8' THEN NULL ELSE COALESCE((SELECT s.bytes FROM content_segments s WHERE s.source_kind=?4 AND s.source_id=?1 AND s.block_index=f.block_index AND s.representation=f.representation AND s.segment=0),x'') END FROM content_frontiers f WHERE f.source_kind=?4 AND f.source_id=?1 GROUP BY f.block_index,f.representation",params![stream.as_str(),kind,id,source_kind]).map_err(|e|storage(e.to_string()))?;
     Ok(())
 }
 fn clear_live(
@@ -1290,7 +1354,7 @@ pub(super) fn settle_canonical(
         }
     } else {
         connection.execute_cached("INSERT INTO content_segments SELECT 'canonical',?2,block_index,representation,segment,bytes FROM content_segments WHERE source_kind='live' AND source_id=?1 AND representation='raw_json_utf8'",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
-        connection.execute_cached("INSERT INTO content_frontiers SELECT 'canonical',?2,block_index,representation,1,MAX(readable_end) FROM content_frontiers WHERE source_kind='live' AND source_id=?1 AND representation='raw_json_utf8' AND readable_end>0 GROUP BY block_index,representation",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
+        connection.execute_cached("INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) SELECT 'canonical',?2,block_index,representation,1,MAX(readable_end) FROM content_frontiers WHERE source_kind='live' AND source_id=?1 AND representation='raw_json_utf8' AND readable_end>0 GROUP BY block_index,representation",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
     }
     // These final suffixes were validated with the terminal marker but never
     // exposed as a live prefix. Preserve their original bytes directly in C.
@@ -1420,6 +1484,8 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             .collect();
         if !compact.ends_with("withoutrowid")
             || (table == "content_segments" && !compact.contains("check(length(bytes)<=65536)"))
+            || (table == "content_frontiers"
+                && !compact.contains("check(bytesisnullorlength(bytes)<=65536)"))
         {
             return Err(ConversationStoreError::IncompatibleSchema(format!(
                 "invalid bounded content index {table}"
@@ -1637,73 +1703,12 @@ pub(super) fn index_structural_value<T: serde::Serialize + schemars::JsonSchema>
     field: u32,
     value: &T,
 ) -> Result<u64, ConversationStoreError> {
-    use std::io::Write as _;
-    let mut writer = StructuralFieldWriter {
+    super::content_encoding::put_native(
         connection,
-        kind,
-        id,
-        field,
-        buffer: Vec::with_capacity(SEGMENT_BYTES),
-        written: 0,
-        segment: 0,
-    };
-    crate::runtime_client::structural_json::to_writer(&mut writer, value)
-        .map_err(|error| storage(error.to_string()))?;
-    writer.flush().map_err(|error| storage(error.to_string()))?;
-    connection
-        .execute_cached(
-            "INSERT INTO content_frontiers VALUES(?1,?2,?3,'canonical_json_v1',1,?4)",
-            params![kind, id, field, writer.written],
-        )
-        .map_err(|error| storage(error.to_string()))?;
-    Ok(writer.written)
-}
-struct StructuralFieldWriter<'a> {
-    connection: &'a Connection,
-    kind: &'a str,
-    id: &'a str,
-    field: u32,
-    buffer: Vec<u8>,
-    written: u64,
-    segment: u64,
-}
-impl StructuralFieldWriter<'_> {
-    fn drain(&mut self) -> std::io::Result<()> {
-        if self.buffer.is_empty() {
-            return Ok(());
-        }
-        self.connection
-            .execute_cached(
-                "INSERT INTO content_segments VALUES(?1,?2,?3,'canonical_json_v1',?4,?5)",
-                params![self.kind, self.id, self.field, self.segment, self.buffer],
-            )
-            .map_err(std::io::Error::other)?;
-        self.written = self
-            .written
-            .checked_add(self.buffer.len() as u64)
-            .filter(|end| *end <= CONTENT_SAFE_INTEGER_MAX)
-            .ok_or_else(|| std::io::Error::other("native structural field length exhausted"))?;
-        self.segment += 1;
-        self.buffer.clear();
-        Ok(())
-    }
-}
-impl std::io::Write for StructuralFieldWriter<'_> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let mut at = 0;
-        while at < bytes.len() {
-            let count = (SEGMENT_BYTES - self.buffer.len()).min(bytes.len() - at);
-            self.buffer.extend_from_slice(&bytes[at..at + count]);
-            at += count;
-            if self.buffer.len() == SEGMENT_BYTES {
-                self.drain()?;
-            }
-        }
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.drain()
-    }
+        (kind, id, field, Rep::CanonicalJsonV1),
+        1,
+        value,
+    )
 }
 pub(super) fn structural_field_read(
     connection: &Connection,
