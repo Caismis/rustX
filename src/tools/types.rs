@@ -270,7 +270,16 @@ pub enum ToolInvocationId {
     /// A concrete fixed-program node visit, owned by `WorkflowRuntime`.
     Workflow {
         node: Box<crate::runtime::workflow::WorkflowNodeInstance>,
+        /// Which call of the visit: 0, then one more per retry, so each call
+        /// is its own invocation with its own approval and events.
+        #[serde(default, skip_serializing_if = "is_first_call")]
+        retry: u32,
     },
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's `skip_serializing_if` passes a reference.
+const fn is_first_call(retry: &u32) -> bool {
+    *retry == 0
 }
 
 impl ToolInvocationId {

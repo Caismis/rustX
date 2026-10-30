@@ -89,7 +89,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
         <SourcePort id={id} port={route.id} label={route.id} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === route.id)} title={data.local} className={css.routeHandle} />
       </div>)}</div>}
       {/* As Dify's ErrorHandleOnNode: the strategy, and the fail branch's port. */}
-      {(node?.type === 'model' || node?.type === 'agent') && node.on_error && node.on_error.type !== 'stop' && <div className={css.errorRow}>
+      {(node?.type === 'model' || node?.type === 'tool' || node?.type === 'agent') && node.on_error && node.on_error.type !== 'stop' && <div className={css.errorRow}>
         <small>{tx('workflows:port.fail')}</small>
         <span>{tx(node.on_error.type === 'fail_branch' ? 'workflows:failure.branch' : 'workflows:failure.default-output')}</span>
         {node.on_error.type === 'fail_branch' && <SourcePort id={id} port="fail" label={tx('workflows:port.fail')} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === 'fail')} title={data.local} className={css.errorHandle} />}

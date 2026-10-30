@@ -1075,6 +1075,7 @@ fn workflow_approval_pins_prepared_native_identity_without_a_canonical_leaf_call
             node: "leaf".into(),
             visit: 0,
         }),
+        retry: 0,
     };
     let subject = InteractionSubject::Approval {
         invocation_id: invocation_id.clone(),
@@ -1116,7 +1117,7 @@ fn workflow_approval_pins_prepared_native_identity_without_a_canonical_leaf_call
     }
     let mut next_visit = subject;
     if let InteractionSubject::Approval {
-        invocation_id: ToolInvocationId::Workflow { node },
+        invocation_id: ToolInvocationId::Workflow { node, .. },
         ..
     } = &mut next_visit
     {

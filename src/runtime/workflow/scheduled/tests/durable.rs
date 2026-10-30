@@ -342,6 +342,7 @@ fn scheduler85_missing_native_proof_stays_blocked_until_the_actual_owner_settles
             ScheduledEffectOwner::Tool {
                 invocation: ToolInvocationId::Workflow {
                     node: Box::new(node.clone()),
+                    retry: 0,
                 },
             },
         )

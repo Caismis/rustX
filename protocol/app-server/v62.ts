@@ -1899,7 +1899,7 @@ export type WorkflowNodeDefinition =
       /**
        * Retry a failed call before its failure is handled.
        */
-      retry?: WorkflowModelRetry | null;
+      retry?: WorkflowRetry | null;
       /**
        * What a call that still failed does.
        */
@@ -1934,6 +1934,25 @@ export type WorkflowNodeDefinition =
       selector: WorkflowToolSelector;
       arguments: WorkflowValue;
       result: WorkflowToolResult;
+      /**
+       * Call a failed Tool again before its failure is handled, as Dify's
+       * tool node does; each call is its own invocation.
+       */
+      retry?: WorkflowRetry | null;
+      /**
+       * What a call that still failed leaves behind.
+       */
+      on_error?:
+        | {
+            type: 'stop';
+          }
+        | {
+            value: unknown;
+            type: 'default_value';
+          }
+        | {
+            type: 'fail_branch';
+          };
       type: 'tool';
     }
   | {
@@ -1964,7 +1983,9 @@ export type WorkflowNodeDefinition =
        */
       routes?: WorkflowAgentRoute[];
       /**
-       * What a failed or timed-out child run leaves behind.
+       * What a failed or timed-out child run leaves behind. Agents are not
+       * retried: a workflow child writes the shared Session workspace
+       * directly, and termination must be proven before it is handled.
        */
       on_error?:
         | {
@@ -3184,6 +3205,11 @@ export type ToolInvocationId =
     }
   | {
       node: WorkflowNodeInstance;
+      /**
+       * Which call of the visit: 0, then one more per retry, so each call
+       * is its own invocation with its own approval and events.
+       */
+      retry?: number;
       caller: 'workflow';
     };
 /**
@@ -6958,6 +6984,11 @@ export type InteractionKind =
           }
         | {
             node: WorkflowNodeInstance;
+            /**
+             * Which call of the visit: 0, then one more per retry, so each call
+             * is its own invocation with its own approval and events.
+             */
+            retry?: number;
             caller: 'workflow';
           };
       /**
@@ -7185,6 +7216,25 @@ export type WorkflowModelErrorStrategy =
       type: 'fail_branch';
     };
 /**
+ * As Dify's error handling on its Agent and tool nodes, for a call that
+ * failed or timed out once it is proven settled. Cancellation, an unknown
+ * outcome, unproven settlement and a refused start still stop the run.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowValueErrorStrategy".
+ */
+export type WorkflowValueErrorStrategy =
+  | {
+      type: 'stop';
+    }
+  | {
+      value: unknown;
+      type: 'default_value';
+    }
+  | {
+      type: 'fail_branch';
+    };
+/**
  * The authored output contract of a Workflow Agent node, as Dify's Agent:
  * the final reply is the `text` variable, or a declared schema adds the
  * reserved `workflow_output` terminal and its fields are the variables.
@@ -7199,28 +7249,6 @@ export type WorkflowAgentOutput =
   | {
       schema: unknown;
       type: 'json_schema';
-    };
-/**
- * As Dify's error handling on its Agent node, for a child run that failed
- * or timed out once its termination is proven. Agents are not retried: a
- * workflow child writes the shared Session workspace directly, so another
- * run could repeat effects the failed one already made. Cancellation, an
- * unknown outcome, unproven termination and a refused start still stop
- * the run.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowAgentErrorStrategy".
- */
-export type WorkflowAgentErrorStrategy =
-  | {
-      type: 'stop';
-    }
-  | {
-      value: unknown;
-      type: 'default_value';
-    }
-  | {
-      type: 'fail_branch';
     };
 /**
  * The configurable execution-ownership policy of one tool.
@@ -7547,6 +7575,11 @@ export type RuntimeClientTranscriptItem =
                 }
               | {
                   node: WorkflowNodeInstance;
+                  /**
+                   * Which call of the visit: 0, then one more per retry, so each call
+                   * is its own invocation with its own approval and events.
+                   */
+                  retry?: number;
                   caller: 'workflow';
                 };
             /**
@@ -7675,6 +7708,11 @@ export type InteractionSubject =
           }
         | {
             node: WorkflowNodeInstance;
+            /**
+             * Which call of the visit: 0, then one more per retry, so each call
+             * is its own invocation with its own approval and events.
+             */
+            retry?: number;
             caller: 'workflow';
           };
       /**
@@ -9365,13 +9403,14 @@ export interface WorkflowModelMessage {
   content?: WorkflowValue[];
 }
 /**
- * As Dify's retry on failure: a failed or timed-out call is made again, up
- * to `max_retries` more times, `interval_ms` after the previous one ended.
+ * As Dify's retry on failure: a failed or timed-out Model or Tool call is
+ * made again, up to `max_retries` more times, `interval_ms` after the
+ * previous one ended.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelRetry".
+ * via the `definition` "WorkflowRetry".
  */
-export interface WorkflowModelRetry {
+export interface WorkflowRetry {
   max_retries: number;
   interval_ms: number;
 }
@@ -11470,6 +11509,11 @@ export interface RuntimeClientTranscriptEntry {
                   }
                 | {
                     node: WorkflowNodeInstance;
+                    /**
+                     * Which call of the visit: 0, then one more per retry, so each call
+                     * is its own invocation with its own approval and events.
+                     */
+                    retry?: number;
                     caller: 'workflow';
                   };
               /**
@@ -14018,6 +14062,11 @@ export interface InteractionRequest {
             }
           | {
               node: WorkflowNodeInstance;
+              /**
+               * Which call of the visit: 0, then one more per retry, so each call
+               * is its own invocation with its own approval and events.
+               */
+              retry?: number;
               caller: 'workflow';
             };
         /**
@@ -16245,6 +16294,11 @@ export interface RuntimeClientTranscriptInteractionRequested {
             }
           | {
               node: WorkflowNodeInstance;
+              /**
+               * Which call of the visit: 0, then one more per retry, so each call
+               * is its own invocation with its own approval and events.
+               */
+              retry?: number;
               caller: 'workflow';
             };
         /**
@@ -19022,6 +19076,11 @@ export interface InteractionRequest1 {
             }
           | {
               node: WorkflowNodeInstance;
+              /**
+               * Which call of the visit: 0, then one more per retry, so each call
+               * is its own invocation with its own approval and events.
+               */
+              retry?: number;
               caller: 'workflow';
             };
         /**
@@ -19613,6 +19672,11 @@ export interface RuntimeClientTranscriptInteractionRequested1 {
             }
           | {
               node: WorkflowNodeInstance;
+              /**
+               * Which call of the visit: 0, then one more per retry, so each call
+               * is its own invocation with its own approval and events.
+               */
+              retry?: number;
               caller: 'workflow';
             };
         /**

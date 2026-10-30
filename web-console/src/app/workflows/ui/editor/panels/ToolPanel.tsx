@@ -5,13 +5,15 @@ import { useTranslation } from '../../../../../locale/react';
 import { IconChevronDownOutline14 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';
 import { encodeField } from '../../../document/fields';
-import type { Value } from '../../../document/model';
+import { blockAt, nodeAt, type Value } from '../../../document/model';
 import { schemaObject } from '../../../document/schema';
 import { ReferencePicker } from '../forms/ReferencePicker';
 import { SchemaEditor } from '../forms/SchemaEditor';
 import { TemplateInput, templateParts, templateValue } from '../forms/TemplateInput';
 import { ValueEditor } from '../forms/ValueEditor';
-import { NumberField, Section, SelectField, TextField } from '../forms/fields';
+import { JsonField, NumberField, Section, SelectField, TextField } from '../forms/fields';
+import { CommandRejected, replaceNodeExits } from '../../../document/commands';
+import { ErrorStrategy, RetrySettings, type Retry } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 
@@ -47,6 +49,37 @@ export function ToolPanel(props: PanelProps) {
     {choice && fields ? <ToolInputs {...props} tool={tool} choice={choice} fields={fields} />
       : <Section title={tx('workflows:tool.inputs')}><ValueEditor label={tx('workflows:inspector.tool-arguments')} address={tool.at('arguments')} value={node.arguments} edit={props.edit} /></Section>}
     <ToolOutputs {...props} tool={tool} />
+    <ToolFailure {...props} tool={tool} />
+  </>;
+}
+
+/** As Dify's tool node: retry on failure, then error handling. Each retry
+ * is a new invocation, approved and recorded on its own. */
+function ToolFailure(props: PanelProps & { tool: ToolNode }) {
+  const tx = useTranslation(), { node, at, update } = props.tool, strategy = node.on_error ?? { type: 'stop' as const };
+  const setRetry = (next?: Retry) => update(current => {
+    const { retry: _previous, ...rest } = current;
+    return next ? { ...rest, retry: next } : rest;
+  }, at('retry'));
+  const choose = (type: typeof strategy.type) => {
+    if (type === strategy.type) return;
+    props.edit(document => {
+      const owner = blockAt(document, props.block), current = owner && nodeAt(owner, props.id);
+      if (current?.type !== 'tool') throw new CommandRejected('missing_node');
+      const { on_error: _previous, ...rest } = current;
+      // A starting default of the result's own type, to be filled in.
+      const next = type === 'stop' ? undefined : type === 'fail_branch' ? { type } : { type, value: current.result.type === 'text' ? '' : {} };
+      // Without a fail branch the node has no fail port, so its connections go.
+      return replaceNodeExits(document, props.block, props.id, next ? { ...rest, on_error: next } : rest);
+    });
+  };
+  return <>
+    <RetrySettings retry={node.retry} setRetry={setRetry} />
+    <ErrorStrategy strategy={strategy.type} choose={choose} note={tx('workflows:failure.tool-retry')}>
+      {strategy.type === 'default_value' && <div className={css.failureDefaults}>
+        <JsonField label={tx('workflows:failure.default-value')} value={strategy.value} rows={4} address={at('on_error', 'value')} />
+      </div>}
+    </ErrorStrategy>
   </>;
 }
 

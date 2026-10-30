@@ -55,7 +55,8 @@ A builtin Tool node's panel is its parameters as a form: each name, required
 mark and description above its control. Text parameters take typed text with
 `/` or `{` inserting variables (a `template` value); other types switch
 between a variable and a constant, as Dify's `{x}` / ✎ switch. Unset
-parameters are absent from the arguments. Output variables fold below.
+parameters are absent from the arguments. Output variables fold below. Below them, as on a Model, come retry on failure and
+error handling; a fail branch adds the card's error row and `fail` port.
 
 Selecting a node type from the searchable popover creates a new sibling and
 adds one connection. Selecting an existing node adds only that connection.

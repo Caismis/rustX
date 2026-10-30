@@ -74,12 +74,13 @@ function ModelOutputs(props: PanelProps) {
 }
 
 type Strategy = NonNullable<Extract<NodeDefinition, { type: 'model' }>['on_error']>;
+export type Retry = NonNullable<Extract<NodeDefinition, { type: 'model' }>['retry']>;
 const STRATEGIES = ['stop', 'default_value', 'fail_branch'] as const;
 const STRATEGY_TEXT = { stop: 'stop', default_value: 'default', fail_branch: 'branch' } as const;
 
 /** As Dify's retry on failure and error handling, under the outputs. */
 function ModelFailure(props: PanelProps) {
-  const tx = useTranslation(), { node, at, update } = useNode(props, 'model');
+  const { node, at, update } = useNode(props, 'model');
   const retry = node.retry, strategy: Strategy = node.on_error ?? { type: 'stop' };
   const setRetry = (next?: NonNullable<typeof retry>) => update(current => {
     const { retry: _previous, ...rest } = current;
@@ -98,14 +99,7 @@ function ModelFailure(props: PanelProps) {
     });
   };
   return <>
-    <section className={css.group} aria-label={tx('workflows:failure.retry')}>
-      <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:failure.retry')}</span>
-        <Switch checked={!!retry} label={tx('workflows:failure.retry')} onChange={on => setRetry(on ? { max_retries: 3, interval_ms: 1000 } : undefined)} /></h3>
-      {retry && <div className={css.retryFields}>
-        <RetryField label={tx('workflows:failure.max-retries')} unit={tx('workflows:failure.times')} min={1} max={10} step={1} value={retry.max_retries} onChange={max_retries => setRetry({ ...retry, max_retries })} />
-        <RetryField label={tx('workflows:failure.interval')} unit={tx('workflows:failure.ms')} min={100} max={5000} step={100} value={retry.interval_ms} onChange={interval_ms => setRetry({ ...retry, interval_ms })} />
-      </div>}
-    </section>
+    <RetrySettings retry={retry} setRetry={setRetry} />
     <ErrorStrategy strategy={strategy.type} choose={choose}>
       {strategy.type === 'default_value' && <div className={css.failureDefaults}>
         <DraftTextField label={/* i18n-raw: native output field name */ 'text'} value={strategy.text} address={at('on_error', 'text')} multiline />
@@ -115,9 +109,22 @@ function ModelFailure(props: PanelProps) {
   </>;
 }
 
+/** As Dify's retry on failure: a switch, then how often and how far apart. */
+export function RetrySettings({ retry, setRetry }: { retry?: Retry | null; setRetry: (retry?: Retry) => void }) {
+  const tx = useTranslation();
+  return <section className={css.group} aria-label={tx('workflows:failure.retry')}>
+    <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:failure.retry')}</span>
+      <Switch checked={!!retry} label={tx('workflows:failure.retry')} onChange={on => setRetry(on ? { max_retries: 3, interval_ms: 1000 } : undefined)} /></h3>
+    {retry && <div className={css.retryFields}>
+      <RetryField label={tx('workflows:failure.max-retries')} unit={tx('workflows:failure.times')} min={1} max={10} step={1} value={retry.max_retries} onChange={max_retries => setRetry({ ...retry, max_retries })} />
+      <RetryField label={tx('workflows:failure.interval')} unit={tx('workflows:failure.ms')} min={100} max={5000} step={100} value={retry.interval_ms} onChange={interval_ms => setRetry({ ...retry, interval_ms })} />
+    </div>}
+  </section>;
+}
+
 /** As Dify's error handling: the strategy menu, what it leaves behind, and
  * the fail branch's card. */
-function ErrorStrategy({ strategy, choose, note, children }: { strategy: Strategy['type']; choose: (type: Strategy['type']) => void; note?: string; children?: ReactNode }) {
+export function ErrorStrategy({ strategy, choose, note, children }: { strategy: Strategy['type']; choose: (type: Strategy['type']) => void; note?: string; children?: ReactNode }) {
   const tx = useTranslation();
   return <section className={css.group} aria-label={tx('workflows:failure.title')}>
     <h3 className={css.groupHeading}>

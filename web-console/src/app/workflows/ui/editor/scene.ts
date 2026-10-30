@@ -73,7 +73,7 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
       const preview = node.type === 'branch' ? 0 : previewRowCount(node);
       // A Model or Agent handling errors shows its strategy on one more row,
       // and each Agent route is a row carrying its exit.
-      const handled = (node.type === 'model' || node.type === 'agent') && !!node.on_error && node.on_error.type !== 'stop';
+      const handled = (node.type === 'model' || node.type === 'tool' || node.type === 'agent') && !!node.on_error && node.on_error.type !== 'stop';
       const routes = node.type === 'agent' ? node.routes?.length ?? 0 : 0;
       // Estimates are for initial placement only. Ordinary cards render at
       // their intrinsic height, and Organize uses their measured footprint.

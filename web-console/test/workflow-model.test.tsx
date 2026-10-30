@@ -369,6 +369,23 @@ describe('Model native editing document', () => {
     expect(outputs.getByText('text')).toBeTruthy();
   });
 
+  it('retries and handles a failed Tool as Dify: a retry switch, then a default value or a fail branch', async () => {
+    const tool: NodeDefinition = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'text', part: 0 } };
+    const actor = await open(undefined, tool);
+    const read = () => actor.getSnapshot().context.document!.block.nodes.model;
+    fireEvent.click(inspector().getByRole('switch', { name: 'Retry on failure' }));
+    expect(read()).toMatchObject({ retry: { max_retries: 3, interval_ms: 1000 } });
+    expect(inspector().getByText(/effects .* can repeat/)).toBeTruthy();
+    await act(async () => fireEvent.click(inspector().getByRole('button', { name: 'Error handling strategy' })));
+    await act(async () => fireEvent.click(await screen.findByRole('menuitem', { name: /^Default value/ })));
+    expect(read()).toMatchObject({ on_error: { type: 'default_value', value: '' } });
+    await act(async () => fireEvent.click(inspector().getByRole('button', { name: 'Error handling strategy' })));
+    await act(async () => fireEvent.click(await screen.findByRole('menuitem', { name: /^Fail branch/ })));
+    expect(read()).toMatchObject({ on_error: { type: 'fail_branch' } });
+    const card = document.querySelector<HTMLElement>('.react-flow__node[aria-label="Tool node model"]')!;
+    expect(card.querySelector('[data-handleid="fail"]')).toBeTruthy();
+  });
+
   it('names a source Tool by its source and tool, with its arguments as one value', async () => {
     const tool: NodeDefinition = { type: 'tool', selector: { origin: 'source', source_id: '', name: '' }, arguments: { type: 'object', fields: {} }, result: { type: 'text', part: 0 } };
     await open(undefined, tool);

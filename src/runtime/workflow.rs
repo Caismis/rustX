@@ -383,7 +383,7 @@ pub enum WorkflowNodeDefinition {
         output: WorkflowModelOutput,
         /// Retry a failed call before its failure is handled.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        retry: Option<WorkflowModelRetry>,
+        retry: Option<WorkflowRetry>,
         /// What a call that still failed does.
         #[serde(default, skip_serializing_if = "WorkflowModelErrorStrategy::is_stop")]
         on_error: WorkflowModelErrorStrategy,
@@ -406,6 +406,13 @@ pub enum WorkflowNodeDefinition {
         selector: WorkflowToolSelector,
         arguments: WorkflowValue,
         result: WorkflowToolResult,
+        /// Call a failed Tool again before its failure is handled, as Dify's
+        /// tool node does; each call is its own invocation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry: Option<WorkflowRetry>,
+        /// What a call that still failed leaves behind.
+        #[serde(default, skip_serializing_if = "WorkflowValueErrorStrategy::is_stop")]
+        on_error: WorkflowValueErrorStrategy,
     },
     /// One execution of an admitted named Subagent profile.
     Agent {
@@ -421,9 +428,11 @@ pub enum WorkflowNodeDefinition {
         /// exits through its required `switch` value.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         routes: Vec<WorkflowAgentRoute>,
-        /// What a failed or timed-out child run leaves behind.
-        #[serde(default, skip_serializing_if = "WorkflowAgentErrorStrategy::is_stop")]
-        on_error: WorkflowAgentErrorStrategy,
+        /// What a failed or timed-out child run leaves behind. Agents are not
+        /// retried: a workflow child writes the shared Session workspace
+        /// directly, and termination must be proven before it is handled.
+        #[serde(default, skip_serializing_if = "WorkflowValueErrorStrategy::is_stop")]
+        on_error: WorkflowValueErrorStrategy,
     },
     /// Ordered IF / ELIF cases, followed by the false (ELSE) port.
     Branch { cases: Vec<WorkflowBranchCase> },
@@ -520,27 +529,24 @@ pub const AGENT_ROUTE_FIELD: &str = "switch";
 pub const MAX_AGENT_ROUTES: usize = 32;
 pub const MAX_AGENT_ROUTE_DESCRIPTION_BYTES: usize = 1024;
 
-/// As Dify's error handling on its Agent node, for a child run that failed
-/// or timed out once its termination is proven. Agents are not retried: a
-/// workflow child writes the shared Session workspace directly, so another
-/// run could repeat effects the failed one already made. Cancellation, an
-/// unknown outcome, unproven termination and a refused start still stop
-/// the run.
+/// As Dify's error handling on its Agent and tool nodes, for a call that
+/// failed or timed out once it is proven settled. Cancellation, an unknown
+/// outcome, unproven settlement and a refused start still stop the run.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum WorkflowAgentErrorStrategy {
+pub enum WorkflowValueErrorStrategy {
     /// The run stops with the node's failure.
     #[default]
     Stop,
     /// The node succeeds with this value, which satisfies the node's own
-    /// value contract; a routed node leaves through its `switch`.
+    /// value contract; a routed Agent leaves through its `switch`.
     DefaultValue { value: Value },
     /// The node leaves through its `fail` port with `error_type` and
     /// `error_message`; only nodes reached through that port see them.
     FailBranch,
 }
 
-impl WorkflowAgentErrorStrategy {
+impl WorkflowValueErrorStrategy {
     #[must_use]
     pub const fn is_stop(&self) -> bool {
         matches!(self, Self::Stop)
@@ -595,11 +601,12 @@ pub fn agent_value_schema(output: &WorkflowAgentOutput, routes: &[WorkflowAgentR
     agent_terminal_schema(output, routes).unwrap_or_else(agent_text_schema)
 }
 
-/// As Dify's retry on failure: a failed or timed-out call is made again, up
-/// to `max_retries` more times, `interval_ms` after the previous one ended.
+/// As Dify's retry on failure: a failed or timed-out Model or Tool call is
+/// made again, up to `max_retries` more times, `interval_ms` after the
+/// previous one ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct WorkflowModelRetry {
+pub struct WorkflowRetry {
     pub max_retries: u32,
     pub interval_ms: u32,
 }
@@ -644,8 +651,8 @@ impl WorkflowModelErrorStrategy {
 }
 
 /// The Dify retry bounds.
-pub const MAX_MODEL_RETRIES: u32 = 10;
-pub const MODEL_RETRY_INTERVAL_MS: std::ops::RangeInclusive<u32> = 100..=5000;
+pub const MAX_RETRIES: u32 = 10;
+pub const RETRY_INTERVAL_MS: std::ops::RangeInclusive<u32> = 100..=5000;
 
 /// One prompt message of a Model node. The first message is the system
 /// prompt and every later one a user or assistant turn. Its content is fixed
@@ -978,6 +985,8 @@ pub enum WorkflowNodeProgram {
         selector: crate::capabilities::selection::ExactToolSelector,
         arguments: WorkflowValue,
         result: WorkflowToolResult,
+        retry: Option<WorkflowRetry>,
+        on_error: WorkflowValueErrorStrategy,
     },
     /// One admitted `AgentRun` template.
     Agent(WorkflowAgentProgram),
@@ -997,7 +1006,7 @@ pub struct WorkflowModelProgram {
     pub model: crate::model::session::AuxiliaryModelPolicy,
     pub messages: Vec<WorkflowModelMessage>,
     pub output: WorkflowModelOutput,
-    pub retry: Option<WorkflowModelRetry>,
+    pub retry: Option<WorkflowRetry>,
     pub on_error: WorkflowModelErrorStrategy,
 }
 
@@ -1013,7 +1022,7 @@ pub struct WorkflowAgentProgram {
     pub output: WorkflowAgentOutput,
     /// The exits the child chooses among; empty for one `next` exit.
     pub routes: Vec<WorkflowAgentRoute>,
-    pub on_error: WorkflowAgentErrorStrategy,
+    pub on_error: WorkflowValueErrorStrategy,
 }
 
 impl WorkflowAgentProgram {
@@ -1545,6 +1554,8 @@ fn compile_block(
                 selector,
                 arguments,
                 result,
+                retry,
+                on_error,
             } => {
                 let selector = selector.lower().map_err(|error| error.at("selector"))?;
                 if let crate::capabilities::selection::ExactToolSelector::Builtin { name } = &selector
@@ -1558,6 +1569,15 @@ fn compile_block(
                 validate_tool_arguments_root(&input).map_err(|e| e.at("arguments"))?;
                 let output = result.schema();
                 validate_workflow_schema(&output, "Tool result").map_err(|e| e.at("result.schema"))?;
+                validate_retry(retry.as_ref(), "Tool", &node_id)?;
+                if let WorkflowValueErrorStrategy::DefaultValue { value } = on_error
+                    && !jsonschema::Validator::new(&output).is_ok_and(|validator| validator.is_valid(value))
+                {
+                    return Err(WorkflowCompileError::InvalidField(format!(
+                        "Tool {node_id:?} default value must satisfy its result schema"
+                    ))
+                    .at("on_error.value"));
+                }
                 available_after.insert(
                     node_id.clone(),
                     available_before.with_prefix(&node_id, &output),
@@ -1566,6 +1586,8 @@ fn compile_block(
                     selector,
                     arguments: arguments.clone(),
                     result: result.clone(),
+                    retry: *retry,
+                    on_error: on_error.clone(),
                 }
             }
             WorkflowNodeDefinition::Agent {
@@ -1578,7 +1600,7 @@ fn compile_block(
                 let profile = SubagentName::parse(profile).map_err(|_| WorkflowCompileError::InvalidField("Agent selection requires a valid named profile".into()).at("profile"))?;
                 validate_agent(task, output, routes, on_error, &available_before, &node_id)?;
                 let exits = routes.iter().map(|route| WorkflowPort::case(&route.id))
-                    .chain(on_error.eq(&WorkflowAgentErrorStrategy::FailBranch).then_some(WorkflowPort::Fail));
+                    .chain(on_error.eq(&WorkflowValueErrorStrategy::FailBranch).then_some(WorkflowPort::Fail));
                 if exits.into_iter().any(|port| !outgoing[&node_id].iter().any(|edge| edge.port == port)) {
                     return Err(WorkflowCompileError::InvalidBranch(format!(
                         "Agent {node_id:?} requires a successor for every route and its fail branch"
@@ -1783,7 +1805,11 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
                     ..
                 }
                 | WorkflowNodeDefinition::Agent {
-                    on_error: WorkflowAgentErrorStrategy::FailBranch,
+                    on_error: WorkflowValueErrorStrategy::FailBranch,
+                    ..
+                }
+                | WorkflowNodeDefinition::Tool {
+                    on_error: WorkflowValueErrorStrategy::FailBranch,
                     ..
                 },
                 Some(WorkflowPort::Fail),
@@ -1841,7 +1867,10 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
                 on_error: WorkflowModelErrorStrategy::FailBranch,
                 ..
             } | WorkflowNodeDefinition::Agent {
-                on_error: WorkflowAgentErrorStrategy::FailBranch,
+                on_error: WorkflowValueErrorStrategy::FailBranch,
+                ..
+            } | WorkflowNodeDefinition::Tool {
+                on_error: WorkflowValueErrorStrategy::FailBranch,
                 ..
             }
         ) && !outgoing[id]
@@ -2190,7 +2219,7 @@ fn validate_agent(
     task: &[WorkflowValue],
     output: &WorkflowAgentOutput,
     routes: &[WorkflowAgentRoute],
-    on_error: &WorkflowAgentErrorStrategy,
+    on_error: &WorkflowValueErrorStrategy,
     available: &SchemaMap,
     node: &str,
 ) -> Result<(), WorkflowCompileError> {
@@ -2242,7 +2271,7 @@ fn validate_agent(
             .at(format!("routes.{index}.description")));
         }
     }
-    if let WorkflowAgentErrorStrategy::DefaultValue { value } = on_error {
+    if let WorkflowValueErrorStrategy::DefaultValue { value } = on_error {
         let schema = agent_value_schema(output, routes);
         if !jsonschema::Validator::new(&schema).is_ok_and(|validator| validator.is_valid(value)) {
             return Err(WorkflowCompileError::InvalidField(format!(
@@ -2356,21 +2385,30 @@ fn validate_model(
     validate_model_output(output, node)
 }
 
+fn validate_retry(
+    retry: Option<&WorkflowRetry>,
+    kind: &str,
+    node: &str,
+) -> Result<(), WorkflowCompileError> {
+    if let Some(retry) = retry
+        && (!(1..=MAX_RETRIES).contains(&retry.max_retries)
+            || !RETRY_INTERVAL_MS.contains(&retry.interval_ms))
+    {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "{kind} {node:?} retries 1..={MAX_RETRIES} times, 100..=5000 ms apart"
+        ))
+        .at("retry"));
+    }
+    Ok(())
+}
+
 fn validate_model_failure(
-    retry: Option<&WorkflowModelRetry>,
+    retry: Option<&WorkflowRetry>,
     on_error: &WorkflowModelErrorStrategy,
     output: &WorkflowModelOutput,
     node: &str,
 ) -> Result<(), WorkflowCompileError> {
-    if let Some(retry) = retry
-        && (!(1..=MAX_MODEL_RETRIES).contains(&retry.max_retries)
-            || !MODEL_RETRY_INTERVAL_MS.contains(&retry.interval_ms))
-    {
-        return Err(WorkflowCompileError::InvalidField(format!(
-            "Model {node:?} retries 1..={MAX_MODEL_RETRIES} times, 100..=5000 ms apart"
-        ))
-        .at("retry"));
-    }
+    validate_retry(retry, "Model", node)?;
     let WorkflowModelErrorStrategy::DefaultValue {
         text,
         structured_output,
@@ -4000,7 +4038,7 @@ mod tests {
             task: vec![text("Review the input."), reference("args.task")],
             output: WorkflowAgentOutput::JsonSchema { schema: output },
             routes: Vec::new(),
-            on_error: WorkflowAgentErrorStrategy::default(),
+            on_error: WorkflowValueErrorStrategy::default(),
         }
     }
 
@@ -4348,7 +4386,7 @@ chat_reasoning_replay = "omit"
                         schema: output.clone(),
                     },
                     routes: Vec::new(),
-                    on_error: WorkflowAgentErrorStrategy::default(),
+                    on_error: WorkflowValueErrorStrategy::default(),
                 },
             );
             edges.extend([edge("workflow_start", key), edge(key, "done")]);
@@ -4386,7 +4424,7 @@ chat_reasoning_replay = "omit"
                             schema: output.clone(),
                         },
                         routes: Vec::new(),
-                        on_error: WorkflowAgentErrorStrategy::default(),
+                        on_error: WorkflowValueErrorStrategy::default(),
                     },
                 ),
                 (
@@ -5697,7 +5735,7 @@ block:
                             schema: output.clone(),
                         },
                         routes: Vec::new(),
-                        on_error: WorkflowAgentErrorStrategy::default(),
+                        on_error: WorkflowValueErrorStrategy::default(),
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),
@@ -5765,7 +5803,7 @@ block:
                             schema: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
                         },
                         routes: Vec::new(),
-                        on_error: WorkflowAgentErrorStrategy::default(),
+                        on_error: WorkflowValueErrorStrategy::default(),
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),
@@ -5885,7 +5923,7 @@ block:
                                     schema: schema(json!({}), &[]),
                                 },
                                 routes: Vec::new(),
-                                on_error: WorkflowAgentErrorStrategy::default(),
+                                on_error: WorkflowValueErrorStrategy::default(),
                             },
                         ),
                         ("done".to_owned(), return_node(BTreeMap::new())),

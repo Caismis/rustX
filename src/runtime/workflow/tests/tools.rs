@@ -741,7 +741,7 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
                 schema: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
             },
             routes: Vec::new(),
-            on_error: WorkflowAgentErrorStrategy::default(),
+            on_error: WorkflowValueErrorStrategy::default(),
         },
     );
     if let WorkflowNodeDefinition::Tool {
@@ -927,7 +927,8 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
         registration
             .prepare_fixed(
                 ToolInvocationId::Workflow {
-                    node: Box::new(test_instance("check", "check"))
+                    node: Box::new(test_instance("check", "check")),
+                    retry: 0,
                 },
                 &changed,
                 &json!({})
@@ -958,6 +959,8 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
                                 part: 0,
                                 schema: json!({"type":"object"}),
                             },
+                            retry: None,
+                            on_error: WorkflowValueErrorStrategy::default(),
                         },
                     ),
                     (
@@ -995,3 +998,167 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
 
 #[path = "admission.rs"]
 mod admission;
+
+/// Fails its first `failures` calls, then passes; records each invocation.
+struct Flaky {
+    failures: AtomicUsize,
+    ids: std::sync::Mutex<Vec<ToolInvocationId>>,
+}
+
+impl ToolExecutor for Flaky {
+    fn start<'a>(
+        &'a self,
+        invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                self.ids.lock().unwrap().push(invocation.id.clone());
+                let failing = self
+                    .failures
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                        left.checked_sub(1)
+                    })
+                    .is_ok();
+                if failing {
+                    return terminal(ToolExecutionStatus::Failed {
+                        error: "flaky check failed".into(),
+                    });
+                }
+                let mut result = terminal(ToolExecutionStatus::Success);
+                result.content = vec![ToolResultContent::Json {
+                    value: json!({"passed": true}),
+                }];
+                result
+            }),
+            context.cancellation,
+        )
+    }
+    fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+        crate::tools::deadline::ToolProgressCapability::None
+    }
+}
+
+/// One Tool node with `failure` handling whose value, or on a fail branch
+/// its error, is the Workflow's output.
+fn failing_program(failure: &Value) -> Arc<WorkflowProgram> {
+    let passed = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
+    let fail_branch = failure["on_error"]["type"] == "fail_branch";
+    let mut tool = json!({"type":"tool","selector":{"origin":"builtin","name":"check"},
+        "arguments":{"type":"object","fields":{"passed":{"type":"literal","value":true},"label":{"type":"literal","value":"fixed"}}},
+        "result":{"type":"json","part":0,"schema":passed}});
+    tool.as_object_mut()
+        .unwrap()
+        .extend(failure.as_object().unwrap().clone());
+    let mut nodes = json!({"workflow_start":{"type":"start"},"check":tool,
+        "done":{"type":"return","output":{"type":"object","fields":{"passed":{"type":"reference","path":["check","passed"]}}}}});
+    let mut edges = json!([{"from":"workflow_start","to":"check"},{"from":"check","to":"done"}]);
+    let output = if fail_branch {
+        nodes["failed"] = json!({"type":"return","output":{"type":"object","fields":{"passed":{"type":"literal","value":false},
+            "error":{"type":"reference","path":["check","error_message"]}}}});
+        edges
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"from":"check","to":"failed","port":"fail"}));
+        nodes["done"]["output"]["fields"]["error"] = json!({"type":"literal","value":""});
+        schema(
+            json!({"passed":{"type":"boolean"},"error":{"type":"string"}}),
+            &["passed", "error"],
+        )
+    } else {
+        passed
+    };
+    Arc::new(
+        compile_test(
+            serde_json::from_value(json!({"description":"flaky check","timeout_ms":60_000,
+                "block":{"input":schema(json!({}), &[]),"output":output,"nodes":nodes,"edges":edges}}))
+            .unwrap(),
+        )
+        .unwrap(),
+    )
+}
+
+async fn run_flaky(
+    failures: usize,
+    failure: &Value,
+) -> (Result<Value, WorkflowRunError>, Vec<ToolInvocationId>) {
+    let plane = workflow_test_plane(1);
+    let flaky = Arc::new(Flaky {
+        failures: AtomicUsize::new(failures),
+        ids: std::sync::Mutex::default(),
+    });
+    let context = context_with_registration(
+        &plane,
+        ToolRegistration::plain(definition(), flaky.clone()),
+        crate::agent::AttemptLifecycle::default(),
+    );
+    let (_, cancellation) = workflow_cancellation();
+    let value = workflow_runtime(&plane)
+        .run_test_foreground(
+            failing_program(failure),
+            ToolCallId::new("flaky"),
+            context,
+            json!({}),
+            cancellation,
+        )
+        .await;
+    let ids = flaky.ids.lock().unwrap().clone();
+    (value, ids)
+}
+
+/// As Dify's tool node: a failed call is made again as its own invocation,
+/// then a call that still failed stops the run, defaults, or takes `fail`.
+#[tokio::test]
+async fn a_failed_tool_is_retried_as_new_invocations_then_handled() {
+    let retry = json!({"retry":{"max_retries":2,"interval_ms":100}});
+    let (value, ids) = run_flaky(2, &retry).await;
+    assert_eq!(value.unwrap(), json!({"passed": true}));
+    let retries: Vec<u32> = ids
+        .iter()
+        .map(|id| match id {
+            ToolInvocationId::Workflow { retry, .. } => *retry,
+            ToolInvocationId::Agent { .. } => panic!("workflow invocation"),
+        })
+        .collect();
+    assert_eq!(retries, [0, 1, 2]);
+
+    let (value, ids) = run_flaky(3, &retry).await;
+    assert!(matches!(value, Err(WorkflowRunError::ToolFailed { .. })));
+    assert_eq!(ids.len(), 3);
+
+    let default = json!({"on_error":{"type":"default_value","value":{"passed":false}}});
+    let (value, ids) = run_flaky(1, &default).await;
+    assert_eq!(value.unwrap(), json!({"passed": false}));
+    assert_eq!(ids.len(), 1);
+
+    let branch = json!({"on_error":{"type":"fail_branch"}});
+    let (value, _) = run_flaky(1, &branch).await;
+    assert_eq!(
+        value.unwrap(),
+        json!({"passed": false, "error": "flaky check failed"})
+    );
+    let (value, _) = run_flaky(0, &branch).await;
+    assert_eq!(value.unwrap(), json!({"passed": true, "error": ""}));
+}
+
+#[test]
+fn tool_failure_handling_is_validated_at_compile() {
+    let compile = |failure: Value| {
+        let mut definition = program_definition();
+        let WorkflowNodeDefinition::Tool {
+            retry, on_error, ..
+        } = definition.block.nodes.get_mut("check").unwrap()
+        else {
+            unreachable!()
+        };
+        *retry = serde_json::from_value(failure["retry"].clone()).unwrap();
+        *on_error = serde_json::from_value(failure["on_error"].clone()).unwrap_or_default();
+        compile_test(definition)
+    };
+    assert!(compile(json!({"retry":{"max_retries":11,"interval_ms":100}})).is_err());
+    assert!(compile(json!({"retry":{"max_retries":1,"interval_ms":50}})).is_err());
+    assert!(compile(json!({"on_error":{"type":"default_value","value":{"passed":"no"}}})).is_err());
+    assert!(compile(json!({"on_error":{"type":"default_value","value":{"passed":false}}})).is_ok());
+    let error = compile(json!({"on_error":{"type":"fail_branch"}})).unwrap_err();
+    assert!(error.to_string().contains("no fail connection"), "{error}");
+}

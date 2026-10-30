@@ -2,9 +2,8 @@
 //! settle; only selected paths run. A producer is in scope exactly when it is
 //! an ancestor and every activation of the consumer also activates it.
 use super::{
-    BTreeMap, BTreeSet, SchemaMap, Value, WorkflowAgentErrorStrategy, WorkflowBlock,
-    WorkflowCompileError, WorkflowEdgeProgram, WorkflowModelErrorStrategy, WorkflowNodeDefinition,
-    WorkflowPort,
+    BTreeMap, BTreeSet, SchemaMap, Value, WorkflowBlock, WorkflowCompileError, WorkflowEdgeProgram,
+    WorkflowModelErrorStrategy, WorkflowNodeDefinition, WorkflowPort, WorkflowValueErrorStrategy,
 };
 use biodivine_lib_bdd::{Bdd, BddVariableSet, op_function};
 
@@ -13,7 +12,7 @@ const MAX_ACTIVATION_NODES: usize = 65_536;
 pub(super) struct ActivationScopes {
     active: BTreeMap<String, Bdd>,
     ancestors: BTreeMap<String, BTreeSet<String>>,
-    /// For a Model or Agent with a fail branch: true exactly when it succeeded.
+    /// For a Model, Tool or Agent with a fail branch: true exactly when it succeeded.
     succeeded: BTreeMap<String, Bdd>,
 }
 impl ActivationScopes {
@@ -34,11 +33,15 @@ impl ActivationScopes {
                     routes, on_error, ..
                 } => {
                     routes.len().saturating_sub(1)
-                        + usize::from(*on_error == WorkflowAgentErrorStrategy::FailBranch)
+                        + usize::from(*on_error == WorkflowValueErrorStrategy::FailBranch)
                 }
                 WorkflowNodeDefinition::Loop { .. }
                 | WorkflowNodeDefinition::Model {
                     on_error: WorkflowModelErrorStrategy::FailBranch,
+                    ..
+                }
+                | WorkflowNodeDefinition::Tool {
+                    on_error: WorkflowValueErrorStrategy::FailBranch,
                     ..
                 } => 1,
                 _ => 0,
@@ -81,8 +84,12 @@ impl ActivationScopes {
                 WorkflowNodeDefinition::Model {
                     on_error: WorkflowModelErrorStrategy::FailBranch,
                     ..
+                }
+                | WorkflowNodeDefinition::Tool {
+                    on_error: WorkflowValueErrorStrategy::FailBranch,
+                    ..
                 } => {
-                    let ok = variables.mk_var(allocated.next().expect("allocated Model outcome"));
+                    let ok = variables.mk_var(allocated.next().expect("allocated call outcome"));
                     ports.insert(WorkflowPort::Next, ok.clone());
                     ports.insert(WorkflowPort::Fail, ok.not());
                     succeeded.insert(id.clone(), ok);
@@ -90,7 +97,7 @@ impl ActivationScopes {
                 WorkflowNodeDefinition::Agent {
                     routes, on_error, ..
                 } => {
-                    let ok = (*on_error == WorkflowAgentErrorStrategy::FailBranch).then(|| {
+                    let ok = (*on_error == WorkflowValueErrorStrategy::FailBranch).then(|| {
                         variables.mk_var(allocated.next().expect("allocated Agent outcome"))
                     });
                     let mut remaining = ok.clone().unwrap_or_else(|| variables.mk_true());

@@ -24,7 +24,7 @@ pub(crate) fn interaction_request_header(
         InteractionKind::Approval { invocation_id, .. } => (
             Kind::Approval,
             match invocation_id {
-                crate::tools::types::ToolInvocationId::Workflow { node } => Some(node.as_ref()),
+                crate::tools::types::ToolInvocationId::Workflow { node, .. } => Some(node.as_ref()),
                 crate::tools::types::ToolInvocationId::Agent { .. } => None,
             },
             vec![
@@ -37,7 +37,7 @@ pub(crate) fn interaction_request_header(
         InteractionKind::Questionnaire { invocation_id, .. } => (
             Kind::Questionnaire,
             match invocation_id {
-                crate::tools::types::ToolInvocationId::Workflow { node } => Some(node.as_ref()),
+                crate::tools::types::ToolInvocationId::Workflow { node, .. } => Some(node.as_ref()),
                 crate::tools::types::ToolInvocationId::Agent { .. } => None,
             },
             vec![

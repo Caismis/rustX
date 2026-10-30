@@ -581,7 +581,7 @@ async fn exact_satisfaction_exhaustion_carry_and_concrete_tool_identity() {
                     format!("committed-{index}")
                 }
             );
-            let ToolInvocationId::Workflow { node } = &call.id else {
+            let ToolInvocationId::Workflow { node, .. } = &call.id else {
                 panic!("native workflow identity")
             };
             assert_eq!(node.block.definition.blocks, ["feedback", "body"]);

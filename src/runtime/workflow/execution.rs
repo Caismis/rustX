@@ -701,12 +701,46 @@ impl WorkflowRuntime {
                     selector,
                     arguments,
                     result,
+                    retry,
+                    on_error,
                 } => {
                     let arguments = evaluate_value(arguments, &input, &values)?;
-                    let native = self
-                        .invoke_tool(run, context, &node_instance, selector, arguments, cancellation)
-                        .await?;
-                    let value = result.project(&native, &node_instance)?;
+                    let mut retries = 0;
+                    // Only a proven-settled failure or timeout is retried or
+                    // handled; anything else is projected and stops as before.
+                    let outcome = loop {
+                        let (native, settled) = self
+                            .invoke_tool(run, context, &node_instance, selector, arguments.clone(), retries, cancellation)
+                            .await?;
+                        let handled = settled && !cancellation.is_cancelled()
+                            && matches!(native.status, crate::tools::types::ToolExecutionStatus::Failed { .. } | crate::tools::types::ToolExecutionStatus::TimedOut);
+                        if !handled {
+                            break Ok(native);
+                        }
+                        if let Some(retry) = retry && retries < retry.max_retries {
+                            retries += 1;
+                            tokio::select! {
+                                biased;
+                                () = cancellation.cancelled() => return Err(WorkflowRunError::from_cancellation(cancellation)),
+                                () = tokio::time::sleep(std::time::Duration::from_millis(retry.interval_ms.into())) => {}
+                            }
+                            continue;
+                        }
+                        break if on_error.is_stop() { Ok(native) } else { Err(native.status) };
+                    };
+                    let (value, schema) = match (outcome, on_error) {
+                        (Ok(native), _) => (result.project(&native, &node_instance)?, result.schema()),
+                        (Err(_), super::WorkflowValueErrorStrategy::DefaultValue { value }) => (value.clone(), result.schema()),
+                        (Err(status), _) => {
+                            let (kind, message) = match status {
+                                crate::tools::types::ToolExecutionStatus::Failed { error } => ("failed", super::bound_workflow_diagnostic(error)),
+                                _ => ("timed_out", "Tool call timed out".to_owned()),
+                            };
+                            selected = WorkflowPort::Fail;
+                            (serde_json::json!({"error_type": kind, "error_message": message}), super::WorkflowModelErrorStrategy::error_schema())
+                        }
+                    };
+                    validate_commit(&schema, &value)?;
                     self.read_model.node(&node_instance, |view| {
                         view.checks_passed = value.get("passed").and_then(Value::as_bool);
                     });
@@ -741,7 +775,7 @@ impl WorkflowRuntime {
                     };
                     let (value, schema) = match (failure, &agent.on_error) {
                         (Ok(value), _) => (value, agent.value_schema()),
-                        (Err(_), super::WorkflowAgentErrorStrategy::DefaultValue { value }) => (value.clone(), agent.value_schema()),
+                        (Err(_), super::WorkflowValueErrorStrategy::DefaultValue { value }) => (value.clone(), agent.value_schema()),
                         (Err((kind, message)), _) => {
                             selected = WorkflowPort::Fail;
                             (serde_json::json!({"error_type": kind, "error_message": message}), super::WorkflowModelErrorStrategy::error_schema())

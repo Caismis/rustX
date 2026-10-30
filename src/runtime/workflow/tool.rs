@@ -66,7 +66,9 @@ impl WorkflowRuntime {
     /// One exact admitted registration through the standard native
     /// invocation path and the invoking Session's execution binding.
     /// External Tools keep their own admitted materialization contract.
-    #[allow(clippy::too_many_lines)]
+    /// `retry` numbers this call of the visit; the flag says whether the
+    /// call's physical settlement is proven, as only then may it be handled.
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(super) async fn invoke_tool(
         &self,
         run: &WorkflowRun,
@@ -74,8 +76,9 @@ impl WorkflowRuntime {
         node: &WorkflowNodeInstance,
         selector: &ExactToolSelector,
         arguments: Value,
+        retry: u32,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<ToolExecutionResult, WorkflowRunError> {
+    ) -> Result<(ToolExecutionResult, bool), WorkflowRunError> {
         let services = context.native.as_ref().ok_or_else(|| {
             WorkflowRunError::InvocationAuthority(
                 "attempt has no native invocation services".into(),
@@ -94,6 +97,7 @@ impl WorkflowRuntime {
             .map_err(WorkflowRunError::IdentityChanged)?;
         let id = ToolInvocationId::Workflow {
             node: Box::new(node.clone()),
+            retry,
         };
         self.read_model.node(node, |view| {
             view.invocation = Some(id.clone());
@@ -105,7 +109,7 @@ impl WorkflowRuntime {
         {
             PreflightOutcome::Ready(prepared) => prepared,
             PreflightOutcome::Rejected { error, .. } => {
-                return Ok(terminal(ToolExecutionStatus::Failed { error }));
+                return Ok((terminal(ToolExecutionStatus::Failed { error }), true));
             }
         };
         let emit = |fact| self.emit_native(run, &id, &definition.id, fact);
@@ -140,6 +144,7 @@ impl WorkflowRuntime {
                 reason: super::read_model::WorkflowWait::Approval,
             }
         });
+        let mut settled = true;
         let result = if let Some(result) =
             crate::tools::invocation::authorize(&services.lifecycle, &view, cancellation)
                 .await
@@ -239,9 +244,11 @@ impl WorkflowRuntime {
                     .await;
                 if outcome.physical_settlement
                     == crate::tools::deadline::ToolSettlementCertainty::Unconfirmed
-                    && let Some(effects) = &run.effects
                 {
-                    effects.unproven(node,"native Tool physical settlement is unconfirmed; inspect its original owner, never replay the Workflow");
+                    settled = false;
+                    if let Some(effects) = &run.effects {
+                        effects.unproven(node,"native Tool physical settlement is unconfirmed; inspect its original owner, never replay the Workflow");
+                    }
                 }
                 for progress in progress.0.into_inner().expect("progress buffer") {
                     emit(NativeInvocationFact::Progress { progress });
@@ -255,7 +262,7 @@ impl WorkflowRuntime {
         emit(NativeInvocationFact::Completed {
             status: bounded_status(&result.status),
         });
-        Ok(result)
+        Ok((result, settled))
     }
 
     fn emit_native(

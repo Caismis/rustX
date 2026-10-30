@@ -265,8 +265,19 @@ Workflow does not acquire a second resolver, Tool Plane, or `SubagentRuntime`:
 an `Agent` node resolves its named profile through the same `SubagentResolver`,
 differing only in the typed authority its launch site supplies.
 
+As Dify's tool node, a Tool node may retry and handle failure. `retry:
+{max_retries: 1..=10, interval_ms: 100..=5000}` calls it again after a
+proven-settled `failed` or `timed_out` status; each call is a new invocation
+whose `ToolInvocationId` carries its `retry` ordinal, so it is prepared,
+approved and recorded on its own, and its effects may repeat. `on_error` is
+`stop` (the default), `default_value` with a `value` satisfying the result
+schema, or `fail_branch`, which adds a `fail` exit whose value is
+`{error_type, error_message}`, as for a Model. Denial, cancellation, an
+unknown outcome and unconfirmed physical settlement are never retried or
+handled; they stop the run.
+
 `ToolInvocationId` separates Agent `ToolCallId` correlation from Workflow's
-concrete `WorkflowNodeInstance`. A Tool node creates no Assistant, model turn,
+concrete `WorkflowNodeInstance` and retry ordinal. A Tool node creates no Assistant, model turn,
 canonical call slot or ToolResult message. Native preparation/start/progress/
 settlement/completion facts belong to the Event Journal, never parent history.
 The ordinary approval rendezvous gates the exact normalized, validated invocation;
@@ -276,8 +287,8 @@ All native invocation Journal facts are best-effort observations. Approval alone
 requires a durable exact-preparation boundary: InteractionRequested commits its
 immutable subject through durable interaction authority before a human can see
 the prompt. It does not depend on a Prepared execution event. A concrete node
-visit cannot acquire a replacement approval subject; another visit needs its own
-interaction. Publication failure is interaction authority loss, not human Denied.
+visit's call cannot acquire a replacement approval subject; another visit or
+retry needs its own interaction. Publication failure is interaction authority loss, not human Denied.
 
 The capability plane owns `ExactToolSelector` and source-qualified resolution; neither
 Workflow nor generic Tool selection depends on the Subagent feature's resolver.

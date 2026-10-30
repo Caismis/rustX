@@ -66,6 +66,15 @@ function output(value: unknown): void {
   const record = object(value);
   if (record.type === 'text') keys(record, ['type']); else if (record.type === 'json_schema') { keys(record, ['type', 'schema']); object(record.schema); } else fail();
 }
+function retry(input: unknown): void { if (input === undefined) return; const at = keys(input, ['max_retries', 'interval_ms']); unsigned(at.max_retries); unsigned(at.interval_ms); }
+/** A Tool's or Agent's failure handling: stop, a whole default value, or the fail branch. */
+function valueStrategy(input: unknown): void {
+  if (input === undefined) return;
+  const strategy = object(input);
+  if (strategy.type === 'stop' || strategy.type === 'fail_branch') keys(strategy, ['type']);
+  else if (strategy.type === 'default_value') { keys(strategy, ['type', 'value']); if (!Object.hasOwn(strategy, 'value')) fail(); }
+  else fail();
+}
 function value(input: unknown): void {
   const record = object(input);
   switch (record.type) {
@@ -93,7 +102,7 @@ function node(input: unknown): void {
   switch (record.type) {
     case 'start': keys(record, ['type']); return;
     case 'agent':
-      keys(record, ['type', 'profile', 'task', 'output', 'routes', 'on_error']); text(record.profile); array(record.task).forEach(value); output(record.output);
+      keys(record, ['type', 'profile', 'task', 'output', 'routes', 'on_error']); text(record.profile); array(record.task).forEach(value); output(record.output); valueStrategy(record.on_error);
       if (record.routes !== undefined) {
         const ids = new Set<string>();
         for (const item of array(record.routes)) {
@@ -102,16 +111,9 @@ function node(input: unknown): void {
           ids.add(route.id as string);
         }
       }
-      if (record.on_error !== undefined) {
-        const strategy = object(record.on_error);
-        if (strategy.type === 'stop' || strategy.type === 'fail_branch') keys(strategy, ['type']);
-        else if (strategy.type === 'default_value') { keys(strategy, ['type', 'value']); if (!Object.hasOwn(strategy, 'value')) fail(); }
-        else fail();
-      }
       return;
     case 'model': {
-      keys(record, ['type', 'model', 'messages', 'output', 'retry', 'on_error']);
-      if (record.retry !== undefined) { const retry = keys(record.retry, ['max_retries', 'interval_ms']); unsigned(retry.max_retries); unsigned(retry.interval_ms); }
+      keys(record, ['type', 'model', 'messages', 'output', 'retry', 'on_error']); retry(record.retry);
       if (record.on_error !== undefined) {
         const strategy = object(record.on_error);
         if (strategy.type === 'stop' || strategy.type === 'fail_branch') keys(strategy, ['type']);
@@ -132,7 +134,7 @@ function node(input: unknown): void {
       output(record.output); return;
     }
     case 'tool': {
-      keys(record, ['type', 'selector', 'arguments', 'result']); value(record.arguments);
+      keys(record, ['type', 'selector', 'arguments', 'result', 'retry', 'on_error']); value(record.arguments); retry(record.retry); valueStrategy(record.on_error);
       const selector = keys(record.selector, ['origin', 'name', 'source_id']); text(selector.name);
       if (selector.origin === 'source') text(selector.source_id); else if (selector.origin !== 'builtin' || selector.source_id !== undefined) fail();
       const result = keys(record.result, ['type', 'part', 'schema']);

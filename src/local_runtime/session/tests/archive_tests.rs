@@ -1432,6 +1432,7 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
                 "NATIVE" => RuntimeEvent::NativeToolInvocation {
                     invocation_id: ToolInvocationId::Workflow {
                         node: Box::new(node.clone()),
+                        retry: 0,
                     },
                     tool_id: ToolId::new("tool-test"),
                     fact: NativeInvocationFact::Completed { status },

@@ -4518,6 +4518,13 @@
             "node": {
               "$ref": "#/$defs/WorkflowNodeInstance"
             },
+            "retry": {
+              "description": "Which call of the visit: 0, then one more per retry, so each call\nis its own invocation with its own approval and events.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
             "caller": {
               "type": "string",
               "const": "workflow"
@@ -11938,7 +11945,7 @@
               "description": "Retry a failed call before its failure is handled.",
               "anyOf": [
                 {
-                  "$ref": "#/$defs/WorkflowModelRetry"
+                  "$ref": "#/$defs/WorkflowRetry"
                 },
                 {
                   "type": "null"
@@ -12035,6 +12042,21 @@
             "result": {
               "$ref": "#/$defs/WorkflowToolResult"
             },
+            "retry": {
+              "description": "Call a failed Tool again before its failure is handled, as Dify's\ntool node does; each call is its own invocation.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowRetry"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "on_error": {
+              "description": "What a call that still failed leaves behind.",
+              "$ref": "#/$defs/WorkflowValueErrorStrategy"
+            },
             "type": {
               "type": "string",
               "const": "tool"
@@ -12075,8 +12097,8 @@
               }
             },
             "on_error": {
-              "description": "What a failed or timed-out child run leaves behind.",
-              "$ref": "#/$defs/WorkflowAgentErrorStrategy"
+              "description": "What a failed or timed-out child run leaves behind. Agents are not\nretried: a workflow child writes the shared Session workspace\ndirectly, and termination must be proven before it is handled.",
+              "$ref": "#/$defs/WorkflowValueErrorStrategy"
             },
             "type": {
               "type": "string",
@@ -12356,8 +12378,8 @@
         }
       ]
     },
-    "WorkflowModelRetry": {
-      "description": "As Dify's retry on failure: a failed or timed-out call is made again, up\nto `max_retries` more times, `interval_ms` after the previous one ended.",
+    "WorkflowRetry": {
+      "description": "As Dify's retry on failure: a failed or timed-out Model or Tool call is\nmade again, up to `max_retries` more times, `interval_ms` after the\nprevious one ended.",
       "type": "object",
       "properties": {
         "max_retries": {
@@ -12790,6 +12812,55 @@
         }
       ]
     },
+    "WorkflowValueErrorStrategy": {
+      "description": "As Dify's error handling on its Agent and tool nodes, for a call that\nfailed or timed out once it is proven settled. Cancellation, an unknown\noutcome, unproven settlement and a refused start still stop the run.",
+      "oneOf": [
+        {
+          "description": "The run stops with the node's failure.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "stop"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The node succeeds with this value, which satisfies the node's own\nvalue contract; a routed Agent leaves through its `switch`.",
+          "type": "object",
+          "properties": {
+            "value": true,
+            "type": {
+              "type": "string",
+              "const": "default_value"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "description": "The node leaves through its `fail` port with `error_type` and\n`error_message`; only nodes reached through that port see them.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "fail_branch"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
     "WorkflowAgentOutput": {
       "description": "The authored output contract of a Workflow Agent node, as Dify's Agent:\nthe final reply is the `text` variable, or a declared schema adds the\nreserved `workflow_output` terminal and its fields are the variables.",
       "oneOf": [
@@ -12840,55 +12911,6 @@
       "required": [
         "id",
         "description"
-      ]
-    },
-    "WorkflowAgentErrorStrategy": {
-      "description": "As Dify's error handling on its Agent node, for a child run that failed\nor timed out once its termination is proven. Agents are not retried: a\nworkflow child writes the shared Session workspace directly, so another\nrun could repeat effects the failed one already made. Cancellation, an\nunknown outcome, unproven termination and a refused start still stop\nthe run.",
-      "oneOf": [
-        {
-          "description": "The run stops with the node's failure.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "stop"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "description": "The node succeeds with this value, which satisfies the node's own\nvalue contract; a routed node leaves through its `switch`.",
-          "type": "object",
-          "properties": {
-            "value": true,
-            "type": {
-              "type": "string",
-              "const": "default_value"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "value"
-          ]
-        },
-        {
-          "description": "The node leaves through its `fail` port with `error_type` and\n`error_message`; only nodes reached through that port see them.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "fail_branch"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "additionalProperties": false
-        }
       ]
     },
     "WorkflowBranchCase": {

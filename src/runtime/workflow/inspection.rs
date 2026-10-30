@@ -371,6 +371,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 selector,
                 arguments,
                 result: tool_result,
+                ..
             } => {
                 result.runtime_requirements.extend([
                     "native_argument_normalization_and_validation",
