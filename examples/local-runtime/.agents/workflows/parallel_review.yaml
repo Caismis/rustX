@@ -99,12 +99,10 @@ block:
       task:
       - type: literal
         value: "Review the supplied proposal for quality. No external research is required."
-      input:
-        proposal:
-          type: reference
-          path:
-          - args
-          - proposal
+      - type: literal
+        value: "\n\nproposal: "
+      - type: reference
+        path: ["args", "proposal"]
       output:
         type: object
         properties:
@@ -122,11 +120,10 @@ block:
       task:
       - type: literal
         value: "Independently check this quality assessment for unsupported claims. Return the corrected assessment."
-      input:
-        assessment:
-          type: reference
-          path:
-          - reviews_quality_review
+      - type: literal
+        value: "\n\nassessment: "
+      - type: reference
+        path: ["reviews_quality_review"]
       output:
         type: object
         properties:
@@ -144,12 +141,10 @@ block:
       task:
       - type: literal
         value: "Review the supplied proposal for security. No external research is required."
-      input:
-        proposal:
-          type: reference
-          path:
-          - args
-          - proposal
+      - type: literal
+        value: "\n\nproposal: "
+      - type: reference
+        path: ["args", "proposal"]
       output:
         type: object
         properties:

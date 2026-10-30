@@ -77,7 +77,7 @@ async fn present_is_admitted_for_selected_named_child_and_invocation_override() 
 }
 
 #[tokio::test]
-async fn goal84_root_only_scope_is_enforced_for_definition_model_and_workflow_overrides() {
+async fn goal84_root_only_scope_is_enforced_for_definition_and_invocation_overrides() {
     let lab = Lab::new();
     lab.write_config(&serde_json::json!({
         "goal_role": {"description": "Root-only extension in a named child", "tools": {"builtin": []}, "plugins": {"goal": {"enabled": true}}},
@@ -222,16 +222,6 @@ impl Lab {
         .expect("SKILL.md");
     }
 
-    fn write_workflow(&self, id: &str, yaml: &str) {
-        std::fs::write(
-            self.workspace()
-                .join(".agents/workflows")
-                .join(format!("{id}.yaml")),
-            yaml,
-        )
-        .expect("workflow yaml");
-    }
-
     /// Writes one complete configuration.
     ///
     /// `builtin_tools` is the **invoking model's** frozen model-facing
@@ -273,22 +263,6 @@ impl Lab {
             .compose(&dependencies())
             .await
             .expect("the runtime composes")
-    }
-
-    /// The offline diagnostic of a statically invalid configuration.
-    ///
-    /// Offline launch resolution is the owner of statically knowable
-    /// reference validation, so an invalid Workflow Agent override is refused
-    /// here — before any runtime, provider, MCP connection, Python
-    /// environment, process, Session, or worktree exists.
-    fn offline_error(&self) -> String {
-        match self.paths().try_resolve() {
-            Err(error) => error,
-            Ok(prospective) => format!(
-                "{:?}",
-                prospective.resource_inspection().resource_diagnostics
-            ),
-        }
     }
 }
 
@@ -632,73 +606,6 @@ async fn sub258_unknown_references_keep_their_own_failure_class() {
 // C. Workflow
 // =====================================================================
 
-const OVERRIDE_WORKFLOW: &str = r"
-description: A Workflow whose Agent node specializes the reviewer role.
-timeout_ms: 60000
-block:
-  input: {type: object, properties: {}, required: [], additionalProperties: false}
-  output:
-    type: object
-    properties: {verdict: {type: string}}
-    required: [verdict]
-    additionalProperties: false
-  nodes:
-    workflow_start:
-      type: start
-    work:
-      type: agent
-      profile: reviewer
-      task:
-      - type: literal
-        value: 'Review the implementation.'
-      override:
-        tools:
-          builtin: [read, grep, bash]
-        skills: [security-review]
-        plugins:
-          agentStatus:
-            enabled: true
-      output:
-        type: object
-        properties: {verdict: {type: string}}
-        required: [verdict]
-        additionalProperties: false
-    done:
-      type: return
-      output: {type: reference, path: [work]}
-  edges:
-  - from: workflow_start
-    to: work
-  - {from: work, to: done}
-";
-
-#[tokio::test]
-async fn goal84_workflow_program_cannot_enable_goal_for_an_agent_node() {
-    let lab = Lab::new();
-    lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_skill("security-review", "Security", "guidance body");
-    lab.write_workflow(
-        "goal-child",
-        &OVERRIDE_WORKFLOW.replace("agentStatus:", "goal:"),
-    );
-    lab.write_config(&reviewer_roles(), &[]);
-    let product = lab.compose().await;
-    let resources = product.runtime().runtime_resources();
-    let id = rustx::runtime::workflow::WorkflowId::parse("goal-child").unwrap();
-    let rustx::runtime::workflow::WorkflowAdmission::Disabled(diagnostics) =
-        &resources.workflows().entries()[&id].admission
-    else {
-        panic!("Goal child must disable the entire program")
-    };
-    assert!(diagnostics.iter().any(|diagnostic| matches!(
-        diagnostic.reason,
-        rustx::runtime::workflow::WorkflowDependencyFailure::Agent(
-            rustx::runtime::agent_profile::AgentProfileDiagnostic::ScopeUnsupported { .. }
-        )
-    )));
-    assert!(resources.workflows().executable(&id).is_err());
-}
-
 /// Equivalent authorized inputs resolve to one specification on both paths.
 /// This is the "one resolver" property stated as an assertion rather than as
 /// a comment.
@@ -727,148 +634,6 @@ async fn sub258_equivalent_dynamic_overrides_have_one_frozen_identity() {
             .profile_digest(),
         from_tool.profile_digest(),
         "Tool order and Skill repetition are normalization, not identity"
-    );
-}
-
-/// A Workflow Agent node's override is validated during resource preparation
-/// against the same candidate generation that will publish it, with a precise
-/// nested authored path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sub258_a_nested_workflow_override_is_validated_with_a_precise_path() {
-    let nested = r"
-description: A Workflow whose nested Agent node carries an invalid override.
-timeout_ms: 60000
-block:
-  input:
-    type: object
-    properties: {}
-    required: []
-    additionalProperties: false
-  output:
-    type: object
-    properties:
-      verdict:
-        type: string
-    required:
-    - verdict
-    additionalProperties: false
-  nodes:
-    workflow_start:
-      type: start
-    fan:
-      type: loop
-      input:
-        type: literal
-        value: {}
-      body:
-        input:
-          type: object
-          properties: {}
-          required: []
-          additionalProperties: false
-        output:
-          type: object
-          properties:
-            verdict:
-              type: string
-          required:
-          - verdict
-          additionalProperties: false
-        nodes:
-          workflow_start:
-            type: start
-          work:
-            type: agent
-            profile: reviewer
-            task:
-            - type: literal
-              value: 'Review the implementation.'
-            override:
-              tools:
-                builtin:
-                - definitely_not_a_capability
-            output:
-              type: object
-              properties:
-                verdict:
-                  type: string
-              required:
-              - verdict
-              additionalProperties: false
-          done:
-            type: return
-            output:
-              type: reference
-              path:
-              - work
-        edges:
-        - from: workflow_start
-          to: work
-        - from: work
-          to: done
-      until:
-        type: boolean
-        value:
-          type: literal
-          value: true
-      carry:
-        type: literal
-        value: {}
-      max_iterations: 1
-    done:
-      type: return
-      output:
-        type: reference
-        path:
-        - fan
-        - result
-  edges:
-  - from: workflow_start
-    to: fan
-  - from: fan
-    to: done
-    port: satisfied
-  - from: fan
-    to: done
-    port: exhausted
-";
-    let lab = Lab::new();
-    lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_workflow("nested", nested);
-    lab.write_config(&reviewer_roles(), &["read"]);
-    let product = lab.compose().await;
-    let resources = product.runtime().runtime_resources();
-    let id = rustx::runtime::workflow::WorkflowId::parse("nested").unwrap();
-    let rustx::runtime::workflow::WorkflowAdmission::Disabled(diagnostics) =
-        &resources.workflows().entries()[&id].admission
-    else {
-        panic!("required missing Tool must disable the program")
-    };
-    assert!(diagnostics.iter().any(|diagnostic| diagnostic.path == "block.nodes.fan.body.nodes.work"
-        && matches!(&diagnostic.reason, rustx::runtime::workflow::WorkflowDependencyFailure::Agent(
-            rustx::runtime::agent_profile::AgentProfileDiagnostic::Tool(rustx::capabilities::selection::ToolSelectionError::UnknownCapability { selector })
-        ) if selector == "builtin:definitely_not_a_capability")));
-}
-
-/// Structural child rules apply to a Workflow override at compilation, with
-/// the offending dimension's authored path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sub258_a_workflow_override_cannot_smuggle_nested_delegation() {
-    let recursive =
-        OVERRIDE_WORKFLOW.replace("builtin: [read, grep, bash]", "builtin: [read, subagent]");
-    let lab = Lab::new();
-    lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_skill("security-review", "How to review security", "security body");
-    lab.write_workflow("specialized", &recursive);
-    lab.write_config(&reviewer_roles(), &["read"]);
-    let error = lab.offline_error();
-    assert!(
-        error.contains("Workflow graph, control structure, or configured bound is invalid"),
-        "structural child rules survive into Workflow authoring: {error}"
-    );
-    assert!(
-        error.contains("override.tools"),
-        "the diagnostic names the offending dimension: {error}"
     );
 }
 

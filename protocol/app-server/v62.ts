@@ -1947,18 +1947,11 @@ export type WorkflowNodeDefinition =
        */
       task: WorkflowValue[];
       /**
-       * Explicit input bindings from workflow-local values.
-       */
-      input?: {
-        [k: string]: WorkflowValue;
-      };
-      /**
        * The frozen `AgentRun` output contract.
        */
       output: {
         [k: string]: unknown;
       };
-      override?: SubagentInvocationOverride;
       type: 'agent';
     }
   | {
@@ -2158,21 +2151,6 @@ export type WorkflowToolResult =
       type: 'text';
     };
 /**
- * Exactly two trust granularities for one source. This is also the authoring
- * boundary: only the literal "all" or an exact array is accepted. `All`
- * grants source-wide Tools and negotiated Resources; `Exact` grants only
- * the named ordinary Tools and never source-wide Resources access.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SourceToolSelection".
- */
-export type SourceToolSelection = AllTools | string[];
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AllTools".
- */
-export type AllTools = 'all';
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowNoteTheme".
  */
@@ -2199,10 +2177,6 @@ export type WorkflowOrderTarget =
       address: WorkflowNodeAddress;
       path: WorkflowSchemaStep[];
       kind: 'node_output';
-    }
-  | {
-      address: WorkflowNodeAddress;
-      kind: 'node_input';
     };
 /**
  * An exact position in a schema, independent of value-reference semantics.
@@ -2223,10 +2197,6 @@ export type WorkflowSchemaStep =
  * via the `definition` "WorkflowConsumerField".
  */
 export type WorkflowConsumerField =
-  | {
-      binding: string;
-      kind: 'input';
-    }
   | {
       index: number;
       kind: 'message';
@@ -2370,7 +2340,7 @@ export type ConfigMutation =
       unit: 'skills';
     }
   | {
-      authored?: TodoExtensionDocument1 | null;
+      authored?: TodoExtensionDocument | null;
       unit: 'todo';
     }
   | {
@@ -2378,7 +2348,7 @@ export type ConfigMutation =
       unit: 'goal';
     }
   | {
-      authored?: AgentStatusExtensionDocument1 | null;
+      authored?: AgentStatusExtensionDocument | null;
       unit: 'agent_status';
     }
   | {
@@ -2566,6 +2536,21 @@ export type AuxiliaryModelAuthoring =
  * via the `definition` "ToolSourceId".
  */
 export type ToolSourceId = string;
+/**
+ * Exactly two trust granularities for one source. This is also the authoring
+ * boundary: only the literal "all" or an exact array is accepted. `All`
+ * grants source-wide Tools and negotiated Resources; `Exact` grants only
+ * the named ordinary Tools and never source-wide Resources access.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SourceToolSelection".
+ */
+export type SourceToolSelection = AllTools | string[];
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AllTools".
+ */
+export type AllTools = 'all';
 /**
  * Prompt visibility within a frozen Skill catalog; never filesystem authority.
  *
@@ -9370,112 +9355,6 @@ export interface WorkflowEdgeDefinition {
   port?: WorkflowPort | null;
 }
 /**
- * The optional invocation-scoped capability override of this node
- * (Issue #258).
- *
- * This is **trusted static program data**: it is part of the
- * compiled Workflow, is validated against the Workflow's own
- * admitted generation, and is not reachable from model output, node
- * input values, or task text. It may therefore legitimately replace
- * the role's defaults with capabilities the invoking main model does
- * not itself hold — never with capabilities the generation does not
- * authorize.
- */
-export interface SubagentInvocationOverride {
-  tools?: ToolSelectionDocument;
-  /**
-   * The complete replacement Skill selection, when this dimension is
-   * overridden. Absent uses the definition's selection.
-   */
-  skills?: string[];
-  plugins?: NativeAgentExtensionSelection;
-}
-/**
- * The complete replacement Tool selection, when this dimension is
- * overridden. Absent uses the definition's selection.
- */
-export interface ToolSelectionDocument {
-  builtin?: string[];
-  sources?: {
-    [k: string]: SourceToolSelection;
-  };
-}
-/**
- * The complete replacement Plugin composition, when this
- * dimension is overridden. Absent uses the definition's composition.
- */
-export interface NativeAgentExtensionSelection {
-  agentStatus?: AgentStatusExtensionDocument;
-  todo?: TodoExtensionDocument;
-  goal?: GoalExtensionDocument;
-}
-/**
- * The requested Agent Status extension, when this selection composes it.
- *
- * `null` is not accepted: the field is either absent (not composed) or a
- * complete authored configuration. Collapsing an explicit `null` into
- * "absent" would give one wire spelling two meanings.
- */
-export interface AgentStatusExtensionDocument {
-  /**
-   * Whether this composition includes the Agent Status extension at all.
-   *
-   * With `false` the runtime composes no status engine: the Agent Loop
-   * emits no Agent Status and is otherwise a completely ordinary
-   * `ConversationRuntime`.
-   */
-  enabled?: boolean;
-  time?: TimeStatusConfig;
-  background?: BackgroundStatusConfig;
-}
-/**
- * The Time contributor configuration.
- */
-export interface TimeStatusConfig {
-  /**
-   * Whether Time participates in an available Agent Status opportunity.
-   */
-  enabled?: boolean;
-  /**
-   * The optional IANA timezone used only by Time presentation. Omitting it
-   * renders UTC.
-   */
-  timezone?: string | null;
-}
-/**
- * The Background contributor configuration.
- */
-export interface BackgroundStatusConfig {
-  /**
-   * Whether Background participates in an available Agent Status opportunity.
-   */
-  enabled?: boolean;
-}
-/**
- * The requested Todo extension, when this selection composes it
- * (Issue #259).
- *
- * Absent means the child composes no Todo at all — no list authority, no
- * `todo` Tool, no status contribution — never "whatever the role
- * authored". `null` is refused for the same reason `agentStatus` refuses
- * it: one wire spelling may not carry two meanings.
- */
-export interface TodoExtensionDocument {
-  /**
-   * Whether this composition includes the Todo extension at all.
-   */
-  enabled?: boolean;
-}
-/**
- * Authored opt-in Goal composition.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "GoalExtensionDocument".
- */
-export interface GoalExtensionDocument {
-  enabled?: boolean;
-}
-/**
  * A stable exit identity and its condition. The first matching case wins.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9761,10 +9640,19 @@ export interface ModelLayer {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "TodoExtensionDocument".
  */
-export interface TodoExtensionDocument1 {
+export interface TodoExtensionDocument {
   /**
    * Whether this composition includes the Todo extension at all.
    */
+  enabled?: boolean;
+}
+/**
+ * Authored opt-in Goal composition.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "GoalExtensionDocument".
+ */
+export interface GoalExtensionDocument {
   enabled?: boolean;
 }
 /**
@@ -9777,7 +9665,7 @@ export interface TodoExtensionDocument1 {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "AgentStatusExtensionDocument".
  */
-export interface AgentStatusExtensionDocument1 {
+export interface AgentStatusExtensionDocument {
   /**
    * Whether this composition includes the Agent Status extension at all.
    *
@@ -9788,6 +9676,29 @@ export interface AgentStatusExtensionDocument1 {
   enabled?: boolean;
   time?: TimeStatusConfig;
   background?: BackgroundStatusConfig;
+}
+/**
+ * The Time contributor configuration.
+ */
+export interface TimeStatusConfig {
+  /**
+   * Whether Time participates in an available Agent Status opportunity.
+   */
+  enabled?: boolean;
+  /**
+   * The optional IANA timezone used only by Time presentation. Omitting it
+   * renders UTC.
+   */
+  timezone?: string | null;
+}
+/**
+ * The Background contributor configuration.
+ */
+export interface BackgroundStatusConfig {
+  /**
+   * Whether Background participates in an available Agent Status opportunity.
+   */
+  enabled?: boolean;
 }
 /**
  * Project-instruction selection from admitted workspace resources.
@@ -9925,7 +9836,7 @@ export interface AgentProfileDocument {
    * lifecycle, in milliseconds. The model cannot override or extend it.
    */
   timeout_ms?: string | null;
-  tools?: ToolSelectionDocument1;
+  tools?: ToolSelectionDocument;
   /**
    * Skill descriptions advertised in the prompt: "all", exact names, or [].
    */
@@ -9936,7 +9847,7 @@ export interface AgentProfileDocument {
 /**
  * The exact source-qualified capability selection.
  */
-export interface ToolSelectionDocument1 {
+export interface ToolSelectionDocument {
   builtin?: string[];
   sources?: {
     [k: string]: SourceToolSelection;
@@ -9964,8 +9875,8 @@ export interface AgentProjectInstructionsDocument1 {
  * independent of this complete document's semantics.
  */
 export interface NativeAgentExtensionsDocument {
-  agent_status?: AgentStatusExtensionDocument2;
-  todo?: TodoExtensionDocument2;
+  agent_status?: AgentStatusExtensionDocument1;
+  todo?: TodoExtensionDocument1;
   goal?: GoalExtensionDocument1;
 }
 /**
@@ -9975,7 +9886,7 @@ export interface NativeAgentExtensionsDocument {
  * `time` and `background` remain the two bounded status contributors, with
  * exactly the semantics they had before the migration.
  */
-export interface AgentStatusExtensionDocument2 {
+export interface AgentStatusExtensionDocument1 {
   /**
    * Whether this composition includes the Agent Status extension at all.
    *
@@ -10009,7 +9920,7 @@ export interface AgentStatusExtensionDocument2 {
  * [`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are
  * not launch configuration.
  */
-export interface TodoExtensionDocument2 {
+export interface TodoExtensionDocument1 {
   /**
    * Whether this composition includes the Todo extension at all.
    */
@@ -17584,8 +17495,8 @@ export interface ToolsLayer {
  * via the `definition` "PluginsLayer".
  */
 export interface PluginsLayer {
-  agent_status?: AgentStatusExtensionDocument1 | null;
-  todo?: TodoExtensionDocument1 | null;
+  agent_status?: AgentStatusExtensionDocument | null;
+  todo?: TodoExtensionDocument | null;
   goal?: GoalExtensionDocument | null;
 }
 /**
@@ -18374,35 +18285,12 @@ export interface NodeInspection {
    * Selector identities only; provider parameters may contain secrets.
    */
   model?: ModelPolicyInspection | null;
-  /**
-   * The node's invocation override, when it carries one.
-   */
-  invocation_override?: AgentOverrideInspection | null;
   selector?: ExactToolSelector | null;
   output_schema?: unknown;
   result_part?: number | null;
   result_kind?: string | null;
   max_iterations?: number | null;
   review_subject?: string | null;
-}
-/**
- * The bounded projection of one Agent node's trusted static invocation
- * override.
- *
- * Presence is the fact this projection has to carry, so each dimension stays
- * an `Option`: `None` is "this dimension keeps the role's default" and
- * `Some` is "this dimension is replaced by exactly this". Only identities
- * are exported — capability selectors, Skill names, and the composed
- * extension names — never a Skill body, a prompt, a credential, or a
- * materialization secret.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AgentOverrideInspection".
- */
-export interface AgentOverrideInspection {
-  tools?: AgentToolSelection[] | null;
-  skills?: string[] | null;
-  extensions?: string[] | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -19160,61 +19048,6 @@ export interface QuestionnaireSpecification2 {
   questions: QuestionSpecification[];
 }
 /**
- * One invocation-scoped replacement of selected child capability
- * dimensions.
- *
- * The same value is produced by model-generated `subagent` arguments and by
- * trusted static Workflow program data. The launch boundary determines
- * authority; both share this vocabulary and the `AgentProfile` resolver.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SubagentInvocationOverride".
- */
-export interface SubagentInvocationOverride1 {
-  tools?: ToolSelectionDocument;
-  /**
-   * The complete replacement Skill selection, when this dimension is
-   * overridden. Absent uses the definition's selection.
-   */
-  skills?: string[];
-  plugins?: NativeAgentExtensionSelection;
-}
-/**
- * Shared Agent and Workflow Agent override selection. Extensions are composed
- * by their native owner and never enter this ordinary capability vocabulary.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ToolSelectionDocument".
- */
-export interface ToolSelectionDocument2 {
-  builtin?: string[];
-  sources?: {
-    [k: string]: SourceToolSelection;
-  };
-}
-/**
- * The **presence-aware** closed selection an invocation override expresses.
- *
- * Complete profiles and invocation selections share omission semantics:
- * omitted members compose no extension. The outer invocation dimension is
- * presence-aware: absent retains the named default; present replaces it.
- * This wire record preserves the invocation protocol's camelCase spelling
- * and rejects explicit null members.
- *
- * The record stays closed exactly like the authored document: an unknown
- * extension name is rejected by `deny_unknown_fields`, so a misspelled or
- * not-yet-implemented extension fails deterministically instead of being
- * silently ignored.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "NativeAgentExtensionSelection".
- */
-export interface NativeAgentExtensionSelection1 {
-  agentStatus?: AgentStatusExtensionDocument;
-  todo?: TodoExtensionDocument;
-  goal?: GoalExtensionDocument;
-}
-/**
  * Configuration of the bounded Time status contributor.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -19244,6 +19077,19 @@ export interface BackgroundStatusConfig1 {
   enabled?: boolean;
 }
 /**
+ * Shared Agent and Workflow Agent override selection. Extensions are composed
+ * by their native owner and never enter this ordinary capability vocabulary.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ToolSelectionDocument".
+ */
+export interface ToolSelectionDocument1 {
+  builtin?: string[];
+  sources?: {
+    [k: string]: SourceToolSelection;
+  };
+}
+/**
  * The closed authored composition surface of native Agent Extensions.
  *
  * Every member is a concrete named extension in a closed record.
@@ -19255,8 +19101,8 @@ export interface BackgroundStatusConfig1 {
  * via the `definition` "NativeAgentExtensionsDocument".
  */
 export interface NativeAgentExtensionsDocument1 {
-  agent_status?: AgentStatusExtensionDocument2;
-  todo?: TodoExtensionDocument2;
+  agent_status?: AgentStatusExtensionDocument1;
+  todo?: TodoExtensionDocument1;
   goal?: GoalExtensionDocument1;
 }
 /**

@@ -171,7 +171,7 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
     let config = json!({"subagents": {}, "agent": {"workflows": []}});
     let original = template_source("typed_agent");
     let mut invalid_reference: serde_json::Value = serde_yaml::from_str(&original).unwrap();
-    invalid_reference["block"]["nodes"]["summarize"]["input"]["topic"]["path"] =
+    invalid_reference["block"]["nodes"]["summarize"]["task"][2]["path"] =
         json!(["args", "missing"]);
     let scenarios = [
         (original.clone(), config.clone(), Validity::Valid, None),
@@ -186,7 +186,7 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
             serde_yaml::to_string(&invalid_reference).unwrap(),
             config.clone(),
             Validity::Invalid,
-            Some("block.nodes.summarize.input.topic"),
+            Some("block.nodes.summarize.task.2"),
         ),
         (
             original.replace("timeout_ms: 60000", "timeout_ms: 0"),
@@ -388,9 +388,9 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
     }});
     for (pointer, value, expected) in [
         (
-            "/block/nodes/repeat/body/nodes/check_text_clarity_assess_clarity/input/text/path",
+            "/block/nodes/repeat/body/nodes/check_text_clarity_assess_clarity/task/2/path",
             json!(["check_text_brevity_assess_brevity", "passed"]),
-            "block.nodes.repeat.body.nodes.check_text_clarity_assess_clarity.input.text",
+            "block.nodes.repeat.body.nodes.check_text_clarity_assess_clarity.task.2",
         ),
         (
             "/block/nodes/repeat/body/nodes/check_text_clarity_assess_clarity/output/properties/passed",
@@ -1022,7 +1022,7 @@ fn cfg235_all_example_layers_use_real_resolver_and_workflow_compiler() {
         ("minimal", 0),
         ("workflow-basic", 1),
         ("", 2),
-        ("workflow-templates", 6),
+        ("workflow-templates", 5),
     ] {
         let f = Fixture::new();
         let mut host = f.host.clone();

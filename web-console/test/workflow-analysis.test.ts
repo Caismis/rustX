@@ -104,7 +104,6 @@ const orphanDestinations = ([[], [{ node: 'repeat' }]] satisfies BlockPath[]).fl
   const kinds: [string, WorkflowEditorMetadata][] = [
     ['title', { nodes: [{ address, title: 'old deleted node title' }] }],
     ['position', { nodes: [{ address, position }] }],
-    ['input order', { orders: [{ target: { kind: 'node_input', address }, fields: ['x'] }] }],
     ['output order', { orders: [{ target: { kind: 'node_output', address, path: [] }, fields: ['x'] }] }],
     ['private node', { nodes: [{ address: { block: privateBlock, node: 'done' }, title: 'private title' }] }],
     ['private note', { notes: [{ id: 'old', block: privateBlock, text: 'Preserve me', theme: 'blue', position, dimensions }] }],

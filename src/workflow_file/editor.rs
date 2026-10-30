@@ -110,9 +110,6 @@ pub enum WorkflowOrderTarget {
         address: WorkflowNodeAddress,
         path: Vec<WorkflowSchemaStep>,
     },
-    NodeInput {
-        address: WorkflowNodeAddress,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -251,7 +248,6 @@ impl WorkflowEditorMetadata {
                 WorkflowOrderTarget::NodeOutput { address, path } => {
                     (address_valid(address), path.as_slice())
                 }
-                WorkflowOrderTarget::NodeInput { address } => (address_valid(address), &[][..]),
             };
             if !valid
                 || path.len() > 32
@@ -333,26 +329,15 @@ fn order_fields(
     definition: &WorkflowDefinition,
     target: &WorkflowOrderTarget,
 ) -> Option<BTreeSet<String>> {
-    use WorkflowOrderTarget::{BlockInput, BlockOutput, NodeInput, NodeOutput};
-    let schema = match target {
-        NodeInput { address } => {
-            return match node_at(definition, address)? {
-                WorkflowNodeDefinition::Agent { input, .. } => {
-                    Some(input.keys().cloned().collect())
-                }
-                _ => None,
-            };
-        }
-        BlockInput { block, .. } => block_at(&definition.block, block)?.input.clone(),
-        BlockOutput { block, .. } => block_at(&definition.block, block)?.output.clone(),
-        NodeOutput { address, .. } => {
+    use WorkflowOrderTarget::{BlockInput, BlockOutput, NodeOutput};
+    let (schema, path) = match target {
+        BlockInput { block, path } => (block_at(&definition.block, block)?.input.clone(), path),
+        BlockOutput { block, path } => (block_at(&definition.block, block)?.output.clone(), path),
+        NodeOutput { address, path } => (
             crate::runtime::workflow::authoring::declared_output(node_at(definition, address)?)
-                .ok()??
-        }
-    };
-    let (BlockInput { path, .. } | BlockOutput { path, .. } | NodeOutput { path, .. }) = target
-    else {
-        unreachable!()
+                .ok()??,
+            path,
+        ),
     };
     let mut schema = &schema;
     for field in path {

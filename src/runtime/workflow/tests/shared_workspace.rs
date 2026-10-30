@@ -17,7 +17,7 @@ fn empty_object() -> Value {
 
 fn implement_node() -> Value {
     json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Implement the fixed greeting change."}],
-        "input":{},"output":empty_object()})
+        "output":empty_object()})
 }
 
 fn check_report() -> Value {

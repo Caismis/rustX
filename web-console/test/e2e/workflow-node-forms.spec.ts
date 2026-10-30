@@ -53,7 +53,7 @@ test('shows each native node in the Dify-style card and grouped settings panel',
   try {
     let document: WorkflowDocument = { description: 'Node surfaces', block: emptyBlock() };
     document.block.input = { type: 'object', properties: { topic: { type: 'string' } }, required: ['topic'], additionalProperties: false };
-    document.block.nodes.agent = { type: 'agent', profile: 'reviewer', task: [{ type: 'literal', value: 'Research the requested topic' }], input: {}, output: { type: 'object', properties: { summary: { type: 'string' } }, additionalProperties: false } };
+    document.block.nodes.agent = { type: 'agent', profile: 'reviewer', task: [{ type: 'literal', value: 'Research the requested topic' }], output: { type: 'object', properties: { summary: { type: 'string' } }, additionalProperties: false } };
     document.block.nodes.model = { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Write a concise summary.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } };
     document.block.nodes.tool = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: { path: { type: 'reference', path: ['args', 'topic'] }, token: { type: 'literal', value: 'super-secret' } } }, result: { type: 'text', part: 0 } };
     document.block.nodes.review = { type: 'review', subject: { type: 'plan', value: { type: 'reference', path: ['model'] } }, context: [{ type: 'reference', path: ['args', 'topic'] }] };

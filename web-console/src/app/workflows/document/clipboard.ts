@@ -60,25 +60,6 @@ function unique(values: unknown[], identity: (value: unknown) => unknown): void 
 function path(value: unknown): void { const steps = array(value); if (steps.length > 8) fail(); for (const step of steps) { const part = keys(step, ['node']); text(part.node); if (validLocalKey(part.node)) fail(); } }
 function address(value: unknown): void { const at = keys(value, ['block', 'node']); path(at.block); text(at.node); if (validLocalKey(at.node)) fail(); }
 function unsigned(value: unknown): void { if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 4294967295) fail(); }
-function flag(value: unknown): void { if (value !== undefined && typeof value !== 'boolean') fail(); }
-function override(value: unknown): void {
-  const record = keys(value, ['tools', 'skills', 'plugins']);
-  if (record.skills !== undefined) array(record.skills).forEach(text);
-  if (record.tools !== undefined) {
-    const tools = keys(record.tools, ['builtin', 'sources']);
-    if (tools.builtin !== undefined) array(tools.builtin).forEach(text);
-    if (tools.sources !== undefined) for (const selected of Object.values(object(tools.sources))) if (selected !== 'all') array(selected).forEach(text);
-  }
-  if (record.plugins !== undefined) {
-    const plugins = keys(record.plugins, ['agentStatus', 'todo', 'goal']);
-    for (const name of ['todo', 'goal']) if (plugins[name] !== undefined) flag(keys(plugins[name], ['enabled']).enabled);
-    if (plugins.agentStatus !== undefined) {
-      const status = keys(plugins.agentStatus, ['enabled', 'time', 'background']); flag(status.enabled);
-      if (status.background !== undefined) flag(keys(status.background, ['enabled']).enabled);
-      if (status.time !== undefined) { const time = keys(status.time, ['enabled', 'timezone']); flag(time.enabled); if (time.timezone != null) text(time.timezone); }
-    }
-  }
-}
 function value(input: unknown): void {
   const record = object(input);
   switch (record.type) {
@@ -105,9 +86,7 @@ function node(input: unknown): void {
   switch (record.type) {
     case 'start': keys(record, ['type']); return;
     case 'agent':
-      keys(record, ['type', 'profile', 'task', 'input', 'output', 'override']); text(record.profile); array(record.task).forEach(value); object(record.output);
-      if (record.override !== undefined) override(record.override);
-      if (record.input !== undefined) Object.values(object(record.input)).forEach(value); return;
+      keys(record, ['type', 'profile', 'task', 'output']); text(record.profile); array(record.task).forEach(value); object(record.output); return;
     case 'model': {
       keys(record, ['type', 'model', 'messages', 'output', 'retry', 'on_error']);
       if (record.retry !== undefined) { const retry = keys(record.retry, ['max_retries', 'interval_ms']); unsigned(retry.max_retries); unsigned(retry.interval_ms); }
@@ -192,13 +171,10 @@ export function parseFragment(source: string): Fragment {
   for (const item of array(metadata.orders ?? [])) {
     const order = keys(item, ['target', 'fields']), target = object(order.target), fields = array(order.fields); fields.forEach(text); unique(fields, value => value);
     if (fields.length > 256 || fields.some(field => !field || utf8Length(field as string) > 64)) fail();
-    if (['node_input'].includes(target.kind as string)) { keys(target, ['kind', 'address']); address(target.address); }
-    else {
-      if (target.kind === 'node_output') { keys(target, ['kind', 'address', 'path']); address(target.address); }
-      else if (['block_input', 'block_output'].includes(target.kind as string)) { keys(target, ['kind', 'block', 'path']); path(target.block); } else fail();
-      const steps = array(target.path); if (steps.length > 32) fail();
-      for (const step of steps) { const part = object(step); if (part.kind === 'property') { keys(part, ['kind', 'name']); text(part.name); if (!part.name || utf8Length(part.name) > 64) fail(); } else if (part.kind === 'items') keys(part, ['kind']); else fail(); }
-    }
+    if (target.kind === 'node_output') { keys(target, ['kind', 'address', 'path']); address(target.address); }
+    else if (['block_input', 'block_output'].includes(target.kind as string)) { keys(target, ['kind', 'block', 'path']); path(target.block); } else fail();
+    const steps = array(target.path); if (steps.length > 32) fail();
+    for (const step of steps) { const part = object(step); if (part.kind === 'property') { keys(part, ['kind', 'name']); text(part.name); if (!part.name || utf8Length(part.name) > 64) fail(); } else if (part.kind === 'items') keys(part, ['kind']); else fail(); }
   }
   unique(array(metadata.nodes ?? []), item => object(item).address);
   unique(array(metadata.notes ?? []), item => object(item).id);

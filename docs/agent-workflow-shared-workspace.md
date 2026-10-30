@@ -183,7 +183,7 @@ boundary_suites::`, `--test contracts --test provider`), **B** = `rust-boundarie
 | C10, C18 | `pending_review_does_not_block_an_independent_parallel_branch` | C |
 | C11 | `workflow_output_latch_is_exactly_once_and_cancel_is_terminal`, `projection_rejects_oversized_or_missing_parts_without_parsing_text` | C |
 | C14 | `review_response_is_bound_to_exact_visit_and_presented_subject`, `review_wrong_instance_subject_and_kind_leave_original_pending_detach_resync_is_live_only` | C |
-| C15 | `sub258_override_selections_are_canonically_normalized`, specialized-agent template tests | C |
+| C15 | `sub258_override_selections_are_canonically_normalized` | C |
 | C16 | `published_initialization_error_retains_live_registry_obligation_until_exact_proof`, Session deletion barrier tests above | C |
 | C19 | `a_workflow_child_cannot_be_resumed_through_agent_controls`, `workflow_activations_do_not_become_continuable_agent_rows` | C |
 | C20 | `a_workflow_child_closes_native_lifecycle_without_parent_inbound` | C |

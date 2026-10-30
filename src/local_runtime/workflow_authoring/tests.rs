@@ -302,7 +302,7 @@ fn unselected_authored_identities_round_trip_for_analysis_but_cannot_replace_a_f
     use serde_json::json;
     let roots = Roots::new();
     let nodes = [
-        json!({"type":"agent", "profile":"", "task":[{"type":"literal","value":"Review"}], "input":{},
+        json!({"type":"agent", "profile":"", "task":[{"type":"literal","value":"Review"}], 
             "output":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}}),
         json!({"type":"model", "model":{"mode":"explicit","model":"","request_params":{}},
             "messages":[{"role":"system","content":[{"type":"literal","value":"Review"}]}], "output":{"type":"text"}}),
@@ -425,8 +425,7 @@ block:
       task:
       - type: literal
         value: 'Review it.'
-      input:
-        proposal: {type: reference, path: [args, proposal]}
+      - {type: reference, path: [args, proposal]}
       output: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}
     done:
       type: return
@@ -737,8 +736,8 @@ fn malformed_files_are_reported_and_never_replaced_by_empty_programs() {
         AGENT_PROGRAM
             .replace("Review it.", "Review it.\n      # 1")
             .replace(
-                "proposal: {type: reference, path: [args, proposal]}\n      output",
-                "proposal: {type: literal, value: 9007199254740993}\n      output",
+                "- {type: reference, path: [args, proposal]}\n      output",
+                "- {type: literal, value: 9007199254740993}\n      output",
             ),
     )
     .unwrap();
@@ -1136,7 +1135,6 @@ fn native_examples_round_trip_semantically_through_canonical_serialization() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime");
     for (directory, name) in [
         ("workflow-templates/.agents/workflows", "typed_agent"),
-        ("workflow-templates/.agents/workflows", "specialized_agent"),
         ("workflow-templates/.agents/workflows", "parallel_checks"),
         ("workflow-templates/.agents/workflows", "human_plan"),
         (".agents/workflows", "parallel_review"),
@@ -1164,34 +1162,6 @@ fn native_examples_round_trip_semantically_through_canonical_serialization() {
             "{name}"
         );
     }
-}
-
-/// Untouched advanced fields and explicit-empty selections survive a save.
-#[test]
-fn overrides_and_explicit_empty_selections_survive_a_whole_file_save() {
-    let roots = Roots::new();
-    let target = workspace(&roots.a);
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("examples/local-runtime/workflow-templates/.agents/workflows/specialized_agent.yaml");
-    let original = definition(&std::fs::read_to_string(path).unwrap());
-    let text = serde_json::to_string(&original).unwrap();
-    assert!(text.contains("\"override\""), "fixture carries an override");
-    roots.create(&target, "specialized", "seed");
-    let base = roots.read(&target, "specialized").revision;
-    roots
-        .write(
-            &target,
-            "specialized",
-            &base,
-            WorkflowEdit::Replace {
-                document: Box::new(original.clone()),
-            },
-        )
-        .unwrap();
-    assert_eq!(
-        *roots.read(&target, "specialized").document.unwrap(),
-        original
-    );
 }
 
 /// A program whose single node identity is `width` bytes of an invalid
@@ -1440,49 +1410,6 @@ fn a_checked_candidate_names_the_revision_its_normalized_commit_takes() {
             .unwrap()
             .contains("timeout_ms")
     );
-
-    // A meaningful distinction is a different identity: an explicitly empty
-    // override is not an omitted one.
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("examples/local-runtime/workflow-templates/.agents/workflows/specialized_agent.yaml");
-    let original: serde_json::Value =
-        serde_json::to_value(definition(&std::fs::read_to_string(path).unwrap())).unwrap();
-    let mut omitted = original.clone();
-    let mut empty = original;
-    for value in [&mut omitted, &mut empty] {
-        let nodes = value["block"]["nodes"].as_object_mut().unwrap();
-        let (_, agent) = nodes
-            .iter_mut()
-            .find(|(_, node)| node.get("override").is_some())
-            .expect("an override");
-        agent.as_object_mut().unwrap().remove("override");
-    }
-    let nodes = empty["block"]["nodes"].as_object_mut().unwrap();
-    let agent = nodes
-        .values_mut()
-        .find(|node| node["type"] == "agent")
-        .unwrap();
-    agent
-        .as_object_mut()
-        .unwrap()
-        .insert("override".into(), serde_json::json!({}));
-    let identity = |value: serde_json::Value| {
-        let report = roots
-            .manager
-            .check_workflow(
-                &target,
-                &id("specialized"),
-                serde_json::from_value(value).unwrap(),
-                None,
-                false,
-            )
-            .unwrap();
-        match report.structure {
-            WorkflowStructure::Valid { revision, .. } => revision,
-            WorkflowStructure::Invalid { diagnostic } => panic!("{diagnostic:?}"),
-        }
-    };
-    assert_ne!(identity(omitted), identity(empty));
 }
 
 /// Seed `directory` with Workflow files written as an external editor would:

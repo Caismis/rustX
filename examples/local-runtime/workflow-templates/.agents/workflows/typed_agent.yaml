@@ -26,12 +26,10 @@ block:
       task:
       - type: literal
         value: "Summarize the supplied topic in one short sentence."
-      input:
-        topic:
-          type: reference
-          path:
-          - args
-          - topic
+      - type: literal
+        value: "\n\ntopic: "
+      - type: reference
+        path: ["args", "topic"]
       output: *id001
     return_summary:
       type: return

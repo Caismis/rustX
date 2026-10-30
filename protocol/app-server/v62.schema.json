@@ -12063,20 +12063,8 @@
                 "$ref": "#/$defs/WorkflowValue"
               }
             },
-            "input": {
-              "description": "Explicit input bindings from workflow-local values.",
-              "type": "object",
-              "additionalProperties": {
-                "$ref": "#/$defs/WorkflowValue"
-              },
-              "default": {}
-            },
             "output": {
               "description": "The frozen `AgentRun` output contract."
-            },
-            "override": {
-              "description": "The optional invocation-scoped capability override of this node\n(Issue #258).\n\nThis is **trusted static program data**: it is part of the\ncompiled Workflow, is validated against the Workflow's own\nadmitted generation, and is not reachable from model output, node\ninput values, or task text. It may therefore legitimately replace\nthe role's defaults with capabilities the invoking main model does\nnot itself hold — never with capabilities the generation does not\nauthorize.",
-              "$ref": "#/$defs/SubagentInvocationOverride"
             },
             "type": {
               "type": "string",
@@ -12769,167 +12757,6 @@
         }
       ]
     },
-    "SubagentInvocationOverride": {
-      "description": "One invocation-scoped replacement of selected child capability\ndimensions.\n\nThe same value is produced by model-generated `subagent` arguments and by\ntrusted static Workflow program data. The launch boundary determines\nauthority; both share this vocabulary and the `AgentProfile` resolver.",
-      "type": "object",
-      "properties": {
-        "tools": {
-          "description": "The complete replacement Tool selection, when this dimension is\noverridden. Absent uses the definition's selection.",
-          "$ref": "#/$defs/ToolSelectionDocument"
-        },
-        "skills": {
-          "description": "The complete replacement Skill selection, when this dimension is\noverridden. Absent uses the definition's selection.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "plugins": {
-          "description": "The complete replacement Plugin composition, when this\ndimension is overridden. Absent uses the definition's composition.",
-          "$ref": "#/$defs/NativeAgentExtensionSelection"
-        }
-      },
-      "additionalProperties": false
-    },
-    "ToolSelectionDocument": {
-      "description": "Shared Agent and Workflow Agent override selection. Extensions are composed\nby their native owner and never enter this ordinary capability vocabulary.",
-      "type": "object",
-      "properties": {
-        "builtin": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        },
-        "sources": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/SourceToolSelection"
-          },
-          "default": {}
-        }
-      },
-      "additionalProperties": false
-    },
-    "SourceToolSelection": {
-      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted. `All`\ngrants source-wide Tools and negotiated Resources; `Exact` grants only\nthe named ordinary Tools and never source-wide Resources access.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AllTools"
-        },
-        {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      ]
-    },
-    "AllTools": {
-      "type": "string",
-      "enum": [
-        "all"
-      ]
-    },
-    "NativeAgentExtensionSelection": {
-      "description": "The **presence-aware** closed selection an invocation override expresses.\n\nComplete profiles and invocation selections share omission semantics:\nomitted members compose no extension. The outer invocation dimension is\npresence-aware: absent retains the named default; present replaces it.\nThis wire record preserves the invocation protocol's camelCase spelling\nand rejects explicit null members.\n\nThe record stays closed exactly like the authored document: an unknown\nextension name is rejected by `deny_unknown_fields`, so a misspelled or\nnot-yet-implemented extension fails deterministically instead of being\nsilently ignored.",
-      "type": "object",
-      "properties": {
-        "agentStatus": {
-          "description": "The requested Agent Status extension, when this selection composes it.\n\n`null` is not accepted: the field is either absent (not composed) or a\ncomplete authored configuration. Collapsing an explicit `null` into\n\"absent\" would give one wire spelling two meanings.",
-          "$ref": "#/$defs/AgentStatusExtensionDocument"
-        },
-        "todo": {
-          "description": "The requested Todo extension, when this selection composes it\n(Issue #259).\n\nAbsent means the child composes no Todo at all — no list authority, no\n`todo` Tool, no status contribution — never \"whatever the role\nauthored\". `null` is refused for the same reason `agentStatus` refuses\nit: one wire spelling may not carry two meanings.",
-          "$ref": "#/$defs/TodoExtensionDocument"
-        },
-        "goal": {
-          "$ref": "#/$defs/GoalExtensionDocument"
-        }
-      },
-      "additionalProperties": false
-    },
-    "AgentStatusExtensionDocument": {
-      "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
-          "type": "boolean",
-          "default": false
-        },
-        "time": {
-          "description": "The Time contributor configuration.",
-          "$ref": "#/$defs/TimeStatusConfig",
-          "default": {
-            "enabled": true
-          }
-        },
-        "background": {
-          "description": "The Background contributor configuration.",
-          "$ref": "#/$defs/BackgroundStatusConfig",
-          "default": {
-            "enabled": true
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "TimeStatusConfig": {
-      "description": "Configuration of the bounded Time status contributor.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "description": "Whether Time participates in an available Agent Status opportunity.",
-          "type": "boolean",
-          "default": true
-        },
-        "timezone": {
-          "description": "The optional IANA timezone used only by Time presentation. Omitting it\nrenders UTC.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "BackgroundStatusConfig": {
-      "description": "Configuration of the bounded Background status contributor.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "description": "Whether Background participates in an available Agent Status opportunity.",
-          "type": "boolean",
-          "default": true
-        }
-      },
-      "additionalProperties": false
-    },
-    "TodoExtensionDocument": {
-      "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "description": "Whether this composition includes the Todo extension at all.",
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "GoalExtensionDocument": {
-      "description": "Authored opt-in Goal composition.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "additionalProperties": false
-    },
     "WorkflowBranchCase": {
       "description": "A stable exit identity and its condition. The first matching case wins.",
       "type": "object",
@@ -13312,23 +13139,6 @@
             "address",
             "path"
           ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "address": {
-              "$ref": "#/$defs/WorkflowNodeAddress"
-            },
-            "kind": {
-              "type": "string",
-              "const": "node_input"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "address"
-          ]
         }
       ]
     },
@@ -13426,23 +13236,6 @@
     },
     "WorkflowConsumerField": {
       "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "binding": {
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "input"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "binding"
-          ]
-        },
         {
           "description": "A variable in one Model prompt message. Every part of a message shares\nits scope, so this also answers for a variable not inserted yet.",
           "type": "object",
@@ -15086,6 +14879,26 @@
       "description": "A configured MCP source or a canonical Managed Python package.\nNamespace parsing happens only at the authoring boundary; runtime dispatch\nmatches these variants, never display strings.",
       "type": "string"
     },
+    "SourceToolSelection": {
+      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted. `All`\ngrants source-wide Tools and negotiated Resources; `Exact` grants only\nthe named ordinary Tools and never source-wide Resources access.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AllTools"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "AllTools": {
+      "type": "string",
+      "enum": [
+        "all"
+      ]
+    },
     "AgentSkillSelection": {
       "description": "Prompt visibility within a frozen Skill catalog; never filesystem authority.",
       "anyOf": [
@@ -15099,6 +14912,86 @@
           }
         }
       ]
+    },
+    "TodoExtensionDocument": {
+      "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether this composition includes the Todo extension at all.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "GoalExtensionDocument": {
+      "description": "Authored opt-in Goal composition.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentStatusExtensionDocument": {
+      "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
+          "type": "boolean",
+          "default": false
+        },
+        "time": {
+          "description": "The Time contributor configuration.",
+          "$ref": "#/$defs/TimeStatusConfig",
+          "default": {
+            "enabled": true
+          }
+        },
+        "background": {
+          "description": "The Background contributor configuration.",
+          "$ref": "#/$defs/BackgroundStatusConfig",
+          "default": {
+            "enabled": true
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "TimeStatusConfig": {
+      "description": "Configuration of the bounded Time status contributor.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether Time participates in an available Agent Status opportunity.",
+          "type": "boolean",
+          "default": true
+        },
+        "timezone": {
+          "description": "The optional IANA timezone used only by Time presentation. Omitting it\nrenders UTC.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "BackgroundStatusConfig": {
+      "description": "Configuration of the bounded Background status contributor.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether Background participates in an available Agent Status opportunity.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
     },
     "AgentProjectInstructionsDocument": {
       "description": "Project-instruction selection from admitted workspace resources.",
@@ -15530,6 +15423,27 @@
               "enabled": false
             }
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolSelectionDocument": {
+      "description": "Shared Agent and Workflow Agent override selection. Extensions are composed\nby their native owner and never enter this ordinary capability vocabulary.",
+      "type": "object",
+      "properties": {
+        "builtin": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "sources": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/SourceToolSelection"
+          },
+          "default": {}
         }
       },
       "additionalProperties": false
@@ -33694,17 +33608,6 @@
             }
           ]
         },
-        "invocation_override": {
-          "description": "The node's invocation override, when it carries one.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AgentOverrideInspection"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "selector": {
           "anyOf": [
             {
@@ -33803,39 +33706,6 @@
           ]
         }
       ]
-    },
-    "AgentOverrideInspection": {
-      "description": "The bounded projection of one Agent node's trusted static invocation\noverride.\n\nPresence is the fact this projection has to carry, so each dimension stays\nan `Option`: `None` is \"this dimension keeps the role's default\" and\n`Some` is \"this dimension is replaced by exactly this\". Only identities\nare exported — capability selectors, Skill names, and the composed\nextension names — never a Skill body, a prompt, a credential, or a\nmaterialization secret.",
-      "type": "object",
-      "properties": {
-        "tools": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/AgentToolSelection"
-          }
-        },
-        "skills": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "extensions": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        }
-      }
     },
     "WorkflowPresentationDiagnostic": {
       "type": "object",

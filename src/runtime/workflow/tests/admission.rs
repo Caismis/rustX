@@ -2,11 +2,8 @@
 use super::*;
 use crate::durable::JournalStore;
 
-fn cfg274_agent_source(overrides: Option<Value>) -> WorkflowProgram {
-    let mut agent = json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],"output":schema(json!({}), &[])});
-    if let Some(overrides) = overrides {
-        agent["override"] = overrides;
-    }
+fn cfg274_agent_source() -> WorkflowProgram {
+    let agent = json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],"output":schema(json!({}), &[])});
     WorkflowProgram::compile(WorkflowId::parse("review").unwrap(), serde_json::from_value(json!({
         "description":"Static review", "block": {
             "input":schema(json!({}), &[]), "output":schema(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},"agent":agent,"done":{"type":"return","output":{"type":"literal","value":{}}}},"edges": [{"from":"workflow_start","to":"agent"},{"from":"agent","to":"done"}],}
@@ -68,7 +65,7 @@ fn cfg274_missing_role_and_required_child_exact_tool_disable_instead_of_suppress
     let available = crate::capabilities::AvailableToolCatalog::default();
     let availability = crate::capabilities::CapabilityAvailability::new();
     let absent = cfg274_admit_child(
-        cfg274_agent_source(None),
+        cfg274_agent_source(),
         &crate::runtime::subagent::AgentCatalog::empty(),
         &available,
         &availability,
@@ -103,27 +100,13 @@ fn cfg274_missing_role_and_required_child_exact_tool_disable_instead_of_suppress
     );
     assert!(ordinary.tools.is_empty());
     assert_eq!(ordinary.diagnostics.len(), 1);
-    let disabled = cfg274_admit_child(
-        cfg274_agent_source(None),
-        &agents,
-        &available,
-        &ready,
-        &skills,
-    );
+    let disabled = cfg274_admit_child(cfg274_agent_source(), &agents, &available, &ready, &skills);
     assert_eq!(
         cfg274_reasons(&disabled)[0].reason,
         WorkflowDependencyFailure::Agent(ordinary.diagnostics[0].clone())
     );
-    let overridden = cfg274_admit_child(
-        cfg274_agent_source(Some(json!({"tools":{"sources":{"github":["missing"]}}}))),
-        &cfg274_agents("description='Review'\ninstructions='Review'"),
-        &available,
-        &ready,
-        &skills,
-    );
-    assert_eq!(cfg274_reasons(&disabled), cfg274_reasons(&overridden));
     let offline = cfg274_admit_child(
-        cfg274_agent_source(None),
+        cfg274_agent_source(),
         &agents,
         &available,
         &availability,
@@ -140,7 +123,7 @@ fn cfg274_missing_role_and_required_child_exact_tool_disable_instead_of_suppress
 }
 
 #[test]
-fn cfg274_replacements_remove_entire_defaults_and_known_goal_disables_child() {
+fn cfg274_missing_defaults_and_known_goal_disable_child() {
     let agents = cfg274_agents(
         "description='Review'\ninstructions='Review'\nskills=['missing']\n[tools.sources]\ngithub=['missing']\n[plugins.goal]\nenabled=true",
     );
@@ -148,7 +131,7 @@ fn cfg274_replacements_remove_entire_defaults_and_known_goal_disables_child() {
     let skills = SkillSnapshot::new(Vec::new());
     let availability = crate::capabilities::CapabilityAvailability::new();
     let disabled = cfg274_admit_child(
-        cfg274_agent_source(None),
+        cfg274_agent_source(),
         &agents,
         &available,
         &availability,
@@ -161,34 +144,14 @@ fn cfg274_replacements_remove_entire_defaults_and_known_goal_disables_child() {
             crate::runtime::agent_profile::AgentProfileDiagnostic::ScopeUnsupported { .. }
         )
     )));
-    let enabled = cfg274_admit_child(
-        cfg274_agent_source(Some(json!({"tools":{},"skills":[],"plugins":{}}))),
-        &agents,
-        &available,
-        &availability,
-        &skills,
-    );
-    let program = enabled
-        .executable(&WorkflowId::parse("review").unwrap())
-        .unwrap();
-    assert_eq!(program.agent_nodes().len(), 1);
-    assert!(program.agent_nodes()[0].resolved.is_some());
-    // Present tools cannot leave a source member inherited from the default.
-    let goal_only = cfg274_admit_child(
-        cfg274_agent_source(Some(json!({"tools":{},"skills":[]}))),
-        &agents,
-        &available,
-        &availability,
-        &skills,
-    );
-    assert_eq!(cfg274_reasons(&goal_only).len(), 1);
 }
 
 #[test]
 fn cfg274_all_freezes_exact_source_set_and_recovery_readmits_only_new_catalog() {
     let plane = workflow_test_plane(1);
     let context = workflow_test_context(&plane);
-    let agents = cfg274_agents("description='Review'\ninstructions='Review'");
+    let agents =
+        cfg274_agents("description='Review'\ninstructions='Review'\n[tools.sources]\ngithub='all'");
     let source = crate::capabilities::ToolSourceId::Mcp(
         crate::runtime::identity::McpServerId::new("github"),
     );
@@ -204,7 +167,7 @@ fn cfg274_all_freezes_exact_source_set_and_recovery_readmits_only_new_catalog() 
             tool
         }))
     };
-    let program = || cfg274_agent_source(Some(json!({"tools":{"sources":{"github":"all"}}})));
+    let program = cfg274_agent_source;
     let skills = SkillSnapshot::new(Vec::new());
     let r1 = cfg274_admit_child(program(), &agents, &available(&["a", "b"]), &ready, &skills);
     let r2 = cfg274_admit_child(program(), &agents, &available(&["c"]), &ready, &skills);
@@ -429,7 +392,7 @@ fn cfg274_child_skills_use_merged_catalog_explicitly_and_remain_lazy() {
             .unwrap()
     };
     let child = cfg274_admit_child(
-        cfg274_agent_source(None),
+        cfg274_agent_source(),
         &agents,
         &available,
         &availability,
@@ -440,8 +403,8 @@ fn cfg274_child_skills_use_merged_catalog_explicitly_and_remain_lazy() {
         "root automatic visibility must not enter a named child"
     );
     let selected = cfg274_admit_child(
-        cfg274_agent_source(Some(json!({"skills":["review"]}))),
-        &agents,
+        cfg274_agent_source(),
+        &cfg274_agents("description='Review'\ninstructions='Review'\nskills=['review']"),
         &available,
         &availability,
         &skills,
@@ -452,8 +415,10 @@ fn cfg274_child_skills_use_merged_catalog_explicitly_and_remain_lazy() {
     assert!(!format!("{selected:?}").contains("SECRET_LAZY_BODY"));
     for name in ["absent", "invalid", "excluded"] {
         let catalog = cfg274_admit_child(
-            cfg274_agent_source(Some(json!({"skills":[name]}))),
-            &agents,
+            cfg274_agent_source(),
+            &cfg274_agents(&format!(
+                "description='Review'\ninstructions='Review'\nskills=['{name}']"
+            )),
             &available,
             &availability,
             &skills,
@@ -736,7 +701,7 @@ fn resource_authority_follows_effective_workflow_agent_selection_and_frozen_gene
             .unwrap()
     };
     let original = cfg274_admit_child(
-        cfg274_agent_source(None),
+        cfg274_agent_source(),
         &agents,
         &resources,
         &availability,
@@ -755,8 +720,8 @@ fn resource_authority_follows_effective_workflow_agent_selection_and_frozen_gene
         [source.clone()].into()
     );
     let replaced = cfg274_admit_child(
-        cfg274_agent_source(Some(json!({"tools":{}}))),
-        &agents,
+        cfg274_agent_source(),
+        &cfg274_agents("description='Review'\ninstructions='Review'"),
         &resources,
         &availability,
         &skills,
@@ -772,8 +737,10 @@ fn resource_authority_follows_effective_workflow_agent_selection_and_frozen_gene
     let with_tool = crate::capabilities::AvailableToolCatalog::metadata([tool])
         .with_resource_sources([source].into());
     let exact = cfg274_admit_child(
-        cfg274_agent_source(Some(json!({"tools":{"sources":{"github":["lookup"]}}}))),
-        &agents,
+        cfg274_agent_source(),
+        &cfg274_agents(
+            "description='Review'\ninstructions='Review'\n[tools.sources]\ngithub=['lookup']",
+        ),
         &with_tool,
         &availability,
         &skills,
@@ -782,7 +749,7 @@ fn resource_authority_follows_effective_workflow_agent_selection_and_frozen_gene
     assert!(bind(&exact).resource_sources.is_empty());
 
     let later = cfg274_admit_child(
-        cfg274_agent_source(None),
+        cfg274_agent_source(),
         &agents,
         &crate::capabilities::AvailableToolCatalog::default(),
         &availability,

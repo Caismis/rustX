@@ -15,11 +15,11 @@ interface Editing { parent: FieldAddress; name?: string }
 export const fieldType = (schema: Schema) => schema.type === 'array' ? `array[${schemaObject(schema.items)?.type ?? 'string'}]` : String(schema.type ?? 'string');
 const types = [...schemaTypes.filter(type => type !== 'array'), ...schemaTypes.filter(type => type !== 'array').map(type => `array[${type}]`)];
 
-export function VisualEditor({ document, address, change, editing, setEditing }: {
-  document: WorkflowDocument; address: FieldAddress; change: (apply: SchemaEdit) => boolean; editing: Editing | undefined; setEditing: (editing: Editing | undefined) => void;
+export function VisualEditor({ document, address, root, change, editing, setEditing }: {
+  document: WorkflowDocument; address: FieldAddress; root: string; change: (apply: SchemaEdit) => boolean; editing: Editing | undefined; setEditing: (editing: Editing | undefined) => void;
 }) {
   return <div className={css.visual}>
-    <SchemaNode name="structured_output" document={document} address={address} depth={0} change={change} editing={editing} setEditing={setEditing} />
+    <SchemaNode name={root} document={document} address={address} depth={0} change={change} editing={editing} setEditing={setEditing} />
   </div>;
 }
 

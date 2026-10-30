@@ -147,12 +147,7 @@ fn admit_block(
             }
             WorkflowNodeProgram::Agent(agent) => {
                 if let Some(definition) = agents.get(&agent.profile) {
-                    let effective = agent
-                        .invocation_override
-                        .clone()
-                        .unwrap_or_default()
-                        .effective_profile(definition);
-                    let resolved = resolve_agent_profile(&effective, authority);
+                    let resolved = resolve_agent_profile(definition.profile(), authority);
                     diagnostics.extend(resolved.diagnostics.iter().cloned().map(|reason| {
                         WorkflowAdmissionDiagnostic {
                             path: path.clone(),

@@ -259,16 +259,16 @@ fn reference_authoring_errors_fail_before_execution() {
             .unwrap();
     let cases = [
         (
-            "/block/nodes/plan/input/brief/path",
+            "/block/nodes/plan/task/2/path",
             serde_json::json!(["args", "missing"]),
         ),
         (
-            "/block/nodes/repair/body/nodes/implement/input/plan/path",
+            "/block/nodes/repair/body/nodes/implement/task/2/path",
             serde_json::json!(["plan"]),
         ),
         ("/block/nodes/repair/max_iterations", serde_json::json!(0)),
         (
-            "/block/nodes/plan/input/brief/path",
+            "/block/nodes/plan/task/2/path",
             serde_json::json!(["repair"]),
         ),
         (

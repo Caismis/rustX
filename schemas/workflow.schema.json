@@ -1,166 +1,5 @@
 {
   "$defs": {
-    "AgentStatusExtensionDocument": {
-      "additionalProperties": false,
-      "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
-      "properties": {
-        "background": {
-          "$ref": "#/$defs/BackgroundStatusConfig",
-          "default": {
-            "enabled": true
-          },
-          "description": "The Background contributor configuration."
-        },
-        "enabled": {
-          "default": false,
-          "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
-          "type": "boolean"
-        },
-        "time": {
-          "$ref": "#/$defs/TimeStatusConfig",
-          "default": {
-            "enabled": true
-          },
-          "description": "The Time contributor configuration."
-        }
-      },
-      "type": "object"
-    },
-    "AllTools": {
-      "enum": [
-        "all"
-      ],
-      "type": "string"
-    },
-    "BackgroundStatusConfig": {
-      "additionalProperties": false,
-      "description": "Configuration of the bounded Background status contributor.",
-      "properties": {
-        "enabled": {
-          "default": true,
-          "description": "Whether Background participates in an available Agent Status opportunity.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "GoalExtensionDocument": {
-      "additionalProperties": false,
-      "description": "Authored opt-in Goal composition.",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "NativeAgentExtensionSelection": {
-      "additionalProperties": false,
-      "description": "The **presence-aware** closed selection an invocation override expresses.\n\nComplete profiles and invocation selections share omission semantics:\nomitted members compose no extension. The outer invocation dimension is\npresence-aware: absent retains the named default; present replaces it.\nThis wire record preserves the invocation protocol's camelCase spelling\nand rejects explicit null members.\n\nThe record stays closed exactly like the authored document: an unknown\nextension name is rejected by `deny_unknown_fields`, so a misspelled or\nnot-yet-implemented extension fails deterministically instead of being\nsilently ignored.",
-      "properties": {
-        "agentStatus": {
-          "$ref": "#/$defs/AgentStatusExtensionDocument",
-          "description": "The requested Agent Status extension, when this selection composes it.\n\n`null` is not accepted: the field is either absent (not composed) or a\ncomplete authored configuration. Collapsing an explicit `null` into\n\"absent\" would give one wire spelling two meanings."
-        },
-        "goal": {
-          "$ref": "#/$defs/GoalExtensionDocument"
-        },
-        "todo": {
-          "$ref": "#/$defs/TodoExtensionDocument",
-          "description": "The requested Todo extension, when this selection composes it\n(Issue #259).\n\nAbsent means the child composes no Todo at all — no list authority, no\n`todo` Tool, no status contribution — never \"whatever the role\nauthored\". `null` is refused for the same reason `agentStatus` refuses\nit: one wire spelling may not carry two meanings."
-        }
-      },
-      "type": "object"
-    },
-    "SourceToolSelection": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AllTools"
-        },
-        {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      ],
-      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted. `All`\ngrants source-wide Tools and negotiated Resources; `Exact` grants only\nthe named ordinary Tools and never source-wide Resources access."
-    },
-    "SubagentInvocationOverride": {
-      "additionalProperties": false,
-      "description": "One invocation-scoped replacement of selected child capability\ndimensions.\n\nThe same value is produced by model-generated `subagent` arguments and by\ntrusted static Workflow program data. The launch boundary determines\nauthority; both share this vocabulary and the `AgentProfile` resolver.",
-      "properties": {
-        "plugins": {
-          "$ref": "#/$defs/NativeAgentExtensionSelection",
-          "description": "The complete replacement Plugin composition, when this\ndimension is overridden. Absent uses the definition's composition."
-        },
-        "skills": {
-          "description": "The complete replacement Skill selection, when this dimension is\noverridden. Absent uses the definition's selection.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "tools": {
-          "$ref": "#/$defs/ToolSelectionDocument",
-          "description": "The complete replacement Tool selection, when this dimension is\noverridden. Absent uses the definition's selection."
-        }
-      },
-      "type": "object"
-    },
-    "TimeStatusConfig": {
-      "additionalProperties": false,
-      "description": "Configuration of the bounded Time status contributor.",
-      "properties": {
-        "enabled": {
-          "default": true,
-          "description": "Whether Time participates in an available Agent Status opportunity.",
-          "type": "boolean"
-        },
-        "timezone": {
-          "description": "The optional IANA timezone used only by Time presentation. Omitting it\nrenders UTC.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "TodoExtensionDocument": {
-      "additionalProperties": false,
-      "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "description": "Whether this composition includes the Todo extension at all.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "ToolSelectionDocument": {
-      "additionalProperties": false,
-      "description": "Shared Agent and Workflow Agent override selection. Extensions are composed\nby their native owner and never enter this ordinary capability vocabulary.",
-      "properties": {
-        "builtin": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "sources": {
-          "additionalProperties": {
-            "$ref": "#/$defs/SourceToolSelection"
-          },
-          "default": {},
-          "type": "object"
-        }
-      },
-      "type": "object"
-    },
     "WorkflowBlock": {
       "additionalProperties": false,
       "description": "A fixed lexical graph shared by the root and Loop bodies.",
@@ -719,20 +558,8 @@
           "additionalProperties": false,
           "description": "One execution of an admitted named Subagent profile.",
           "properties": {
-            "input": {
-              "additionalProperties": {
-                "$ref": "#/$defs/WorkflowValue"
-              },
-              "default": {},
-              "description": "Explicit input bindings from workflow-local values.",
-              "type": "object"
-            },
             "output": {
               "description": "The frozen `AgentRun` output contract."
-            },
-            "override": {
-              "$ref": "#/$defs/SubagentInvocationOverride",
-              "description": "The optional invocation-scoped capability override of this node\n(Issue #258).\n\nThis is **trusted static program data**: it is part of the\ncompiled Workflow, is validated against the Workflow's own\nadmitted generation, and is not reachable from model output, node\ninput values, or task text. It may therefore legitimately replace\nthe role's defaults with capabilities the invoking main model does\nnot itself hold — never with capabilities the generation does not\nauthorize."
             },
             "profile": {
               "description": "The native named profile to resolve at `AgentRun` admission.",
@@ -968,23 +795,6 @@
             "kind",
             "address",
             "path"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "address": {
-              "$ref": "#/$defs/WorkflowNodeAddress"
-            },
-            "kind": {
-              "const": "node_input",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "address"
           ],
           "type": "object"
         }

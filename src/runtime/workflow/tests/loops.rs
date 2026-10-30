@@ -274,7 +274,7 @@ fn agent_feedback_definition(max: u32) -> WorkflowDefinition {
     let state = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
     let definition = serde_json::from_value(json!({"description":"native child feedback","block":{
         "input":state,"output":state,"nodes": {"workflow_start":{"type":"start"},
-            "work":{"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Check fixed input"}],"input":{},"output":state},
+            "work":{"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Check fixed input"}],"output":state},
             "done":{"type":"return","output":{"type":"reference","path":["work"]}}
         },"edges": [{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}],}})).unwrap();
     wrap_definition(definition, max)
@@ -948,7 +948,7 @@ async fn parallel_body_return_waits_for_siblings_and_fresh_children_in_definitio
             .map(|_| stage_workflow_child(&plane))
             .collect::<Vec<_>>();
         let state = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
-        let work = json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Check fixed input"}],"input":{},"output":state});
+        let work = json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Check fixed input"}],"output":state});
         let definition = serde_json::from_value(json!({"description":"parallel feedback","block":{
         "input":state,"output":state,"nodes": {
             "workflow_start":{"type":"start"},"a":work,"b":work,

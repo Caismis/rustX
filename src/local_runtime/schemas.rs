@@ -147,44 +147,6 @@ mod tests {
     }
 
     #[test]
-    fn workflow_agent_override_authoring_and_schema_keep_all_and_exact() {
-        use crate::capabilities::selection::SourceToolSelection;
-        let schema = super::generate()["workflow.schema.json"].clone();
-        let validator = jsonschema::Validator::new(&schema).unwrap();
-        for (selection, expected) in [
-            (json!("all"), SourceToolSelection::All),
-            (
-                json!(["get_issue"]),
-                SourceToolSelection::Exact(vec!["get_issue".into()]),
-            ),
-        ] {
-            let document = workflow(
-                &json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],
-                "output":{"type":"object"},"override":{"tools":{"sources":{"github":selection}}}}),
-            );
-            assert!(validator.is_valid(&document));
-            let parsed: WorkflowDefinition =
-                serde_yaml::from_str(&serde_yaml::to_string(&document).unwrap()).unwrap();
-            let WorkflowNodeDefinition::Agent {
-                invocation_override: Some(overrides),
-                ..
-            } = &parsed.block.nodes["work"]
-            else {
-                panic!("Agent override")
-            };
-            assert_eq!(
-                overrides.tools.as_ref().unwrap().sources.values().next(),
-                Some(&expected)
-            );
-            crate::runtime::workflow::WorkflowProgram::compile(
-                crate::runtime::workflow::WorkflowId::parse("selector-contract").unwrap(),
-                parsed,
-            )
-            .unwrap();
-        }
-    }
-
-    #[test]
     fn source_request_parameter_schemas_are_json_strings() {
         for (name, schema) in super::generate() {
             if matches!(name, "workflow.schema.json" | "mcp.schema.json") {

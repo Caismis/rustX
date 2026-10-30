@@ -12,9 +12,7 @@ export function consumerAddress(document: WorkflowDocument, field: FieldAddress)
   const first = parts.shift();
   let consumer: WorkflowConsumerField;
   const key = () => { const part = parts.shift(); return typeof part === 'object' ? part.key : undefined; };
-  if (first === 'input' && node.type === 'agent') {
-    const binding = key(); if (binding === undefined) return undefined; consumer = { kind: 'input', binding };
-  } else if (first === 'messages' && node.type === 'model') {
+  if (first === 'messages' && node.type === 'model') {
     // Every variable of a message shares its scope, inserted or not.
     const index = parts.shift(); if (typeof index !== 'number' || !node.messages[index]) return undefined;
     return { address: { block: [...field.block], node: field.node }, field: { kind: 'message', index }, path: [] };

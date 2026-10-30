@@ -101,7 +101,7 @@ Commit, publication, observed reread and runtime adoption remain separate facts.
 | --- | --- |
 | `nodes` | Structured `{block, node}` address; optional display `title`, author `description`, `position`, Loop container `dimensions` |
 | `notes` | Globally unique stable note ID, owning Block, Markdown text, one of `neutral/blue/green/amber/rose`, position and dimensions |
-| `orders` | Ordered field names at a typed Block-input/output, node-output, node-input binding target |
+| `orders` | Ordered field names at a typed Block-input/output or node-output target |
 
 A Block address is an array of `{node}` steps, each naming a Loop body.
 Different child Blocks may reuse local node IDs. Start is a real node and stores
@@ -730,6 +730,6 @@ credentials, WorkflowRun, interaction publication/waiter creation, resource
 generation construction, and Tool registration/domain admission mutation. Measurement wraps the synchronous inspection entry point;
 no sleep or live provider serves as correctness evidence.
 
-Invocation overrides never change Workflow run identity. Workflow Agent children
+Workflow Agent children
 own their Conversations and run in the shared Session workspace; a Workflow owns
 no workspace resource and contributes no Session deletion blocker. See [capability identity and Session ownership](subagent-resources.md#capability-identity-and-session-ownership).

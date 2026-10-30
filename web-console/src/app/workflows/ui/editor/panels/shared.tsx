@@ -2,12 +2,10 @@ import type { WorkflowVocabulary } from '../../../../../../../protocol/app-serve
 import { useTranslation } from '../../../../../locale/react';
 import { CommandRejected, replaceNode } from '../../../document/commands';
 import { encodeField, nodeField, type ArrayEdit, type FieldAddress, type FieldStep } from '../../../document/fields';
-import { blockAt, nodeAt, sameBlockPath, type BlockPath, type NodeDefinition, type Value, type WorkflowDocument } from '../../../document/model';
-import { orderedKeys } from '../../../document/presentation';
+import { blockAt, nodeAt, sameBlockPath, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../../../document/model';
 import { schemaObject } from '../../../document/schema';
 import type { WorkflowScopePort } from '../../../port';
 import { useCandidateAnalysis } from '../forms/analysis';
-import { AddKey, ValueEditor } from '../forms/ValueEditor';
 import { Section } from '../forms/fields';
 import type { Selection } from '../selection';
 import css from '../Editor.module.css';
@@ -27,29 +25,6 @@ export function useNode<K extends NodeDefinition['type']>(props: PanelProps, kin
   return { node, at, update };
 }
 
-export function Bindings(props: PanelProps) {
-  const tx = useTranslation();
-  const { document, block, id, edit } = props;
-  const node = nodeAt(blockAt(document, block)!, id)!;
-  if (node.type !== 'agent') return null;
-  const update = (change: (input: Record<string, Value>) => Record<string, Value>) => edit(document => {
-    const current = nodeAt(blockAt(document, block)!, id)!;
-    if (current.type !== 'agent') throw new CommandRejected('missing_node');
-    return replaceNode(document, block, id, { ...current, input: change(current.input ?? {}) });
-  });
-  return <Section title={tx('workflows:inspector.agent-input')}>
-    {orderedKeys(document, { kind: 'node_input', address: { block: [...block], node: id } }, Object.keys(node.input ?? {})).map(key => <div key={key} className={css.nestedRow}>
-      <ValueEditor label={key} address={nodeField(block, id, ['input', { key }])} value={node.input![key]} edit={edit} />
-      <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: key })} onClick={() => update(input => Object.fromEntries(Object.entries(input).filter(([name]) => name !== key)))}>×</button>
-    </div>)}
-    <AddKey existing={Object.keys(node.input ?? {})} address={nodeField(block, id)} add={(document, key) => {
-      const current = nodeAt(blockAt(document, block)!, id)!;
-      if (current.type !== 'agent') throw new CommandRejected('missing_node');
-      if (Object.hasOwn(current.input ?? {}, key)) throw new CommandRejected('duplicate_identifier');
-      return replaceNode(document, block, id, { ...current, input: { ...current.input, [key]: { type: 'reference', path: ['args'] } } });
-    }} />
-  </Section>;
-}
 export function OutputDeclaration({ block, id }: Pick<PanelProps, 'block' | 'id'>) {
   const tx = useTranslation(), analysis = useCandidateAnalysis();
   const report = analysis?.report?.analysis;

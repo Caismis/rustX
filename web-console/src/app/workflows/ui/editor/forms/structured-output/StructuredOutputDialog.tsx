@@ -19,8 +19,9 @@ import css from './StructuredOutput.module.css';
 
 /** A dialog owns its working copy. Only Save sends one document edit; Escape,
  * Cancel and the close button discard everything in this editing session. */
-export function StructuredOutputDialog({ document: original, address, edit, onClose }: {
-  document: WorkflowDocument; address: FieldAddress; edit: (apply: SchemaEdit) => void; onClose: () => void;
+/** `root` names the edited object as downstream references reach it. */
+export function StructuredOutputDialog({ document: original, address, root, edit, onClose }: {
+  document: WorkflowDocument; address: FieldAddress; root: string; edit: (apply: SchemaEdit) => void; onClose: () => void;
 }) {
   const tx = useTranslation();
   const owner = useContext(DraftOwner)!;
@@ -84,7 +85,7 @@ export function StructuredOutputDialog({ document: original, address, edit, onCl
         </Tabs.List>
         <button type="button" className={css.importButton} onClick={() => { if (editing) setError(tx('workflows:structured.finish-field')); else setImporting(true); }}>{tx('workflows:structured.import-json')}</button>
       </div>
-      <Tabs.Panel className={css.workspace} value="visual"><VisualEditor document={staged.document} address={address} change={change} editing={editing} setEditing={value => { setEditing(value); setError(''); }} /></Tabs.Panel>
+      <Tabs.Panel className={css.workspace} value="visual"><VisualEditor document={staged.document} address={address} root={root} change={change} editing={editing} setEditing={value => { setEditing(value); setError(''); }} /></Tabs.Panel>
       <Tabs.Panel className={css.workspace} value="json"><JsonCodeEditor panel label="JSON" value={json} onChange={value => { setJson(value); setError(''); }} allowEmpty={false}
         headerActions={<button type="button" aria-label={tx(copied === json ? 'workflows:structured.copied' : 'workflows:structured.copy')} onClick={async () => {
           try { await navigator.clipboard.writeText(json); setCopied(json); } catch { setError(tx('workflows:structured.copy-failed')); }

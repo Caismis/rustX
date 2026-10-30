@@ -786,17 +786,11 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     use crate::runtime::workflow::{WorkflowId, WorkflowProgram};
     use crate::workflow_file::WorkflowFileDocument;
     use sha2::Digest;
-    const EXAMPLES: [(&str, &str); 8] = [
+    const EXAMPLES: [(&str, &str); 7] = [
         (
             "typed_agent",
             include_str!(
                 "../../examples/local-runtime/workflow-templates/.agents/workflows/typed_agent.yaml"
-            ),
-        ),
-        (
-            "specialized_agent",
-            include_str!(
-                "../../examples/local-runtime/workflow-templates/.agents/workflows/specialized_agent.yaml"
             ),
         ),
         (
@@ -946,7 +940,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             },
         ));
     }
-    let (id, definition, revision, _) = &examples[4];
+    let (id, definition, revision, _) = &examples[3];
     let program = WorkflowProgram::compile(id.clone(), definition.definition.clone())
         .expect("example compiles");
     fixtures.push(request(
@@ -995,7 +989,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     ));
     // Partial output contracts cross the same generated protocol. In particular,
     // unknown is an explicit null schema, not a fabricated empty schema object.
-    let (incomplete_id, incomplete_base, _, _) = &examples[6];
+    let (incomplete_id, incomplete_base, _, _) = &examples[5];
     let mut incomplete = incomplete_base.clone();
     let crate::runtime::workflow::WorkflowNodeDefinition::Model { output, .. } = incomplete
         .block

@@ -354,12 +354,10 @@ block:
       task:
       - type: literal
         value: 'Review the request and commit the result.'
-      input:
-        task:
-          type: reference
-          path:
-          - args
-          - task
+      - type: reference
+        path:
+        - args
+        - task
       output:
         type: object
         properties:

@@ -4,8 +4,8 @@ See [Workflow admission and Agent selection](workflow-admission.md) for static c
 
 Goal answers WHAT persists; Workflow answers HOW finite work executes. A Goal
 round can invoke Workflow Tools normally, but Workflow completion never completes
-Goal, and WorkflowRun never owns Goal state or continuation. Workflow Agent-node
-overrides cannot enable root-only Goal for child activations. Scheduler owns future
+Goal, and WorkflowRun never owns Goal state or continuation. A Workflow Agent
+node cannot enable root-only Goal for its child activation. Scheduler owns future
 WHEN semantics; Todo remains bounded working state. See [Goal extension](goal-extension.md).
 
 For small executable starting points and offline `workflow check` / `workflow explain`,
@@ -216,8 +216,7 @@ block:
 
 Builtin selectors are `{origin: builtin, name: <name>}`. External Tool leaves
 use `{origin: source, source_id: <source>, name: <name>}` for both configured
-MCP sources and Managed Python sources (`python:<package>`). Agent overrides
-use the shared `tools.sources` All/Exact vocabulary. Each Tool node is its own
+MCP sources and Managed Python sources (`python:<package>`). Each Tool node is its own
 exact executable declaration. Static admission freezes each exact capability; the compiler checks typed lexical
 bindings, object arguments, and the closed result schema. The invoking
 resource generation resolves the actual capability and native input schema;
@@ -233,8 +232,8 @@ execution. Exact identity changes at invocation fail closed. Available-but-inact
 parent model. Admission rejects background-only capabilities, composites,
 Workflow dispatch, subagents and execution control. Ordinary ask_user is eligible.
 An extension-provided Tool such as `todo` is not an ordinary capability at all
-and is refused at compile time, naming the extension that owns it; a Workflow
-Agent node composes Todo through `override.extensions`, never as a capability.
+and is refused at compile time, naming the extension that owns it; an Agent
+profile composes Todo through its Plugins, never as a capability.
 No rediscovery or current-file lookup can replace a frozen registration.
 Tools run with their exact admitted execution contract in the invoking
 Session's workspace; a Workflow never rebinds a Tool's working directory.
@@ -258,22 +257,13 @@ summary, otherwise the first failing definition key supplies its typed status.
 Child outcomes are immutable. Diagnostics are bounded without replacing status
 or claiming that remote effects stopped.
 
-An `Agent` node may carry one optional `override` object with the same three
-dimensions and the same replacement rule as the model-facing `subagent` Tool
-(see [Canonical named Subagent resources](subagent-resources.md#invocation-scoped-overrides)).
-A Workflow override is **trusted static program data**: it is part of the
-compiled program, is validated at compilation and again during
-resource-generation preparation against that generation's authority, and is not
-reachable from model output, node input values, task text, or any expression or
-interpolation language. It may therefore replace the role's defaults with
-capabilities the invoking main model does not itself hold — never with
-capabilities the admitted generation does not authorize.
+An `Agent` node runs its named profile exactly as the profile defines it:
+there is no per-node override of its tools, Skills or Plugins. A Workflow that
+needs a different capability set names a different profile.
 
-Workflow does not acquire a second resolver, Tool Plane, or `SubagentRuntime`
-for this: an `Agent` node still resolves one named profile through the same
-`SubagentResolver`, differing only in the typed authority its launch site
-supplies. Equivalent authorized inputs on the Workflow and Tool paths therefore
-produce one identical `ResolvedSubagentSpec`.
+Workflow does not acquire a second resolver, Tool Plane, or `SubagentRuntime`:
+an `Agent` node resolves its named profile through the same `SubagentResolver`,
+differing only in the typed authority its launch site supplies.
 
 `ToolInvocationId` separates Agent `ToolCallId` correlation from Workflow's
 concrete `WorkflowNodeInstance`. A Tool node creates no Assistant, model turn,
@@ -444,11 +434,11 @@ Values are a closed tagged AST:
 | `object` | `fields: {key: <value expression>}` | Atomic object construction |
 | `array` | `items: [<value expression>, ...]` | Atomic array construction |
 
-An Agent's `input` is a map of names to value expressions. A branch's `input`
-and a Return's `output` are each one value expression. An Agent's `task`,
+A Loop's `input` and a Return's `output` are each one value expression. An Agent's `task`,
 like a Model message's `content`, is a list of fixed string literals and
 references, rendered in order when the AgentRun starts: a string is inserted
-as itself, any other value as JSON text. There is no interpolation, truthiness, callback, Transform node,
+as itself, any other value as JSON text. The task is the only way workflow
+values reach an Agent. There is no interpolation, truthiness, callback, Transform node,
 or embedded programming language. Unknown fields/tags and duplicate
 construction field keys are rejected. A failing construction commits no
 partial local value.
@@ -985,6 +975,5 @@ App Server carries them into the foreground Workflow Tool details. See
 [run projection](workflow-run-projection.md) for ownership, revision domains, cursor/resync synchronization, finite retention,
 cancellation draining, and reconnect/process death.
 
-Invocation overrides never change Workflow run identity. Workflow Agent
-children own their Conversations and run in the shared Session workspace; a
+Workflow Agent children own their Conversations and run in the shared Session workspace; a
 Workflow owns no workspace resource and contributes no Session deletion blocker. See [capability identity and Session ownership](subagent-resources.md#capability-identity-and-session-ownership).

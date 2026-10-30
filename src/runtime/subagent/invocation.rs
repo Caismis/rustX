@@ -221,27 +221,6 @@ impl SubagentInvocationOverride {
         }
         Ok(())
     }
-
-    /// The authored field path of one dimension, for nested diagnostics.
-    #[must_use]
-    pub const fn dimension_path(error: &SubagentOverrideError) -> &'static str {
-        match error {
-            SubagentOverrideError::InvalidTools { .. }
-            | SubagentOverrideError::TooManyTools { .. }
-            | SubagentOverrideError::RecursiveSelector { .. } => "override.tools",
-            SubagentOverrideError::TooManySkills { .. }
-            | SubagentOverrideError::EmptySkillSelector => "override.skills",
-        }
-    }
-}
-
-impl SubagentInvocationOverride {
-    /// The canonically ordered, deduplicated selectors of one authored
-    /// selection document, for bounded authoring projections.
-    #[must_use]
-    pub fn canonical_selectors_of(selection: &ToolSelectionDocument) -> Vec<AgentToolSelection> {
-        canonical_selectors(selection.selectors())
-    }
 }
 
 /// Canonically orders and deduplicates a Tool selection.

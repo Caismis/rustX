@@ -8,4 +8,4 @@ export function exampleSource(id: string): WorkflowSource {
   return structuredClone(message.result.source as unknown as WorkflowSource);
 }
 
-export const EXAMPLES = ['typed_agent', 'specialized_agent', 'parallel_checks', 'human_plan', 'parallel_review', 'implement_and_review'] as const;
+export const EXAMPLES = ['typed_agent', 'parallel_checks', 'human_plan', 'parallel_review', 'implement_and_review'] as const;

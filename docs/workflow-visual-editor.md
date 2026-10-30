@@ -84,7 +84,7 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | --- | --- |
 | Start | Nondeletable Block input schema, descriptions and one or more next nodes |
 | Model | Session/registered model, fixed instruction, bindings and text/JSON output |
-| Agent | Profile, fixed task, bindings, output schema and invocation override |
+| Agent | Profile picked from the scope's profiles, task in the prompt editor with variables, structured output fields |
 | Tool | Exact selector, arguments and text/JSON result projection |
 | Branch | Compact IF/ELIF/ELSE card, ordered cases, searchable variable conditions, AND/OR and multiple successors per exit |
 | Loop | Initial input, private body contracts, `until`, `carry`, iteration limit and both exits |

@@ -16,9 +16,8 @@ import { KindIcon } from '../../icons';
 import { useTranslation } from '../../../../../locale/react';
 import { encodeField, within, type FieldAddress } from '../../../document/fields';
 import { ModelSelection } from '../forms/ModelSelection';
-import { SchemaEditor } from '../forms/SchemaEditor';
 import { DraftTextField, JsonField, Section } from '../forms/fields';
-import { Bindings, useNode, type PanelProps } from './shared';
+import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 
 const StructuredOutputDialog = lazy(() => import('../forms/structured-output/StructuredOutputDialog').then(module => ({ default: module.StructuredOutputDialog })));
@@ -67,10 +66,10 @@ function ModelOutputs(props: PanelProps) {
         <div className={css.structuredHead}><b>{/* i18n-raw: native output field name */ 'structured_output'}</b><code>{/* i18n-raw: JSON Schema type name */ 'object'}</code>
           <button type="button" className={css.smallButton} onClick={() => setConfiguring(true)}><IconEditOutline16 />{tx('workflows:prompt.configure')}</button>
         </div>
-        {Object.keys(schemaObject(schemaObject(schema)?.properties) ?? {}).length ? <SchemaTree schema={schema} document={props.document} address={at('output', 'schema')} /> : <p className={css.structuredEmpty}>{tx('workflows:prompt.structured-empty')}</p>}
+        <StructuredFields schema={schema} document={props.document} address={at('output', 'schema')} />
       </div>}
     </>}
-    {configuring && schema !== undefined && <Suspense fallback={null}><StructuredOutputDialog document={props.document} address={at('output', 'schema')} edit={props.edit} onClose={() => setConfiguring(false)} /></Suspense>}
+    {configuring && schema !== undefined && <Suspense fallback={null}><StructuredOutputDialog document={props.document} address={at('output', 'schema')} root={/* i18n-raw: native output field name */ 'structured_output'} edit={props.edit} onClose={() => setConfiguring(false)} /></Suspense>}
   </section>;
 }
 
@@ -199,7 +198,7 @@ function InsertVariable() {
 }
 
 export function AgentPanel(props: PanelProps) {
-  const tx = useTranslation(), { node, at, update } = useNode(props, 'agent');
+  const tx = useTranslation();
   return <>
     {/* As Dify's Agent panel: the strategy is picked from a list, then the
         instruction is written in the same prompt editor as the LLM node. */}
@@ -207,16 +206,27 @@ export function AgentPanel(props: PanelProps) {
       <ProfileSelection {...props} />
       <AgentTask {...props} />
     </Section>
-    <Bindings {...props} />
-    <Section title={tx('workflows:panel.output')}><SchemaEditor label={tx('workflows:inspector.agent-output')} value={node.output} address={at('output')} edit={props.edit} /></Section>
-    <Section title={tx('workflows:panel.advanced')}>
-      <details className={css.advanced}><summary>{tx('workflows:inspector.agent-override')}</summary>
-        <label className={css.check}><input type="checkbox" checked={node.override !== undefined} onChange={event => { const enabled = event.target.checked; update(current => { const { override: _previous, ...rest } = current; return enabled ? { ...rest, override: {} } : rest; }, at('override')); }} />{tx('workflows:inspector.override-enabled')}</label>
-        {node.override !== undefined && <JsonField label={tx('workflows:inspector.agent-override')} value={node.override} address={at('override')} />}
-        <p className={css.note}>{tx('workflows:inspector.agent-override-hint')}</p>
-      </details>
-    </Section>
+    <AgentOutputs {...props} />
   </>;
+}
+
+/** An Agent always returns structured output: its declared fields, edited in
+ * the same dialog as a Model's structured output. */
+function AgentOutputs(props: PanelProps) {
+  const tx = useTranslation(), { node, at } = useNode(props, 'agent');
+  const [configuring, setConfiguring] = useState(false);
+  return <section className={css.group} aria-label={tx('workflows:prompt.output-variables')}>
+    <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:prompt.output-variables')}</span>
+      <button type="button" className={css.smallButton} onClick={() => setConfiguring(true)}><IconEditOutline16 />{tx('workflows:prompt.configure')}</button></h3>
+    <StructuredFields schema={node.output} document={props.document} address={at('output')} />
+    {configuring && <Suspense fallback={null}><StructuredOutputDialog document={props.document} address={at('output')} root={props.id} edit={props.edit} onClose={() => setConfiguring(false)} /></Suspense>}
+  </section>;
+}
+
+/** A structured output's declared fields, or the note that it has none. */
+function StructuredFields({ schema, document, address }: { schema: unknown; document: WorkflowDocument; address: FieldAddress }) {
+  const tx = useTranslation();
+  return Object.keys(schemaObject(schemaObject(schema)?.properties) ?? {}).length ? <SchemaTree schema={schema} document={document} address={address} /> : <p className={css.structuredEmpty}>{tx('workflows:prompt.structured-empty')}</p>;
 }
 
 /** The named profile, chosen from those discovered in this scope. */

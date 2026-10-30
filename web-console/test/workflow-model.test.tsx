@@ -287,7 +287,7 @@ describe('Model native editing document', () => {
   });
 
   it('writes an Agent task in the prompt editor, its variables as tokens, and lists the scope\'s profiles', async () => {
-    const agent: NodeDefinition = { type: 'agent', profile: '', task: [{ type: 'literal', value: 'Review ' }, { type: 'reference', path: ['args'] }], input: {}, output: object };
+    const agent: NodeDefinition = { type: 'agent', profile: '', task: [{ type: 'literal', value: 'Review ' }, { type: 'reference', path: ['args'] }], output: object };
     await open(undefined, agent);
     const task = inspector().getByRole('textbox', { name: 'Task' });
     expect(task.textContent).toContain('Review ');
@@ -297,6 +297,13 @@ describe('Model native editing document', () => {
     expect(trigger.textContent).toContain('Choose an Agent profile');
     await act(async () => fireEvent.click(trigger));
     expect(await screen.findByText('No Agent profiles in this scope')).toBeTruthy();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    const outputs = within(inspector().getByRole('region', { name: 'Output variables' }));
+    expect(outputs.getByText('Structured output is not configured')).toBeTruthy();
+    await act(async () => fireEvent.click(outputs.getByRole('button', { name: 'Configure' })));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(inspector().queryByText('Input bindings')).toBeNull();
+    expect(inspector().queryByText('Invocation override')).toBeNull();
   });
 
   it('handles failure as Dify: retries, then a default value or a fail branch whose connections leave with it', async () => {

@@ -47,12 +47,10 @@ block:
       task:
       - type: literal
         value: "Is the supplied text understandable without unexplained jargon?"
-      input:
-        text:
-          type: reference
-          path:
-          - args
-          - text
+      - type: literal
+        value: "\n\ntext: "
+      - type: reference
+        path: ["args", "text"]
       output:
         type: object
         properties:
@@ -67,12 +65,10 @@ block:
       task:
       - type: literal
         value: "Does the supplied text avoid unnecessary repetition?"
-      input:
-        text:
-          type: reference
-          path:
-          - args
-          - text
+      - type: literal
+        value: "\n\ntext: "
+      - type: reference
+        path: ["args", "text"]
       output:
         type: object
         properties:

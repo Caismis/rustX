@@ -39,9 +39,6 @@ pub struct WorkflowNodeAddress {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkflowConsumerField {
-    Input {
-        binding: String,
-    },
     /// A variable in one Model prompt message. Every part of a message shares
     /// its scope, so this also answers for a variable not inserted yet.
     Message {
@@ -227,11 +224,6 @@ impl WorkflowAnalysisQuery {
             return Err("analysis query exceeds address, text, depth or result bounds");
         }
         match &self.consumer.field {
-            WorkflowConsumerField::Input { binding }
-                if binding.trim().is_empty() || binding.len() > 64 || binding.contains('.') =>
-            {
-                Err("invalid input binding identity")
-            }
             WorkflowConsumerField::Condition { case_id }
             | WorkflowConsumerField::ConditionVariable { case_id }
                 if !valid_key(case_id) =>
@@ -327,9 +319,6 @@ fn consumer<'a>(
     use WorkflowNodeDefinition as N;
     let node = block.nodes.get(&address.address.node)?;
     let (expression, expected, result_scope) = match (node, &address.field) {
-        (N::Agent { input, .. }, F::Input { binding }) => {
-            (Expression::Value(input.get(binding)?), None, false)
-        }
         (N::Model { messages, .. }, F::Message { index }) => {
             messages.get(*index as usize)?;
             (Expression::Value(&UNSET_REFERENCE), None, false)

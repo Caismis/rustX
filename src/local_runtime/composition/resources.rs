@@ -237,15 +237,10 @@ pub(super) fn workflow_source_demand(
                 .filter_map(|selector| selector.source().cloned()),
         );
         for node in program.agent_nodes() {
-            if let Some(agent) = agents.get(&node.profile) {
-                let profile = node
-                    .invocation_override
-                    .clone()
-                    .unwrap_or_default()
-                    .effective_profile(agent);
+            if let Some(profile) = agents.get(&node.profile) {
                 sources.extend(
                     profile
-                        .tools
+                        .tools()
                         .iter()
                         .filter_map(|selector| selector.source().cloned()),
                 );
@@ -325,7 +320,7 @@ mod tests {
     use crate::runtime::workflow::WorkflowCatalog;
 
     #[test]
-    fn exact_workflow_leaves_and_agent_all_overrides_coalesce_source_demand() {
+    fn exact_workflow_leaves_and_agent_profile_sources_coalesce_source_demand() {
         use crate::runtime::workflow::{WorkflowId, WorkflowProgram};
         use serde_json::json;
         let mut config: CurrentRuntimeConfig = serde_json::from_value(json!({"agent": {"model": {"model":"local/test"}, "tools": {"sources":{"github":"all"}}}}))
@@ -333,62 +328,63 @@ mod tests {
         let id = WorkflowId::parse("source-demand").unwrap();
         config.agent.workflows = vec![id.clone()];
         let selector = json!({"origin":"source","source_id":"github","name":"get_issue"});
-        let mut authored = json!({
+        let authored = json!({
             "description":"Demand contract",
             "block":{
                 "input":{"type":"object"}, "output":{"type":"object"},"nodes": {"workflow_start":{"type":"start"},
                     "leaf":{"type":"tool","selector":selector,"arguments":{"type":"literal","value":{}},
                         "result":{"type":"json","part":0,"schema":{"type":"object"}}},
-                    "agent":{"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],"output":{"type":"object"},
-                        "override":{"tools":{"sources":{"github":"all","python:data-analysis":"all"}}}},
+                    "agent":{"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],"output":{"type":"object"}},
                     "done":{"type":"return","output":{"type":"reference","path":["agent"]}}
                 },"edges": [{"from":"workflow_start","to":"leaf"},{"from":"leaf","to":"agent"},{"from":"agent","to":"done"}],}
         });
-        let compile = |authored| {
-            WorkflowProgram::compile(id.clone(), serde_json::from_value(authored).unwrap()).unwrap()
-        };
-        let workflows = WorkflowCatalog::new([compile(authored.clone())]).unwrap();
-        let document = super::super::super::agent_resources::parse(
-            "description='Review'\ninstructions='Review'",
-        )
-        .unwrap();
-        let agents = AgentCatalog::new([NamedAgentDefinition::new(
-            SubagentName::parse("reviewer").unwrap(),
-            crate::runtime::agent_profile::AgentProfile::from_document(
-                &document,
-                crate::runtime::agent_profile::AgentProfileKind::Named,
-                Vec::new(),
-            )
-            .unwrap(),
-            "reviewer.toml".into(),
+        let workflows = WorkflowCatalog::new([WorkflowProgram::compile(
+            id.clone(),
+            serde_json::from_value(authored).unwrap(),
         )
         .unwrap()])
         .unwrap();
-        let demand = |config: &CurrentRuntimeConfig, workflows: &WorkflowCatalog| {
+        let agents = |text: &str| {
+            let document = super::super::super::agent_resources::parse(text).unwrap();
+            AgentCatalog::new([NamedAgentDefinition::new(
+                SubagentName::parse("reviewer").unwrap(),
+                crate::runtime::agent_profile::AgentProfile::from_document(
+                    &document,
+                    crate::runtime::agent_profile::AgentProfileKind::Named,
+                    Vec::new(),
+                )
+                .unwrap(),
+                "reviewer.toml".into(),
+            )
+            .unwrap()])
+            .unwrap()
+        };
+        let demand = |config: &CurrentRuntimeConfig, agents: &AgentCatalog| {
             admitted_source_demand(
                 config,
-                &agents,
-                workflows,
+                agents,
+                &workflows,
                 crate::runtime::resources::ManagedPythonCatalog::default(),
             )
             .sources
         };
+        let sourced = agents(
+            "description='Review'\ninstructions='Review'\n[tools.sources]\ngithub='all'\n'python:data-analysis'='all'",
+        );
         let expected = [
             ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new("github")),
             ToolSourceId::ManagedPython("data-analysis".into()),
         ]
         .into();
-        assert_eq!(demand(&config, &workflows), expected);
+        assert_eq!(demand(&config, &sourced), expected);
         config.agent.tools = crate::capabilities::selection::ToolSelectionDocument::default();
-        assert_eq!(demand(&config, &workflows), expected);
-        // Remove the Agent override: the exact leaf alone still demands github.
-        authored["block"]["nodes"]["agent"]
-            .as_object_mut()
-            .unwrap()
-            .remove("override");
-        let workflows = WorkflowCatalog::new([compile(authored)]).unwrap();
+        assert_eq!(demand(&config, &sourced), expected);
+        // Without profile sources, the exact leaf alone still demands github.
         assert_eq!(
-            demand(&config, &workflows),
+            demand(
+                &config,
+                &agents("description='Review'\ninstructions='Review'")
+            ),
             [ToolSourceId::Mcp(
                 crate::runtime::identity::McpServerId::new("github")
             )]

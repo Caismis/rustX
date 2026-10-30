@@ -42,12 +42,10 @@ block:
       task:
       - type: literal
         value: "Review the request and commit the result."
-      input:
-        task:
-          type: reference
-          path:
-            - args
-            - task
+      - type: literal
+        value: "\n\ntask: "
+      - type: reference
+        path: ["args", "task"]
       output:
         type: object
         properties:
@@ -103,13 +101,13 @@ block:
   edges:
   - from: workflow_start
     to: review
-    - from: review
-      to: gate
-    - from: gate
-      to: decision
-    - from: decision
-      to: success
-      port: true
-    - from: decision
-      to: failure
-      port: false
+  - from: review
+    to: gate
+  - from: gate
+    to: decision
+  - from: decision
+    to: success
+    port: true
+  - from: decision
+    to: failure
+    port: false

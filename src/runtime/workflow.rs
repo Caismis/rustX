@@ -414,29 +414,8 @@ pub enum WorkflowNodeDefinition {
         /// The task instruction for this `AgentRun`: fixed text and explicit
         /// references, as a Model message's content.
         task: Vec<WorkflowValue>,
-        /// Explicit input bindings from workflow-local values.
-        #[serde(default)]
-        input: BTreeMap<String, WorkflowValue>,
         /// The frozen `AgentRun` output contract.
         output: Value,
-        /// The optional invocation-scoped capability override of this node
-        /// (Issue #258).
-        ///
-        /// This is **trusted static program data**: it is part of the
-        /// compiled Workflow, is validated against the Workflow's own
-        /// admitted generation, and is not reachable from model output, node
-        /// input values, or task text. It may therefore legitimately replace
-        /// the role's defaults with capabilities the invoking main model does
-        /// not itself hold — never with capabilities the generation does not
-        /// authorize.
-        #[serde(
-            rename = "override",
-            default,
-            deserialize_with = "crate::extensions::present_and_not_null",
-            skip_serializing_if = "Option::is_none"
-        )]
-        #[schemars(with = "crate::runtime::subagent::SubagentInvocationOverride")]
-        invocation_override: Option<crate::runtime::subagent::SubagentInvocationOverride>,
     },
     /// Ordered IF / ELIF cases, followed by the false (ELSE) port.
     Branch { cases: Vec<WorkflowBranchCase> },
@@ -907,15 +886,8 @@ pub struct WorkflowAgentProgram {
     pub profile: SubagentName,
     /// The task's fixed text and references.
     pub task: Vec<WorkflowValue>,
-    /// Explicit input bindings.
-    pub input: BTreeMap<String, WorkflowValue>,
     /// Frozen output contract.
     pub output_schema: Value,
-    /// The compiled trusted static invocation override of this node.
-    ///
-    /// It is fixed at compilation: no expression, interpolation, node input
-    /// value, or model output can replace it at run time.
-    pub invocation_override: Option<crate::runtime::subagent::SubagentInvocationOverride>,
 }
 
 /// A compiled edge.
@@ -1444,26 +1416,15 @@ fn compile_block(
             WorkflowNodeDefinition::Agent {
                 profile,
                 task,
-                input,
                 output,
-                invocation_override,
             } => {
                 let profile = SubagentName::parse(profile).map_err(|_| WorkflowCompileError::InvalidField("Agent selection requires a valid named profile".into()).at("profile"))?;
-                validate_agent(
-                    task,
-                    input,
-                    output,
-                    invocation_override.as_ref(),
-                                &available_before,
-                    &node_id,
-                )?;
+                validate_agent(task, output, &available_before, &node_id)?;
                 let agent = WorkflowAgentProgram {
                     resolved: None,
                     profile,
                     task: task.clone(),
-                    input: input.clone(),
                     output_schema: output.clone(),
-                    invocation_override: invocation_override.clone(),
                 };
                 available_after.insert(
                     node_id.clone(),
@@ -2043,27 +2004,12 @@ fn validate_workflow_schema_at(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)] // one Agent node's complete static contract
 fn validate_agent(
     task: &[WorkflowValue],
-    input: &BTreeMap<String, WorkflowValue>,
     output: &Value,
-    invocation_override: Option<&crate::runtime::subagent::SubagentInvocationOverride>,
     available: &SchemaMap,
     node: &str,
 ) -> Result<(), WorkflowCompileError> {
-    if let Some(invocation_override) = invocation_override {
-        // Structural validity is decided at compilation, with the authored
-        // path of the offending dimension. Reference *authority* is a
-        // question about a concrete resource generation and belongs to
-        // resource-generation preparation, not to the compiler.
-        invocation_override.validate_spelling().map_err(|error| {
-            WorkflowCompileError::InvalidField(format!(
-                "Agent {node:?} invocation override is invalid: {error}"
-            ))
-            .at(crate::runtime::subagent::SubagentInvocationOverride::dimension_path(&error))
-        })?;
-    }
     if validate_prompt(
         task,
         available,
@@ -2075,22 +2021,7 @@ fn validate_agent(
             WorkflowCompileError::InvalidField(format!("Agent {node:?} task is empty")).at("task"),
         );
     }
-    validate_root_schema(output, &format!("Agent {node} output")).map_err(|e| e.at("output"))?;
-    for (name, binding) in input {
-        if name.trim().is_empty() {
-            return Err(WorkflowCompileError::InvalidField(format!(
-                "Agent {node:?} has an empty input binding name"
-            ))
-            .at(format!("input.{name}")));
-        }
-        if name.len() > 64 || name.contains('.') {
-            return Err(WorkflowCompileError::InvalidField(format!(
-                "Agent {node:?} input binding name {name:?} must be at most 64 bytes and contain no dots"
-            )).at(format!("input.{name}")));
-        }
-        value_schema(binding, available, node, 0).map_err(|e| e.at(format!("input.{name}")))?;
-    }
-    Ok(())
+    validate_root_schema(output, &format!("Agent {node} output")).map_err(|e| e.at("output"))
 }
 
 /// Check one prompt's parts, fixed text or references, against its bounds and
@@ -3199,20 +3130,6 @@ impl WorkflowRuntime {
                 detail: bound_workflow_diagnostic(error.to_string()),
             })?;
         let task = model::render_parts(&agent.task, |part| evaluate_value(part, input, values))?;
-        let mut bound = serde_json::Map::new();
-        for (key, binding) in &agent.input {
-            bound.insert(key.clone(), evaluate_value(binding, input, values)?);
-        }
-        let context_package = serde_json::json!({
-            "workflow_node": node_id.node,
-            "input": Value::Object(bound),
-        });
-        let context_package = serde_json::to_string(&context_package).map_err(|error| {
-            WorkflowRunError::ChildStart {
-                node: node_id.to_string(),
-                detail: format!("cannot encode typed Agent input: {error}"),
-            }
-        })?;
         let spec = crate::runtime::subagent::SubagentStartSpec {
             authority: crate::runtime::subagent::DurableAgentAuthority {
                 title: node_id.node.clone().into(),
@@ -3223,7 +3140,7 @@ impl WorkflowRuntime {
             admission: crate::runtime::subagent::ActivationAdmission {
                 attachments: Vec::new(),
                 task,
-                context: Some(context_package),
+                context: None,
                 origin: crate::runtime::subagent::AgentActivationOrigin::Workflow {
                     node_id: Box::new(node_id.clone()),
                 },
@@ -3826,10 +3743,8 @@ mod tests {
     fn agent(output: Value) -> WorkflowNodeDefinition {
         WorkflowNodeDefinition::Agent {
             profile: "reviewer".into(),
-            task: vec![text("Review the input.")],
-            input: BTreeMap::from([("task".to_owned(), reference("args.task"))]),
+            task: vec![text("Review the input."), reference("args.task")],
             output,
-            invocation_override: None,
         }
     }
 
@@ -4173,9 +4088,7 @@ chat_reasoning_replay = "omit"
                 WorkflowNodeDefinition::Agent {
                     profile: "reviewer".into(),
                     task: vec![text(&format!("Run the {key} workflow branch."))],
-                    input: BTreeMap::new(),
                     output: output.clone(),
-                    invocation_override: None,
                 },
             );
             edges.extend([edge("workflow_start", key), edge(key, "done")]);
@@ -4209,9 +4122,7 @@ chat_reasoning_replay = "omit"
                     WorkflowNodeDefinition::Agent {
                         profile: "reviewer".into(),
                         task: vec![text(&format!("Run the {description} branch."))],
-                        input: BTreeMap::new(),
                         output: output.clone(),
-                        invocation_override: None,
                     },
                 ),
                 (
@@ -5517,10 +5428,8 @@ block:
                     "review".to_owned(),
                     WorkflowNodeDefinition::Agent {
                         profile: "reviewer".into(),
-                        task: vec![text("Review the input.")],
-                        input: BTreeMap::from([("later".to_owned(), reference("later.summary"))]),
+                        task: vec![text("Review the input."), reference("later.summary")],
                         output: output.clone(),
-                        invocation_override: None,
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),
@@ -5583,10 +5492,8 @@ block:
                     "join".to_owned(),
                     WorkflowNodeDefinition::Agent {
                         profile: "reviewer".into(),
-                        task: vec![text("Join the committed facts.")],
-                        input: BTreeMap::from([("summary".to_owned(), reference("yes.summary"))]),
+                        task: vec![text("Join the committed facts."), reference("yes.summary")],
                         output: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
-                        invocation_override: None,
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),
@@ -5697,13 +5604,11 @@ block:
                             "review".to_owned(),
                             WorkflowNodeDefinition::Agent {
                                 profile: "reviewer".into(),
-                                task: vec![text("Review the input.")],
-                                input: BTreeMap::from([(
-                                    "detail".to_owned(),
+                                task: vec![
+                                    text("Review the input."),
                                     reference("args.task.detail"),
-                                )]),
+                                ],
                                 output: schema(json!({}), &[]),
-                                invocation_override: None,
                             },
                         ),
                         ("done".to_owned(), return_node(BTreeMap::new())),

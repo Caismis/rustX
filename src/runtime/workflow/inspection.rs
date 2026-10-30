@@ -38,43 +38,6 @@ impl WorkflowProgram {
         walk(&self.block, "block", &mut found);
         found
     }
-
-    /// Every Agent node that carries a trusted static invocation override,
-    /// with its precise authored path.
-    ///
-    /// The walk descends into Loop bodies, so a nested
-    /// Agent node's override receives the same static validation and the same
-    /// precise diagnostic path as a root-level one.
-    #[must_use]
-    pub fn agent_override_nodes(&self) -> Vec<AgentOverrideNode<'_>> {
-        fn walk<'a>(
-            block: &'a WorkflowBlockProgram,
-            path: &str,
-            found: &mut Vec<AgentOverrideNode<'a>>,
-        ) {
-            for (id, node) in &block.nodes {
-                let path = format!("{path}.nodes.{id}");
-                match node {
-                    WorkflowNodeProgram::Agent(agent) => {
-                        if let Some(invocation_override) = &agent.invocation_override {
-                            found.push(AgentOverrideNode {
-                                path: format!("{path}.override"),
-                                profile: &agent.profile,
-                                invocation_override,
-                            });
-                        }
-                    }
-                    WorkflowNodeProgram::Loop { body, .. } => {
-                        walk(body, &format!("{path}.body"), found);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let mut found = Vec::new();
-        walk(&self.block, "block", &mut found);
-        found
-    }
 }
 
 impl WorkflowProgram {
@@ -125,18 +88,6 @@ pub struct ModelPolicyNode<'a> {
     pub policy: &'a crate::model::session::AuxiliaryModelPolicy,
 }
 
-/// One Agent node's trusted static invocation override, with the authored
-/// path a diagnostic must name.
-#[derive(Debug, Clone)]
-pub struct AgentOverrideNode<'a> {
-    /// The precise authored path of the override, including nesting.
-    pub path: String,
-    /// The role the override specializes.
-    pub profile: &'a SubagentName,
-    /// The compiled override itself.
-    pub invocation_override: &'a crate::runtime::subagent::SubagentInvocationOverride,
-}
-
 /// Static program facts. Literals and task text are deliberately not exported.
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct WorkflowInspection {
@@ -166,22 +117,6 @@ pub struct BlockInspection {
     pub nodes: BTreeMap<String, NodeInspection>,
 }
 
-/// The bounded projection of one Agent node's trusted static invocation
-/// override.
-///
-/// Presence is the fact this projection has to carry, so each dimension stays
-/// an `Option`: `None` is "this dimension keeps the role's default" and
-/// `Some` is "this dimension is replaced by exactly this". Only identities
-/// are exported — capability selectors, Skill names, and the composed
-/// extension names — never a Skill body, a prompt, a credential, or a
-/// materialization secret.
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct AgentOverrideInspection {
-    pub tools: Option<Vec<crate::capabilities::selection::AgentToolSelection>>,
-    pub skills: Option<Vec<String>>,
-    pub extensions: Option<Vec<Cow<'static, str>>>,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct NodeInspection {
     pub kind: Cow<'static, str>,
@@ -190,8 +125,6 @@ pub struct NodeInspection {
     pub profile: Option<SubagentName>,
     /// Selector identities only; provider parameters may contain secrets.
     pub model: Option<ModelPolicyInspection>,
-    /// The node's invocation override, when it carries one.
-    pub invocation_override: Option<AgentOverrideInspection>,
     pub selector: Option<crate::capabilities::selection::ExactToolSelector>,
     pub output_schema: Option<Value>,
     pub result_part: Option<usize>,
@@ -359,7 +292,6 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             bindings: BTreeMap::new(),
             profile: None,
             model: None,
-            invocation_override: None,
             selector: None,
             output_schema: None,
             result_part: None,
@@ -422,34 +354,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 view.kind = "agent".into();
                 view.profile = Some(agent.profile.clone());
                 result.profiles.insert(agent.profile.clone());
-                if let Some(invocation_override) = &agent.invocation_override {
-                    result
-                        .runtime_requirements
-                        .insert("agent_override_reference_resolution_and_source_availability");
-                    view.invocation_override = Some(AgentOverrideInspection {
-                        tools: invocation_override
-                            .tools
-                            .as_ref()
-                            .map(super::super::subagent::invocation::SubagentInvocationOverride::canonical_selectors_of),
-                        skills: invocation_override.skills.clone(),
-                        extensions: invocation_override
-                            .extensions
-                            .as_ref()
-                            .map(|selection| {
-                                crate::extensions::composed_extension_names(&selection.resolve())
-                                    .into_iter()
-                                    .map(Cow::Borrowed)
-                                    .collect()
-                            }),
-                    });
-                }
                 view.output_schema = Some(schema(&agent.output_schema));
-                view.bindings.extend(
-                    agent
-                        .input
-                        .iter()
-                        .map(|(key, value)| (format!("input.{key}"), binding(value))),
-                );
                 view.bindings.extend(
                     agent
                         .task

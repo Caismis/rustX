@@ -6,7 +6,7 @@ Python identity such as `python:data-analysis`. Namespace parsing happens at the
 strict authoring boundary. Resolution and materialization dispatch use typed
 identities, never display names or prefix matching.
 
-Agents and Workflow Agent overrides share one selection document:
+Agents and `subagent` invocation overrides share one selection document:
 
 ```toml
 [tools]
@@ -47,8 +47,7 @@ there is no separate selector-only identity language.
 
 `SourceToolSelection::All | Exact` owns Agent capability selection in the shared
 `ToolSelectionDocument`, lowered to typed `AgentToolSelection` requests for
-admission and immutable generation projection. Workflow Agent node overrides
-use this same document: `tools.sources.github: all` remains valid there.
+admission and immutable generation projection.
 
 A Workflow Tool node uses `ExactToolSelector`: either `origin: builtin` with
 `name`, or `origin: source` with `source_id` and `name`. Both MCP and Managed

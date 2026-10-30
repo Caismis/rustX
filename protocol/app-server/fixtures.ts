@@ -1301,8 +1301,8 @@ export const fixtures = [
             "file_name": "typed_agent.yaml",
             "id": "typed_agent",
             "relative_path": ".agents/workflows/typed_agent.yaml",
-            "revision": "sha256:543983970ca62888b58124763f1a6b670e71bacac3f847ac4a00f7683d9a03aa",
-            "byte_length": "886",
+            "revision": "sha256:4aebaa2ea8f3f8e4253b8f4cee8d135bab96fefdb73d0f395029ad5de3449d41",
+            "byte_length": "888",
             "modified_ms": 1790000000000,
             "description": "Summarize a topic with one typed Agent result.",
             "display": null,
@@ -1311,24 +1311,11 @@ export const fixtures = [
             "shadows_global": false
           },
           {
-            "file_name": "specialized_agent.yaml",
-            "id": "specialized_agent",
-            "relative_path": ".agents/workflows/specialized_agent.yaml",
-            "revision": "sha256:9f4d55d262e410c6cd8ec9a5c8535445116ca8ef9facbbd0c1f44b6e50d72fe3",
-            "byte_length": "1325",
-            "modified_ms": 1790000000000,
-            "description": "Run one named role twice, specialized differently per node.",
-            "display": null,
-            "nodes": 4,
-            "diagnostic": null,
-            "shadows_global": false
-          },
-          {
             "file_name": "parallel_checks.yaml",
             "id": "parallel_checks",
             "relative_path": ".agents/workflows/parallel_checks.yaml",
-            "revision": "sha256:0502d6e1732513b5b40444df62e8367b89df3f57524c510771bb887f1a6c885b",
-            "byte_length": "2081",
+            "revision": "sha256:797d4d14876f82a0c330c62e02e655925f673710c0c731e1e6de93eb0b570de1",
+            "byte_length": "2085",
             "modified_ms": 1790000000000,
             "description": "Run two fixed keyed text checks and return both results.",
             "display": null,
@@ -1353,8 +1340,8 @@ export const fixtures = [
             "file_name": "parallel_review.yaml",
             "id": "parallel_review",
             "relative_path": ".agents/workflows/parallel_review.yaml",
-            "revision": "sha256:1404b66399b97dfcc8346b9a54e9b4026b01d387fb1a48ad1db1af57121f4b45",
-            "byte_length": "4156",
+            "revision": "sha256:5cf7863ee806a58f32fa43516a77eb4bd6a4db7deb4797e94e5883a54278ab6b",
+            "byte_length": "4171",
             "modified_ms": 1790000000000,
             "description": "Two scoped proposal reviews, including a fixed second quality pass; no Git required.",
             "display": null,
@@ -1366,8 +1353,8 @@ export const fixtures = [
             "file_name": "implement_and_review.yaml",
             "id": "implement_and_review",
             "relative_path": ".agents/workflows/implement_and_review.yaml",
-            "revision": "sha256:edf98e365cc052086ab08efc6a0477dca9ff44757e78010f847ecd6b14da8e22",
-            "byte_length": "14349",
+            "revision": "sha256:fce5d386b83a4e86c601840bf9095876282398759861b1414a6072210c9e9a1a",
+            "byte_length": "14352",
             "modified_ms": 1790000000000,
             "description": "Plan greeting.py, gate implementation on human plan acceptance, then implement and run real checks in the shared Session workspace up to three times.",
             "display": null,
@@ -1419,7 +1406,7 @@ export const fixtures = [
         "id": "typed_agent",
         "path": "/workspace/fixture/.agents/workflows/typed_agent.yaml",
         "relative_path": ".agents/workflows/typed_agent.yaml",
-        "revision": "sha256:543983970ca62888b58124763f1a6b670e71bacac3f847ac4a00f7683d9a03aa",
+        "revision": "sha256:4aebaa2ea8f3f8e4253b8f4cee8d135bab96fefdb73d0f395029ad5de3449d41",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -1470,17 +1457,19 @@ export const fixtures = [
                   {
                     "type": "literal",
                     "value": "Summarize the supplied topic in one short sentence."
-                  }
-                ],
-                "input": {
-                  "topic": {
+                  },
+                  {
+                    "type": "literal",
+                    "value": "\n\ntopic: "
+                  },
+                  {
                     "type": "reference",
                     "path": [
                       "args",
                       "topic"
                     ]
                   }
-                },
+                ],
                 "output": {
                   "type": "object",
                   "properties": {
@@ -1531,174 +1520,6 @@ export const fixtures = [
   },
   {
     "jsonrpc": "2.0",
-    "id": "workflow-source-specialized_agent",
-    "result": {
-      "type": "workflow_source",
-      "source": {
-        "target": {
-          "kind": "workspace",
-          "directory": "/workspace/fixture"
-        },
-        "id": "specialized_agent",
-        "path": "/workspace/fixture/.agents/workflows/specialized_agent.yaml",
-        "relative_path": ".agents/workflows/specialized_agent.yaml",
-        "revision": "sha256:9f4d55d262e410c6cd8ec9a5c8535445116ca8ef9facbbd0c1f44b6e50d72fe3",
-        "present": true,
-        "modified_ms": 1790000000000,
-        "document": {
-          "description": "Run one named role twice, specialized differently per node.",
-          "timeout_ms": "60000",
-          "block": {
-            "input": {
-              "type": "object",
-              "properties": {
-                "topic": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "topic"
-              ],
-              "additionalProperties": false
-            },
-            "output": {
-              "type": "object",
-              "properties": {
-                "summary": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "summary"
-              ],
-              "additionalProperties": false
-            },
-            "nodes": {
-              "describe": {
-                "type": "agent",
-                "profile": "reviewer",
-                "task": [
-                  {
-                    "type": "literal",
-                    "value": "Describe the supplied topic in one short sentence."
-                  }
-                ],
-                "input": {
-                  "topic": {
-                    "type": "reference",
-                    "path": [
-                      "args",
-                      "topic"
-                    ]
-                  }
-                },
-                "output": {
-                  "type": "object",
-                  "properties": {
-                    "summary": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "summary"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "inspect": {
-                "type": "agent",
-                "profile": "reviewer",
-                "task": [
-                  {
-                    "type": "literal",
-                    "value": "Using the described topic, report what the repository files show."
-                  }
-                ],
-                "input": {
-                  "described": {
-                    "type": "reference",
-                    "path": [
-                      "describe"
-                    ]
-                  }
-                },
-                "output": {
-                  "type": "object",
-                  "properties": {
-                    "summary": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "summary"
-                  ],
-                  "additionalProperties": false
-                },
-                "override": {
-                  "tools": {
-                    "builtin": [
-                      "read",
-                      "grep"
-                    ],
-                    "sources": {}
-                  },
-                  "plugins": {}
-                }
-              },
-              "return_assessment": {
-                "type": "return",
-                "output": {
-                  "type": "reference",
-                  "path": [
-                    "inspect"
-                  ]
-                }
-              },
-              "start": {
-                "type": "start"
-              }
-            },
-            "edges": [
-              {
-                "from": "start",
-                "to": "describe",
-                "port": null
-              },
-              {
-                "from": "describe",
-                "to": "inspect",
-                "port": null
-              },
-              {
-                "from": "inspect",
-                "to": "return_assessment",
-                "port": null
-              }
-            ]
-          }
-        },
-        "diagnostic": null,
-        "vocabulary": {
-          "profiles": [
-            "reviewer"
-          ],
-          "builtin_tools": [
-            "ask_user",
-            "read",
-            "read_image",
-            "present",
-            "write",
-            "edit",
-            "glob",
-            "grep",
-            "bash"
-          ]
-        }
-      }
-    }
-  },
-  {
-    "jsonrpc": "2.0",
     "id": "workflow-source-parallel_checks",
     "result": {
       "type": "workflow_source",
@@ -1710,7 +1531,7 @@ export const fixtures = [
         "id": "parallel_checks",
         "path": "/workspace/fixture/.agents/workflows/parallel_checks.yaml",
         "relative_path": ".agents/workflows/parallel_checks.yaml",
-        "revision": "sha256:0502d6e1732513b5b40444df62e8367b89df3f57524c510771bb887f1a6c885b",
+        "revision": "sha256:797d4d14876f82a0c330c62e02e655925f673710c0c731e1e6de93eb0b570de1",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -1771,17 +1592,19 @@ export const fixtures = [
                   {
                     "type": "literal",
                     "value": "Does the supplied text avoid unnecessary repetition?"
-                  }
-                ],
-                "input": {
-                  "text": {
+                  },
+                  {
+                    "type": "literal",
+                    "value": "\n\ntext: "
+                  },
+                  {
                     "type": "reference",
                     "path": [
                       "args",
                       "text"
                     ]
                   }
-                },
+                ],
                 "output": {
                   "type": "object",
                   "properties": {
@@ -1802,17 +1625,19 @@ export const fixtures = [
                   {
                     "type": "literal",
                     "value": "Is the supplied text understandable without unexplained jargon?"
-                  }
-                ],
-                "input": {
-                  "text": {
+                  },
+                  {
+                    "type": "literal",
+                    "value": "\n\ntext: "
+                  },
+                  {
                     "type": "reference",
                     "path": [
                       "args",
                       "text"
                     ]
                   }
-                },
+                ],
                 "output": {
                   "type": "object",
                   "properties": {
@@ -2026,7 +1851,7 @@ export const fixtures = [
         "id": "parallel_review",
         "path": "/workspace/fixture/.agents/workflows/parallel_review.yaml",
         "relative_path": ".agents/workflows/parallel_review.yaml",
-        "revision": "sha256:1404b66399b97dfcc8346b9a54e9b4026b01d387fb1a48ad1db1af57121f4b45",
+        "revision": "sha256:5cf7863ee806a58f32fa43516a77eb4bd6a4db7deb4797e94e5883a54278ab6b",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2174,16 +1999,18 @@ export const fixtures = [
                   {
                     "type": "literal",
                     "value": "Independently check this quality assessment for unsupported claims. Return the corrected assessment."
-                  }
-                ],
-                "input": {
-                  "assessment": {
+                  },
+                  {
+                    "type": "literal",
+                    "value": "\n\nassessment: "
+                  },
+                  {
                     "type": "reference",
                     "path": [
                       "reviews_quality_review"
                     ]
                   }
-                },
+                ],
                 "output": {
                   "type": "object",
                   "properties": {
@@ -2208,17 +2035,19 @@ export const fixtures = [
                   {
                     "type": "literal",
                     "value": "Review the supplied proposal for quality. No external research is required."
-                  }
-                ],
-                "input": {
-                  "proposal": {
+                  },
+                  {
+                    "type": "literal",
+                    "value": "\n\nproposal: "
+                  },
+                  {
                     "type": "reference",
                     "path": [
                       "args",
                       "proposal"
                     ]
                   }
-                },
+                ],
                 "output": {
                   "type": "object",
                   "properties": {
@@ -2243,17 +2072,19 @@ export const fixtures = [
                   {
                     "type": "literal",
                     "value": "Review the supplied proposal for security. No external research is required."
-                  }
-                ],
-                "input": {
-                  "proposal": {
+                  },
+                  {
+                    "type": "literal",
+                    "value": "\n\nproposal: "
+                  },
+                  {
                     "type": "reference",
                     "path": [
                       "args",
                       "proposal"
                     ]
                   }
-                },
+                ],
                 "output": {
                   "type": "object",
                   "properties": {
@@ -2376,7 +2207,7 @@ export const fixtures = [
         "id": "implement_and_review",
         "path": "/workspace/fixture/.agents/workflows/implement_and_review.yaml",
         "relative_path": ".agents/workflows/implement_and_review.yaml",
-        "revision": "sha256:edf98e365cc052086ab08efc6a0477dca9ff44757e78010f847ecd6b14da8e22",
+        "revision": "sha256:fce5d386b83a4e86c601840bf9095876282398759861b1414a6072210c9e9a1a",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2725,23 +2556,23 @@ export const fixtures = [
                   {
                     "type": "literal",
                     "value": "Produce a concise implementation plan for the fixed greeting contract and supplied priority. Do not edit files or run commands. The plan is business data, never executable Workflow structure."
-                  }
-                ],
-                "input": {
-                  "brief": {
+                  },
+                  {
+                    "type": "literal",
+                    "value": "\n\nbrief: "
+                  },
+                  {
                     "type": "reference",
                     "path": [
                       "intake_brief",
                       "result"
                     ]
                   },
-                  "contract": {
+                  {
                     "type": "literal",
-                    "value": {
-                      "requirement": "greeting(\"Ada\") == \"Hello, Ada!\"; greeting(\"\") == \"Hello, friend!\""
-                    }
+                    "value": "\n\ncontract: {\"requirement\": \"greeting(\\\"Ada\\\") == \\\"Hello, Ada!\\\"; greeting(\\\"\\\") == \\\"Hello, friend!\\\"\"}"
                   }
-                },
+                ],
                 "output": {
                   "type": "object",
                   "properties": {
@@ -2967,24 +2798,30 @@ export const fixtures = [
                         {
                           "type": "literal",
                           "value": "Implement or repair greeting.py so greeting(name) returns Hello, NAME! and uses friend for an empty name. Use the supplied plan and feedback as data. Change only greeting.py. Never claim verification from prose; the next fixed Tool runs the checker. Return the implemented plan as the declared output for the next iteration."
-                        }
-                      ],
-                      "input": {
-                        "feedback": {
-                          "type": "reference",
-                          "path": [
-                            "args",
-                            "feedback"
-                          ]
                         },
-                        "plan": {
+                        {
+                          "type": "literal",
+                          "value": "\n\nplan: "
+                        },
+                        {
                           "type": "reference",
                           "path": [
                             "args",
                             "plan"
                           ]
+                        },
+                        {
+                          "type": "literal",
+                          "value": "\n\nfeedback: "
+                        },
+                        {
+                          "type": "reference",
+                          "path": [
+                            "args",
+                            "feedback"
+                          ]
                         }
-                      },
+                      ],
                       "output": {
                         "type": "object",
                         "properties": {
@@ -3741,16 +3578,18 @@ export const fixtures = [
                 {
                   "type": "literal",
                   "value": "Independently check this quality assessment for unsupported claims. Return the corrected assessment."
-                }
-              ],
-              "input": {
-                "assessment": {
+                },
+                {
+                  "type": "literal",
+                  "value": "\n\nassessment: "
+                },
+                {
                   "type": "reference",
                   "path": [
                     "reviews_quality_review"
                   ]
                 }
-              },
+              ],
               "output": {
                 "type": "object",
                 "properties": {
@@ -3775,17 +3614,19 @@ export const fixtures = [
                 {
                   "type": "literal",
                   "value": "Review the supplied proposal for quality. No external research is required."
-                }
-              ],
-              "input": {
-                "proposal": {
+                },
+                {
+                  "type": "literal",
+                  "value": "\n\nproposal: "
+                },
+                {
                   "type": "reference",
                   "path": [
                     "args",
                     "proposal"
                   ]
                 }
-              },
+              ],
               "output": {
                 "type": "object",
                 "properties": {
@@ -3810,17 +3651,19 @@ export const fixtures = [
                 {
                   "type": "literal",
                   "value": "Review the supplied proposal for security. No external research is required."
-                }
-              ],
-              "input": {
-                "proposal": {
+                },
+                {
+                  "type": "literal",
+                  "value": "\n\nproposal: "
+                },
+                {
                   "type": "reference",
                   "path": [
                     "args",
                     "proposal"
                   ]
                 }
-              },
+              ],
               "output": {
                 "type": "object",
                 "properties": {
@@ -4069,16 +3912,18 @@ export const fixtures = [
                 {
                   "type": "literal",
                   "value": "Independently check this quality assessment for unsupported claims. Return the corrected assessment."
-                }
-              ],
-              "input": {
-                "assessment": {
+                },
+                {
+                  "type": "literal",
+                  "value": "\n\nassessment: "
+                },
+                {
                   "type": "reference",
                   "path": [
                     "reviews_quality_review"
                   ]
                 }
-              },
+              ],
               "output": {
                 "type": "object",
                 "properties": {
@@ -4103,17 +3948,19 @@ export const fixtures = [
                 {
                   "type": "literal",
                   "value": "Review the supplied proposal for quality. No external research is required."
-                }
-              ],
-              "input": {
-                "proposal": {
+                },
+                {
+                  "type": "literal",
+                  "value": "\n\nproposal: "
+                },
+                {
                   "type": "reference",
                   "path": [
                     "args",
                     "proposal"
                   ]
                 }
-              },
+              ],
               "output": {
                 "type": "object",
                 "properties": {
@@ -4138,17 +3985,19 @@ export const fixtures = [
                 {
                   "type": "literal",
                   "value": "Review the supplied proposal for security. No external research is required."
-                }
-              ],
-              "input": {
-                "proposal": {
+                },
+                {
+                  "type": "literal",
+                  "value": "\n\nproposal: "
+                },
+                {
                   "type": "reference",
                   "path": [
                     "args",
                     "proposal"
                   ]
                 }
-              },
+              ],
               "output": {
                 "type": "object",
                 "properties": {
@@ -4253,7 +4102,7 @@ export const fixtures = [
           "directory": "/workspace/fixture"
         },
         "id": "parallel_review",
-        "candidate_revision": "sha256:d5634f2a0f57cd499298fae723fd16c2156c0c61d05d6ab56586efc107004a17",
+        "candidate_revision": "sha256:7a1fd76db703e3855f82edcecb9d8badef0cdd9442e55212a476d3c2408d185b",
         "generation": "7",
         "query": null,
         "analysis": {
@@ -4544,7 +4393,7 @@ export const fixtures = [
               "additionalProperties": false
             }
           },
-          "revision": "sha256:1404b66399b97dfcc8346b9a54e9b4026b01d387fb1a48ad1db1af57121f4b45"
+          "revision": "sha256:5cf7863ee806a58f32fa43516a77eb4bd6a4db7deb4797e94e5883a54278ab6b"
         },
         "dependencies": {
           "status": "admitted",
@@ -4553,7 +4402,7 @@ export const fixtures = [
         "explanation": {
           "identity": {
             "workflow_id": "parallel_review",
-            "program_digest": "b375c0aab474d4998109f1bb4648c7e20df8d6baedcc72191092fb086d12b37b"
+            "program_digest": "24afc8d0ec1d20afd7198d8ab6cb5d04c056206b6ed20763e4dd2ade1abffeed"
           },
           "stage": "statically_compiled_online_admission_unresolved",
           "input_schema": {
@@ -4762,7 +4611,6 @@ export const fixtures = [
                   },
                   "profile": null,
                   "model": null,
-                  "invocation_override": null,
                   "selector": null,
                   "output_schema": null,
                   "result_part": null,
@@ -4804,7 +4652,6 @@ export const fixtures = [
                   },
                   "profile": null,
                   "model": null,
-                  "invocation_override": null,
                   "selector": null,
                   "output_schema": null,
                   "result_part": null,
@@ -4821,7 +4668,7 @@ export const fixtures = [
                     ]
                   ],
                   "bindings": {
-                    "input.assessment": {
+                    "task.2": {
                       "type": "reference",
                       "path": [
                         "reviews_quality_review"
@@ -4830,7 +4677,6 @@ export const fixtures = [
                   },
                   "profile": "reviewer",
                   "model": null,
-                  "invocation_override": null,
                   "selector": null,
                   "output_schema": {
                     "type": "object",
@@ -4862,7 +4708,7 @@ export const fixtures = [
                     ]
                   ],
                   "bindings": {
-                    "input.proposal": {
+                    "task.2": {
                       "type": "reference",
                       "path": [
                         "args",
@@ -4872,7 +4718,6 @@ export const fixtures = [
                   },
                   "profile": "reviewer",
                   "model": null,
-                  "invocation_override": null,
                   "selector": null,
                   "output_schema": {
                     "type": "object",
@@ -4904,7 +4749,7 @@ export const fixtures = [
                     ]
                   ],
                   "bindings": {
-                    "input.proposal": {
+                    "task.2": {
                       "type": "reference",
                       "path": [
                         "args",
@@ -4914,7 +4759,6 @@ export const fixtures = [
                   },
                   "profile": "reviewer",
                   "model": null,
-                  "invocation_override": null,
                   "selector": null,
                   "output_schema": {
                     "type": "object",
@@ -4971,7 +4815,6 @@ export const fixtures = [
                   },
                   "profile": null,
                   "model": null,
-                  "invocation_override": null,
                   "selector": null,
                   "output_schema": null,
                   "result_part": null,
@@ -4994,7 +4837,6 @@ export const fixtures = [
                   "bindings": {},
                   "profile": null,
                   "model": null,
-                  "invocation_override": null,
                   "selector": null,
                   "output_schema": null,
                   "result_part": null,
@@ -5022,7 +4864,7 @@ export const fixtures = [
         "kind": "workspace",
         "directory": "/workspace/fixture"
       },
-      "expected_revision": "sha256:1404b66399b97dfcc8346b9a54e9b4026b01d387fb1a48ad1db1af57121f4b45",
+      "expected_revision": "sha256:5cf7863ee806a58f32fa43516a77eb4bd6a4db7deb4797e94e5883a54278ab6b",
       "mutation": {
         "kind": "workflow",
         "id": "parallel_review",
@@ -5173,16 +5015,18 @@ export const fixtures = [
                     {
                       "type": "literal",
                       "value": "Independently check this quality assessment for unsupported claims. Return the corrected assessment."
-                    }
-                  ],
-                  "input": {
-                    "assessment": {
+                    },
+                    {
+                      "type": "literal",
+                      "value": "\n\nassessment: "
+                    },
+                    {
                       "type": "reference",
                       "path": [
                         "reviews_quality_review"
                       ]
                     }
-                  },
+                  ],
                   "output": {
                     "type": "object",
                     "properties": {
@@ -5207,17 +5051,19 @@ export const fixtures = [
                     {
                       "type": "literal",
                       "value": "Review the supplied proposal for quality. No external research is required."
-                    }
-                  ],
-                  "input": {
-                    "proposal": {
+                    },
+                    {
+                      "type": "literal",
+                      "value": "\n\nproposal: "
+                    },
+                    {
                       "type": "reference",
                       "path": [
                         "args",
                         "proposal"
                       ]
                     }
-                  },
+                  ],
                   "output": {
                     "type": "object",
                     "properties": {
@@ -5242,17 +5088,19 @@ export const fixtures = [
                     {
                       "type": "literal",
                       "value": "Review the supplied proposal for security. No external research is required."
-                    }
-                  ],
-                  "input": {
-                    "proposal": {
+                    },
+                    {
+                      "type": "literal",
+                      "value": "\n\nproposal: "
+                    },
+                    {
                       "type": "reference",
                       "path": [
                         "args",
                         "proposal"
                       ]
                     }
-                  },
+                  ],
                   "output": {
                     "type": "object",
                     "properties": {
