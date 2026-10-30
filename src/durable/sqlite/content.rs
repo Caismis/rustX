@@ -362,25 +362,18 @@ fn range_bytes_at(
 ) -> Result<Vec<u8>, ConversationStoreError> {
     #[cfg(test)]
     LAST_READ_WORK.with(|work| work.set((0, 0)));
-    range_bytes_inner(connection, key, revision, offset, end)
-}
-fn range_bytes_inner(
-    connection: &Connection,
-    key: (&str, &str, u32, Rep),
-    revision: u64,
-    offset: u64,
-    end: u64,
-) -> Result<Vec<u8>, ConversationStoreError> {
     if offset > end || end - offset > u64::from(CONTENT_READ_MAX_BYTES) {
         return Err(ConversationStoreError::InvalidContentRange);
     }
     let (kind, id, block, representation) = key;
+    let mut bytes = Vec::with_capacity(usize::try_from(end - offset).map_err(|_| invalid())?);
+    let mut offset = offset;
     if super::content_encoding::inline_first(kind, representation)
         && offset < SEGMENT
         && offset < end
     {
         let first_end = end.min(SEGMENT);
-        let mut first = range_bytes_query(
+        range_bytes_query(
             connection,
             "SELECT 0,substr(bytes,?5+1,?6-?5) FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision=?7",
             &[
@@ -394,11 +387,9 @@ fn range_bytes_inner(
             ],
             offset,
             first_end,
+            &mut bytes,
         )?;
-        if end > SEGMENT {
-            first.extend(range_bytes_inner(connection, key, revision, SEGMENT, end)?);
-        }
-        return Ok(first);
+        offset = first_end;
     }
     range_bytes_query(
         connection,
@@ -415,7 +406,9 @@ fn range_bytes_inner(
         ],
         offset,
         end,
-    )
+        &mut bytes,
+    )?;
+    Ok(bytes)
 }
 pub(super) fn pending_range_bytes(
     connection: &Connection,
@@ -439,21 +432,23 @@ fn range_bytes_query(
     bindings: &[&dyn rusqlite::ToSql],
     offset: u64,
     end: u64,
-) -> Result<Vec<u8>, ConversationStoreError> {
-    let mut bytes = Vec::with_capacity(usize::try_from(end - offset).map_err(|_| invalid())?);
+    bytes: &mut Vec<u8>,
+) -> Result<(), ConversationStoreError> {
+    let before = bytes.len();
     if end > offset {
-        // The primary-key range visits at most two finite BLOBs. SQL returns
-        // only their selected slices, whose aggregate is one bounded window.
+        // Both physical stores append selected slices into one bounded output.
+        // Borrow the current SQLite cell instead of allocating a temporary Vec.
         let mut stmt = connection
             .prepare(sql)
             .map_err(|e| storage(e.to_string()))?;
-        let rows = stmt
-            .query_map(bindings, |row| {
-                Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?))
-            })
-            .map_err(|e| storage(e.to_string()))?;
-        for row in rows {
-            let (segment, data) = row.map_err(|e| storage(e.to_string()))?;
+        let mut rows = stmt.query(bindings).map_err(|e| storage(e.to_string()))?;
+        while let Some(row) = rows.next().map_err(|e| storage(e.to_string()))? {
+            let segment: u64 = row.get(0).map_err(|e| storage(e.to_string()))?;
+            let data = row
+                .get_ref(1)
+                .map_err(|e| storage(e.to_string()))?
+                .as_blob()
+                .map_err(|e| storage(e.to_string()))?;
             #[cfg(test)]
             LAST_READ_WORK.with(|work| {
                 let (rows, bytes) = work.get();
@@ -465,13 +460,13 @@ fn range_bytes_query(
             if data.len() as u64 != expected {
                 return Err(invalid());
             }
-            bytes.extend_from_slice(&data);
+            bytes.extend_from_slice(data);
         }
-        if bytes.len() as u64 != end - offset {
+        if (bytes.len() - before) as u64 != end - offset {
             return Err(invalid());
         }
     }
-    Ok(bytes)
+    Ok(())
 }
 pub(super) fn index_pending(
     connection: &Connection,

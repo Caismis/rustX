@@ -267,15 +267,14 @@ fn new_request_source_nodes_reuse_construction_after_actual_storage_checks() {
     let work = observation_request::composed::take_work();
     assert_eq!(work.new_leaves, first.input.len());
     assert_eq!(
-        work.node_reuses,
-        work.new_nodes - 1,
-        "every newly captured child, excluding the root, reuses its decoded construction"
+        work.node_reuses, work.new_nodes,
+        "every newly captured node, including the root after scalar writes, reuses its decoded construction"
     );
     assert!(work.template_reuses >= work.new_leaves);
     assert_eq!(work.template_decodes, 0);
     assert!(
         work.node_decodes > 0,
-        "final root reads still inspect persisted evidence"
+        "width-crossing child traversals still independently decode persisted evidence"
     );
     assert_fragment_oracle(&store, &first, sequence);
     store
@@ -333,6 +332,80 @@ fn prepared_request_children_still_detect_later_sibling_trigger_mutation() {
                     .unwrap(),
                 0,
                 "failed optional capture rolls back {table}"
+            );
+        }
+    }
+}
+
+#[test]
+fn request_root_reuses_one_post_scalar_read_for_paths_and_length() {
+    let store = store();
+    store
+        .initialize(&[user_message("one-root", "root body 水🙂")])
+        .unwrap();
+    for turn in 1..=2 {
+        let snapshot = fragment_snapshot(&store, turn, 0);
+        observation_request::composed::take_work();
+        let sequence = store
+            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .unwrap()
+            .started
+            .sequence;
+        let work = observation_request::composed::take_work();
+        assert_eq!(
+            work.native_nodes, 1,
+            "one actual root read serves both geometry stages"
+        );
+        assert_eq!(work.source_nodes, 1);
+        assert_eq!(work.node_reuses, usize::from(turn == 1));
+        assert_eq!(work.node_decodes, usize::from(turn == 2));
+        assert_fragment_oracle(&store, &snapshot, sequence);
+    }
+}
+
+#[test]
+fn request_root_proof_detects_scalar_trigger_changes_and_rolls_back_optional_source() {
+    for native in [false, true] {
+        let store = store();
+        store
+            .initialize(&[user_message("root-after-scalar", "unchanged original")])
+            .unwrap();
+        let canonical = store.load_canonical().unwrap();
+        {
+            let connection = store.lock().unwrap();
+            let target = if native {
+                "UPDATE native_input_nodes SET digest=zeroblob(32) WHERE id=(SELECT max(native_id) FROM request_source_nodes)"
+            } else {
+                "UPDATE request_source_nodes SET metadata=x'7b' WHERE native_id=(SELECT max(native_id) FROM request_source_nodes)"
+            };
+            connection.execute_batch(&format!("CREATE TEMP TRIGGER rewrite_root_after_scalar AFTER INSERT ON request_source_scalars BEGIN {target}; END;")).unwrap();
+        }
+        let snapshot = fragment_snapshot(&store, 1, 0);
+        let sequence = store
+            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .unwrap()
+            .started
+            .sequence;
+        assert_shape_optional_source_hole(&store, &snapshot, sequence);
+        assert_eq!(
+            store.load_request_snapshot(&snapshot.request_id).unwrap(),
+            snapshot
+        );
+        assert_eq!(store.load_canonical().unwrap(), canonical);
+        let connection = store.lock().unwrap();
+        for table in [
+            "request_source_roots",
+            "request_source_nodes",
+            "request_source_pages",
+            "request_source_scalars",
+        ] {
+            assert_eq!(
+                connection
+                    .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                        .get::<_, u64>(0))
+                    .unwrap(),
+                0,
+                "optional root capture rollback: {table}"
             );
         }
     }
