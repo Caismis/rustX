@@ -442,7 +442,10 @@ function renderInteractionRequested(
       ...bar(`arguments digest: ${entry.subject.arguments_digest}`, style.dim),
     );
   } else if (entry.subject.type === "review") {
-    lines.push(role.warning(`Review · ${entry.subject.review.instance.node} · ${entry.subject.review.subject.type}`));
+    lines.push(role.warning(`Human Input · ${entry.subject.review.instance.node}`));
+    for (const question of entry.subject.review.questionnaire.questions) {
+      lines.push(...bar(question.question, style.dim));
+    }
   } else {
     lines.push(role.warning("questionnaire"));
     for (const line of requesterLines(entry.subject.requester)) {
@@ -467,10 +470,11 @@ function renderInteractionSettled(
   ];
   if (entry.settlement.type === "denied" || entry.settlement.type === "cancelled") {
     lines.push(...bar(entry.settlement.reason, style.dim));
-  } else if (entry.settlement.type === "questionnaire_submitted") {
+  } else if (entry.settlement.type === "questionnaire_submitted" || entry.settlement.type === "reviewed") {
+    const submission = entry.settlement.type === "reviewed" ? entry.settlement.response.submission : entry.settlement.submission;
     lines.push(
       ...bar(
-        entry.settlement.submission.answers
+        submission.answers
           .map((answer) => `${answer.question_index}: ${answer.answer.type}`)
           .join(", "),
         style.dim,
@@ -484,7 +488,7 @@ function settlementLabel(
   settlement: TranscriptInteractionSettled["settlement"],
 ): string {
   switch (settlement.type) {
-    case "reviewed": return settlement.response.decision.type;
+    case "reviewed": return "answered";
     case "deadline_expired":
       return "deadline expired";
     case "approved":

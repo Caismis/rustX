@@ -15,5 +15,5 @@ export function workflowRun(): WorkflowRunView {
 }
 export function workflowReview(): ReviewSpecification {
   const run = workflowRun();
-  return { instance: { block: run.instances[0].block, node: 'gate', visit: 1 }, subject: { type: 'plan', content: { overview: '## Review report\n\nThe workflow completed its analysis.', issues: ['Check the release version before publishing.'], candidate: null } }, context: [] };
+  return { instance: { block: run.instances[0].block, node: 'gate', visit: 1 }, questionnaire: { questions: [{ question: '## Review report\n\nCheck the release version before publishing.', header: 'gate', answer: { type: 'single_choice', options: [{ label: 'Approve', description: '' }, { label: 'Revise', description: '' }], allow_custom: false } }] } };
 }

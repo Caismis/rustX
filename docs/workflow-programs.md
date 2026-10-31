@@ -874,58 +874,60 @@ There are three distinct contracts:
 | Contract | Meaning | Result |
 | --- | --- | --- |
 | Questionnaire | Supply missing business information | Existing submitted/declined answer contract |
-| Review | Accept/reject one immutable business subject | `{accepted: boolean, feedback: string}` |
+| Human Input (`review`) | Choose one of the node's actions | `{action: string, content: string}`, and the action's exit |
 | Tool Approval | Permit the exact prepared invocation to start | Existing Allow once/Deny |
 
 FullAccess affects only configured Tool Approval. It does not answer either
 Questionnaire or Review, select capabilities, or change workspace authority.
 No Review policy or model/provider interpretation is involved.
 
-A Review node has `type: review`, a `subject`, and a `context` array. The subject
-must reference an already committed value, including a validated block input.
-An explicit Branch on the Review's `accepted` field gates later work:
+A Human Input node, as Dify's, has `type: review`, a `content` template, its
+`actions` and a `timeout_ms`. The person is asked in the conversation with the
+questionnaire: the rendered content is the question and each action's title is
+an option. Each action is an exit of its own, named by its ID, and `timeout` is
+the exit taken when nobody answers within `timeout_ms`:
 
 ```yaml
 review_plan:
   type: review
-  subject:
-    type: plan
-    value: {type: reference, path: [plan]}
-  context:
-    - {type: reference, path: [intake]}
-plan_accepted:
-  type: branch
-  cases:
-    - id: 'true'
-      condition:
-        type: boolean
-        value: {type: reference, path: [review_plan, accepted]}
+  content:
+    - {type: literal, value: "Approve this plan before any file changes:\n\n"}
+    - {type: reference, path: [plan]}
+  actions:
+    - {id: approve, title: Approve}
+    - {id: reject, title: Reject}
+  timeout_ms: 600000
+edges:
+  - {from: review_plan, to: repair, port: approve}
+  - {from: review_plan, to: rejected_plan, port: reject}
+  - {from: review_plan, to: rejected_plan, port: timeout}
 ```
 
-`type: plan` is the only subject kind. It freezes the actual structured object
-by value and binds the presented subject, not mutable files named by strings
-inside it. Context entries are bounded committed values. The subject, context
-and concrete node instance are included in the Review specification, digest,
-durable requested fact and UI disclosure.
+Content is fixed text and references, as an Agent's task, rendered when the
+node runs. There are 1–12 actions with unique IDs and unique titles of at most
+60 characters; an ID cannot be `timeout` or another reserved port. In the root
+block every action and `timeout` needs a successor; in a body a path may end at
+any of them. The node value is `{action, content}`: the chosen action's ID, or
+`timeout`, and the content as shown. The concrete node instance and the whole
+questionnaire are included in the Review specification, digest, durable
+requested fact and UI disclosure; a response is the questionnaire submission
+choosing one action.
 
-The Review result `{accepted, feedback}` is ordinary typed data. Rejection is
-not a Workflow failure; only an explicit Branch on `accepted` routes around
-gated nodes, so merely placing a Review before a write establishes no gate.
-There is no implicit rejection-to-failure rule. Acceptance grants no Tool
-authority and does not certify that files still match anything that was shown.
-A Review after a write does not undo it. Review acquires no filesystem lease:
-an independent sibling path keeps running while it waits.
+Choosing an action grants no Tool authority and does not certify that files
+still match anything that was shown. A Human Input after a write does not undo
+it. It acquires no filesystem lease: an independent sibling path keeps running
+while it waits.
 
 ### Ownership and linearization
 
 | Frontier | Owner and rule |
 | --- | --- |
-| Subject selection | Workflow evaluates a committed explicit reference and bounded context. |
+| Content rendering | Workflow renders the content template from committed values. |
 | Requested commit | InteractionCoordinator commits InteractionRequested before installing/publishing the actionable prompt through the existing route. |
 | Response validation | Coordinator checks the live identity, kind, concrete instance and whole-subject digest. |
 | Settled commit | Under coordinator terminal ownership, durable InteractionSettled precedes waiter release. Observable cancellation/deadline overrides a response. |
-| Review local commit | Workflow commits the immutable `{accepted, feedback}` JSON as the node value. |
-| Downstream admission | Ordinary Branch/Agent/Tool/Return admission. Only an explicit Branch on `accepted` routes around gated nodes. |
+| Review local commit | Workflow commits `{action, content}` as the node value and leaves through the action's exit, or `timeout`. |
+| Downstream admission | Ordinary admission of the nodes on the exit taken. |
 
 Stale responses, wrong node visits, wrong subject digests and responses after
 terminal cancellation remain rejected by the existing interaction owner.

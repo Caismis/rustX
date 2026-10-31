@@ -1,42 +1,51 @@
-//! Fixed Review node: local values and progression belong to Workflow;
-//! identity, publication and settlement belong to the invoking coordinator.
+//! Human Input node, as Dify's: local values and progression belong to
+//! Workflow; identity, publication and settlement belong to the invoking
+//! coordinator.
 //!
-//! A Review presents one bounded immutable structured subject and returns an
-//! ordinary `{ accepted, feedback }` decision value. It acquires no
-//! filesystem lease, certifies no workspace state and gates nothing by
-//! itself: only an explicit downstream Branch on `accepted` does.
+//! The node asks the person one questionnaire question, its rendered
+//! content, whose options are its actions. The chosen action is the exit the
+//! run takes; `timeout` is taken when nobody answers in time. It acquires no
+//! filesystem lease and certifies no workspace state.
 use super::{
-    Deserialize, Serialize, Value, WorkflowNodeInstance, WorkflowRunError, WorkflowRuntime,
-    WorkflowValue,
+    Deserialize, Serialize, Value, WorkflowNodeInstance, WorkflowPort, WorkflowRunError,
+    WorkflowRuntime,
 };
-use crate::events::review::{ReviewDecision, ReviewSpecification, ReviewSubject};
+use crate::events::review::ReviewSpecification;
 use crate::runtime::interaction::{InteractionOutcome, InteractionResponse};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub enum WorkflowReviewSubject {
-    Plan { value: WorkflowValue },
+/// The exit taken when nobody answers within the node's timeout.
+pub const REVIEW_TIMEOUT_PORT: &str = "timeout";
+pub const MAX_REVIEW_ACTIONS: usize = crate::events::interaction::MAX_CHOICE_OPTIONS;
+
+/// One button the person may press, and the exit it takes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowReviewAction {
+    pub id: String,
+    pub title: String,
 }
-impl WorkflowReviewSubject {
-    pub(super) fn value(&self) -> &WorkflowValue {
-        match self {
-            Self::Plan { value } => value,
-        }
-    }
+
+/// `action` is the chosen action's ID, or `timeout`; `content` is what the
+/// person was shown.
+pub(super) fn result_schema(actions: &[WorkflowReviewAction]) -> Value {
+    let ids = actions
+        .iter()
+        .map(|action| action.id.as_str())
+        .chain([REVIEW_TIMEOUT_PORT])
+        .collect::<Vec<_>>();
+    serde_json::json!({"type":"object","properties":{"action":{"type":"string","enum":ids},"content":{"type":"string"}},"required":["action","content"],"additionalProperties":false})
 }
-pub(super) fn result_schema() -> Value {
-    serde_json::json!({"type":"object","properties":{"accepted":{"type":"boolean"},"feedback":{"type":"string"}},"required":["accepted","feedback"],"additionalProperties":false})
-}
+
 impl WorkflowRuntime {
     pub(super) async fn review(
         &self,
         context: &crate::runtime::subagent::NativeExecutionContext,
         node: &WorkflowNodeInstance,
-        subject: Value,
-        checks: Vec<Value>,
+        shown: String,
+        actions: &[WorkflowReviewAction],
+        timeout_ms: u64,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<Value, WorkflowRunError> {
+    ) -> Result<(Value, WorkflowPort), WorkflowRunError> {
         let services = context.native.as_ref().ok_or_else(|| {
             WorkflowRunError::InvocationAuthority("missing native interaction services".into())
         })?;
@@ -48,23 +57,34 @@ impl WorkflowRuntime {
                     "human interaction provider unavailable".into(),
                 )
             })?;
-        let specification = ReviewSpecification {
-            instance: Box::new(node.clone()),
-            subject: ReviewSubject::Plan { content: subject },
-            context: checks,
-        };
+        let specification = ReviewSpecification::new(
+            node.clone(),
+            shown.clone(),
+            actions.iter().map(|action| action.title.as_str()),
+        );
+        specification.validate().map_err(|error| {
+            WorkflowRunError::InvalidValue(format!("Human Input {:?}: {error}", node.node))
+        })?;
         self.read_model.node(node, |view| {
             view.state = super::read_model::WorkflowState::Waiting {
                 reason: super::read_model::WorkflowWait::Review,
             };
         });
-        let outcome = coordinator
-            .request_review(
-                specification,
-                services.execution.clone(),
-                cancellation.clone(),
-            )
-            .await;
+        // The node's own deadline settles the question as expired; an
+        // ancestor's cancellation still wins over it.
+        let (deadline, waiting) = cancellation.child_execution();
+        let request =
+            coordinator.request_review(specification.clone(), services.execution.clone(), waiting);
+        tokio::pin!(request);
+        let outcome = tokio::select! {
+            outcome = &mut request => outcome,
+            () = tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)) => {
+                deadline.cancel(crate::tools::deadline::ToolCancellationCause::Deadline(
+                    crate::tools::deadline::ToolDeadlineKind::Hard,
+                ));
+                request.await
+            }
+        };
         if cancellation.is_cancelled() {
             return Err(WorkflowRunError::from_cancellation(cancellation));
         }
@@ -74,26 +94,28 @@ impl WorkflowRuntime {
             }
             WorkflowRunError::InvocationAuthority(failure.to_string())
         })?;
-        match outcome {
+        let action = match outcome {
             InteractionOutcome::Responded {
                 response: InteractionResponse::Review { response },
             } => {
-                let (accepted, feedback) = match response.decision {
-                    ReviewDecision::Accepted => (true, String::new()),
-                    ReviewDecision::Rejected { feedback } => (false, feedback),
-                };
-                self.read_model
-                    .node(node, |view| view.review_accepted = Some(accepted));
-                // Rejection is a normally produced decision, never a
-                // Workflow failure, cancellation or implicit Return.
-                Ok(serde_json::json!({"accepted": accepted, "feedback": feedback}))
+                let index = specification
+                    .validate_response(&response)
+                    .map_err(WorkflowRunError::InvalidValue)?;
+                actions[index].id.as_str()
             }
-            InteractionOutcome::Cancelled { .. } | InteractionOutcome::DeadlineExpired { .. } => {
-                Err(WorkflowRunError::from_cancellation(cancellation))
+            InteractionOutcome::DeadlineExpired { .. } => REVIEW_TIMEOUT_PORT,
+            InteractionOutcome::Cancelled { .. } => {
+                return Err(WorkflowRunError::from_cancellation(cancellation));
             }
-            InteractionOutcome::Responded { .. } => Err(WorkflowRunError::InvalidValue(
-                "Review interaction kind mismatch".into(),
-            )),
-        }
+            InteractionOutcome::Responded { .. } => {
+                return Err(WorkflowRunError::InvalidValue(
+                    "Review interaction kind mismatch".into(),
+                ));
+            }
+        };
+        Ok((
+            serde_json::json!({"action": action, "content": shown}),
+            WorkflowPort::case(action),
+        ))
     }
 }

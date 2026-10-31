@@ -5,7 +5,7 @@ import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
 import { IconEllipsisOutline16 } from '../../../../presentation/primitives/icons';
 import { MarkdownText } from '../../../../presentation/markdown/MarkdownText';
-import { portsOf, type ControlPort, type BuiltinPort } from '../../document/ports';
+import { portsOf, TIMEOUT_PORT, type ControlPort, type BuiltinPort } from '../../document/ports';
 import { KindIcon, IconEntry, IconHome, IconPlus } from '../icons';
 import { predicateText } from './summary';
 import { NodePreview } from './NodePreview';
@@ -62,7 +62,8 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
   // A fail branch's port sits on the card's error row and each Agent route's
   // on its own row, not beside the head.
   const routes = node?.type === 'agent' ? node.routes ?? [] : [];
-  const exits = ports.filter(port => port !== 'fail' && !routes.some(route => route.id === port));
+  const choices = node?.type === 'review' ? [...node.actions.map(action => action.id), TIMEOUT_PORT] : [];
+  const exits = ports.filter(port => port !== 'fail' && !routes.some(route => route.id === port) && !choices.includes(port));
   const card = <div className={clsx(css.node, container && css.containerNode, node?.type === 'branch' && css.branchCard, selected && css.nodeSelected)} title={data.description}>
     {container && <NodeResizer isVisible={selected && data.minSize.width <= 8192 && data.minSize.height <= 8192} minWidth={data.minSize.width} minHeight={data.minSize.height} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />}
     {/* As Dify's NodeTargetHandle: "+" adds a node ahead of an unconnected input. */}
@@ -82,7 +83,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
       {actions.editable && <button type="button" className={clsx(css.addBlockButton, 'nodrag nopan')} onClick={event => { event.stopPropagation(); actions.addAfter(data.emptyBody!.start, 'next', event.currentTarget); }}><IconPlus size={14} />{tx('workflows:canvas.add')}</button>}
     </div>}
     {!container && <>
-      {node && node.type !== 'branch' && node.type !== 'start' && <NodePreview tx={tx} node={node} sources={data.sources ?? {}} />}
+      {node && node.type !== 'branch' && node.type !== 'start' && node.type !== 'review' && <NodePreview tx={tx} node={node} sources={data.sources ?? {}} />}
       {node?.type === 'branch' && <div className={css.branchBody}>
         {node.cases.map((item, index) => <div key={item.id}>
           <div className={css.branchCaseLabel}><small>{node.cases.length > 1 ? tx('workflows:branch.case', { p0: String(index + 1) }) : ''}</small><b>{tx(index ? 'workflows:branch.elif' : 'workflows:branch.if')}</b></div>
@@ -99,6 +100,11 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
       {!!routes.length && <div className={css.routeRows}>{routes.map(route => <div key={route.id} className={css.routeRow} title={route.description}>
         <b>{route.id}</b><span>{route.description}</span>
         <SourcePort id={id} port={route.id} label={route.id} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === route.id)} title={data.local} className={css.routeHandle} />
+      </div>)}</div>}
+      {/* As Dify's Human Input card: one row and exit per action, then Timeout. */}
+      {!!choices.length && <div className={css.actionRows}>{choices.map(port => <div key={port} className={css.actionRow}>
+        <span>{port === TIMEOUT_PORT ? tx('workflows:port.timeout') : port}</span>
+        <SourcePort id={id} port={port} label={port === TIMEOUT_PORT ? tx('workflows:port.timeout') : port} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === port)} title={data.local} className={css.routeHandle} />
       </div>)}</div>}
       {/* As Dify's ErrorHandleOnNode: the strategy, and the fail branch's port. */}
       {(node?.type === 'model' || node?.type === 'tool' || node?.type === 'agent') && node.on_error && node.on_error.type !== 'stop' && <div className={css.errorRow}>

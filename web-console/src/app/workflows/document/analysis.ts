@@ -18,11 +18,10 @@ export function consumerAddress(document: WorkflowDocument, field: FieldAddress)
     return { address: { block: [...field.block], node: field.node }, field: { kind: 'message', index }, path: [] };
   } else if (first === 'task' && node.type === 'agent') {
     return { address: { block: [...field.block], node: field.node }, field: { kind: 'task' }, path: [] };
+  } else if (first === 'content' && node.type === 'review') {
+    return { address: { block: [...field.block], node: field.node }, field: { kind: 'review_content' }, path: [] };
   } else if (first === 'arguments' && node.type === 'tool') consumer = { kind: 'arguments' };
-  else if (first === 'subject' && node.type === 'review' && parts.shift() === 'value') consumer = { kind: 'review_subject' };
-  else if (first === 'context' && node.type === 'review') {
-    const index = parts.shift(); if (typeof index !== 'number') return undefined; consumer = { kind: 'review_context', index };
-  } else if (first === 'cases' && node.type === 'branch') {
+  else if (first === 'cases' && node.type === 'branch') {
     const index = parts.shift(); if (typeof index !== 'number' || parts.shift() !== 'condition' || !node.cases[index]) return undefined;
     consumer = { kind: 'condition', case_id: node.cases[index].id };
   }

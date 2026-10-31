@@ -689,7 +689,7 @@ mod budget_tests {
         else {
             panic!("native review fixture");
         };
-        review.context = vec![serde_json::Value::String("x".repeat(14_000))];
+        review.questionnaire.questions[0].question = "🙂".repeat(3_500);
         for ordinal in 0..CHECKPOINT_PAGE_ITEMS {
             request.id = crate::runtime::identity::InteractionId::new(format!("review-{ordinal}"));
             let mut header = interaction_request_header(

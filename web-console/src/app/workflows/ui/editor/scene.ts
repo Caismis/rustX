@@ -81,9 +81,9 @@ export function projectScene(document: WorkflowDocument, measured: ReadonlyMap<s
       const described = !container && node.type !== 'branch' && !!metadata?.description?.trim();
       const preview = node.type === 'branch' ? 0 : previewRowCount(node);
       // A Model or Agent handling errors shows its strategy on one more row,
-      // and each Agent route is a row carrying its exit.
+      // and each Agent route or Human Input action is a row carrying its exit.
       const handled = (node.type === 'model' || node.type === 'tool' || node.type === 'agent') && !!node.on_error && node.on_error.type !== 'stop';
-      const routes = node.type === 'agent' ? node.routes?.length ?? 0 : 0;
+      const routes = node.type === 'agent' ? node.routes?.length ?? 0 : node.type === 'review' ? node.actions.length + 1 : 0;
       // Estimates are for initial placement only. Ordinary cards render at
       // their intrinsic height, and Organize uses their measured footprint.
       const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? branchGeometry(node).height : 57 + (preview ? 8 + preview * 27 : 0)) + (described ? CARD_DESCRIPTION_HEIGHT : 0) + (handled ? ERROR_ROW_HEIGHT : 0) + (routes ? ROUTE_ROWS_MARGIN + routes * ROUTE_ROW_HEIGHT : 0) };

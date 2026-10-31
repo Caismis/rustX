@@ -1771,24 +1771,12 @@ export type InteractionResponse =
       response:
         | {
             type: 'submitted';
-            value: QuestionnaireSubmission;
+            value: QuestionnaireSubmission1;
           }
         | {
             type: 'declined';
           };
       type: 'questionnaire';
-    };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ReviewDecision".
- */
-export type ReviewDecision =
-  | {
-      type: 'accepted';
-    }
-  | {
-      feedback: string;
-      type: 'rejected';
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -2012,8 +2000,13 @@ export type WorkflowNodeDefinition =
       type: 'assigner';
     }
   | {
-      subject: WorkflowReviewSubject;
-      context: WorkflowValue[];
+      /**
+       * The Markdown shown to the person: fixed text and references, as
+       * an Agent's task.
+       */
+      content: WorkflowValue[];
+      actions: WorkflowReviewAction[];
+      timeout_ms: string;
       type: 'review';
     }
   | {
@@ -2296,14 +2289,6 @@ export type WorkflowWriteMode =
   | 'divide';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowReviewSubject".
- */
-export type WorkflowReviewSubject = {
-  value: WorkflowValue;
-  type: 'plan';
-};
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowToolSelector".
  */
 export type WorkflowToolSelector =
@@ -2389,11 +2374,7 @@ export type WorkflowConsumerField =
       kind: 'arguments';
     }
   | {
-      kind: 'review_subject';
-    }
-  | {
-      index: number;
-      kind: 'review_context';
+      kind: 'review_content';
     }
   | {
       case_id: string;
@@ -4524,14 +4505,6 @@ export type PublicationAuditBlock =
       kind: 'proposed_tool_call';
     };
 /**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ReviewSubject".
- */
-export type ReviewSubject = {
-  content: unknown;
-  type: 'plan';
-};
-/**
  * The bounded set of text shapes rustX can validate deterministically.
  *
  * Only formats rustX can prove are supported. A schema asking for a format
@@ -5848,7 +5821,7 @@ export type RuntimeClientEvent =
                   response:
                     | {
                         type: 'submitted';
-                        value: QuestionnaireSubmission;
+                        value: QuestionnaireSubmission1;
                       }
                     | {
                         type: 'declined';
@@ -7216,7 +7189,7 @@ export type InteractionKind =
   | {
       invocation_id: ToolInvocationId;
       requester: InteractionRequester1;
-      questionnaire: QuestionnaireSpecification1;
+      questionnaire: QuestionnaireSpecification2;
       type: 'questionnaire';
     };
 /**
@@ -7302,37 +7275,6 @@ export type AnswerSpecification =
       type: 'multi_choice';
     };
 /**
- * The finite approval decision accepted from a client.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ApprovalDecision".
- */
-export type ApprovalDecision =
-  | {
-      type: 'allow';
-    }
-  | {
-      /**
-       * A bounded client-facing reason.
-       */
-      reason: string;
-      type: 'deny';
-    };
-/**
- * The two valid terminal responses to a questionnaire.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "QuestionnaireResponse".
- */
-export type QuestionnaireResponse =
-  | {
-      type: 'submitted';
-      value: QuestionnaireSubmission;
-    }
-  | {
-      type: 'declined';
-    };
-/**
  * A typed answer decision accepted from a Runtime Client.
  *
  * Which variants are legal for a given question is decided by that question's
@@ -7369,6 +7311,37 @@ export type QuestionnaireAnswer =
   | {
       type: 'custom';
       value: CustomAnswer;
+    };
+/**
+ * The finite approval decision accepted from a client.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ApprovalDecision".
+ */
+export type ApprovalDecision =
+  | {
+      type: 'allow';
+    }
+  | {
+      /**
+       * A bounded client-facing reason.
+       */
+      reason: string;
+      type: 'deny';
+    };
+/**
+ * The two valid terminal responses to a questionnaire.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "QuestionnaireResponse".
+ */
+export type QuestionnaireResponse =
+  | {
+      type: 'submitted';
+      value: QuestionnaireSubmission1;
+    }
+  | {
+      type: 'declined';
     };
 /**
  * As Dify's error handling, for a call that failed or timed out after its
@@ -7778,7 +7751,7 @@ export type RuntimeClientTranscriptItem =
         | {
             invocation_id: ToolInvocationId;
             requester: InteractionRequester;
-            questionnaire: QuestionnaireSpecification;
+            questionnaire: QuestionnaireSpecification1;
             type: 'questionnaire';
           };
       type: 'interaction_requested';
@@ -7827,7 +7800,7 @@ export type RuntimeClientTranscriptItem =
             type: 'denied';
           }
         | {
-            submission: QuestionnaireSubmission1;
+            submission: QuestionnaireSubmission2;
             type: 'questionnaire_submitted';
           }
         | {
@@ -7911,7 +7884,7 @@ export type InteractionSubject =
   | {
       invocation_id: ToolInvocationId;
       requester: InteractionRequester;
-      questionnaire: QuestionnaireSpecification;
+      questionnaire: QuestionnaireSpecification1;
       type: 'questionnaire';
     };
 /**
@@ -7940,7 +7913,7 @@ export type InteractionSettlement =
       type: 'denied';
     }
   | {
-      submission: QuestionnaireSubmission1;
+      submission: QuestionnaireSubmission2;
       type: 'questionnaire_submitted';
     }
   | {
@@ -8784,7 +8757,7 @@ export type InteractionOutcome =
             response:
               | {
                   type: 'submitted';
-                  value: QuestionnaireSubmission;
+                  value: QuestionnaireSubmission1;
                 }
               | {
                   type: 'declined';
@@ -9281,7 +9254,7 @@ export interface InteractionRef {
 export interface ReviewResponse {
   instance: WorkflowNodeInstance;
   subject_digest: string;
-  decision: ReviewDecision;
+  submission: QuestionnaireSubmission;
 }
 /**
  * One concrete node visit in an owning block instance.
@@ -9347,11 +9320,7 @@ export interface WorkflowDefinitionPath {
   blocks: string[];
 }
 /**
- * The submitted decisions for one questionnaire. Omitted questions are
- * intentionally allowed so a user may submit a partial questionnaire.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "QuestionnaireSubmission".
+ * Every question answered; the action is an option of the last one.
  */
 export interface QuestionnaireSubmission {
   /**
@@ -9497,6 +9466,19 @@ export interface CustomAnswer {
    * The bounded user-entered answer.
    */
   answer: string;
+}
+/**
+ * The submitted decisions for one questionnaire. Omitted questions are
+ * intentionally allowed so a user may submit a partial questionnaire.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "QuestionnaireSubmission".
+ */
+export interface QuestionnaireSubmission1 {
+  /**
+   * At most one entry per answered question.
+   */
+  answers: QuestionnaireAnswerEntry[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9693,6 +9675,16 @@ export interface WorkflowAssignment {
    * The operand; `clear`, `remove_first` and `remove_last` take none.
    */
   value?: WorkflowValue | null;
+}
+/**
+ * One button the person may press, and the exit it takes.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowReviewAction".
+ */
+export interface WorkflowReviewAction {
+  id: string;
+  title: string;
 }
 /**
  * One exit an Agent may choose, as Dify's Agent output route. The child
@@ -11767,7 +11759,7 @@ export interface RuntimeClientTranscriptEntry {
           | {
               invocation_id: ToolInvocationId;
               requester: InteractionRequester;
-              questionnaire: QuestionnaireSpecification;
+              questionnaire: QuestionnaireSpecification1;
               type: 'questionnaire';
             };
         type: 'interaction_requested';
@@ -11816,7 +11808,7 @@ export interface RuntimeClientTranscriptEntry {
               type: 'denied';
             }
           | {
-              submission: QuestionnaireSubmission1;
+              submission: QuestionnaireSubmission2;
               type: 'questionnaire_submitted';
             }
           | {
@@ -12775,43 +12767,10 @@ export interface PublicationAudit {
  */
 export interface ReviewSpecification {
   instance: WorkflowNodeInstance;
-  subject: ReviewSubject;
-  /**
-   * Bounded committed Workflow values presented beside the subject.
-   */
-  context: unknown[];
+  questionnaire: QuestionnaireSpecification;
 }
 /**
- * The canonical identity of the tool that asked. Durable evidence of
- * *who* asked, so an audit of an MCP elicitation names its server.
- */
-export interface InteractionRequester {
-  /**
-   * Identifies a tool definition in the capability set.
-   */
-  tool_id: string;
-  /**
-   * The safe model-facing tool name.
-   */
-  tool_name: string;
-  /**
-   * The registry-resolved tool origin, which carries MCP server identity.
-   */
-  origin:
-    | 'builtin'
-    | {
-        mcp: {
-          server_id: McpServerId;
-        };
-      }
-    | {
-        managed_python: {
-          package: string;
-        };
-      };
-}
-/**
- * The exact immutable facts projected to the Runtime Client.
+ * The node's content as the question and its actions as the options.
  */
 export interface QuestionnaireSpecification {
   /**
@@ -12935,10 +12894,48 @@ export interface OptionSpecification {
   preview?: string | null;
 }
 /**
+ * The canonical identity of the tool that asked. Durable evidence of
+ * *who* asked, so an audit of an MCP elicitation names its server.
+ */
+export interface InteractionRequester {
+  /**
+   * Identifies a tool definition in the capability set.
+   */
+  tool_id: string;
+  /**
+   * The safe model-facing tool name.
+   */
+  tool_name: string;
+  /**
+   * The registry-resolved tool origin, which carries MCP server identity.
+   */
+  origin:
+    | 'builtin'
+    | {
+        mcp: {
+          server_id: McpServerId;
+        };
+      }
+    | {
+        managed_python: {
+          package: string;
+        };
+      };
+}
+/**
+ * The exact immutable facts projected to the Runtime Client.
+ */
+export interface QuestionnaireSpecification1 {
+  /**
+   * One to four related blocking questions.
+   */
+  questions: QuestionSpecification[];
+}
+/**
  * The submitted decisions for one questionnaire. Omitted questions are
  * intentionally allowed so a user may submit a partial questionnaire.
  */
-export interface QuestionnaireSubmission1 {
+export interface QuestionnaireSubmission2 {
   /**
    * At most one entry per answered question.
    */
@@ -13401,7 +13398,6 @@ export interface WorkflowInstanceView {
   iterations_max?: number | null;
   loop_exit?: WorkflowLoopExit | null;
   checks_passed?: boolean | null;
-  review_accepted?: boolean | null;
 }
 /**
  * The client-visible durable-authority failure state of a conversation
@@ -14349,7 +14345,7 @@ export interface InteractionRequest {
     | {
         invocation_id: ToolInvocationId;
         requester: InteractionRequester1;
-        questionnaire: QuestionnaireSpecification1;
+        questionnaire: QuestionnaireSpecification2;
         type: 'questionnaire';
       };
 }
@@ -14387,7 +14383,7 @@ export interface InteractionRequester1 {
 /**
  * The complete immutable facts shown to the Runtime Client.
  */
-export interface QuestionnaireSpecification1 {
+export interface QuestionnaireSpecification2 {
   /**
    * One to four related blocking questions.
    */
@@ -15976,7 +15972,7 @@ export interface RuntimeClientProtocolEvent {
                     response:
                       | {
                           type: 'submitted';
-                          value: QuestionnaireSubmission;
+                          value: QuestionnaireSubmission1;
                         }
                       | {
                           type: 'declined';
@@ -16552,7 +16548,7 @@ export interface RuntimeClientTranscriptInteractionRequested {
     | {
         invocation_id: ToolInvocationId;
         requester: InteractionRequester;
-        questionnaire: QuestionnaireSpecification;
+        questionnaire: QuestionnaireSpecification1;
         type: 'questionnaire';
       };
 }
@@ -16610,7 +16606,7 @@ export interface RuntimeClientTranscriptInteractionSettled {
         type: 'denied';
       }
     | {
-        submission: QuestionnaireSubmission1;
+        submission: QuestionnaireSubmission2;
         type: 'questionnaire_submitted';
       }
     | {
@@ -18702,7 +18698,6 @@ export interface NodeInspection {
   output_schema?: unknown;
   result_kind?: string | null;
   loop_count?: number | null;
-  review_subject?: string | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -19397,9 +19392,21 @@ export interface InteractionRequest1 {
     | {
         invocation_id: ToolInvocationId;
         requester: InteractionRequester1;
-        questionnaire: QuestionnaireSpecification1;
+        questionnaire: QuestionnaireSpecification2;
         type: 'questionnaire';
       };
+}
+/**
+ * The complete immutable questionnaire shown to a client.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "QuestionnaireSpecification".
+ */
+export interface QuestionnaireSpecification3 {
+  /**
+   * One to four related blocking questions.
+   */
+  questions: QuestionSpecification[];
 }
 /**
  * The canonical, provider-independent identity of whoever asked the human.
@@ -19451,18 +19458,6 @@ export interface InteractionRequester2 {
           package: string;
         };
       };
-}
-/**
- * The complete immutable questionnaire shown to a client.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "QuestionnaireSpecification".
- */
-export interface QuestionnaireSpecification2 {
-  /**
-   * One to four related blocking questions.
-   */
-  questions: QuestionSpecification[];
 }
 /**
  * Configuration of the bounded Time status contributor.
@@ -19964,7 +19959,7 @@ export interface RuntimeClientTranscriptInteractionRequested1 {
     | {
         invocation_id: ToolInvocationId;
         requester: InteractionRequester;
-        questionnaire: QuestionnaireSpecification;
+        questionnaire: QuestionnaireSpecification1;
         type: 'questionnaire';
       };
 }
@@ -20025,7 +20020,7 @@ export interface RuntimeClientTranscriptInteractionSettled1 {
         type: 'denied';
       }
     | {
-        submission: QuestionnaireSubmission1;
+        submission: QuestionnaireSubmission2;
         type: 'questionnaire_submitted';
       }
     | {

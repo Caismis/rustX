@@ -70,11 +70,11 @@ function row(node: string, scope: string): WorkflowInstanceView {
   return { block: { run: id, definition: { workflow_id: "review", blocks: [scope, "body"] }, invocations: [0, 1] },
     node, visit: 0, kind: "review", state: { type: "waiting", reason: "review" }, child: null, invocation: null, tool_id: null,
     interaction: { conversation_id: "conv_01900000-0000-7000-8000-000000000002", interaction_id: node }, iteration: null, iterations_max: null,
-    loop_exit: null, checks_passed: null, review_accepted: true };
+    loop_exit: null, checks_passed: null };
 }
 function run(): WorkflowRunView {
   return { id, workflow_id: "review", program_digest: "a".repeat(64), resource_revision: "1", tool_call_id: "outer",
-    state: { type: "running" }, instances: [row("human", "left"), { ...row("worker", "right"), state: { type: "running" }, child: "child-right", interaction: null, review_accepted: null }],
+    state: { type: "running" }, instances: [row("human", "left"), { ...row("worker", "right"), state: { type: "running" }, child: "child-right", interaction: null }],
     omitted_instances: 0, steps_consumed: 4, steps_max: 20, agents_consumed: 1, model_calls_consumed: 0 };
 }
 
@@ -94,7 +94,6 @@ it("Concurrent human wait and child coexist without Candidate or handoff rows", 
   const text = workflowDetails(run()).join("\n");
   assert.match(text, /human · waiting for review/);
   assert.match(text, /worker · running.*child-right/);
-  assert.match(text, /Review accepted/);
   assert.doesNotMatch(text, /candidate|handoff/i);
   assert.match(text, /root HITL/);
 });
@@ -106,7 +105,7 @@ it("draining is not terminal cancellation and Loop exhaustion is not business ac
   const value = run();
   value.state = { type: "settled", outcome: "completed" };
   value.instances = [{ ...row("repair", "body"), kind: "loop", state: { type: "settled", outcome: "completed" }, interaction: null,
-    review_accepted: null, checks_passed: false, iteration: 3, iterations_max: 3, loop_exit: "exhausted" }];
+    checks_passed: false, iteration: 3, iterations_max: 3, loop_exit: "exhausted" }];
   const text = workflowDetails(value).join("\n");
   assert.match(text, /execution completed/);
   assert.match(text, /iteration 3\/3 · exhausted.*business checks failed/);

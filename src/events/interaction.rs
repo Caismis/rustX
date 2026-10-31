@@ -1124,11 +1124,14 @@ fn validate_choice_options(
                 "{context}.options[{option_index}].label duplicates {context}.options[{previous_index}].label. Option labels must be unique within each question. Change one of the conflicting labels."
             ));
         }
-        validate_text(
-            &option.description,
-            &format!("{context}.options[{option_index}].description"),
-            MAX_OPTION_DESCRIPTION_CHARS,
-        )?;
+        // A description is optional: a Human Input action is a bare button.
+        if !option.description.is_empty() {
+            validate_text(
+                &option.description,
+                &format!("{context}.options[{option_index}].description"),
+                MAX_OPTION_DESCRIPTION_CHARS,
+            )?;
+        }
         if let Some(preview) = &option.preview {
             validate_text(
                 preview,
@@ -1511,7 +1514,7 @@ pub fn validate_interaction_settlement(
 ) -> Result<(), String> {
     match (subject, settlement) {
         (InteractionSubject::Review { review }, InteractionSettlement::Reviewed { response }) => {
-            review.validate_response(response)
+            review.validate_response(response).map(|_| ())
         }
         (
             _,
@@ -1632,9 +1635,11 @@ mod tests {
         let mut invalid = questionnaire();
         options_mut(&mut invalid)[0].label = "Other".to_owned();
         assert!(validate_questionnaire(&invalid).is_err());
-        let mut invalid = questionnaire();
-        options_mut(&mut invalid)[0].description.clear();
-        assert!(validate_questionnaire(&invalid).is_err());
+        let mut described = questionnaire();
+        options_mut(&mut described)[0].description.clear();
+        assert!(validate_questionnaire(&described).is_ok());
+        options_mut(&mut described)[0].description = " ".to_owned();
+        assert!(validate_questionnaire(&described).is_err());
 
         let mut invalid = questionnaire();
         invalid.questions[0].question = "duplicate".to_owned();

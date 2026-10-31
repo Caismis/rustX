@@ -81,24 +81,21 @@ block:
           additionalProperties: false
     review_plan:
       type: review
-      subject:
-        type: plan
-        value:
-          type: reference
-          path:
-          - plan
-      context: []
-    plan_accepted:
-      type: branch
-      cases:
-      - id: 'true'
-        condition:
-          type: boolean
-          value:
-            type: reference
-            path:
-            - review_plan
-            - accepted
+      content:
+      - type: literal
+        value: 'Approve this plan before any file changes:
+
+
+          '
+      - type: reference
+        path:
+        - plan
+      actions:
+      - id: approve
+        title: Approve
+      - id: reject
+        title: Reject
+      timeout_ms: 600000
     repair:
       type: loop
       loop_count: 3
@@ -333,10 +330,8 @@ block:
             type: literal
             value: rejected
           feedback:
-            type: reference
-            path:
-            - review_plan
-            - feedback
+            type: literal
+            value: The plan was not approved.
     exhausted:
       type: return
       output:
@@ -494,13 +489,14 @@ block:
   - from: plan
     to: review_plan
   - from: review_plan
-    to: plan_accepted
-  - from: plan_accepted
     to: repair
-    port: 'true'
-  - from: plan_accepted
+    port: approve
+  - from: review_plan
     to: rejected_plan
-    port: 'false'
+    port: reject
+  - from: review_plan
+    to: rejected_plan
+    port: timeout
   - from: start
     to: intake_brief
   - from: start

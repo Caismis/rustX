@@ -5,7 +5,7 @@ use super::{
     BTreeMap, BTreeSet, LOOP_NODE_MAX_COUNT, MAX_BLOCK_DEPTH, MAX_LOCAL_BYTES, MAX_VALUE_BYTES,
     MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_MODEL_CALLS, MAX_WORKFLOW_NODES, MAX_WORKFLOW_STEPS,
     Serialize, SubagentName, Value, WorkflowBlockProgram, WorkflowNodeProgram, WorkflowPort,
-    WorkflowPredicate, WorkflowProgram, WorkflowReviewSubject, WorkflowToolIdentity, WorkflowValue,
+    WorkflowPredicate, WorkflowProgram, WorkflowToolIdentity, WorkflowValue,
 };
 use serde_json::json;
 use std::borrow::Cow;
@@ -58,7 +58,9 @@ impl WorkflowProgram {
                     WorkflowNodeProgram::Model(model) => Some(model.output.schema()),
                     WorkflowNodeProgram::Agent(agent) => Some(agent.value_schema()),
                     WorkflowNodeProgram::Tool { result, .. } => Some(result.schema()),
-                    WorkflowNodeProgram::Review { .. } => Some(super::review::result_schema()),
+                    WorkflowNodeProgram::Review { actions, .. } => {
+                        Some(super::review::result_schema(actions))
+                    }
                     WorkflowNodeProgram::Loop {
                         body,
                         output_schema,
@@ -137,7 +139,6 @@ pub struct NodeInspection {
     pub output_schema: Option<Value>,
     pub result_kind: Option<Cow<'static, str>>,
     pub loop_count: Option<u32>,
-    pub review_subject: Option<Cow<'static, str>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -306,7 +307,6 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             output_schema: None,
             result_kind: None,
             loop_count: None,
-            review_subject: None,
         };
         match node {
             WorkflowNodeProgram::Model(model) => {
@@ -463,20 +463,21 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                     }
                 }
             }
-            WorkflowNodeProgram::Review { subject, context } => {
+            WorkflowNodeProgram::Review {
+                content, actions, ..
+            } => {
                 result
                     .runtime_requirements
-                    .insert("human_review_decision_and_interaction_availability");
+                    .insert("human_input_and_interaction_availability");
                 view.kind = "review".into();
-                view.review_subject = Some(match subject {
-                    WorkflowReviewSubject::Plan { .. } => "plan".into(),
-                });
-                view.bindings
-                    .insert("subject".into(), binding(subject.value()));
-                for (index, value) in context.iter().enumerate() {
-                    view.bindings
-                        .insert(format!("context.{index}"), binding(value));
-                }
+                view.output_schema = Some(schema(&super::review::result_schema(actions)));
+                view.bindings.extend(
+                    content
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, part)| matches!(part, super::WorkflowValue::Reference { .. }))
+                        .map(|(position, part)| (format!("content.{position}"), binding(part))),
+                );
             }
         }
         nodes.insert(id.clone(), view);

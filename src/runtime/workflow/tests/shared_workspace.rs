@@ -1,12 +1,11 @@
 //! Issue #462 Workflow regressions over the shared Session workspace.
 //!
 //! Workflow Agents and Tools act directly in the frozen Session execution
-//! binding: there is no Candidate, worktree, freeze or rollback. Review is a
-//! typed `{accepted, feedback}` value that gates later work only through an
-//! explicit Branch. Every proof uses the real registry, real native Bash and
+//! binding: there is no Candidate, worktree, freeze or rollback. A Human
+//! Input gates later work only through the exit of the action chosen. Every proof uses the real registry, real native Bash and
 //! the native Review owner; ordering is driven by IPC frames and interaction
 //! publications, never by elapsed time.
-use super::human::{answer, owner};
+use super::human::{answer, owner, review_node, review_output};
 use super::*;
 
 const IMPLEMENT_FILE: &str = "greeting.txt";
@@ -159,9 +158,9 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
     assert!(plane.registry.unsettled_snapshot().is_empty());
 }
 
-/// C03/C04/C17: Review is ordinary typed data. A rejected plan takes the
-/// explicit Branch's rejected Return and never admits the gated Agent; an
-/// accepted plan reaches it. Neither path grants unrelated Tool authority.
+/// C03/C04/C17: a rejected plan takes the Human Input's `no` exit to the
+/// rejected Return and never admits the gated Agent; an accepted plan
+/// reaches it. Neither path grants unrelated Tool authority.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn explicit_review_branch_gates_implementation() {
     for accepted in [false, true] {
@@ -171,22 +170,21 @@ async fn explicit_review_branch_gates_implementation() {
         let context = bash_context(&plane, Some(owner.clone()));
         let output = schema(
             json!({"status":{"type":"string","enum":["implemented","rejected"]},
-                "feedback":{"type":"string"}}),
-            &["status", "feedback"],
+                "action":{"type":"string"}}),
+            &["status", "action"],
         );
         let definition = serde_json::from_value(json!({"description":"gated implementation","timeout_ms":600_000,"block":{
             "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),"output":output,"nodes": {"workflow_start":{"type":"start"},
-                "review":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},
-                "gate":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["review","accepted"]}}}]},
+                "review":review_node(3_600_000),
                 "implement":implement_node(),
                 "implemented":{"type":"return","output":{"type":"object","fields":{
                     "status":{"type":"literal","value":"implemented"},
-                    "feedback":{"type":"reference","path":["review","feedback"]}}}},
+                    "action":{"type":"reference","path":["review","action"]}}}},
                 "rejected":{"type":"return","output":{"type":"object","fields":{
                     "status":{"type":"literal","value":"rejected"},
-                    "feedback":{"type":"reference","path":["review","feedback"]}}}}
-            },"edges": [{"from":"workflow_start","to":"review"},{"from":"review","to":"gate"},{"from":"gate","to":"implement","port":"true"},
-                {"from":"gate","to":"rejected","port":"false"},{"from":"implement","to":"implemented"}],}}))
+                    "action":{"type":"reference","path":["review","action"]}}}}
+            },"edges": [{"from":"workflow_start","to":"review"},{"from":"review","to":"implement","port":"yes"},
+                {"from":"review","to":"rejected","port":"no"},{"from":"review","to":"rejected","port":"timeout"},{"from":"implement","to":"implemented"}],}}))
         .unwrap();
         let program = Arc::new(compile_test(definition).unwrap());
         let mut child = accepted.then(|| stage_workflow_child(&plane));
@@ -233,8 +231,8 @@ async fn explicit_review_branch_gates_implementation() {
         } else {
             assert_eq!(
                 value,
-                json!({"status":"rejected","feedback":"Revise scope"}),
-                "rejection is normal typed data routed by the explicit Branch"
+                json!({"status":"rejected","action":"no"}),
+                "rejection is the action's own exit"
             );
             assert!(
                 plane.registry.all_snapshots().is_empty(),
@@ -257,11 +255,12 @@ async fn rejection_after_a_write_never_rolls_it_back() {
     let mut child = stage_workflow_child(&plane);
     let definition = serde_json::from_value(json!({"description":"post-write review","timeout_ms":600_000,"block":{
         "input":schema(json!({"changed":{"type":"string"}}), &["changed"]),
-        "output":crate::runtime::workflow::review::result_schema(),"nodes": {"workflow_start":{"type":"start"},
+        "output":review_output(),"nodes": {"workflow_start":{"type":"start"},
             "implement":implement_node(),
-            "review":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},
+            "review":review_node(3_600_000),
             "done":{"type":"return","output":{"type":"reference","path":["review"]}}
-        },"edges": [{"from":"workflow_start","to":"implement"},{"from":"implement","to":"review"},{"from":"review","to":"done"}],}}))
+        },"edges": [{"from":"workflow_start","to":"implement"},{"from":"implement","to":"review"},{"from":"review","to":"done","port":"yes"},
+            {"from":"review","to":"done","port":"no"},{"from":"review","to":"done","port":"timeout"}],}}))
     .unwrap();
     let program = Arc::new(compile_test(definition).unwrap());
     let runtime = workflow_runtime(&plane);
@@ -292,7 +291,7 @@ async fn rejection_after_a_write_never_rolls_it_back() {
         .unwrap();
     assert_eq!(
         task.await.unwrap().unwrap(),
-        json!({"accepted":false,"feedback":"Revise scope"})
+        json!({"action":"no","content":"Approve the plan?"})
     );
     assert_eq!(
         std::fs::read_to_string(workspace.join(IMPLEMENT_FILE)).unwrap(),
@@ -310,13 +309,13 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
     let workspace = plane.dir.path().join("workspace");
     let (owner, _audit, mut published) = owner(&plane);
     let context = bash_context(&plane, Some(owner.clone()));
-    let review_output = crate::runtime::workflow::review::result_schema();
+    let review_output = review_output();
     let definition = serde_json::from_value(json!({"description":"parallel review","timeout_ms":600_000,"block":{
         "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),
         "output":schema(json!({"decision":review_output,"write":check_report()}), &["decision", "write"]),
         "nodes": {
             "workflow_start":{"type":"start"},
-            "review":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},
+            "review":review_node(3_600_000),
             "write":{"type":"tool","selector":{"origin":"builtin","name":"bash"},
                 "arguments":{"type":"literal","value":{"command":format!("printf independent > {IMPLEMENT_FILE}")}},
                 "result":{"type":"json","schema":check_report()}},
@@ -326,7 +325,8 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
             }}}
         },"edges": [
             {"from":"workflow_start","to":"review"},{"from":"workflow_start","to":"write"},
-            {"from":"review","to":"done"},{"from":"write","to":"done"}
+            {"from":"review","to":"done","port":"yes"},{"from":"review","to":"done","port":"no"},
+            {"from":"review","to":"done","port":"timeout"},{"from":"write","to":"done"}
         ]}})).unwrap();
     let program = Arc::new(compile_test(definition).unwrap());
     let runtime = workflow_runtime(&plane);
@@ -365,7 +365,7 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
         .await
         .unwrap();
     let output = task.await.unwrap().unwrap();
-    assert_eq!(output["decision"]["accepted"], true);
+    assert_eq!(output["decision"]["action"], "yes");
     assert_eq!(output["write"]["exit_code"], 0);
 }
 

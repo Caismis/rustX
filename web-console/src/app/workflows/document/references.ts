@@ -44,7 +44,7 @@ function node(input: NodeDefinition, rewrite: PathRewrite): NodeDefinition {
     case 'model': return { ...input, messages: input.messages.map(message => ({ ...message, content: message.content?.map(part => value(part, rewrite)) })) };
     case 'tool': return { ...input, arguments: value(input.arguments, rewrite) };
     case 'branch': return { ...input, cases: input.cases.map(item => ({ ...item, condition: predicate(item.condition, rewrite) })) };
-    case 'review': return { ...input, subject: { ...input.subject, value: value(input.subject.value, rewrite) }, context: input.context.map(item => value(item, rewrite)) };
+    case 'review': return { ...input, content: input.content.map(part => value(part, rewrite)) };
     case 'loop': return { ...input, loop_variables: input.loop_variables?.map(item => ({ ...item, value: value(item.value, rewrite) })),
       ...(input.break_condition ? { break_condition: predicate(input.break_condition, rewrite) } : {}), body: rewriteBlockReferences(input.body, rewrite) };
     case 'iteration': return { ...input, iterator: value(input.iterator, rewrite), output: value(input.output, rewrite), body: rewriteBlockReferences(input.body, rewrite) };

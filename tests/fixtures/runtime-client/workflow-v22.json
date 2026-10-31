@@ -59,8 +59,7 @@
             "iteration": null,
             "iterations_max": null,
             "loop_exit": null,
-            "checks_passed": false,
-            "review_accepted": null
+            "checks_passed": false
           }
         ],
         "omitted_instances": 3,

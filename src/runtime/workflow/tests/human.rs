@@ -1,7 +1,6 @@
 //! Native human waits: channel publication, manual deadlines, exact typed responses.
 use super::*;
 use crate::durable::JournalStore;
-use crate::events::review::{ReviewDecision, ReviewResponse};
 use crate::runtime::interaction::*;
 
 #[tokio::test]
@@ -34,8 +33,8 @@ async fn cfg237_human_plan_template_uses_native_review_and_settlement() {
         .await
         .unwrap();
     let output = task.await.unwrap().unwrap();
-    assert_eq!(output["accepted"], true);
-    assert!(output["feedback"].is_string());
+    assert_eq!(output["action"], "approve");
+    assert!(output["content"].is_string());
     assert_eq!(audit.events().len(), 2);
     assert!(owner.pending_snapshot().is_empty());
     assert!(plane.registry.all_snapshots().is_empty());
@@ -90,21 +89,32 @@ fn human_program(question: bool) -> Arc<WorkflowProgram> {
     Arc::new(compile_test(human_definition(question)).unwrap())
 }
 fn human_definition(question: bool) -> WorkflowDefinition {
-    let result = if question {
-        schema(
-            json!({"cancelled":{"type":"boolean"},"answers":{"type":"array","items":{"type":"object"}}}),
-            &["cancelled", "answers"],
-        )
-    } else {
-        crate::runtime::workflow::review::result_schema()
-    };
-    let node = if question {
-        json!({"type":"tool","selector":{"origin":"builtin","name":"ask_user"},"arguments":{"type":"literal","value":{"questions":[{"question":"Choose target","header":"Target","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}},"result":{"type":"json","schema":result}})
-    } else {
-        json!({"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]})
-    };
+    if !question {
+        // Each action is its own exit, as Dify's Human Input.
+        return serde_json::from_value(json!({"description":"Human business decision","timeout_ms":100,"block":{
+            "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"output":review_output(),
+            "nodes": {"workflow_start":{"type":"start"},"human":review_node(3_600_000),
+                "yes":{"type":"return","output":{"type":"reference","path":["human"]}},
+                "no":{"type":"return","output":{"type":"reference","path":["human"]}}},
+            "edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"yes","port":"yes"},
+                {"from":"human","to":"no","port":"no"},{"from":"human","to":"no","port":"timeout"}]}})).unwrap();
+    }
+    let result = schema(
+        json!({"cancelled":{"type":"boolean"},"answers":{"type":"array","items":{"type":"object"}}}),
+        &["cancelled", "answers"],
+    );
+    let node = json!({"type":"tool","selector":{"origin":"builtin","name":"ask_user"},"arguments":{"type":"literal","value":{"questions":[{"question":"Choose target","header":"Target","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}},"result":{"type":"json","schema":result}});
     serde_json::from_value(json!({"description":"Human business decision","timeout_ms":100,"block":{
-        "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"output":result,"nodes": {"workflow_start":{"type":"start"},"human":node,"branch":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["human",if question {"cancelled"} else {"accepted"}]}}}]},"yes":{"type":"return","output":{"type":"reference","path":["human"]}},"no":{"type":"return","output":{"type":"reference","path":["human"]}}},"edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}})).unwrap()
+        "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"output":result,"nodes": {"workflow_start":{"type":"start"},"human":node,"branch":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["human","cancelled"]}}}]},"yes":{"type":"return","output":{"type":"reference","path":["human"]}},"no":{"type":"return","output":{"type":"reference","path":["human"]}}},"edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}})).unwrap()
+}
+pub(super) fn review_node(timeout_ms: u64) -> Value {
+    json!({"type":"review","content":[{"type":"literal","value":"Approve the plan?"}],
+        "actions":[{"id":"yes","title":"Approve"},{"id":"no","title":"Revise"}],"timeout_ms":timeout_ms})
+}
+pub(super) fn review_output() -> Value {
+    let actions: Vec<crate::runtime::workflow::WorkflowReviewAction> =
+        serde_json::from_value(review_node(1)["actions"].clone()).unwrap();
+    crate::runtime::workflow::review::result_schema(&actions)
 }
 fn human_context(
     plane: &WorkflowTestPlane,
@@ -125,12 +135,21 @@ fn human_context(
 /// (questionnaire), which an Assigner records in its `done` variable.
 fn feedback_definition(question: bool) -> WorkflowDefinition {
     let human = serde_json::to_value(&human_definition(question).block.nodes["human"]).unwrap();
-    let field = if question { "cancelled" } else { "accepted" };
-    let mut condition =
-        json!({"type":"boolean","value":{"type":"reference","path":["human",field]}});
-    if question {
-        condition = json!({"type":"not","predicate":condition});
-    }
+    // The questionnaire's answer goes through a Branch; a Human Input's
+    // `yes` action is its own exit.
+    let (nodes, edges) = if question {
+        let condition = json!({"type":"not","predicate":{"type":"boolean","value":{"type":"reference","path":["human","cancelled"]}}});
+        (
+            json!({"start":{"type":"start"},"human":human,
+            "branch":{"type":"branch","cases":[{"id":"true","condition":condition}]},"save":save()}),
+            json!([{"from":"start","to":"human"},{"from":"human","to":"branch"},{"from":"branch","to":"save","port":"true"}]),
+        )
+    } else {
+        (
+            json!({"start":{"type":"start"},"human":human,"save":save()}),
+            json!([{"from":"start","to":"human"},{"from":"human","to":"save","port":"yes"}]),
+        )
+    };
     serde_json::from_value(json!({"description":"Human feedback loop","timeout_ms":100,"block":{
         "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
         "output":schema(json!({"done":{"type":"boolean"}}), &["done"]),
@@ -138,13 +157,13 @@ fn feedback_definition(question: bool) -> WorkflowDefinition {
             "feedback":{"type":"loop","loop_count":3,
                 "loop_variables":[{"label":"done","var_type":"boolean","value":{"type":"literal","value":false}}],
                 "break_condition":{"type":"boolean","value":{"type":"reference","path":["feedback","done"]}},
-                "body":{"nodes":{"start":{"type":"start"},"human":human,
-                    "branch":{"type":"branch","cases":[{"id":"true","condition":condition}]},
-                    "save":{"type":"assigner","items":[{"variable":["feedback","done"],"operation":"set","value":{"type":"literal","value":true}}]}},
-                    "edges":[{"from":"start","to":"human"},{"from":"human","to":"branch"},{"from":"branch","to":"save","port":"true"}]}},
+                "body":{"nodes":nodes,"edges":edges}},
             "done":{"type":"return","output":{"type":"reference","path":["feedback"]}}},
         "edges":[{"from":"workflow_start","to":"feedback"},{"from":"feedback","to":"done"}]}}))
     .unwrap()
+}
+fn save() -> Value {
+    json!({"type":"assigner","items":[{"variable":["feedback","done"],"operation":"set","value":{"type":"literal","value":true}}]})
 }
 
 #[tokio::test]
@@ -258,21 +277,8 @@ async fn unavailable_loop_human_step_fails_without_exhaustion_or_reprompt() {
 }
 pub(super) fn answer(request: &InteractionRequest, affirmative: bool) -> InteractionResponse {
     match &request.kind {
-        InteractionKind::Review {
-            review,
-            subject_digest,
-        } => InteractionResponse::Review {
-            response: ReviewResponse {
-                instance: review.instance.clone(),
-                subject_digest: subject_digest.clone(),
-                decision: if affirmative {
-                    ReviewDecision::Accepted
-                } else {
-                    ReviewDecision::Rejected {
-                        feedback: "Revise scope".into(),
-                    }
-                },
-            },
+        InteractionKind::Review { review, .. } => InteractionResponse::Review {
+            response: review.choose(usize::from(!affirmative)),
         },
         InteractionKind::Questionnaire { .. } => InteractionResponse::Questionnaire {
             response: if affirmative {
@@ -333,12 +339,11 @@ async fn fixed_native_questions_and_plan_review_branch_without_model_or_history_
             let value = task.await.unwrap().unwrap();
             assert_eq!(audit.events().len(), 2);
             let expected = if question { !affirmative } else { affirmative };
-            assert_eq!(
-                value[if question { "cancelled" } else { "accepted" }],
-                expected
-            );
-            if !question && !affirmative {
-                assert_eq!(value["feedback"], "Revise scope");
+            if question {
+                assert_eq!(value["cancelled"], expected);
+            } else {
+                assert_eq!(value["action"], if affirmative { "yes" } else { "no" });
+                assert_eq!(value["content"], "Approve the plan?");
             }
             let events = plane.store.read_events(None, 128).unwrap().events;
             assert!(events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowBranchSelected { successor, .. } if successor == if expected { "yes" } else { "no" })));
@@ -545,4 +550,49 @@ async fn simultaneous_workflow_review_and_questionnaire_settle_only_their_origin
         task.await.unwrap().unwrap();
     }
     assert_eq!(audit.events().len(), 4);
+}
+
+/// As Dify's Human Input, an unanswered question leaves through `timeout`,
+/// and the late answer is refused.
+#[tokio::test]
+async fn unanswered_review_takes_its_timeout_exit() {
+    let plane = workflow_test_plane(1);
+    let (owner, audit, mut published) = owner(&plane);
+    let context = human_context(&plane, owner.clone());
+    let runtime = workflow_runtime(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let mut definition = human_definition(false);
+    definition.block.nodes.insert(
+        "human".into(),
+        serde_json::from_value(review_node(1)).unwrap(),
+    );
+    let task = tokio::spawn(async move {
+        runtime
+            .run_test_foreground(
+                Arc::new(compile_test(definition).unwrap()),
+                ToolCallId::new("outer"),
+                context,
+                json!({"passed":false}),
+                cancellation,
+            )
+            .await
+    });
+    let request = published.recv().await.unwrap();
+    let value = task.await.unwrap().unwrap();
+    assert_eq!(value["action"], "timeout");
+    assert!(matches!(
+        audit.events().last(),
+        Some(RuntimeEvent::InteractionSettled {
+            settlement: crate::events::interaction::InteractionSettlement::DeadlineExpired { .. },
+            ..
+        })
+    ));
+    assert!(
+        owner
+            .respond_async(&request.id, answer(&request, true))
+            .await
+            .is_err()
+    );
+    let events = plane.store.read_events(None, 128).unwrap().events;
+    assert!(events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowBranchSelected { successor, .. } if successor == "no")));
 }

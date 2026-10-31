@@ -3241,13 +3241,8 @@ mod tests {
         let mut instance = crate::runtime::workflow::test_instance("review", "human");
         instance.block.run.conversation_id =
             ConversationId::new("conv_0f3f0cba-1d5b-7e19-8c43-5c7a7d4e9a10");
-        let review = crate::events::review::ReviewSpecification {
-            instance: Box::new(instance),
-            subject: crate::events::review::ReviewSubject::Plan {
-                content: serde_json::json!({"plan":"P"}),
-            },
-            context: vec![serde_json::json!({"passed":true})],
-        };
+        let review =
+            crate::events::review::ReviewSpecification::new(instance, "P".into(), ["Approve"]);
         let cancellation =
             crate::agent::cancellation::AgentCancellation::new(CancellationReason::UserRequested);
         assert!(matches!(
@@ -3282,19 +3277,10 @@ mod tests {
             let mut instance = crate::runtime::workflow::test_instance("review", "human");
             instance.block.run.conversation_id =
                 ConversationId::new("conv_8b34dbc2-c05e-74d7-825d-48efeace8245");
-            let review = crate::events::review::ReviewSpecification {
-                instance: Box::new(instance),
-                subject: crate::events::review::ReviewSubject::Plan {
-                    content: serde_json::json!({"plan":"A"}),
-                },
-                context: vec![],
-            };
+            let review =
+                crate::events::review::ReviewSpecification::new(instance, "A".into(), ["Approve"]);
             let response = InteractionResponse::Review {
-                response: crate::events::review::ReviewResponse {
-                    instance: review.instance.clone(),
-                    subject_digest: review.digest(),
-                    decision: crate::events::review::ReviewDecision::Accepted,
-                },
+                response: review.choose(0),
             };
             let cancellation = crate::agent::cancellation::AgentCancellation::new(
                 CancellationReason::UserRequested,

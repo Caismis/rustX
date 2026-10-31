@@ -10,7 +10,7 @@ const tx = translator('en');
 const sources: VariableSources = { args: { kind: 'start', title: '' }, draft: { kind: 'agent', title: 'Drafter' } };
 
 it('shows a card reference as Dify does: source icon and title, a slash, then {x} and the name', () => {
-  const node = { type: 'review', subject: { value: { type: 'reference', path: ['draft', 'proposal'] } }, context: [] } as never;
+  const node = { type: 'iteration', iterator: { type: 'reference', path: ['draft', 'proposal'] }, output: { type: 'reference', path: [] }, body: { nodes: {}, edges: [] } } as never;
   const { container } = render(<NodePreview tx={tx} node={node} sources={sources} />);
   const label = container.querySelector('[data-node-preview] [title]:not([data-node-preview] > div)')!;
   expect(label.getAttribute('title')).toBe('Drafter / proposal');

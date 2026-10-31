@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CommandRejected, renameAgentRoute, replaceNodeExits } from '../src/app/workflows/document/commands';
+import { CommandRejected, renameExit, replaceNodeExits } from '../src/app/workflows/document/commands';
 import { rootBlock } from './workflow-root';
 import type { NodeDefinition, WorkflowDocument } from '../src/app/workflows/document/model';
 import { portsOf } from '../src/app/workflows/document/ports';
@@ -26,12 +26,12 @@ describe('Agent output routes, as Dify', () => {
 
   it('renames a route with its connections and refuses reserved or taken names', () => {
     const original = document(agent({ routes, on_error: { type: 'fail_branch' } }));
-    const renamed = renameAgentRoute(original, [], 'triage', 'revise', 'rework');
+    const renamed = renameExit(original, [], 'triage', 'revise', 'rework');
     expect(renamed.block.nodes.triage).toMatchObject({ routes: [{ id: 'approve' }, { id: 'rework', description: 'Needs edits.' }] });
     expect(renamed.block.edges).toContainEqual({ from: 'triage', to: 'edit', port: 'rework' });
     expect(renamed.block.edges).toContainEqual({ from: 'triage', to: 'edit', port: 'fail' });
     for (const [to, code] of [['fail', 'reserved_port'], ['approve', 'duplicate_identifier'], ['two words', 'invalid_identifier']] as const) {
-      expect(() => renameAgentRoute(original, [], 'triage', 'revise', to)).toThrow(new CommandRejected(code));
+      expect(() => renameExit(original, [], 'triage', 'revise', to)).toThrow(new CommandRejected(code));
     }
   });
 

@@ -28,6 +28,8 @@ impl ActivationScopes {
             .values()
             .map(|node| match node {
                 WorkflowNodeDefinition::Branch { cases } => cases.len(),
+                // Each action, then the timeout that takes what remains.
+                WorkflowNodeDefinition::Review { actions, .. } => actions.len(),
                 // Routes are mutually exclusive: the last takes what remains.
                 WorkflowNodeDefinition::Agent {
                     routes, on_error, ..
@@ -74,6 +76,29 @@ impl ActivationScopes {
                         .ok_or_else(too_complex)?;
                     }
                     ports.insert(WorkflowPort::False, remaining);
+                }
+                WorkflowNodeDefinition::Review { actions, .. } => {
+                    let mut remaining = variables.mk_true();
+                    for action in actions {
+                        let selected =
+                            variables.mk_var(allocated.next().expect("allocated action"));
+                        let guard = Bdd::binary_op_with_limit(
+                            MAX_ACTIVATION_NODES,
+                            &remaining,
+                            &selected,
+                            op_function::and,
+                        )
+                        .ok_or_else(too_complex)?;
+                        ports.insert(WorkflowPort::case(&action.id), guard);
+                        remaining = Bdd::binary_op_with_limit(
+                            MAX_ACTIVATION_NODES,
+                            &remaining,
+                            &selected.not(),
+                            op_function::and,
+                        )
+                        .ok_or_else(too_complex)?;
+                    }
+                    ports.insert(WorkflowPort::case(super::REVIEW_TIMEOUT_PORT), remaining);
                 }
                 WorkflowNodeDefinition::Model {
                     on_error: WorkflowModelErrorStrategy::FailBranch,

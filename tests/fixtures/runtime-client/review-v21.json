@@ -30,21 +30,29 @@
         "node": "human",
         "visit": 0
       },
-      "subject": {
-        "type": "plan",
-        "content": {
-          "steps": [
-            "inspect",
-            "implement"
-          ]
-        }
-      },
-      "context": [
-        {
-          "passed": true
-        }
-      ]
+      "questionnaire": {
+        "questions": [
+          {
+            "question": "Ship the plan: inspect, then implement?",
+            "header": "human",
+            "answer": {
+              "type": "single_choice",
+              "options": [
+                {
+                  "label": "Approve",
+                  "description": ""
+                },
+                {
+                  "label": "Revise",
+                  "description": ""
+                }
+              ],
+              "allow_custom": false
+            }
+          }
+        ]
+      }
     },
-    "subject_digest": "d83bcfa43e82b6f5d8bfb16d6c2ec05b9dbd7654b9a32985ca310b89d6c02c6e"
+    "subject_digest": "a9a3d6599cc1907a639e4b8da62d0a26e7a63ddeadd439585332d46d9196f13b"
   }
 }

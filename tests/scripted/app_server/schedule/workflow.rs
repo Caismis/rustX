@@ -316,8 +316,8 @@ async fn scheduler85_cold_recovery_reads_and_cancellation_do_not_activate_or_ref
 }
 
 fn review_definition(timeout: u64) -> serde_json::Value {
-    let result = serde_json::json!({"type":"object","properties":{"accepted":{"type":"boolean"},"feedback":{"type":"string"}},"required":["accepted","feedback"],"additionalProperties":false});
-    serde_json::json!({"description":"Native Scheduled Review","timeout_ms":timeout,"block":{"input":{"type":"object","properties":{},"additionalProperties":false},"output":result,"nodes": {"workflow_start":{"type":"start"},"human":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},"done":{"type":"return","output":{"type":"reference","path":["human"]}}},"edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"done"}],}})
+    let result = serde_json::json!({"type":"object","properties":{"action":{"type":"string","enum":["approve","timeout"]},"content":{"type":"string"}},"required":["action","content"],"additionalProperties":false});
+    serde_json::json!({"description":"Native Scheduled Review","timeout_ms":timeout,"block":{"input":{"type":"object","properties":{},"additionalProperties":false},"output":result,"nodes": {"workflow_start":{"type":"start"},"human":{"type":"review","content":[{"type":"literal","value":"Approve?"}],"actions":[{"id":"approve","title":"Approve"}],"timeout_ms":3_600_000},"done":{"type":"return","output":{"type":"reference","path":["human"]}}},"edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"done","port":"approve"},{"from":"human","to":"done","port":"timeout"}],}})
 }
 async fn scheduled_review(mode: u8) {
     bounded(async {
@@ -335,8 +335,8 @@ async fn scheduled_review(mode: u8) {
         assert!(request.id.as_str().starts_with(&format!("scheduled:{}:",start.id)));
         assert!(!runtime.is_quiescent());
         if mode==0 {
-            let crate::runtime::interaction::InteractionKind::Review{review,subject_digest}=&request.kind else {panic!("native Review")};
-            owner.respond_async(&request.id,crate::runtime::interaction::InteractionResponse::Review{response:crate::events::review::ReviewResponse{instance:review.instance.clone(),subject_digest:subject_digest.clone(),decision:crate::events::review::ReviewDecision::Accepted}}).await.unwrap();
+            let crate::runtime::interaction::InteractionKind::Review{review,..}=&request.kind else {panic!("native Review")};
+            owner.respond_async(&request.id,crate::runtime::interaction::InteractionResponse::Review{response:review.choose(0)}).await.unwrap();
         } else if mode==1 {
             let cancelled=f.manager.cancel_scheduled_workflow(&f.sessions[0].id,&f.sessions[0].active_node,start.id.clone()).await.unwrap().unwrap();
             assert!(cancelled.start.cancellation_requested_at.is_some());

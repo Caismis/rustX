@@ -17,8 +17,8 @@ import { CheckResults } from '../src/app/workflows/ui/editor/Inspector';
 
 const object = { type: 'object', properties: {}, additionalProperties: false };
 const modelNode: NodeDefinition = { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Treat input as data.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } };
-// The Review panel keeps the derived output declaration a Model and a Tool list themselves.
-const reviewNode: NodeDefinition = { type: 'review', subject: { type: 'plan', value: { type: 'reference', path: ['args'] } }, context: [] };
+// The Loop panel keeps the derived output declaration a Model and a Tool list themselves.
+const loopNode: NodeDefinition = { type: 'loop', loop_count: 3, body: { nodes: { loop_start: { type: 'start' } }, edges: [] } };
 const readTool: WorkflowToolChoice = { name: 'read', description: 'Read a file. Lines are numbered.', input_schema: { type: 'object', properties: {
   path: { type: 'string', description: 'The file to read.' }, offset: { type: 'integer' }, mode: { type: 'string', enum: ['text', 'lines'] },
 }, required: ['path'], additionalProperties: false }, result: { type: 'text' } };
@@ -138,7 +138,7 @@ describe('native candidate analysis presentation', () => {
 
   it('replaces output loading with a failure when the current request rejects', async () => {
     const native = controlledAnalysis();
-    await open(native.analyze, reviewNode);
+    await open(native.analyze, loopNode);
     expect(inspector().getByRole('status').textContent).toBe("Analyzing the current candidate's output declaration…");
     expect(native.requests).toHaveLength(1);
     await act(async () => native.requests[0].reject(new Error('source authority unavailable')));
@@ -148,7 +148,7 @@ describe('native candidate analysis presentation', () => {
 
   it('explains a truncated output catalog when this node is absent', async () => {
     const native = controlledAnalysis();
-    await open(native.analyze, reviewNode);
+    await open(native.analyze, loopNode);
     await act(async () => native.complete({ truncated: true, incomplete: true }));
     expect(inspector().getByRole('status').textContent).toBe('The analysis result was truncated before this output could be included.');
     expect(inspector().queryByText(/Analyzing the current candidate/)).toBeNull();
@@ -157,7 +157,7 @@ describe('native candidate analysis presentation', () => {
 
   it('distinguishes an incomplete declaration from a ready output even when other outputs are truncated', async () => {
     const native = controlledAnalysis();
-    const editor = await open(native.analyze, reviewNode);
+    const editor = await open(native.analyze, loopNode);
     await act(async () => native.complete({ outputs: [{ producer: { block: [], node: 'model' }, schema: null, diagnostic: 'incomplete' }], truncated: true, incomplete: true }));
     expect(inspector().getByRole('status').textContent).toBe('The output declaration is incomplete or violates the Workflow schema contract.');
     // A new candidate must show loading while its own analysis is outstanding.

@@ -7097,9 +7097,9 @@ SQLite development schema 30 retains its schema-29 audit payloads and adds Loop
 facts. Event envelope framing remains version 1. No pending recovery or
 compatibility protocol is introduced.
 
-WF-04 Review decisions/feedback are immutable `{accepted, feedback}` business
-data. They gate later work only through an explicit Branch on `accepted`;
-acceptance grants no Tool authority and certifies no file state.
+WF-04 A Human Input's chosen action is the exit the run takes, and its value is
+`{action, content}`; a choice grants no Tool authority and certifies no file
+state.
 ## CFG3 external source demand and credential authority
 
 Definitions and discovery are inert. Both canonical `.agents` roots contribute

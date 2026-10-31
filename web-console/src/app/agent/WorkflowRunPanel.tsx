@@ -93,7 +93,6 @@ export function WorkflowRunPanel({ run, pending = [] }: { run: WorkflowRunView; 
             {instance.iteration != null && <> · {tx('common:workflow.iteration', { current: instance.iteration, max: instance.iterations_max ?? '—' })}</>}
             {instance.loop_exit && <> · {tx(`common:workflow.loop.${instance.loop_exit}`)}</>}
             {instance.checks_passed != null && <> · {tx(instance.checks_passed ? 'common:workflow.checks-passed' : 'common:workflow.checks-failed')}</>}
-            {instance.review_accepted != null && <> · {tx(instance.review_accepted ? 'common:workflow.accepted' : 'common:workflow.rejected')}</>}
           </span>}
           {instance.block.definition.blocks.length > 0 && <span className={css.kind}>
             {instance.block.definition.blocks.join(' / ')} · {instance.block.invocations.slice(1).join('.')}

@@ -196,8 +196,8 @@ pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
             } => (static_retained_bound(body) + MAX_VALUE_BYTES)
                 .saturating_mul(*parallel as usize)
                 .saturating_add(schema_value_bound(output_schema)),
-            WorkflowNodeProgram::Review { .. } => {
-                schema_value_bound(&super::review::result_schema())
+            WorkflowNodeProgram::Review { actions, .. } => {
+                schema_value_bound(&super::review::result_schema(actions))
             }
             WorkflowNodeProgram::Return { .. } => schema_value_bound(&block.output_schema),
         });
@@ -815,25 +815,22 @@ impl WorkflowRuntime {
                     }
                     Ok(None)
                 }
-                WorkflowNodeProgram::Review {
-                    subject,
-                    context: checks,
-                } => {
-                    let bound = evaluate_value(subject.value(), &input, &values)?;
-                    let checks = checks
-                        .iter()
-                        .map(|check| evaluate_value(check, &input, &values))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    // The decision is ordinary structured data. Only an
-                    // explicit downstream Branch on `accepted` gates work.
-                    let value = self
-                        .review(context, &node_instance, bound, checks, cancellation)
+                WorkflowNodeProgram::Review { content: parts, actions, timeout_ms } => {
+                    let shown = super::model::render_parts(parts, |part| evaluate_value(part, &input, &values))?;
+                    let (value, port) = self
+                        .review(context, &node_instance, shown, actions, *timeout_ms, cancellation)
                         .await?;
+                    selected = port;
+                    for successor in block.outgoing[node_id].iter().filter(|edge| edge.port == selected) {
+                        self.emit_observability(run, RuntimeEvent::WorkflowBranchSelected {
+                            workflow_id: run.program.id.clone(), run_id: run.run_id.clone(),
+                            node_id: node_instance.clone(), port: selected.clone(), successor: successor.to.clone(),
+                        });
+                    }
                     reservation.retain(&value)?;
                     values.insert(node_id.to_owned(), value);
                     Ok(None)
                 }
-
                 WorkflowNodeProgram::Model(model) => {
                     let prompt = super::model::render_prompt(&model.messages, |part| evaluate_value(part, &input, &values))?;
                     let mut retries = 0;

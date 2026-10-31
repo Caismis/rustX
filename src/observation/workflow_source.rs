@@ -158,7 +158,6 @@ mod tests {
                 iterations_max: None,
                 loop_exit: None,
                 checks_passed: None,
-                review_accepted: None,
             })
             .collect::<Vec<_>>();
         let original = Arc::new(WorkflowSnapshot {

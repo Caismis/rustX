@@ -1630,7 +1630,6 @@ async fn discovered_workflow_can_remain_out_of_main_model_admission() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in_outer_call() {
-    use rustx::events::review::{ReviewDecision, ReviewResponse};
     use rustx::runtime::{InteractionKind, InteractionResponse, QuestionnaireResponse};
     for accepted in [false, true] {
         let Some(emulator) = ProviderEmulator::start("workflow_tool").await else {
@@ -1643,17 +1642,18 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
             "arguments":{"type":"literal","value":{"questions":[{"question":"PRIVATE QUESTION: choose a priority","header":"Priority","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}},
             "result":{"type":"json","schema":{"type":"object","properties":{"cancelled":{"type":"boolean"},"answers":{"type":"array","items":{"type":"object"}}},"required":["cancelled","answers"],"additionalProperties":false}}
         });
-        definition["block"]["nodes"]["human"] = serde_json::json!({"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[{"type":"reference","path":["question"]}]});
-        definition["block"]["nodes"]["decision"] = serde_json::json!({"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["human","accepted"]}}}]});
+        definition["block"]["nodes"]["human"] = serde_json::json!({"type":"review",
+            "content":[{"type":"literal","value":"Proceed? "},{"type":"reference","path":["question","cancelled"]}],
+            "actions":[{"id":"approve","title":"Approve"},{"id":"reject","title":"Reject"}],"timeout_ms":3_600_000});
         definition["block"]["nodes"]["rejected"] = serde_json::json!({"type":"return","output":{"type":"literal","value":{"files":"review_pr.yaml review rejected"}}});
         definition["block"]["edges"]
             .as_array_mut()
             .unwrap()
             .extend([
                 serde_json::json!({"from":"question","to":"human"}),
-                serde_json::json!({"from":"human","to":"decision"}),
-                serde_json::json!({"from":"decision","to":"inspect","port":"true"}),
-                serde_json::json!({"from":"decision","to":"rejected","port":"false"}),
+                serde_json::json!({"from":"human","to":"inspect","port":"approve"}),
+                serde_json::json!({"from":"human","to":"rejected","port":"reject"}),
+                serde_json::json!({"from":"human","to":"rejected","port":"timeout"}),
             ]);
         let driver =
             Driver::start_with_workflow(&emulator, &serde_yaml::to_string(&definition).unwrap())
@@ -1696,21 +1696,8 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
                         response: QuestionnaireResponse::Declined,
                     }
                 }
-                InteractionKind::Review {
-                    review,
-                    subject_digest,
-                } => InteractionResponse::Review {
-                    response: ReviewResponse {
-                        instance: review.instance,
-                        subject_digest,
-                        decision: if accepted {
-                            ReviewDecision::Accepted
-                        } else {
-                            ReviewDecision::Rejected {
-                                feedback: "PRIVATE FEEDBACK".into(),
-                            }
-                        },
-                    },
+                InteractionKind::Review { review, .. } => InteractionResponse::Review {
+                    response: review.choose(usize::from(!accepted)),
                 },
                 InteractionKind::Approval { .. } => panic!("no approval expected"),
             };
@@ -1765,7 +1752,6 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
         let canonical = driver.canonical_history();
         let messages = serde_json::to_string(&canonical).unwrap();
         assert!(!messages.contains("PRIVATE QUESTION"));
-        assert!(!messages.contains("PRIVATE FEEDBACK"));
         assert_eq!(
             canonical
                 .iter()
@@ -1886,7 +1872,6 @@ async fn shipped_repair_checker_tampering_cannot_redefine_frozen_verification() 
 /// declared output; and completed writes stay in place on every outcome.
 #[allow(clippy::too_many_lines)]
 async fn reference_repair(exhausted: bool, tampered: bool) {
-    use rustx::events::review::{ReviewDecision, ReviewResponse};
     use rustx::runtime::{InteractionKind, InteractionResponse, QuestionnaireResponse};
     let scenario = if tampered {
         "workflow_reference_tampering"
@@ -2063,21 +2048,14 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
                             ),
                         }
                     }
-                    InteractionKind::Review {
-                        review,
-                        subject_digest,
-                    } => {
+                    InteractionKind::Review { review, .. } => {
                         reviews += 1;
                         // Only the plan is reviewed, before any writer
                         // can start: the explicit Branch gates the Loop.
                         assert_eq!(emulator.requests().await.len(), 2);
                         assert_eq!(*writer_started.borrow(), 0);
                         InteractionResponse::Review {
-                            response: ReviewResponse {
-                                instance: review.instance,
-                                subject_digest,
-                                decision: ReviewDecision::Accepted,
-                            },
+                            response: review.choose(0),
                         }
                     }
                     InteractionKind::Approval {

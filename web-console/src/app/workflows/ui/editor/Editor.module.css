@@ -740,6 +740,24 @@
 .routeIdInput { flex: 1; min-width: 0; height: 26px; padding: 0 8px; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l3); border-radius: 7px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-family: var(--ds-font-family-code); font-size: 12px; }
 .routeIdInput:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 0; }
 .routeRows { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+/* As Dify's Human Input card: each action, then Timeout, right-aligned
+   beside its exit. */
+.actionRows { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.actionRow { position: relative; display: flex; align-items: center; justify-content: flex-end; height: 24px; padding: 0 6px; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--dsw-alias-label-secondary); }
+.actionRow span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panelDivider { height: 1px; margin: 4px 0 20px; background: var(--dsw-alias-border-l1); }
+.reviewActions { display: flex; flex-direction: column; gap: 8px; }
+.reviewEmpty { margin: 0; padding: 12px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--dsw-alias-label-tertiary); font-size: 12px; text-align: center; }
+.reviewAction { display: flex; align-items: center; gap: 4px; }
+.reviewAction .routeIdInput { height: 32px; padding: 0 10px; border-color: transparent; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); font-size: 13px; }
+.reviewAction .routeIdInput:hover { border-color: var(--dsw-alias-border-l3); }
+.reviewActionId { flex: 0 0 120px; }
+.reviewActionTitle { font-family: inherit !important; }
+.reviewAction .iconButton { flex: none; width: 32px; height: 32px; }
+.reviewTimeout { display: flex; align-items: center; gap: 4px; }
+.nodeSettings > .reviewTimeout .groupHeading { flex: 1; margin: 0; }
+.reviewTimeout .input { width: 72px; height: 32px; }
+.reviewTimeout .typeSwitch button { width: auto; padding: 0 10px; font-family: inherit; font-size: 13px; }
 .routeRow { position: relative; display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 6px; border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover-solid); font-size: 11px; }
 .routeRow b { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code); font-weight: 600; color: var(--dsw-alias-label-primary); }
 .routeRow span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary); }

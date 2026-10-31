@@ -122,7 +122,6 @@ pub struct WorkflowInstanceView {
     pub iterations_max: Option<u32>,
     pub loop_exit: Option<WorkflowLoopExit>,
     pub checks_passed: Option<bool>,
-    pub review_accepted: Option<bool>,
 }
 
 impl WorkflowInstanceView {
@@ -143,7 +142,6 @@ impl WorkflowInstanceView {
             iterations_max: None,
             loop_exit: None,
             checks_passed: None,
-            review_accepted: None,
         }
     }
 

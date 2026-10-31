@@ -4,7 +4,7 @@ import { predicateText, promptText, toolText, valueText } from './summary';
 import { VariableLabel, type VariableSources } from './VariableLabel';
 import css from './Editor.module.css';
 
-type PreviewNode = Exclude<NodeDefinition, { type: 'start' | 'branch' }>;
+type PreviewNode = Exclude<NodeDefinition, { type: 'start' | 'branch' | 'review' }>;
 interface Row { label: string; value: string; reference?: readonly string[]; badge?: string }
 
 const valueRow = (label: string, value: Value): Row => ({ label, value: valueText(value), reference: value.type === 'reference' ? value.path : undefined });
@@ -34,10 +34,6 @@ function rows(tx: Translate, node: PreviewNode): Row[] {
     case 'tool': return [
       { label: tx('workflows:card.tool'), value: node.selector.name ? toolText(node.selector) : tx('workflows:summary.tool-unset') },
       ...(node.arguments.type === 'object' ? Object.entries(node.arguments.fields).slice(0, 2).map(([label, item]) => toolArgument(tx, label, item)) : [toolArgument(tx, tx('workflows:card.arguments'), node.arguments)]),
-    ];
-    case 'review': return [
-      valueRow(tx('workflows:card.subject'), node.subject.value),
-      ...(node.context.length ? [{ label: tx('workflows:card.context'), value: String(node.context.length) }] : []),
     ];
     case 'loop': return [
       ...(node.loop_variables ?? []).slice(0, 2).map(variable => valueRow(variable.label, variable.value)),

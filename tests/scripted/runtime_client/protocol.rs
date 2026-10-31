@@ -723,11 +723,8 @@ fn review_v21_shared_fixture_pins_complete_subject_and_response_identity() {
     };
     review.validate().unwrap();
     assert_eq!(review.digest(), subject_digest);
-    let response = rustx::events::review::ReviewResponse {
-        instance: review.instance.clone(),
-        subject_digest,
-        decision: rustx::events::review::ReviewDecision::Accepted,
-    };
+    assert_eq!(review.choose(0).subject_digest, subject_digest);
+    let response = review.choose(0);
     review.validate_response(&response).unwrap();
     let value = serde_json::to_value(InteractionResponse::Review { response }).unwrap();
     let mut forged = value.clone();

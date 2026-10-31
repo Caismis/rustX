@@ -4455,182 +4455,15 @@
         "instance": {
           "$ref": "#/$defs/WorkflowNodeInstance"
         },
-        "subject": {
-          "$ref": "#/$defs/ReviewSubject"
-        },
-        "context": {
-          "description": "Bounded committed Workflow values presented beside the subject.",
-          "type": "array",
-          "items": true
+        "questionnaire": {
+          "description": "The node's content as the question and its actions as the options.",
+          "$ref": "#/$defs/QuestionnaireSpecification"
         }
       },
       "additionalProperties": false,
       "required": [
         "instance",
-        "subject",
-        "context"
-      ]
-    },
-    "ReviewSubject": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "content": true,
-            "type": {
-              "type": "string",
-              "const": "plan"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "content"
-          ]
-        }
-      ]
-    },
-    "ToolInvocationId": {
-      "description": "Caller correlation for one native invocation. Capability source is\nindependently represented by [`ToolOrigin`].",
-      "oneOf": [
-        {
-          "description": "An accepted canonical Assistant call, owned by the Agent Loop.",
-          "type": "object",
-          "properties": {
-            "call_id": {
-              "$ref": "#/$defs/ToolCallId"
-            },
-            "caller": {
-              "type": "string",
-              "const": "agent"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "caller",
-            "call_id"
-          ]
-        },
-        {
-          "description": "A concrete fixed-program node visit, owned by `WorkflowRuntime`.",
-          "type": "object",
-          "properties": {
-            "node": {
-              "$ref": "#/$defs/WorkflowNodeInstance"
-            },
-            "retry": {
-              "description": "Which call of the visit: 0, then one more per retry, so each call\nis its own invocation with its own approval and events.",
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0,
-              "maximum": 4294967295
-            },
-            "caller": {
-              "type": "string",
-              "const": "workflow"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "caller",
-            "node"
-          ]
-        }
-      ]
-    },
-    "ToolOrigin": {
-      "description": "Where a tool comes from.",
-      "oneOf": [
-        {
-          "description": "A tool built into the runtime. Platform communication tools such as\nfuture Fleet messaging are represented as built-in tools as well.",
-          "type": "string",
-          "const": "builtin"
-        },
-        {
-          "description": "A configured MCP source, independent of its current connection.",
-          "type": "object",
-          "properties": {
-            "mcp": {
-              "type": "object",
-              "properties": {
-                "server_id": {
-                  "$ref": "#/$defs/McpServerId"
-                }
-              },
-              "required": [
-                "server_id"
-              ]
-            }
-          },
-          "required": [
-            "mcp"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "description": "A canonical package prepared by the Managed Python owner.",
-          "type": "object",
-          "properties": {
-            "managed_python": {
-              "type": "object",
-              "properties": {
-                "package": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "package"
-              ]
-            }
-          },
-          "required": [
-            "managed_python"
-          ],
-          "additionalProperties": false
-        }
-      ]
-    },
-    "McpServerId": {
-      "description": "Identifies an MCP server bound to the runtime.",
-      "type": "string"
-    },
-    "ToolInvocationMode": {
-      "description": "The resolved execution ownership of one canonical invocation.\n\nThe runtime resolves the effective mode from the tool's declared\n[`ToolExecutionPolicy`] and (for `ModelSelectable`) the required\n`execution_mode` invocation field, and delivers it to the executor as\ncanonical invocation data. The field is consumed before business-argument\nvalidation and never reaches an executor. No policy resolution happens\ninside executors.",
-      "oneOf": [
-        {
-          "description": "Attempt-owned execution: settles before the attempt continues.",
-          "type": "string",
-          "const": "foreground"
-        },
-        {
-          "description": "Conversation-owned execution: detached after accepted dispatch.",
-          "type": "string",
-          "const": "background"
-        }
-      ]
-    },
-    "InteractionRequester": {
-      "description": "The canonical, provider-independent identity of whoever asked the human.\n\nThese are the registry-resolved facts of the tool invocation that reached\nthe interaction boundary — never a display string, never an rmcp value, and\nnever something a Runtime Client infers from the prompt text. The same\nimmutable value flows through the live request, the Event Journal subject,\nthe Runtime Client projection, and the TUI, so an MCP-originated prompt can\nalways name the server that asked:\n\n```text\nToolOrigin::Mcp { server_id: \"github\" } + tool_name \"create_issue\"\n    -> \"Requested by MCP server: github / Tool: create_issue\"\nToolOrigin::Builtin + tool_name \"ask_user\"\n    -> the native wording, never labelled as MCP\n```\n\nIt is deliberately orthogonal to\n[`InteractionSource`](crate::runtime::interaction::InteractionSource):\n*where* an interaction came from (primary or subagent) and *who* requested\nit (native tool or MCP server) are two independent facts and are never\ncollapsed into one field.",
-      "type": "object",
-      "properties": {
-        "tool_id": {
-          "description": "The canonical registry-resolved tool identity.",
-          "$ref": "#/$defs/ToolId"
-        },
-        "tool_name": {
-          "description": "The safe model-facing tool name.",
-          "type": "string"
-        },
-        "origin": {
-          "description": "The registry-resolved tool origin, which carries MCP server identity.",
-          "$ref": "#/$defs/ToolOrigin"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "tool_id",
-        "tool_name",
-        "origin"
+        "questionnaire"
       ]
     },
     "QuestionnaireSpecification": {
@@ -4959,6 +4792,149 @@
       "required": [
         "label",
         "description"
+      ]
+    },
+    "ToolInvocationId": {
+      "description": "Caller correlation for one native invocation. Capability source is\nindependently represented by [`ToolOrigin`].",
+      "oneOf": [
+        {
+          "description": "An accepted canonical Assistant call, owned by the Agent Loop.",
+          "type": "object",
+          "properties": {
+            "call_id": {
+              "$ref": "#/$defs/ToolCallId"
+            },
+            "caller": {
+              "type": "string",
+              "const": "agent"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "caller",
+            "call_id"
+          ]
+        },
+        {
+          "description": "A concrete fixed-program node visit, owned by `WorkflowRuntime`.",
+          "type": "object",
+          "properties": {
+            "node": {
+              "$ref": "#/$defs/WorkflowNodeInstance"
+            },
+            "retry": {
+              "description": "Which call of the visit: 0, then one more per retry, so each call\nis its own invocation with its own approval and events.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "caller": {
+              "type": "string",
+              "const": "workflow"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "caller",
+            "node"
+          ]
+        }
+      ]
+    },
+    "ToolOrigin": {
+      "description": "Where a tool comes from.",
+      "oneOf": [
+        {
+          "description": "A tool built into the runtime. Platform communication tools such as\nfuture Fleet messaging are represented as built-in tools as well.",
+          "type": "string",
+          "const": "builtin"
+        },
+        {
+          "description": "A configured MCP source, independent of its current connection.",
+          "type": "object",
+          "properties": {
+            "mcp": {
+              "type": "object",
+              "properties": {
+                "server_id": {
+                  "$ref": "#/$defs/McpServerId"
+                }
+              },
+              "required": [
+                "server_id"
+              ]
+            }
+          },
+          "required": [
+            "mcp"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A canonical package prepared by the Managed Python owner.",
+          "type": "object",
+          "properties": {
+            "managed_python": {
+              "type": "object",
+              "properties": {
+                "package": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "package"
+              ]
+            }
+          },
+          "required": [
+            "managed_python"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "McpServerId": {
+      "description": "Identifies an MCP server bound to the runtime.",
+      "type": "string"
+    },
+    "ToolInvocationMode": {
+      "description": "The resolved execution ownership of one canonical invocation.\n\nThe runtime resolves the effective mode from the tool's declared\n[`ToolExecutionPolicy`] and (for `ModelSelectable`) the required\n`execution_mode` invocation field, and delivers it to the executor as\ncanonical invocation data. The field is consumed before business-argument\nvalidation and never reaches an executor. No policy resolution happens\ninside executors.",
+      "oneOf": [
+        {
+          "description": "Attempt-owned execution: settles before the attempt continues.",
+          "type": "string",
+          "const": "foreground"
+        },
+        {
+          "description": "Conversation-owned execution: detached after accepted dispatch.",
+          "type": "string",
+          "const": "background"
+        }
+      ]
+    },
+    "InteractionRequester": {
+      "description": "The canonical, provider-independent identity of whoever asked the human.\n\nThese are the registry-resolved facts of the tool invocation that reached\nthe interaction boundary — never a display string, never an rmcp value, and\nnever something a Runtime Client infers from the prompt text. The same\nimmutable value flows through the live request, the Event Journal subject,\nthe Runtime Client projection, and the TUI, so an MCP-originated prompt can\nalways name the server that asked:\n\n```text\nToolOrigin::Mcp { server_id: \"github\" } + tool_name \"create_issue\"\n    -> \"Requested by MCP server: github / Tool: create_issue\"\nToolOrigin::Builtin + tool_name \"ask_user\"\n    -> the native wording, never labelled as MCP\n```\n\nIt is deliberately orthogonal to\n[`InteractionSource`](crate::runtime::interaction::InteractionSource):\n*where* an interaction came from (primary or subagent) and *who* requested\nit (native tool or MCP server) are two independent facts and are never\ncollapsed into one field.",
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "description": "The canonical registry-resolved tool identity.",
+          "$ref": "#/$defs/ToolId"
+        },
+        "tool_name": {
+          "description": "The safe model-facing tool name.",
+          "type": "string"
+        },
+        "origin": {
+          "description": "The registry-resolved tool origin, which carries MCP server identity.",
+          "$ref": "#/$defs/ToolOrigin"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tool_id",
+        "tool_name",
+        "origin"
       ]
     },
     "Request": {
@@ -11271,124 +11247,16 @@
         "subject_digest": {
           "type": "string"
         },
-        "decision": {
-          "$ref": "#/$defs/ReviewDecision"
+        "submission": {
+          "description": "Every question answered; the action is an option of the last one.",
+          "$ref": "#/$defs/QuestionnaireSubmission"
         }
       },
       "additionalProperties": false,
       "required": [
         "instance",
         "subject_digest",
-        "decision"
-      ]
-    },
-    "ReviewDecision": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "accepted"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "feedback": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "rejected"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "feedback"
-          ]
-        }
-      ]
-    },
-    "ApprovalDecision": {
-      "description": "The finite approval decision accepted from a client.",
-      "oneOf": [
-        {
-          "description": "Continue with the exact `PreparedInvocation` that was already\nresolved by the Tool Registry.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "allow"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "description": "Do not start the invocation and settle its canonical result slot as\npolicy-denied.",
-          "type": "object",
-          "properties": {
-            "reason": {
-              "description": "A bounded client-facing reason.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "deny"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "reason"
-          ]
-        }
-      ]
-    },
-    "QuestionnaireResponse": {
-      "description": "The two valid terminal responses to a questionnaire.",
-      "oneOf": [
-        {
-          "description": "The accepted, possibly partial answer set.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "submitted"
-            },
-            "value": {
-              "$ref": "#/$defs/QuestionnaireSubmission"
-            }
-          },
-          "required": [
-            "type",
-            "value"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "description": "The user explicitly declined, or submitted no answers.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "declined"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "additionalProperties": false
-        }
+        "submission"
       ]
     },
     "QuestionnaireSubmission": {
@@ -11666,6 +11534,81 @@
       "additionalProperties": false,
       "required": [
         "answer"
+      ]
+    },
+    "ApprovalDecision": {
+      "description": "The finite approval decision accepted from a client.",
+      "oneOf": [
+        {
+          "description": "Continue with the exact `PreparedInvocation` that was already\nresolved by the Tool Registry.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "allow"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Do not start the invocation and settle its canonical result slot as\npolicy-denied.",
+          "type": "object",
+          "properties": {
+            "reason": {
+              "description": "A bounded client-facing reason.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "deny"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "QuestionnaireResponse": {
+      "description": "The two valid terminal responses to a questionnaire.",
+      "oneOf": [
+        {
+          "description": "The accepted, possibly partial answer set.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "submitted"
+            },
+            "value": {
+              "$ref": "#/$defs/QuestionnaireSubmission"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The user explicitly declined, or submitted no answers.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "declined"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        }
       ]
     },
     "EffectiveFieldRef": {
@@ -12124,16 +12067,25 @@
           ]
         },
         {
+          "description": "As Dify's Human Input: asks the person in the conversation which of\nits actions to take. Each action leaves through its own port, and\n`timeout` is taken when nobody answers within `timeout_ms`.",
           "type": "object",
           "properties": {
-            "subject": {
-              "$ref": "#/$defs/WorkflowReviewSubject"
-            },
-            "context": {
+            "content": {
+              "description": "The Markdown shown to the person: fixed text and references, as\nan Agent's task.",
               "type": "array",
               "items": {
                 "$ref": "#/$defs/WorkflowValue"
               }
+            },
+            "actions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowReviewAction"
+              }
+            },
+            "timeout_ms": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
             },
             "type": {
               "type": "string",
@@ -12143,8 +12095,9 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "subject",
-            "context"
+            "content",
+            "actions",
+            "timeout_ms"
           ]
         },
         {
@@ -12923,25 +12876,21 @@
         "divide"
       ]
     },
-    "WorkflowReviewSubject": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "value": {
-              "$ref": "#/$defs/WorkflowValue"
-            },
-            "type": {
-              "type": "string",
-              "const": "plan"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "value"
-          ]
+    "WorkflowReviewAction": {
+      "description": "One button the person may press, and the exit it takes.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
         }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title"
       ]
     },
     "WorkflowToolSelector": {
@@ -13650,37 +13599,18 @@
           "additionalProperties": false
         },
         {
+          "description": "A variable in a Human Input's content, answered as for a Model message.",
           "type": "object",
           "properties": {
             "kind": {
               "type": "string",
-              "const": "review_subject"
+              "const": "review_content"
             }
           },
           "required": [
             "kind"
           ],
           "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "index": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0,
-              "maximum": 4294967295
-            },
-            "kind": {
-              "type": "string",
-              "const": "review_context"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "index"
-          ]
         },
         {
           "type": "object",
@@ -24415,12 +24345,6 @@
             "boolean",
             "null"
           ]
-        },
-        "review_accepted": {
-          "type": [
-            "boolean",
-            "null"
-          ]
         }
       },
       "additionalProperties": false,
@@ -34184,12 +34108,6 @@
           "format": "uint32",
           "minimum": 0,
           "maximum": 4294967295
-        },
-        "review_subject": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [

@@ -283,7 +283,7 @@
       "destination": "web-console/src/app/agent/Questionnaire.tsx",
       "upstream_sha256": "b4ff56bd18dfef03299dd7dc43f928b7ac2a7d5253ecf65a5fbe64ca9b65ec8e",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI/UX alignment: Harness QuestionFlow takeover (header-only eyebrow, minimize and dismiss-as-decline actions, always-visible custom row, single-choice advance, skip/next/submit footer, recommended first-choice draft); native index submissions keep typed authority. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained.",
+      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI/UX alignment: Harness QuestionFlow takeover (header-only eyebrow, minimize and dismiss-as-decline actions, always-visible custom row, single-choice advance, skip/next/submit footer, recommended first-choice draft); native index submissions keep typed authority. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow Human Input: an optional form heading shows the question as Markdown above its actions and removes Skip.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v62",
@@ -291,6 +291,7 @@
         "../../locale/react",
         "../../locale/translation",
         "../../presentation/agent/Question.module.css",
+        "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/icons",
         "clsx",
@@ -302,7 +303,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "3b2388e95d793b6b789b6025bd920281f153789a18eeaded65310370a48f421e"
+      "local_sha256": "49d4e2ace4fddd68094b0bd05f96c1001f7403236edd85c886327f4bcb915156"
     },
     {
       "upstream": "packages/client/ui-input-trigger/src/client/MenuView.tsx",
@@ -1466,7 +1467,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "bb7aeea23a8215e502b53b9cb7decdb6d0a7ef7dcd3a0d66b84ded8b5a632ee9",
+      "local_sha256": "1b9e78b348565465430d090eef2f473cf2045109a639a46aa4b0e568bb9b3b4e",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.module.css",
@@ -3856,7 +3857,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "9042fee3dc12f24d6b955818f6f49a11c56da6fc62f108528ecd5eb4d89c59a1"
+      "local_sha256": "8ae224405386ce0cca7d3ee85bab37f41844db266f6bda267e8630120fd5e20e"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3928,7 +3929,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "52b52609944ae692570477021153af8a1288a690117444711550d7e2e90b5675"
+      "local_sha256": "8518d19af38b9e82a41568a1ff93addedf4e26ab8f7e9b3b01c902426374c102"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6761,7 +6762,7 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "86274bfb93a0f4000abed03e7472a282bfbe68ab88a230e7484c20f58e853345"
+      "local_sha256": "afe305572c257fb6ed3bd9766372648b5ecc987f3a6f6e10fd30bd8e7a1c58c9"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6778,31 +6779,6 @@
         "DSH Remote interaction settlement"
       ],
       "local_sha256": "b35e8e7724311cc73cbccab51ea704ef1ebceebe5b6d49c98bc68935f3017ae9"
-    },
-    {
-      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.tsx",
-      "destination": "web-console/src/app/agent/Review.tsx",
-      "upstream_sha256": "e6a763552a3ebb3dcc18f1043f5437e7c4a32b5c796128ee284a5cf21108df20",
-      "classification": "B",
-      "treatment": "Workflow alignment: DSH compact run/block disclosure and QuestionComposer takeover adapted to native rustX block/node identities, states, budget counters and in-workflow Review decisions. No DSH session/controller/runtime semantics retained. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained.",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [
-        "../../../../protocol/app-server/v62",
-        "../../locale/react",
-        "../../presentation/agent/Question.module.css",
-        "../../presentation/agent/ReviewContent",
-        "../../presentation/agent/ReviewContent.module.css",
-        "../../presentation/primitives/Button",
-        "../../presentation/primitives/icons",
-        "react"
-      ],
-      "excluded_dependencies": [
-        "DSH workflow event assembler and phase/member lifecycle",
-        "DSH child Session navigation and controller",
-        "DSH Remote interaction settlement"
-      ],
-      "local_sha256": "91f3f05d6dbbc350eb3a77595aa675e828d08b69b0a754878864a4c6b1d7fe13"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",

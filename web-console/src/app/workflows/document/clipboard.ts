@@ -7,7 +7,7 @@ import { MAX_COORDINATE, dimensions, freshNote, position, presentationEdit, utf8
 import { blockReferences, rewriteBlockReferences } from './references';
 import { schemaObject } from './schema';
 import { requireVacantNodePresentation } from './presentation';
-import { RESERVED_PORTS } from './ports';
+import { RESERVED_PORTS, TIMEOUT_PORT } from './ports';
 
 const MAX_BYTES = 768 * 1024;
 export interface Fragment {
@@ -155,7 +155,15 @@ function node(input: unknown): void {
     }
     case 'return': keys(record, ['type', 'output']); value(record.output); return;
     case 'review': {
-      keys(record, ['type', 'subject', 'context']); const subject = keys(record.subject, ['type', 'value']); if (subject.type !== 'plan') fail(); value(subject.value); array(record.context).forEach(value); return;
+      keys(record, ['type', 'content', 'actions', 'timeout_ms']); array(record.content).forEach(value);
+      if (typeof record.timeout_ms !== 'string' || !/^[1-9]\d*$/.test(record.timeout_ms)) fail();
+      const ids = new Set<string>();
+      for (const item of array(record.actions)) {
+        const action = keys(item, ['id', 'title']); text(action.id); text(action.title);
+        if (validLocalKey(action.id as string) || RESERVED_PORTS.includes(action.id as string) || action.id === TIMEOUT_PORT || ids.has(action.id as string)) fail();
+        ids.add(action.id as string);
+      }
+      return;
     }
     case 'loop': {
       keys(record, ['type', 'loop_variables', 'break_condition', 'loop_count', 'body']); unsigned(record.loop_count); block(record.body);

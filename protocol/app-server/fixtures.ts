@@ -1376,10 +1376,10 @@ export const fixtures = [
             "file_name": "human_plan.yaml",
             "id": "human_plan",
             "relative_path": ".agents/workflows/human_plan.yaml",
-            "revision": "sha256:4cbf57e677884253b0c8c5021c8917aaf9f629c3cbe7490bbdcc8c0584d36461",
-            "byte_length": "987",
+            "revision": "sha256:2ffe6a6059afc293fb3dccdf3f7bae5112c7ca85fcf1f0ffc9ec874dea93ca2f",
+            "byte_length": "1364",
             "modified_ms": 1790000000000,
-            "description": "Ask a human to review a bounded plan and return their decision.",
+            "description": "Ask a person to approve or reject a bounded plan, and return the action they chose.",
             "display": null,
             "nodes": 3,
             "diagnostic": null,
@@ -1402,12 +1402,12 @@ export const fixtures = [
             "file_name": "implement_and_review.yaml",
             "id": "implement_and_review",
             "relative_path": ".agents/workflows/implement_and_review.yaml",
-            "revision": "sha256:4122df9a44c425fb07912c16ba8ed24bc81e7951f6013134415c0d12c18d9562",
-            "byte_length": "13622",
+            "revision": "sha256:32ef2df4478129b910bf08c00fd8005c68b5c1d984777c4ffda3a87e327873a5",
+            "byte_length": "13549",
             "modified_ms": 1790000000000,
             "description": "Plan greeting.py, gate implementation on human plan acceptance, then implement and run real checks in the shared Session workspace up to three times.",
             "display": null,
-            "nodes": 12,
+            "nodes": 11,
             "diagnostic": null,
             "shadows_global": false
           },
@@ -2376,11 +2376,11 @@ export const fixtures = [
         "id": "human_plan",
         "path": "/workspace/fixture/.agents/workflows/human_plan.yaml",
         "relative_path": ".agents/workflows/human_plan.yaml",
-        "revision": "sha256:4cbf57e677884253b0c8c5021c8917aaf9f629c3cbe7490bbdcc8c0584d36461",
+        "revision": "sha256:2ffe6a6059afc293fb3dccdf3f7bae5112c7ca85fcf1f0ffc9ec874dea93ca2f",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
-          "description": "Ask a human to review a bounded plan and return their decision.",
+          "description": "Ask a person to approve or reject a bounded plan, and return the action they chose.",
           "timeout_ms": "120000",
           "block": {
             "input": {
@@ -2407,16 +2407,21 @@ export const fixtures = [
             "output": {
               "type": "object",
               "properties": {
-                "accepted": {
-                  "type": "boolean"
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "approve",
+                    "reject",
+                    "timeout"
+                  ]
                 },
-                "feedback": {
+                "content": {
                   "type": "string"
                 }
               },
               "required": [
-                "accepted",
-                "feedback"
+                "action",
+                "content"
               ],
               "additionalProperties": false
             },
@@ -2432,17 +2437,31 @@ export const fixtures = [
               },
               "review_plan": {
                 "type": "review",
-                "subject": {
-                  "type": "plan",
-                  "value": {
+                "content": [
+                  {
+                    "type": "literal",
+                    "value": "Approve this plan?\n\n"
+                  },
+                  {
                     "type": "reference",
                     "path": [
                       "args",
-                      "plan"
+                      "plan",
+                      "summary"
                     ]
                   }
-                },
-                "context": []
+                ],
+                "actions": [
+                  {
+                    "id": "approve",
+                    "title": "Approve"
+                  },
+                  {
+                    "id": "reject",
+                    "title": "Reject"
+                  }
+                ],
+                "timeout_ms": "60000"
               },
               "start": {
                 "type": "start"
@@ -2457,7 +2476,17 @@ export const fixtures = [
               {
                 "from": "review_plan",
                 "to": "return_decision",
-                "port": null
+                "port": "approve"
+              },
+              {
+                "from": "review_plan",
+                "to": "return_decision",
+                "port": "reject"
+              },
+              {
+                "from": "review_plan",
+                "to": "return_decision",
+                "port": "timeout"
               }
             ]
           }
@@ -3446,7 +3475,7 @@ export const fixtures = [
         "id": "implement_and_review",
         "path": "/workspace/fixture/.agents/workflows/implement_and_review.yaml",
         "relative_path": ".agents/workflows/implement_and_review.yaml",
-        "revision": "sha256:4122df9a44c425fb07912c16ba8ed24bc81e7951f6013134415c0d12c18d9562",
+        "revision": "sha256:32ef2df4478129b910bf08c00fd8005c68b5c1d984777c4ffda3a87e327873a5",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -3773,35 +3802,14 @@ export const fixtures = [
                   }
                 }
               },
-              "plan_accepted": {
-                "type": "branch",
-                "cases": [
-                  {
-                    "id": "true",
-                    "condition": {
-                      "type": "boolean",
-                      "value": {
-                        "type": "reference",
-                        "path": [
-                          "review_plan",
-                          "accepted"
-                        ]
-                      }
-                    }
-                  }
-                ]
-              },
               "rejected_plan": {
                 "type": "return",
                 "output": {
                   "type": "object",
                   "fields": {
                     "feedback": {
-                      "type": "reference",
-                      "path": [
-                        "review_plan",
-                        "feedback"
-                      ]
+                      "type": "literal",
+                      "value": "The plan was not approved."
                     },
                     "status": {
                       "type": "literal",
@@ -4122,16 +4130,29 @@ export const fixtures = [
               },
               "review_plan": {
                 "type": "review",
-                "subject": {
-                  "type": "plan",
-                  "value": {
+                "content": [
+                  {
+                    "type": "literal",
+                    "value": "Approve this plan before any file changes:\n\n"
+                  },
+                  {
                     "type": "reference",
                     "path": [
                       "plan"
                     ]
                   }
-                },
-                "context": []
+                ],
+                "actions": [
+                  {
+                    "id": "approve",
+                    "title": "Approve"
+                  },
+                  {
+                    "id": "reject",
+                    "title": "Reject"
+                  }
+                ],
+                "timeout_ms": "600000"
               },
               "start": {
                 "type": "start"
@@ -4195,18 +4216,18 @@ export const fixtures = [
               },
               {
                 "from": "review_plan",
-                "to": "plan_accepted",
-                "port": null
-              },
-              {
-                "from": "plan_accepted",
                 "to": "repair",
-                "port": "true"
+                "port": "approve"
               },
               {
-                "from": "plan_accepted",
+                "from": "review_plan",
                 "to": "rejected_plan",
-                "port": "false"
+                "port": "reject"
+              },
+              {
+                "from": "review_plan",
+                "to": "rejected_plan",
+                "port": "timeout"
               },
               {
                 "from": "start",
@@ -6654,8 +6675,7 @@ export const fixtures = [
                   "selector": null,
                   "output_schema": null,
                   "result_kind": null,
-                  "loop_count": null,
-                  "review_subject": null
+                  "loop_count": null
                 },
                 "ready": {
                   "kind": "return",
@@ -6694,8 +6714,7 @@ export const fixtures = [
                   "selector": null,
                   "output_schema": null,
                   "result_kind": null,
-                  "loop_count": null,
-                  "review_subject": null
+                  "loop_count": null
                 },
                 "reviews_quality_refine": {
                   "kind": "agent",
@@ -6733,8 +6752,7 @@ export const fixtures = [
                     "additionalProperties": false
                   },
                   "result_kind": null,
-                  "loop_count": null,
-                  "review_subject": null
+                  "loop_count": null
                 },
                 "reviews_quality_review": {
                   "kind": "agent",
@@ -6773,8 +6791,7 @@ export const fixtures = [
                     "additionalProperties": false
                   },
                   "result_kind": null,
-                  "loop_count": null,
-                  "review_subject": null
+                  "loop_count": null
                 },
                 "reviews_security_review": {
                   "kind": "agent",
@@ -6813,8 +6830,7 @@ export const fixtures = [
                     "additionalProperties": false
                   },
                   "result_kind": null,
-                  "loop_count": null,
-                  "review_subject": null
+                  "loop_count": null
                 },
                 "revise": {
                   "kind": "return",
@@ -6853,8 +6869,7 @@ export const fixtures = [
                   "selector": null,
                   "output_schema": null,
                   "result_kind": null,
-                  "loop_count": null,
-                  "review_subject": null
+                  "loop_count": null
                 },
                 "start": {
                   "kind": "start",
@@ -6874,8 +6889,7 @@ export const fixtures = [
                   "selector": null,
                   "output_schema": null,
                   "result_kind": null,
-                  "loop_count": null,
-                  "review_subject": null
+                  "loop_count": null
                 }
               }
             }

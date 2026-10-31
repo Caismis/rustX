@@ -7714,9 +7714,8 @@ query.
 
 A Workflow owns no workspace resource and has no Candidate. Agent and Tool
 nodes run in the shared Session binding under their existing native owners; a
-successful run returns exactly its declared output. Review is a typed
-`{accepted, feedback}` value over an immutable Plan subject, gates later work
-only through an explicit Branch on `accepted`, acquires no filesystem lease,
+successful run returns exactly its declared output. A Human Input
+continues through the exit of the action chosen, acquires no filesystem lease,
 and never rolls back an earlier write. Stale responses, wrong node visits,
 wrong subject digests and responses after terminal cancellation remain
 rejected. Workflow children are finite: ordinary durable Agent controls cannot

@@ -695,15 +695,25 @@
         },
         {
           "additionalProperties": false,
+          "description": "As Dify's Human Input: asks the person in the conversation which of\nits actions to take. Each action leaves through its own port, and\n`timeout` is taken when nobody answers within `timeout_ms`.",
           "properties": {
-            "context": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/WorkflowReviewAction"
+              },
+              "type": "array"
+            },
+            "content": {
+              "description": "The Markdown shown to the person: fixed text and references, as\nan Agent's task.",
               "items": {
                 "$ref": "#/$defs/WorkflowValue"
               },
               "type": "array"
             },
-            "subject": {
-              "$ref": "#/$defs/WorkflowReviewSubject"
+            "timeout_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
             },
             "type": {
               "const": "review",
@@ -712,8 +722,9 @@
           },
           "required": [
             "type",
-            "subject",
-            "context"
+            "content",
+            "actions",
+            "timeout_ms"
           ],
           "type": "object"
         },
@@ -1315,26 +1326,22 @@
       ],
       "type": "object"
     },
-    "WorkflowReviewSubject": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "plan",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/$defs/WorkflowValue"
-            }
-          },
-          "required": [
-            "type",
-            "value"
-          ],
-          "type": "object"
+    "WorkflowReviewAction": {
+      "additionalProperties": false,
+      "description": "One button the person may press, and the exit it takes.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
         }
-      ]
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
     },
     "WorkflowSchemaStep": {
       "description": "An exact position in a schema, independent of value-reference semantics.",

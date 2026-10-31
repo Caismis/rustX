@@ -2,8 +2,11 @@ import type { Edge, NodeDefinition } from './model';
 
 /** A native control port. `next` is the ordinary outgoing port, written
  * by omitting `port`. */
-export type BuiltinPort = 'next' | 'true' | 'false' | 'fail';
+export type BuiltinPort = 'next' | 'true' | 'false' | 'fail' | 'timeout';
 export type ControlPort = string;
+
+/** As Dify's Human Input: the exit taken when nobody answers in time. */
+export const TIMEOUT_PORT = 'timeout';
 
 /** The exact native outgoing ports of each node kind. */
 export function outputPorts(kind: NodeDefinition['type']): readonly ControlPort[] {
@@ -11,6 +14,8 @@ export function outputPorts(kind: NodeDefinition['type']): readonly ControlPort[
     case 'branch': return ['true', 'false'];
     // As Dify's Exit Loop, it ends its round; Return ends the workflow.
     case 'loop_end': case 'return': return [];
+    // Its actions are exits too; see `portsOf`.
+    case 'review': return [TIMEOUT_PORT];
     default: return ['next'];
   }
 }
@@ -35,6 +40,8 @@ export const RESERVED_PORTS: readonly string[] = ['false', 'next', 'fail'];
 
 export function portsOf(node: NodeDefinition): readonly ControlPort[] {
   if (node.type === 'branch') return [...node.cases.map(item => item.id), 'false'];
+  // As Dify's Human Input: each action is an exit, then its timeout.
+  if (node.type === 'review') return [...node.actions.map(action => action.id), TIMEOUT_PORT];
   // As Dify's Agent output routes: each route replaces `next` as an exit.
   const exits = node.type === 'agent' && node.routes?.length ? node.routes.map(route => route.id) : outputPorts(node.type);
   // As Dify's fail branch: a Model, Tool or Agent handling errors that way also exits on `fail`.

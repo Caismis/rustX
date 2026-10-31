@@ -5,7 +5,7 @@ import { IconChevronDownOutline14, IconEditOutline16, IconQuestionOutline14 } fr
 import { schemaObject, schemaTarget } from '../../../document/schema';
 import { Switch } from '../../../../../presentation/primitives/Switch';
 import { Tooltip } from '../../../../../presentation/primitives/Tooltip';
-import { CommandRejected, freshIdentifier, renameAgentRoute, replaceNode, replaceNodeExits } from '../../../document/commands';
+import { CommandRejected, freshIdentifier, renameExit, replaceNode, replaceNodeExits } from '../../../document/commands';
 import { blockAt, nodeAt, type NodeDefinition, type WorkflowDocument } from '../../../document/model';
 import { orderedKeys } from '../../../document/presentation';
 import { IconPlus } from '../../icons';
@@ -205,7 +205,7 @@ function PromptMessage(props: PanelProps & { index: number; message: Message }) 
   </PromptEditor>;
 }
 
-function InsertVariable() {
+export function InsertVariable() {
   const tx = useTranslation(), insert = useInsertVariable();
   return <button type="button" className={css.promptTool} aria-label={tx('workflows:prompt.insert-variable')} title={tx('workflows:prompt.insert-variable')}
     onMouseDown={event => event.preventDefault()} onClick={insert}><span aria-hidden className={css.promptVariableIcon}>{'{x}'}</span></button>;
@@ -260,7 +260,7 @@ function AgentRoutes(props: PanelProps) {
     {!!routes.length && <div className={css.routeList}>
       {routes.map((route, index) => <div key={route.id} className={css.routeItem}>
         <div className={css.routeItemHead}>
-          <RouteId value={route.id} label={tx('workflows:routes.id')} onCommit={to => props.edit(document => renameAgentRoute(document, props.block, props.id, route.id, to))} />
+          <RouteId value={route.id} label={tx('workflows:routes.id')} onCommit={to => props.edit(document => renameExit(document, props.block, props.id, route.id, to))} />
           <button type="button" className={css.smallButton} disabled={routes.length < 2} aria-label={tx('workflows:routes.remove', { p0: route.id })} title={tx('workflows:routes.remove', { p0: route.id })}
             onClick={() => exits(agent => withRoutes(agent, (agent.routes ?? []).filter(item => item.id !== route.id)))}>×</button>
         </div>
@@ -272,11 +272,11 @@ function AgentRoutes(props: PanelProps) {
   </section>;
 }
 
-/** A route ID commits on blur or Enter, moving its connections with it. */
-function RouteId({ value, label, onCommit }: { value: string; label: string; onCommit: (value: string) => void }) {
+/** A route ID, or a Human Input action's ID or title, commits on blur or Enter. */
+export function RouteId({ value, label, className, onCommit }: { value: string; label: string; className?: string; onCommit: (value: string) => void }) {
   const [draft, setDraft] = useState(value);
   const commit = () => { const next = draft.trim(); if (next && next !== value) onCommit(next); else setDraft(value); };
-  return <input className={css.routeIdInput} aria-label={label} value={draft} onChange={event => setDraft(event.target.value)} onBlur={commit}
+  return <input className={clsx(css.routeIdInput, className)} aria-label={label} value={draft} onChange={event => setDraft(event.target.value)} onBlur={commit}
     onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { setDraft(value); event.currentTarget.blur(); } }} />;
 }
 

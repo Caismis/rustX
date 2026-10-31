@@ -35,7 +35,7 @@ pub mod inspection;
 pub mod read_model;
 mod review;
 pub mod scheduled;
-pub use review::WorkflowReviewSubject;
+pub use review::{MAX_REVIEW_ACTIONS, REVIEW_TIMEOUT_PORT, WorkflowReviewAction};
 mod expressions;
 pub(crate) mod model;
 mod tool;
@@ -481,11 +481,16 @@ pub enum WorkflowNodeDefinition {
     LoopEnd {},
     /// As Dify's Variable Assigner: writes variables of the Loop it is in.
     Assigner { items: Vec<WorkflowAssignment> },
+    /// As Dify's Human Input: asks the person in the conversation which of
+    /// its actions to take. Each action leaves through its own port, and
+    /// `timeout` is taken when nobody answers within `timeout_ms`.
     Review {
-        subject: WorkflowReviewSubject,
-        context: Vec<WorkflowValue>,
+        /// The Markdown shown to the person: fixed text and references, as
+        /// an Agent's task.
+        content: Vec<WorkflowValue>,
+        actions: Vec<WorkflowReviewAction>,
+        timeout_ms: u64,
     },
-
     /// One statically selected, explicitly admitted foreground capability.
     Tool {
         selector: WorkflowToolSelector,
@@ -1267,10 +1272,10 @@ pub enum WorkflowNodeProgram {
         types: Vec<WorkflowVarType>,
     },
     Review {
-        subject: WorkflowReviewSubject,
-        context: Vec<WorkflowValue>,
+        content: Vec<WorkflowValue>,
+        actions: Vec<WorkflowReviewAction>,
+        timeout_ms: u64,
     },
-
     Tool {
         selector: crate::capabilities::selection::ExactToolSelector,
         arguments: WorkflowValue,
@@ -1963,35 +1968,23 @@ fn compile_block(
                 available_after.insert(node_id.clone(), available_before.clone());
                 WorkflowNodeProgram::Assigner { items: items.clone(), types }
             }
-            WorkflowNodeDefinition::Review { subject, context } => {
-                if !matches!(subject.value(), WorkflowValue::Reference { .. }) {
-                    return Err(WorkflowCompileError::InvalidField(
-                        "Review subject must reference a committed value".into(),
-                    ).at("subject"));
-                }
-                let schema = value_schema(subject.value(), &available_before, &node_id, 0).map_err(|e| e.at("subject"))?;
-                if matches!(subject, WorkflowReviewSubject::Plan { .. })
-                    && schema_type(&schema) != Some("object")
-                {
-                    return Err(WorkflowCompileError::InvalidField(
-                        "Review plan must be structured".into(),
-                    ).at("subject"));
-                }
-                if context.len() > 8 {
-                    return Err(WorkflowCompileError::InvalidField(
-                        "Review context exceeds eight entries".into(),
-                    ).at("context"));
-                }
-                for (index, value) in context.iter().enumerate() {
-                    value_schema(value, &available_before, &node_id, 0).map_err(|e| e.at(format!("context.{index}")))?;
+            WorkflowNodeDefinition::Review { content, actions, timeout_ms } => {
+                validate_review(content, actions, *timeout_ms, &available_before, &node_id)?;
+                let exits = actions.iter().map(|action| WorkflowPort::case(&action.id))
+                    .chain(std::iter::once(WorkflowPort::case(REVIEW_TIMEOUT_PORT)));
+                if container.is_none() && exits.into_iter().any(|port| !outgoing[&node_id].iter().any(|edge| edge.port == port)) {
+                    return Err(WorkflowCompileError::InvalidBranch(format!(
+                        "Human Input {node_id:?} requires a successor for every action and its timeout"
+                    )));
                 }
                 available_after.insert(
                     node_id.clone(),
-                    available_before.with_prefix(&node_id, &review::result_schema()),
+                    available_before.with_prefix(&node_id, &review::result_schema(actions)),
                 );
                 WorkflowNodeProgram::Review {
-                    subject: subject.clone(),
-                    context: context.clone(),
+                    content: content.clone(),
+                    actions: actions.clone(),
+                    timeout_ms: *timeout_ms,
                 }
             }
             WorkflowNodeDefinition::Tool {
@@ -2259,6 +2252,21 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
                     .any(|route| WorkflowPort::case(&route.id) == port) =>
             {
                 port
+            }
+            (WorkflowNodeDefinition::Review { actions, .. }, Some(port))
+                if port == WorkflowPort::case(REVIEW_TIMEOUT_PORT)
+                    || actions
+                        .iter()
+                        .any(|action| WorkflowPort::case(&action.id) == port) =>
+            {
+                port
+            }
+            (WorkflowNodeDefinition::Review { .. }, _) => {
+                return Err(WorkflowCompileError::InvalidBranch(format!(
+                    "Human Input node {:?} must use one of its action IDs or timeout",
+                    edge.from
+                ))
+                .at(format!("edges.{edge_index}.port")));
             }
             (WorkflowNodeDefinition::Agent { routes, .. }, _) if !routes.is_empty() => {
                 return Err(WorkflowCompileError::InvalidBranch(format!(
@@ -2723,6 +2731,64 @@ fn validate_agent(
 }
 
 /// Ports a Branch case or an Agent route cannot be named after.
+fn validate_review(
+    content: &[WorkflowValue],
+    actions: &[WorkflowReviewAction],
+    timeout_ms: u64,
+    available: &SchemaMap,
+    node: &str,
+) -> Result<(), WorkflowCompileError> {
+    if validate_prompt(
+        content,
+        available,
+        node,
+        &format!("Human Input {node:?} content"),
+        "content",
+    )? {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "Human Input {node:?} content is empty"
+        ))
+        .at("content"));
+    }
+    if actions.is_empty() || actions.len() > MAX_REVIEW_ACTIONS {
+        return Err(WorkflowCompileError::InvalidBranch(format!(
+            "Human Input {node:?} has 1..={MAX_REVIEW_ACTIONS} actions"
+        ))
+        .at("actions"));
+    }
+    let (mut ids, mut titles) = (BTreeSet::new(), BTreeSet::new());
+    for (index, action) in actions.iter().enumerate() {
+        if !valid_local_key(&action.id)
+            || is_reserved_port(&action.id)
+            || action.id == REVIEW_TIMEOUT_PORT
+            || !ids.insert(&action.id)
+        {
+            return Err(WorkflowCompileError::InvalidBranch(
+                "action IDs must be unique valid local keys and cannot name a reserved port".into(),
+            )
+            .at(format!("actions.{index}.id")));
+        }
+        let title = action.title.trim();
+        if title.is_empty()
+            || action.title.chars().count() > crate::events::interaction::MAX_OPTION_LABEL_CHARS
+            || !titles.insert(title)
+        {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "action titles must be unique non-empty text of at most {} characters",
+                crate::events::interaction::MAX_OPTION_LABEL_CHARS
+            ))
+            .at(format!("actions.{index}.title")));
+        }
+    }
+    if timeout_ms == 0 || timeout_ms > 86_400_000 {
+        return Err(
+            WorkflowCompileError::InvalidField("timeout_ms must be 1..=86400000".into())
+                .at("timeout_ms"),
+        );
+    }
+    Ok(())
+}
+
 fn is_reserved_port(id: &str) -> bool {
     matches!(id, "false" | "next" | "fail")
 }

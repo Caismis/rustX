@@ -12,7 +12,3 @@ export function ReviewValue({ value }: { value: unknown }) {
   if (Array.isArray(value)) return <ul className={css.list}>{value.map((item, index) => <li key={index}><ReviewValue value={item}/></li>)}</ul>;
   return <dl className={css.fields}>{Object.entries(value).map(([key, item]) => <div className={css.field} key={key}><dt>{key}</dt><dd><ReviewValue value={item}/></dd></div>)}</dl>;
 }
-export function ReviewContent({ content, context }: { content: unknown; context: unknown[] }) {
-  const tx = useTranslation();
-  return <div className={css.root} data-review-content><ReviewValue value={content}/>{context.length > 0 && <section><h3>{tx('interactions:review.context')}</h3>{context.map((item, index) => <ReviewValue key={index} value={item}/>)}</section>}</div>;
-}

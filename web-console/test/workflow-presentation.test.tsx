@@ -4,7 +4,7 @@ import { WorkflowRunPanel } from '../src/app/agent/WorkflowRunPanel';
 import { SubagentContext } from '../src/app/agent/subagent-context';
 import type { AppServerClient } from '../src/client/app-server';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
-import { Review } from '../src/app/agent/Review';
+import { Questionnaire } from '../src/app/agent/Questionnaire';
 import { workflowReview, workflowRun } from './workflow-data';
 import { interaction, snapshot } from './fixture';
 import { nativeTool } from './native-tool-cases';
@@ -66,29 +66,27 @@ it('places the run next to its exact native call, without inheriting an adjacent
   expect(ui.container.querySelectorAll('[data-workflow-run-id]')).toHaveLength(1);
   expect(panel.parentElement?.querySelector('[data-chat-anchor-key="message:' + tool.message_id + '"]')).toBeTruthy();
 });
-it('uses the DSH review card with readable content and explicit submit, requiring feedback for rejection', () => {
-  const accepted: boolean[] = [], rejected: string[] = [], ui = render(<Review review={workflowReview()} title="Waiting for your response" disabled={false} submitting={false} accept={() => accepted.push(true)} reject={text => rejected.push(text)} cancel={() => {}}/>);
+it('asks a Human Input on the questionnaire card: Markdown content above its actions, and no skipping', () => {
+  const review = workflowReview(), submitted: unknown[] = [];
+  const ui = render(<Questionnaire questions={review.questionnaire.questions} form={{ eyebrow: 'workflow · gate', title: 'Human Input' }} disabled={false}
+    onSubmit={value => submitted.push(value)} onDecline={() => {}}/>);
+  expect(ui.getByRole('heading', { name: 'Human Input' })).toBeTruthy();
   expect(ui.getByRole('heading', { name: 'Review report' })).toBeTruthy();
-  expect(ui.container.querySelector('pre')).toBeNull();
-  expect(accepted).toEqual([]);
-  fireEvent.click(ui.getByRole('radio', { name: 'Reject with feedback' }));
-  const submit = ui.getByRole('button', { name: 'Submit' });
-  expect((submit as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.change(ui.getByLabelText('Review feedback'), { target: { value: 'Fix the release version.' } });
-  fireEvent.click(submit); expect(rejected).toEqual(['Fix the release version.']);
-  fireEvent.click(ui.getByRole('radio', { name: 'Accept review' }));
-  fireEvent.click(submit); expect(accepted).toEqual([true]);
+  expect(ui.queryByRole('button', { name: 'Skip' })).toBeNull();
+  fireEvent.click(ui.getByRole('radio', { name: 'Revise' }));
+  fireEvent.click(ui.getByRole('button', { name: 'Submit' }));
+  expect(submitted).toEqual([{ answers: [{ question_index: 0, answer: { type: 'option', value: { option_index: 1 } } }] }]);
   fireEvent.click(ui.getByRole('button', { name: 'Collapse the question card' }));
   expect(ui.queryByRole('heading', { name: 'Review report' })).toBeNull();
 });
 it('renders historical review and its exact settlement once, without raw interaction envelopes', () => {
   const s = snapshot(), review = workflowReview();
   s.transcript.entries = [{ cursor: '1', item: { type: 'interaction_requested', event_id: 'event-1', timestamp: '2026-10-20T00:00:00Z', attempt_id: 'a', turn_id: 't', interaction_id: 'review-1', subject: { type: 'review', review } } },
-    { cursor: '2', item: { type: 'interaction_settled', event_id: 'event-2', timestamp: '2026-10-20T00:01:00Z', attempt_id: 'a', turn_id: 't', interaction_id: 'review-1', settlement: { type: 'reviewed', response: { instance: review.instance, subject_digest: 'digest', decision: { type: 'rejected', feedback: 'Please revise.' } } } } }];
+    { cursor: '2', item: { type: 'interaction_settled', event_id: 'event-2', timestamp: '2026-10-20T00:01:00Z', attempt_id: 'a', turn_id: 't', interaction_id: 'review-1', settlement: { type: 'reviewed', response: { instance: review.instance, subject_digest: 'digest', submission: { answers: [{ question_index: 0, answer: { type: 'option', value: { option_index: 1 } } }] } } } } }];
   const ui = render(<AgentTranscript snapshot={s}/>);
   expect(ui.container.querySelectorAll('[data-interaction-audit]')).toHaveLength(1);
-  fireEvent.click(ui.getByRole('button', { name: /Review · gate/ }));
-  expect(ui.getByText('Please revise.')).toBeTruthy();
+  fireEvent.click(ui.getByRole('button', { name: /Human Input · gate/ }));
+  expect(ui.getAllByText('Revise').length).toBeGreaterThan(0);
   expect(ui.container.textContent).not.toMatch(/interaction_requested|subject_digest|Historical interaction/);
 });
 

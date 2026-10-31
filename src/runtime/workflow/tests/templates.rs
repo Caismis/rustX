@@ -59,7 +59,7 @@ fn cfg237_templates_use_native_loader_compiler_and_editor_schema() {
         assert!(!view.runtime_requirements.contains("actual_loop_iterations"));
         assert_eq!(
             view.runtime_requirements
-                .contains("human_review_decision_and_interaction_availability"),
+                .contains("human_input_and_interaction_availability"),
             id == "human_plan"
         );
     }
@@ -76,7 +76,7 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
     let original = json!({"description":"Bounded review loop", "block":{
         "input":body.block.input, "output":{"type":"object","properties":{},"additionalProperties":false},"nodes": {"workflow_start":{"type":"start"},
             "revise":{"type":"loop", "loop_count":2, "body":test_body(&serde_json::to_value(&body.block).unwrap()),
-                "break_condition":{"type":"boolean","value":{"type":"reference","path":["review_plan","accepted"]}}},
+                "break_condition":{"type":"equal","left":{"type":"reference","path":["review_plan","action"]},"right":{"type":"literal","value":"approve"}}},
             "done":{"type":"return","output":{"type":"literal","value":{}}}
         },"edges": [{"from":"workflow_start","to":"revise"},{"from":"revise","to":"done"}],}});
     let compile = |value| {
@@ -103,12 +103,12 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
             "block.nodes.revise.loop_count",
         ),
         (
-            "/block/nodes/revise/body/nodes/review_plan/subject/value/path",
+            "/block/nodes/revise/body/nodes/review_plan/content/1/path",
             json!(["revise", "result"]),
-            "block.nodes.revise.body.nodes.review_plan.subject",
+            "block.nodes.revise.body.nodes.review_plan.content.1",
         ),
         (
-            "/block/nodes/revise/break_condition/value/path",
+            "/block/nodes/revise/break_condition/left/path",
             json!(["nowhere"]),
             "block.nodes.revise.break_condition",
         ),

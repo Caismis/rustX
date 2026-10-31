@@ -75,7 +75,7 @@ it('keeps a Loop container at its authored dimensions', () => {
 });
 
 it('inserts into one chosen edge and preserves every parallel sibling', () => {
-  const document = graph(), next = insertNode(document, [], 0, 'review', 'inspect');
+  const document = graph(), next = insertNode(document, [], 0, 'agent', 'inspect');
   expect(next.block.edges).toEqual([{ from: 'start', to: 'right' }, { from: 'left', to: 'done' }, { from: 'right', to: 'done' }, { from: 'start', to: 'inspect' }, { from: 'inspect', to: 'left' }]);
   expect(document.block.edges?.[0]).toEqual({ from: 'start', to: 'left' });
 });

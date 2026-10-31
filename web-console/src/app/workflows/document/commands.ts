@@ -3,7 +3,7 @@ import {
   blockAt, edgesOf, isContainer, nodeAt, sameBlockPath, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
   type WorkflowDocument,
 } from './model';
-import { authoredEdge, edgePort, outputPorts, portsOf, RESERVED_PORTS, type ControlPort } from './ports';
+import { authoredEdge, edgePort, outputPorts, portsOf, RESERVED_PORTS, TIMEOUT_PORT, type ControlPort } from './ports';
 import { renameProducer, rewriteBlockReferences, rewriteRoundReferences } from './references';
 
 /** Why an editing command was refused. The document is unchanged. These are
@@ -55,7 +55,8 @@ export function nodeTemplate(kind: NodeKind, id: string = kind): NodeDefinition 
     case 'model': return { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [] }, { role: 'user', content: [] }], output: { type: 'text' } };
     case 'tool': return { type: 'tool', selector: { origin: 'builtin', name: '' }, arguments: { type: 'object', fields: {} }, result: { type: 'text' } };
     case 'branch': return { type: 'branch', cases: [{ id: 'true', condition: { type: 'and', predicates: [] } }] };
-    case 'review': return { type: 'review', subject: { type: 'plan', value: { type: 'reference', path: ['args'] } }, context: [] };
+    // As Dify's Human Input: content and actions to write, and a timeout.
+    case 'review': return { type: 'review', content: [], actions: [], timeout_ms: '3600000' };
     // As Dify's defaults: ten rounds, sequential, terminate on error, flattened.
     case 'loop': return { type: 'loop', loop_count: 10, body: emptyBody(`${id}_start`) };
     case 'iteration': return { type: 'iteration', iterator: { type: 'reference', path: [] }, output: { type: 'reference', path: [] }, parallel_nums: 10, body: emptyBody(`${id}_start`) };
@@ -253,17 +254,21 @@ export function replaceNodeExits(document: WorkflowDocument, path: BlockPath, id
   return updateBlock(next, path, block => withEdges(block, edgesOf(block).filter(edge => edge.from !== id || ports.has(edgePort(edge)))));
 }
 
-/** A route ID is what the child answers with, so it moves its connections. */
-export function renameAgentRoute(document: WorkflowDocument, path: BlockPath, id: string, from: string, to: string): WorkflowDocument {
+/** An Agent route or a Human Input action is named by its exit, so renaming
+ * one moves its connections. */
+export function renameExit(document: WorkflowDocument, path: BlockPath, id: string, from: string, to: string): WorkflowDocument {
   return updateBlock(document, path, block => {
     const node = nodeAt(block, id);
-    if (node?.type !== 'agent' || !node.routes?.some(route => route.id === from)) throw new CommandRejected('missing_field');
+    const exits = node?.type === 'agent' ? node.routes : node?.type === 'review' ? node.actions : undefined;
+    if (!node || !exits?.some(exit => exit.id === from)) throw new CommandRejected('missing_field');
     if (from === to) return block;
     const invalid = validLocalKey(to);
     if (invalid) throw new CommandRejected(invalid);
-    if (RESERVED_PORTS.includes(to)) throw new CommandRejected('reserved_port');
-    if (node.routes.some(route => route.id === to)) throw new CommandRejected('duplicate_identifier');
-    return { ...block, nodes: { ...block.nodes, [id]: { ...node, routes: node.routes.map(route => route.id === from ? { ...route, id: to } : route) } },
+    if (RESERVED_PORTS.includes(to) || node.type === 'review' && to === TIMEOUT_PORT) throw new CommandRejected('reserved_port');
+    if (exits.some(exit => exit.id === to)) throw new CommandRejected('duplicate_identifier');
+    const renamed = node.type === 'agent' ? { ...node, routes: node.routes!.map(route => route.id === from ? { ...route, id: to } : route) }
+      : { ...node, actions: (node as Extract<NodeDefinition, { type: 'review' }>).actions.map(action => action.id === from ? { ...action, id: to } : action) };
+    return { ...block, nodes: { ...block.nodes, [id]: renamed },
       edges: edgesOf(block).map(edge => edge.from === id && edgePort(edge) === from ? authoredEdge(id, to, edge.to) : edge) };
   });
 }

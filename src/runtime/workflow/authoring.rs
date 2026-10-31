@@ -47,10 +47,8 @@ pub enum WorkflowConsumerField {
     /// A variable in an Agent's task, answered as for a Model message.
     Task,
     Arguments,
-    ReviewSubject,
-    ReviewContext {
-        index: u32,
-    },
+    /// A variable in a Human Input's content, answered as for a Model message.
+    ReviewContent,
     Condition {
         case_id: String,
     },
@@ -202,7 +200,7 @@ pub fn declared_output(
             validate_workflow_schema(&schema, "result")?;
             schema
         }
-        WorkflowNodeDefinition::Review { .. } => super::review::result_schema(),
+        WorkflowNodeDefinition::Review { actions, .. } => super::review::result_schema(actions),
         WorkflowNodeDefinition::Loop { loop_variables, .. } => {
             super::loop_variables_schema(loop_variables)
         }
@@ -370,19 +368,10 @@ fn consumer<'a>(
             messages.get(*index as usize)?;
             (Expression::Value(&UNSET_REFERENCE), None, false)
         }
-        (N::Agent { .. }, F::Task) => (Expression::Value(&UNSET_REFERENCE), None, false),
+        (N::Agent { .. }, F::Task) | (N::Review { .. }, F::ReviewContent) => {
+            (Expression::Value(&UNSET_REFERENCE), None, false)
+        }
         (N::Tool { arguments, .. }, F::Arguments) => (Expression::Value(arguments), None, false),
-        (N::Review { subject, .. }, F::ReviewSubject) => (
-            Expression::Value(subject.value()),
-            matches!(subject, super::WorkflowReviewSubject::Plan { .. })
-                .then(|| Cow::Owned(serde_json::json!({"type":"object"}))),
-            false,
-        ),
-        (N::Review { context, .. }, F::ReviewContext { index }) => (
-            Expression::Value(context.get(*index as usize)?),
-            None,
-            false,
-        ),
         (N::Branch { cases }, F::Condition { case_id } | F::ConditionVariable { case_id }) => (
             Expression::Predicate(&cases.iter().find(|case| &case.id == case_id)?.condition),
             None,
