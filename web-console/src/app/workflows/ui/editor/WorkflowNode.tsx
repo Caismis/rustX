@@ -4,7 +4,7 @@ import { Handle, NodeResizer, Position, useNodeConnections, type NodeProps, type
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
 import { IconEllipsisOutline16 } from '../../../../presentation/primitives/icons';
-import { MarkdownText } from '../../../../presentation/markdown/MarkdownText';
+import { NoteNode } from './note/NoteNode';
 import { portsOf, TIMEOUT_PORT, type ControlPort, type BuiltinPort } from '../../document/ports';
 import { KindIcon, IconEntry, IconHome, IconPlus } from '../icons';
 import { predicateText } from './summary';
@@ -46,11 +46,8 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
   const tx = useTranslation(), actions = useContext(CanvasActions), connections = useNodeConnections();
   const node = data.definition, ports = node ? portsOf(node) : data.view === 'start' ? ['next'] as const : [];
   const container = data.container, branch = node?.type === 'branch' ? branchGeometry(node) : undefined;
-  if (data.view === 'note' && data.note) return <div className={clsx(css.noteNode, css[`note_${data.note.theme}`], selected && css.nodeSelected)}>
-    <NodeResizer isVisible={selected} minWidth={160} minHeight={88} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />
-    <header className={css.noteHead}><span>{tx('workflows:note.title')}</span><button type="button" className={clsx(css.iconButton, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local })} onClick={event => actions.menu(id, event.currentTarget)}><IconEllipsisOutline16 /></button></header>
-    <div className={clsx(css.notePreview, 'nowheel nodrag')}><MarkdownText text={data.note.text || tx('workflows:note.empty')} variant="compact" /></div>
-  </div>;
+  if (data.view === 'note' && data.note) return <NoteNode id={id} note={data.note} selected={selected}
+    resizer={<NodeResizer isVisible={selected} minWidth={240} minHeight={88} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />} />;
   const adding = isConnectable && actions.editable, entered = connections.some(connection => connection.target === id);
   // As Dify's LoopStartNode: a body's Start is a small square with a home
   // glyph and its one exit.

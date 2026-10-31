@@ -922,6 +922,7 @@
           "$ref": "#/$defs/WorkflowPosition"
         },
         "text": {
+          "description": "As Dify, the note's Lexical editor state serialized as JSON.",
           "type": "string"
         },
         "theme": {
@@ -940,11 +941,12 @@
     },
     "WorkflowNoteTheme": {
       "enum": [
-        "neutral",
         "blue",
+        "cyan",
         "green",
-        "amber",
-        "rose"
+        "yellow",
+        "pink",
+        "violet"
       ],
       "type": "string"
     },

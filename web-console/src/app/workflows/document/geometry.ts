@@ -47,7 +47,7 @@ export function freshNote(document: WorkflowDocument, base = 'note'): string {
 export function putNote(document: WorkflowDocument, note: WorkflowNote): WorkflowDocument {
   if (!blockAt(document, note.block)) throw new CommandRejected('missing_node');
   if (validLocalKey(note.id)) throw new CommandRejected('invalid_identifier');
-  if (utf8Length(note.text) > 16 * 1024) throw new CommandRejected('limit_exceeded');
+  if (utf8Length(note.text) > 64 * 1024) throw new CommandRejected('limit_exceeded');
   position(note.position); dimensions(note.dimensions);
   return presentationEdit(document, editor => ({ ...editor, notes: [...(editor.notes ?? []).filter(entry => entry.id !== note.id), note] }));
 }

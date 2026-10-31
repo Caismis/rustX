@@ -118,7 +118,7 @@ describe('atomic insertion and bounded clipboard', () => {
     const positioned = setNodePresentation(original, [], 'done', { position: { x: 1_000_000, y: 0 } });
     expect(() => pasteFragment(original, 'owner', [], parseFragment(copyFragment(positioned, 'owner', [], ['done'])))).toThrow('invalid_geometry');
     expect(Object.keys(original.block.nodes)).toEqual(['start', 'done']);
-    const note = putNote(original, { id: 'args', block: [], text: '', theme: 'neutral', position: { x: 0, y: 0 }, dimensions: { width: 200, height: 100 } });
+    const note = putNote(original, { id: 'args', block: [], text: '', theme: 'blue', position: { x: 0, y: 0 }, dimensions: { width: 200, height: 100 } });
     expect(parseFragment(copyFragment(note, 'owner', [], [], ['args'])).editor.notes?.[0].id).toBe('args');
     expect(fragmentOwnsField([], ['loop'], [], blockField([{ node: 'loop' }], ['input']))).toBe(true);
     expect(fragmentOwnsField([], ['loop'], [], nodeField([{ node: 'other' }], 'loop', ['input']))).toBe(false);

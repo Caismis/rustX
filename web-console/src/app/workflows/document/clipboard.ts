@@ -222,7 +222,7 @@ export function parseFragment(source: string): Fragment {
     if (entry.position != null) point(entry.position); if (entry.dimensions != null) size(entry.dimensions);
   }
   for (const item of array(metadata.notes ?? [])) {
-    const note = keys(item, ['id', 'block', 'text', 'theme', 'position', 'dimensions']); text(note.id); text(note.text); if (validLocalKey(note.id) || utf8Length(note.text) > 16384 || !['neutral', 'blue', 'green', 'amber', 'rose'].includes(note.theme as string)) fail();
+    const note = keys(item, ['id', 'block', 'text', 'theme', 'position', 'dimensions']); text(note.id); text(note.text); if (validLocalKey(note.id) || utf8Length(note.text) > 65536 || !['blue', 'cyan', 'green', 'yellow', 'pink', 'violet'].includes(note.theme as string)) fail();
     path(note.block); point(note.position); size(note.dimensions);
   }
   for (const item of array(metadata.orders ?? [])) {

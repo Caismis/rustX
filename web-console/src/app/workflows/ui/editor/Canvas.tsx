@@ -1,5 +1,5 @@
 import type { ArrayEdit } from '../../document/fields';
-import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v62';
+import type { WorkflowNote, WorkflowToolChoice } from '../../../../../../protocol/app-server/v62';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Background, BackgroundVariant, MiniMap, ReactFlow, applyNodeChanges, useReactFlow, useViewport, useNodesInitialized, type Connection, type EdgeChange, type NodeChange, type Viewport } from '@xyflow/react';
 import clsx from 'clsx';
@@ -19,6 +19,7 @@ import { chosenNode, type NodeChoice } from './NodeChooser';
 import { applySceneConnection } from './connections';
 import { readViewport, writeViewport } from './view-store';
 import { CanvasActions, WorkflowNode } from './WorkflowNode';
+import { NoteActions } from './note/NoteNode';
 import { NODE_WIDTH, projectScene, type SceneEdge, type SceneNode } from './scene';
 import { WorkflowEdge } from './WorkflowEdge';
 import { viewId, type Duplicate, type Selection } from './selection';
@@ -243,6 +244,15 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     });
     setSelected(new Set()); onSelect(undefined);
   };
+  const copy = (id: string) => { try { const text = fragmentFor(id); void writeClipboard(text).then(ok => setMessage(tx(ok ? 'workflows:canvas.copied' : 'workflows:notice.copy-failed'))); } catch (error) { report(error); } };
+  // As Dify's note: written in place, with its own toolbar for these.
+  const noteActions = {
+    editable, copy, duplicate, remove,
+    change(id: string, change: Partial<Pick<WorkflowNote, 'text' | 'theme'>>) {
+      const local = byId.get(id)?.data.local;
+      if (editable && local) mutate(document => { const note = document.editor?.notes?.find(note => note.id === local); return note ? putNote(document, { ...note, ...change }) : document; }, change.text === undefined ? undefined : `note:${local}:text`);
+    },
+  };
   const add = (choice: NodeChoice) => {
     if (!palette || !editable) return;
     const chosen = palette, kind = choice.kind; let added = '';
@@ -271,7 +281,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
   const addNote = () => {
     if (!editable) return;
     let id = '';
-    mutate(document => { id = freshNote(document); return putNote(document, { id, block: [...scope], text: '', theme: 'amber', position: { x: 32, y: Math.max(280, ...scene.nodes.filter(node => sameBlockPath(node.data.path, scope)).map(node => node.position.y + (node.height ?? 128) + 48)) }, dimensions: { width: 280, height: 160 } }); });
+    mutate(document => { id = freshNote(document); return putNote(document, { id, block: [...scope], text: '', theme: 'blue', position: { x: 32, y: Math.max(280, ...scene.nodes.filter(node => sameBlockPath(node.data.path, scope)).map(node => node.position.y + (node.height ?? 128) + 48)) }, dimensions: { width: 240, height: 88 } }); });
     onSelect({ kind: 'note', id, path: scope });
   };
   const organize = useCallback(async () => {
@@ -328,7 +338,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       else if (!mod && key === 'n' && editable) { event.preventDefault(); addBelow(); }
       else if (!mod && key === 'v') setMode('select'); else if (!mod && key === 'h') setMode('pan');
     }}>
-    <CanvasActions.Provider value={actions}>
+    <CanvasActions.Provider value={actions}><NoteActions.Provider value={noteActions}>
       <ReactFlow<SceneNode, SceneEdge> nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} connectOnClick={false} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
         onNodeDragStart={() => { dragged.current = true; session.current.cancel(); }} onNodeDragStop={(_, __, moved) => { dragged.current = false; persist(moved); }}
         onConnect={connection => { if (editable) mutate(document => connectionCommand(document, connection)); }} onReconnect={(edge, connection) => { if (editable) mutate(document => connectionCommand(document, connection, edge)); }}
@@ -361,7 +371,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       {palette && <Palette at={palette.at} tools={tools} omit={unavailableKinds(document, palette.path)} insertion={!!palette.insertion} onChoose={add} onClose={() => { setPalette(undefined); container.current?.focus(); }} />}
       {menu && <div className={css.contextMenu} role="dialog" aria-label={tx('workflows:canvas.node-actions', { p0: byId.get(menu.id)?.data.title ?? '' })} style={{ left: menu.at.x, top: menu.at.y }} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(undefined); container.current?.focus(); } }}>
         {['node', 'note'].includes(byId.get(menu.id)?.data.view ?? '') ? <>
-          <button type="button" autoFocus onClick={() => { try { const text = fragmentFor(menu.id); void writeClipboard(text).then(ok => setMessage(tx(ok ? 'workflows:canvas.copied' : 'workflows:notice.copy-failed'))); } catch (error) { report(error); } setMenu(undefined); }}>{tx('workflows:canvas.copy')}</button>
+          <button type="button" autoFocus onClick={() => { copy(menu.id); setMenu(undefined); }}>{tx('workflows:canvas.copy')}</button>
           <button type="button" disabled={!editable} onClick={() => { duplicate(menu.id); setMenu(undefined); }}>{tx('workflows:canvas.duplicate')}</button>
           <button type="button" disabled={!editable} onClick={() => { remove(menu.id); setMenu(undefined); }}>{tx(byId.get(menu.id)?.data.view === 'note' ? 'workflows:note.delete' : 'workflows:inspector.delete-node')}</button>
         </> : <button type="button" disabled={!editable} onClick={event => openFor(menu.id, event.currentTarget)}>{tx('workflows:canvas.add')}</button>}
@@ -372,7 +382,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         {found.map(node => <button type="button" key={node.id} onClick={() => { choose(node); setSearch(undefined); }}>{node.data.view === 'start' ? node.data.title || tx(node.data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : node.data.title}<small>{keyOfBlock(node.data.path)}</small></button>)}
         {!found.length && <p className={css.note}>{tx('workflows:palette.none')}</p>}
       </div>}
-    </CanvasActions.Provider>
+    </NoteActions.Provider></CanvasActions.Provider>
   </div>;
 });
 

@@ -63,11 +63,12 @@ pub struct WorkflowNodePresentation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowNoteTheme {
-    Neutral,
     Blue,
+    Cyan,
     Green,
-    Amber,
-    Rose,
+    Yellow,
+    Pink,
+    Violet,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -75,6 +76,7 @@ pub enum WorkflowNoteTheme {
 pub struct WorkflowNote {
     pub id: String,
     pub block: Vec<WorkflowBlockStep>,
+    /// As Dify, the note's Lexical editor state serialized as JSON.
     pub text: String,
     pub theme: WorkflowNoteTheme,
     pub position: WorkflowPosition,
@@ -227,7 +229,7 @@ impl WorkflowEditorMetadata {
         }) || self.notes.iter().any(|note| {
             !block_valid(&note.block)
                 || !key(&note.id)
-                || note.text.len() > 16 * 1024
+                || note.text.len() > 64 * 1024
                 || !position_valid(note.position)
                 || !dimensions_valid(note.dimensions)
         }) {

@@ -119,7 +119,7 @@ fn metadata_bounds_and_stale_references_have_distinct_non_destructive_outcomes()
         assert_eq!(invalid.validate().unwrap_err().category, "presentation");
     }
     let mut invalid = before.clone();
-    invalid.editor.as_mut().unwrap().notes[0].text = "界".repeat(6000);
+    invalid.editor.as_mut().unwrap().notes[0].text = "界".repeat(22_000);
     assert!(invalid.validate().is_err(), "UTF-8 byte bound");
     let mut invalid = before.clone();
     let note = invalid.editor.as_ref().unwrap().notes[0].clone();

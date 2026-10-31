@@ -100,7 +100,7 @@ Commit, publication, observed reread and runtime adoption remain separate facts.
 | Collection | Authored content and identity |
 | --- | --- |
 | `nodes` | Structured `{block, node}` address; optional display `title`, author `description`, `position`, Loop container `dimensions` |
-| `notes` | Globally unique stable note ID, owning Block, Markdown text, one of `neutral/blue/green/amber/rose`, position and dimensions |
+| `notes` | Globally unique stable note ID, owning Block, text as Dify's note editor state (Lexical JSON; empty for a blank note), one of `blue/cyan/green/yellow/pink/violet`, position and dimensions |
 | `orders` | Ordered field names at a typed Block-input/output or node-output target |
 
 A Block address is an array of `{node}` steps, each naming a Loop body.
@@ -124,7 +124,7 @@ editor:
   notes:
     - id: review_note
       block: [{node: repeat}]
-      text: "## Review guidance\n\nKeep the result concise."
+      text: '{"root":{"children":[{"children":[{"detail":0,"format":0,"mode":"normal","style":"","text":"Keep the result concise.","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":""}],"direction":null,"format":"","indent":0,"type":"root","version":1}}'
       theme: blue
       position: {x: 0, y: 100}
       dimensions: {width: 240, height: 180}
@@ -147,7 +147,7 @@ are never file metadata. See the [visual authoring guide and acceptance record](
 | Expanded authoring document in JSON | 768 KiB, leaving space in the existing 1 MiB transport envelope |
 | Executable definition | 512 KiB; existing 256-node, depth-8 Block and value/run budgets remain separate |
 | Editor metadata | 256 KiB and 1024 total collection entries; at most 128 notes |
-| Node title / author description / note Markdown | 256 / 4096 / 16384 UTF-8 bytes per entry |
+| Node title / author description / note editor state | 256 / 4096 / 65536 UTF-8 bytes per entry |
 | Coordinates / dimensions | finite x/y in ±1000000; finite width/height in 16..8192 |
 | Addresses / field order | Block depth 8; schema path depth 32; at most 256 unique ordered fields, each 1..64 UTF-8 bytes |
 | Presentation diagnostics | At most 64; static reasons and bounded collection-index paths |

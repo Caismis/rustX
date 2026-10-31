@@ -27,6 +27,15 @@ export const IconRedo = glyph(<path d="m15 14 5-5-5-5M20 9H10a6 6 0 0 0 0 12h3" 
 export const IconBlock = glyph(<><rect x="3.5" y="3.5" width="17" height="17" rx="3" /><path d="M8 9h8M8 13h5" /></>);
 export const IconEntry = glyph(<path d="M3 12h11M10 7l5 5-5 5M18 4v16" />);
 export const IconHome = glyph(<path d="M4 10.5 12 4l8 6.5V20h-5v-5H9v5H4z" />);
+// Dify's note toolbar glyphs.
+export const IconBold = glyph(<path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z" />);
+export const IconItalic = glyph(<path d="M10 5h8M6 19h8M14 5l-4 14" />);
+export const IconStrikethrough = glyph(<path d="M4 12h16M16.5 7.5C16 5.8 14.3 5 12 5 9.5 5 7.5 6.2 7.5 8.3c0 1.4.9 2.3 2.4 2.9M8 16.5c.6 1.7 2.2 2.5 4.3 2.5 2.6 0 4.6-1.2 4.6-3.4 0-.8-.3-1.5-.8-2" />);
+export const IconLink = glyph(<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />);
+export const IconUnlink = glyph(<path d="M15.7 14 18.7 11a4 4 0 0 0-5.7-5.7l-1 1M8.3 10l-3 3a4 4 0 0 0 5.7 5.7l1-1M3 3l18 18" />);
+export const IconBulletList = glyph(<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" />);
+export const IconFontSize = glyph(<path d="M3 18 8 6l5 12M4.7 14h6.6M14 18l3.5-8 3.5 8M15 16h5" />);
+export const IconExternal = glyph(<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />);
 export const IconPencil = glyph(<path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />);
 export const IconBraces = glyph(<path d="M8 3H6a2 2 0 0 0-2 2v4a3 3 0 0 1-2 3 3 3 0 0 1 2 3v4a2 2 0 0 0 2 2h2M16 3h2a2 2 0 0 1 2 2v4a3 3 0 0 0 2 3 3 3 0 0 0-2 3v4a2 2 0 0 1-2 2h-2" />);
 

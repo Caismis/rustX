@@ -41,9 +41,21 @@ importers:
       '@internationalized/date':
         specifier: 3.12.4
         version: 3.12.4
+      '@lexical/link':
+        specifier: 0.52.0
+        version: 0.52.0(typescript@5.9.3)
+      '@lexical/list':
+        specifier: 0.52.0
+        version: 0.52.0(typescript@5.9.3)
       '@lexical/react':
         specifier: 0.52.0
         version: 0.52.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)(yjs@13.6.33)
+      '@lexical/rich-text':
+        specifier: 0.52.0
+        version: 0.52.0(typescript@5.9.3)
+      '@lexical/selection':
+        specifier: 0.52.0
+        version: 0.52.0(typescript@5.9.3)
       '@lexical/utils':
         specifier: 0.52.0
         version: 0.52.0(typescript@5.9.3)

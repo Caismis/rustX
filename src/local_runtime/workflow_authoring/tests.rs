@@ -131,7 +131,7 @@ fn definition(yaml: &str) -> WorkflowFileDocument {
 
 fn with_note(mut document: WorkflowFileDocument, text: &str) -> WorkflowFileDocument {
     document.editor=Some(serde_json::from_value(serde_json::json!({"notes":[{
-        "id":"note", "block":[], "text":text, "theme":"amber", "position":{"x":10.0,"y":20.5}, "dimensions":{"width":240.0,"height":160.0}
+        "id":"note", "block":[], "text":text, "theme":"yellow", "position":{"x":10.0,"y":20.5}, "dimensions":{"width":240.0,"height":160.0}
     }]})).unwrap());
     document
 }

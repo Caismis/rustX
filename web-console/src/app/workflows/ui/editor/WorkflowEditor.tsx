@@ -199,8 +199,9 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
           problems={problems} edit={edit} editable={editable && !saving} blockLabel={blockLabel} drafts={context.drafts} onDuplicate={duplicate} tools={base.source.vocabulary.builtin_tools} />
       </div>
     </ReactFlowProvider>
-    {/* As Dify: a selected connection only highlights; it opens no panel. */}
-    {selection && selection.kind !== 'edge' && <DraftOwner.Provider value={owner$}><Inspector port={context.port} document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} navigate={navigate} focus={fieldFocus} onDuplicate={duplicate}
+    {/* As Dify: a selected connection only highlights and a note is written in
+      place; neither opens a panel. */}
+    {selection && selection.kind !== 'edge' && selection.kind !== 'note' && <DraftOwner.Provider value={owner$}><Inspector port={context.port} document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} navigate={navigate} focus={fieldFocus}
       vocabulary={base.source.vocabulary} check={check} generation={generation} rejection={context.rejection ? tx(`workflows:rejection.${context.rejection}`) : undefined}
       checks={<CheckResults check={check} generation={generation} global={target.scope.kind === 'user'} workspaces={workspaces} context={dependencyContext} setContext={setDependencyContext} run={() => runCheck()} go={go} />} /></DraftOwner.Provider>}
   </div></ToolCatalogProvider>;

@@ -19,5 +19,5 @@ export function scaleWorkflow(): WorkflowFileDocument {
     start: { type: 'start' },
     repeat: { type: 'loop', loop_count: 1, body: branchTree() },
     model: { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Return text.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } }, done: returned,
-  }, edges: [{ from: 'start', to: 'repeat' }, { from: 'start', to: 'model' }, { from: 'model', to: 'done' }, { from: 'repeat', to: 'done' }] }, editor: { notes: [{ id: 'manual', block: [], text: 'Manual note: organize preserves this position.', theme: 'neutral', position: { x: -120, y: 300 }, dimensions: { width: 280, height: 120 } }] } };
+  }, edges: [{ from: 'start', to: 'repeat' }, { from: 'start', to: 'model' }, { from: 'model', to: 'done' }, { from: 'repeat', to: 'done' }] }, editor: { notes: [{ id: 'manual', block: [], text: 'Manual note: organize preserves this position.', theme: 'blue', position: { x: -120, y: 300 }, dimensions: { width: 280, height: 120 } }] } };
 }

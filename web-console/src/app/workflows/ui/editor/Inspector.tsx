@@ -4,17 +4,17 @@ import clsx from 'clsx';
 import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../locale/react';
 import { IconCheckOutline14, IconCloseOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
-import { nodePresentation, putNote, removeNotes } from '../../document/geometry';
+import { nodePresentation } from '../../document/geometry';
 import { nodeField } from '../../document/fields';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
 import { blockAt, nodeAt, startOf, type BlockPath, type WorkflowDocument } from '../../document/model';
 import type { WorkflowScopePort } from '../../port';
 import type { CheckResult } from '../../machines/editor';
 import { IconBlock, IconEntry, KindIcon } from '../icons';
-import type { Duplicate, Selection } from './selection';
+import type { Selection } from './selection';
 import { BlockForm } from './forms/BlockForm';
 import { NodePanel } from './panels/NodePanel';
-import { DraftTextField, NumberField, SelectField } from './forms/fields';
+import { DraftTextField } from './forms/fields';
 import { readInspectorWidth, writeInspectorWidth } from './view-store';
 import css from './Editor.module.css';
 
@@ -28,12 +28,11 @@ export function checkState(check: CheckResult | undefined, generation: number): 
 
 /** A single Settings surface; specialized panels own node semantics and the
  * editor machine owns all deferred text, history and save state. */
-export function Inspector({ document, block, selection, onSelect, edit, navigate, vocabulary, check, generation, rejection, checks, port, focus, onDuplicate }: {
+export function Inspector({ document, block, selection, onSelect, edit, navigate, vocabulary, check, generation, rejection, checks, port, focus }: {
   document: WorkflowDocument; block: BlockPath; selection: NonNullable<Selection>; onSelect: (selection: Selection) => void;
   edit: Edit; navigate: (block: BlockPath) => void; vocabulary?: WorkflowVocabulary; check?: CheckResult; generation: number;
   rejection?: string; checks: ReactNode; port: WorkflowScopePort;
   focus?: { address?: FieldAddress; field?: string; epoch: number };
-  onDuplicate: Duplicate;
 }) {
   const tx = useTranslation(), path = 'path' in selection ? selection.path ?? block : block;
   const root = useRef<HTMLElement>(null);
@@ -77,16 +76,6 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     body = <NodePanel document={document} block={path} id={id} port={port} vocabulary={vocabulary} edit={edit} navigate={navigate} onSelect={onSelect} />;
   } else if (selection.kind === 'check') {
     head = <span className={css.nodeTitle}>{tx('workflows:check.problems')}</span>; body = checks;
-  } else if (selection.kind === 'note') {
-    const note = document.editor?.notes?.find(note => note.id === selection.id);
-    head = <span className={css.nodeTitle}>{tx('workflows:note.title')}</span>;
-    body = note && <>
-      <DraftTextField label={tx('workflows:note.text')} value={note.text} multiline address={{ block: path, path: ['text'], role: 'value', domain: { kind: 'note', id: note.id } }} />
-      <SelectField label={tx('workflows:note.theme')} value={note.theme} options={(['neutral', 'blue', 'green', 'amber', 'rose'] as const).map(value => ({ value, label: tx(`workflows:note.${value}`) }))} onChange={theme => edit(document => putNote(document, { ...note, theme }))} />
-      {(['width', 'height'] as const).map(dimension => <NumberField key={dimension} label={tx(`workflows:note.${dimension}`)} value={note.dimensions[dimension]} min={16} max={8192} address={{ block: path, path: ['dimensions', dimension], role: 'value', domain: { kind: 'note', id: note.id } }} />)}
-      <div className={css.row}><button type="button" className={css.smallButton} onClick={() => onDuplicate(path, [], [note.id])}>{tx('workflows:canvas.duplicate')}</button>
-        <button type="button" className={css.smallButton} onClick={() => { edit(document => removeNotes(document, [note.id])); onSelect(undefined); }}>{tx('workflows:note.delete')}</button></div>
-    </>;
   } else {
     const startId = owner && startOf(owner), entry = selection.kind === 'start' && startId ? nodePresentation(document, path, startId) : undefined;
     const startTitle = tx(path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title');

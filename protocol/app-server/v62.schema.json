@@ -13346,6 +13346,7 @@
           }
         },
         "text": {
+          "description": "As Dify, the note's Lexical editor state serialized as JSON.",
           "type": "string"
         },
         "theme": {
@@ -13371,11 +13372,12 @@
     "WorkflowNoteTheme": {
       "type": "string",
       "enum": [
-        "neutral",
         "blue",
+        "cyan",
         "green",
-        "amber",
-        "rose"
+        "yellow",
+        "pink",
+        "violet"
       ]
     },
     "WorkflowFieldOrder": {

@@ -2295,7 +2295,7 @@ export type WorkflowToolResult =
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowNoteTheme".
  */
-export type WorkflowNoteTheme = 'neutral' | 'blue' | 'green' | 'amber' | 'rose';
+export type WorkflowNoteTheme = 'blue' | 'cyan' | 'green' | 'yellow' | 'pink' | 'violet';
 /**
  * Presentation order targets a specific authored list. Schema `path` contains
  * property names (not JSON pointers); missing/new fields append in key order.
@@ -9757,6 +9757,9 @@ export interface WorkflowDimensions {
 export interface WorkflowNote {
   id: string;
   block: WorkflowBlockStep[];
+  /**
+   * As Dify, the note's Lexical editor state serialized as JSON.
+   */
   text: string;
   theme: WorkflowNoteTheme;
   position: WorkflowPosition;

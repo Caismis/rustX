@@ -3430,6 +3430,11 @@ export const fixtures = [
                 ],
                 "loop_count": 1,
                 "body": {
+                  "input": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
                   "nodes": {
                     "answered": {
                       "type": "assigner",
@@ -3704,6 +3709,11 @@ export const fixtures = [
                 },
                 "loop_count": 3,
                 "body": {
+                  "input": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
                   "nodes": {
                     "check": {
                       "type": "tool",

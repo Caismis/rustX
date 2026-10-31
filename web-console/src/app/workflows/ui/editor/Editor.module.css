@@ -115,7 +115,6 @@
 .canvas :global(.react-flow__node:focus-visible) { outline: none; }
 .canvas :global(.react-flow__node:focus-visible:not(.selected)) > .node,
 .canvas :global(.react-flow__node:focus-visible:not(.selected)) > .entryFrame > .node,
-.canvas :global(.react-flow__node:focus-visible:not(.selected)) > .noteNode { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
 .dots { --xy-background-pattern-dots-color-default: var(--dsw-alias-border-l3); }
 
 .rail {
@@ -499,13 +498,6 @@
 .bodyStart { position: relative; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l3); border-radius: 16px; background: var(--dsw-alias-bg-layer-1); }
 .bodyStartIcon { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--dsw-alias-state-business-primary); color: #fff; }
 .bodyStart:hover .handleAdd { opacity: 1; pointer-events: auto; }
-.noteNode { display: flex; flex-direction: column; width: 100%; height: 100%; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); }
-.note_blue { background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 9%, var(--dsw-alias-bg-layer-1)); }
-.note_green { background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 9%, var(--dsw-alias-bg-layer-1)); }
-.note_amber { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 9%, var(--dsw-alias-bg-layer-1)); }
-.note_rose { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 9%, var(--dsw-alias-bg-layer-1)); }
-.noteHead { display: flex; justify-content: space-between; align-items: center; padding: 3px 10px; font-size: 10px; color: var(--dsw-alias-label-secondary); }
-.notePreview { flex: 1; min-height: 0; overflow: auto; padding: 0 12px 12px; font-size: 12px; user-select: text; }
 .inspector { position: relative; width: var(--inspector-width, 392px); max-width: 55%; }
 .inspectorResize { position: absolute; z-index: 3; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; }
 .inspectorResize:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -2px; }
