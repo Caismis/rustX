@@ -4,7 +4,6 @@ import clsx from 'clsx';
 import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../locale/react';
 import { IconCheckOutline14, IconCloseOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
-import { deleteNodes } from '../../document/commands';
 import { nodePresentation, putNote, removeNotes } from '../../document/geometry';
 import { nodeField } from '../../document/fields';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
@@ -74,11 +73,8 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
       <span className={css.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} placeholder={tx('workflows:panel.title-placeholder')} value={metadata?.title || id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} /></span>
     </div>;
     description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />;
-    body = <>
-      <NodePanel document={document} block={path} id={id} port={port} vocabulary={vocabulary} edit={edit} navigate={navigate} onSelect={onSelect} />
-      <div className={css.row}><button type="button" className={css.smallButton} onClick={() => onDuplicate(path, [id], [])}>{tx('workflows:canvas.duplicate')}</button>
-        <button type="button" className={clsx(css.smallButton, css.dangerText)} onClick={() => edit(document => deleteNodes(document, path, [id]))}>{tx('workflows:inspector.delete-node')}</button></div>
-    </>;
+    // As Dify: duplicate and delete live on the canvas menu, not the panel.
+    body = <NodePanel document={document} block={path} id={id} port={port} vocabulary={vocabulary} edit={edit} navigate={navigate} onSelect={onSelect} />;
   } else if (selection.kind === 'check') {
     head = <span className={css.nodeTitle}>{tx('workflows:check.problems')}</span>; body = checks;
   } else if (selection.kind === 'note') {

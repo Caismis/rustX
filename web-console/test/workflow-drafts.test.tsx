@@ -50,6 +50,8 @@ function select(label: string) {
   act(() => { node.focus(); });
   fireEvent.keyDown(node, { key: 'Enter' });
 }
+/** Delete a canvas node from the keyboard. */
+const remove = (label: string) => fireEvent.keyDown(document.querySelector<HTMLElement>(`.react-flow__node[aria-label="${label}"]`)!, { key: 'Delete' });
 const inspector = () => within(screen.getByRole('complementary', { name: 'Inspector' }));
 const literals = () => inspector().getAllByLabelText('Literal JSON') as HTMLTextAreaElement[];
 /** A Tool no catalog describes: its arguments are edited as a raw value. */
@@ -170,7 +172,7 @@ describe('rename with retained drafts (repair B)', () => {
     leave('ready', '"orphan_ready');
     if (!liveFirst) leave('revise', '"live_revise');
     select('Tool node ready');
-    fireEvent.click(inspector().getByRole('button', { name: 'Delete node' }));
+    remove('Tool node ready');
     select('Tool node revise');
     rename(editor, 'revise', 'ready');
     // The rename is accepted; the inspector follows the node, which shows
@@ -388,7 +390,7 @@ describe('recovering detached text (F4)', () => {
     const editor = await open(statusSource());
     select('Tool node ready');
     type(literals()[0], kept);
-    fireEvent.click(inspector().getByRole('button', { name: 'Delete node' }));
+    remove('Tool node ready');
     undo();
     // The node is back; its field shows its value, not the kept text, and
     // takes its own new draft.

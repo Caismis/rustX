@@ -268,7 +268,7 @@ test('uses the same visible duplicate transaction from Inspector and canvas for 
       const values = (element as HTMLElement).style.transform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/)!;
       return { x: Number(values[1]), y: Number(values[2]) };
     });
-    await activate(page, 'Output node done'); await panel(page).getByRole('button', { name: 'Duplicate', exact: true }).click();
+    await activate(page, 'Output node done'); await page.keyboard.press('Control+d');
     await expect(node([], 'node', 'done_copy')).toHaveClass(/selected/); await expect(node([], 'node', 'done_copy')).toBeInViewport();
     expect(await position(node([], 'node', 'done_copy'))).toEqual({ x: 532, y: 272 });
     await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(node([], 'node', 'done_copy')).toHaveCount(0);
@@ -279,7 +279,7 @@ test('uses the same visible duplicate transaction from Inspector and canvas for 
     await expect(node([], 'node', 'done_copy_2')).toHaveClass(/selected/);
     expect(await position(node([], 'node', 'done_copy_2'))).toEqual({ x: 564, y: 304 });
     await page.getByRole('button', { name: 'Undo', exact: true }).click(); await page.getByRole('button', { name: 'Undo', exact: true }).click();
-    await activate(page, 'Loop node repeat'); await panel(page).getByRole('button', { name: 'Duplicate', exact: true }).click();
+    await activate(page, 'Loop node repeat'); await page.keyboard.press('Control+d');
     const copied = [{ node: 'repeat_copy' }];
     await expect(node([], 'node', 'repeat_copy')).toHaveClass(/selected/); await expect(node([], 'node', 'repeat_copy')).toBeInViewport();
     expect(await position(node([], 'node', 'repeat_copy'))).toEqual({ x: 932, y: 272 });
