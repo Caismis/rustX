@@ -50,7 +50,7 @@ describe('native Workflow editing document', () => {
     const document = example('typed_agent');
     const [id, node] = Object.entries(blockAt(document, ROOT)!.nodes).find(([, node]) => node.type === 'agent')!;
     expect(node.type).toBe('agent');
-    expect(rejection(() => replaceNode(document, ROOT, id, { type: 'return', output: { type: 'literal', value: {} } }))).toBe('missing_node');
+    expect(rejection(() => replaceNode(document, ROOT, id, { type: 'return', outputs: []}))).toBe('missing_node');
     const edited = replaceNode(document, ROOT, id, { ...node, task: [{ type: 'literal', value: 'Different task' }] } as typeof node);
     const replaced = blockAt(edited, ROOT)!.nodes[id];
     expect(replaced.type === 'agent' && replaced.task).toEqual([{ type: 'literal', value: 'Different task' }]);
@@ -99,21 +99,22 @@ describe('authored maps and the browser number contract', () => {
 describe('field addresses', () => {
   const fixture = (): WorkflowDocument => {
     const document = example('parallel_review');
-    return replaceNode(document, ROOT, 'ready', {
-      type: 'return',
-      output: { type: 'object', fields: {
+    document.block.nodes.ready = {
+      type: 'tool', selector: { origin: 'builtin', name: 'read' }, result: { type: 'text' },
+      arguments: { type: 'object', fields: {
         'a.fields.b': { type: 'literal', value: 1 },
         a: { type: 'object', fields: { b: { type: 'literal', value: 2 } } },
       } },
-    });
+    };
+    return document;
   };
-  const direct = nodeField(ROOT, 'ready', ['output', 'fields', { key: 'a.fields.b' }, 'value']);
-  const nested = nodeField(ROOT, 'ready', ['output', 'fields', { key: 'a' }, 'fields', { key: 'b' }, 'value']);
+  const direct = nodeField(ROOT, 'ready', ['arguments', 'fields', { key: 'a.fields.b' }, 'value']);
+  const nested = nodeField(ROOT, 'ready', ['arguments', 'fields', { key: 'a' }, 'fields', { key: 'b' }, 'value']);
 
   it('keeps a direct key containing dots apart from the nested path it spells', () => {
     expect(encodeField(direct)).not.toBe(encodeField(nested));
     // An authored key is never a structural component of the same name.
-    expect(encodeField(nodeField(ROOT, 'n', ['output', 'fields', { key: 'fields' }]))).not.toBe(encodeField(nodeField(ROOT, 'n', ['output', 'fields', 'fields'])));
+    expect(encodeField(nodeField(ROOT, 'n', ['arguments', 'fields', { key: 'fields' }]))).not.toBe(encodeField(nodeField(ROOT, 'n', ['arguments', 'fields', 'fields'])));
     const document = fixture();
     expect(fieldText(document, direct)).toBe('1');
     expect(fieldText(document, nested)).toBe('2');

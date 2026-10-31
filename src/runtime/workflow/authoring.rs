@@ -368,18 +368,13 @@ fn consumer<'a>(
             messages.get(*index as usize)?;
             (Expression::Value(&UNSET_REFERENCE), None, false)
         }
-        (N::Agent { .. }, F::Task) | (N::Review { .. }, F::ReviewContent) => {
-            (Expression::Value(&UNSET_REFERENCE), None, false)
-        }
+        (N::Agent { .. }, F::Task)
+        | (N::Review { .. }, F::ReviewContent)
+        | (N::Return { .. }, F::ReturnOutput) => (Expression::Value(&UNSET_REFERENCE), None, false),
         (N::Tool { arguments, .. }, F::Arguments) => (Expression::Value(arguments), None, false),
         (N::Branch { cases }, F::Condition { case_id } | F::ConditionVariable { case_id }) => (
             Expression::Predicate(&cases.iter().find(|case| &case.id == case_id)?.condition),
             None,
-            false,
-        ),
-        (N::Return { output }, F::ReturnOutput) => (
-            Expression::Value(output),
-            Some(Cow::Borrowed(&block.output)),
             false,
         ),
         (N::Loop { loop_variables, .. }, F::LoopVariable { index }) => {

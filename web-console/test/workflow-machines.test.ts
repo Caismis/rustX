@@ -1,7 +1,7 @@
 import { setPositions } from '../src/app/workflows/document/presentation';
 import { describe, expect, it } from 'vitest';
 import { createActor } from 'xstate';
-import { exampleSource } from './workflow-fixtures';
+import { statusSource } from './workflow-fixtures';
 import type { WorkflowCheckReport, WorkflowFileDocument, WorkflowEdit, WorkflowLibrary, WorkflowSource } from '../../protocol/app-server/v62';
 import { RpcFailure } from '../src/client/errors';
 import { WorkspaceHostError, type WorkflowCommit } from '../src/workspaces/host';
@@ -27,7 +27,7 @@ function deferred<T>() {
 const flush = async () => { for (let turn = 0; turn < 16; turn++) await Promise.resolve(); };
 
 function source(id: string, revision = 'sha256:base'): WorkflowSource {
-  return { ...exampleSource('parallel_review'), id, revision, relative_path: `.agents/workflows/${id}.yaml` };
+  return { ...statusSource(), id, revision, relative_path: `.agents/workflows/${id}.yaml` };
 }
 const listing = (scope: WorkflowScope, files: string[]): WorkflowLibrary => ({
   target: scope.kind === 'user' ? { kind: 'user' } : { kind: 'workspace', directory: `/${scope.workspaceId}` },
@@ -239,7 +239,7 @@ describe('Workflow editor races', () => {
     script.reads[0].result.resolve(source('flow'));
     await flush();
     const editor = actor.getSnapshot().context.editor!;
-    editor.send({ type: 'DRAFT', address: blockField(ROOT, ['output']), text: '{}' });
+    editor.send({ type: 'DRAFT', address: blockField(ROOT, ['input']), text: '{}' });
     expect(editorHolds(editor)).toBe(true);
     let left = false;
     actor.send({ type: 'LEAVE', proceed: () => { left = true; } });
@@ -353,7 +353,7 @@ describe('Workflow editor races', () => {
 });
 
 describe('field drafts in the editor machine', () => {
-  const ready = nodeField(ROOT, 'ready', ['output', 'fields', { key: 'status' }, 'value']);
+  const ready = nodeField(ROOT, 'ready', ['arguments', 'fields', { key: 'status' }, 'value']);
   const field = encodeField(ready);
   const json: FieldCommand = (document, text) => {
     const reading = readJson(text);
@@ -371,10 +371,10 @@ describe('field drafts in the editor machine', () => {
     // A request for the older version applies nothing and clears nothing.
     editor.send({ type: 'APPLY_DRAFT', field, version: first, command: json });
     expect(draft(editor).text).toBe('"second"');
-    expect(status(editor)).toMatchObject({ output: { fields: { status: { value: 'ready' } } } });
+    expect(status(editor)).toMatchObject({ arguments: { fields: { status: { value: 'ready' } } } });
     editor.send({ type: 'APPLY_DRAFT', field, version: draft(editor).version, command: json });
     expect(draft(editor)).toBeUndefined();
-    expect(status(editor)).toMatchObject({ output: { fields: { status: { value: 'second' } } } });
+    expect(status(editor)).toMatchObject({ arguments: { fields: { status: { value: 'second' } } } });
     expect(editor.getSnapshot().context.applied).toMatchObject({ field, result: { status: 'applied' } });
   });
 
@@ -404,7 +404,7 @@ describe('field drafts in the editor machine', () => {
     expect(draft(editor)).toMatchObject({ text: '"mine"', conflict: 'changed' });
     // Neither a stale application nor Save reapplies it.
     editor.send({ type: 'APPLY_DRAFT', field, version: draft(editor).version, command: json });
-    expect(status(editor)).toMatchObject({ output: { fields: { status: { value: 'ready' } } } });
+    expect(status(editor)).toMatchObject({ arguments: { fields: { status: { value: 'ready' } } } });
     editor.send({ type: 'SAVE' });
     expect(script.writes).toHaveLength(0);
     // Redo back to the value it began on does not silently clear the mark.
@@ -414,7 +414,7 @@ describe('field drafts in the editor machine', () => {
     expect(draft(editor)).toMatchObject({ text: '"mine"', base: '"edited"' });
     expect(draft(editor).conflict).toBeUndefined();
     editor.send({ type: 'APPLY_DRAFT', field, version: draft(editor).version, command: json });
-    expect(status(editor)).toMatchObject({ output: { fields: { status: { value: 'mine' } } } });
+    expect(status(editor)).toMatchObject({ arguments: { fields: { status: { value: 'mine' } } } });
   });
 
   it('never attaches a draft to another field after deletion, a kind change or an unidentified array resize', async () => {
@@ -431,7 +431,7 @@ describe('field drafts in the editor machine', () => {
     editor.send({ type: 'EDIT', apply: document => deleteNodes(document, ROOT, ['ready']) });
     expect(holding('"kept"').draft).toMatchObject({ conflict: 'missing', address: ready });
     expect(draft(editor)).toBeUndefined();
-    editor.send({ type: 'EDIT', apply: document => addNode(document, ROOT, 'return', 'ready') });
+    editor.send({ type: 'EDIT', apply: document => addNode(document, ROOT, 'tool', 'ready') });
     expect(draft(editor)).toBeUndefined();
     editor.send({ type: 'KEEP_DRAFT', field: holding('"kept"').key });
     expect(holding('"kept"').draft.conflict).toBe('missing');
@@ -442,7 +442,7 @@ describe('field drafts in the editor machine', () => {
     expect(editor.getSnapshot().context.notice).toBeUndefined();
 
     // A value-kind change removes the literal the text was typed into.
-    const revise = nodeField(ROOT, 'revise', ['output', 'fields', { key: 'status' }]);
+    const revise = nodeField(ROOT, 'revise', ['arguments', 'fields', { key: 'status' }]);
     editor.send({ type: 'DRAFT', address: within(revise, ['value']), text: '"later"' });
     editor.send({ type: 'EDIT', apply: document => setField(document, revise, { type: 'object', fields: {} }) });
     editor.send({ type: 'EDIT', apply: document => setField(document, revise, { type: 'literal', value: 'needs_revision' }) });

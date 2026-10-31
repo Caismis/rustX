@@ -92,10 +92,9 @@ fn human_definition(question: bool) -> WorkflowDefinition {
     if !question {
         // Each action is its own exit, as Dify's Human Input.
         return serde_json::from_value(json!({"description":"Human business decision","timeout_ms":100,"block":{
-            "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"output":review_output(),
+            "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
             "nodes": {"workflow_start":{"type":"start"},"human":review_node(3_600_000),
-                "yes":{"type":"return","output":{"type":"reference","path":["human"]}},
-                "no":{"type":"return","output":{"type":"reference","path":["human"]}}},
+                "yes":returns("human", &["action", "content"]),"no":returns("human", &["action", "content"])},
             "edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"yes","port":"yes"},
                 {"from":"human","to":"no","port":"no"},{"from":"human","to":"no","port":"timeout"}]}})).unwrap();
     }
@@ -105,16 +104,11 @@ fn human_definition(question: bool) -> WorkflowDefinition {
     );
     let node = json!({"type":"tool","selector":{"origin":"builtin","name":"ask_user"},"arguments":{"type":"literal","value":{"questions":[{"question":"Choose target","header":"Target","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}},"result":{"type":"json","schema":result}});
     serde_json::from_value(json!({"description":"Human business decision","timeout_ms":100,"block":{
-        "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"output":result,"nodes": {"workflow_start":{"type":"start"},"human":node,"branch":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["human","cancelled"]}}}]},"yes":{"type":"return","output":{"type":"reference","path":["human"]}},"no":{"type":"return","output":{"type":"reference","path":["human"]}}},"edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}})).unwrap()
+        "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"nodes": {"workflow_start":{"type":"start"},"human":node,"branch":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["human","cancelled"]}}}]},"yes":returns("human", &["cancelled", "answers"]),"no":returns("human", &["cancelled", "answers"])},"edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}})).unwrap()
 }
 pub(super) fn review_node(timeout_ms: u64) -> Value {
     json!({"type":"review","content":[{"type":"literal","value":"Approve the plan?"}],
         "actions":[{"id":"yes","title":"Approve"},{"id":"no","title":"Revise"}],"timeout_ms":timeout_ms})
-}
-pub(super) fn review_output() -> Value {
-    let actions: Vec<crate::runtime::workflow::WorkflowReviewAction> =
-        serde_json::from_value(review_node(1)["actions"].clone()).unwrap();
-    crate::runtime::workflow::review::result_schema(&actions)
 }
 fn human_context(
     plane: &WorkflowTestPlane,
@@ -152,13 +146,12 @@ fn feedback_definition(question: bool) -> WorkflowDefinition {
     };
     serde_json::from_value(json!({"description":"Human feedback loop","timeout_ms":100,"block":{
         "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
-        "output":schema(json!({"done":{"type":"boolean"}}), &["done"]),
         "nodes":{"workflow_start":{"type":"start"},
             "feedback":{"type":"loop","loop_count":3,
                 "loop_variables":[{"label":"done","var_type":"boolean","value":{"type":"literal","value":false}}],
                 "break_condition":{"type":"boolean","value":{"type":"reference","path":["feedback","done"]}},
                 "body":{"nodes":nodes,"edges":edges}},
-            "done":{"type":"return","output":{"type":"reference","path":["feedback"]}}},
+            "done":{"type":"return","outputs":[{"variable":"done","value_selector":["feedback","done"]}]}},
         "edges":[{"from":"workflow_start","to":"feedback"},{"from":"feedback","to":"done"}]}}))
     .unwrap()
 }

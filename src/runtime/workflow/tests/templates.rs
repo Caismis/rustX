@@ -74,10 +74,10 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
     .unwrap();
     let body: WorkflowDefinition = serde_yaml::from_str(&text).unwrap();
     let original = json!({"description":"Bounded review loop", "block":{
-        "input":body.block.input, "output":{"type":"object","properties":{},"additionalProperties":false},"nodes": {"workflow_start":{"type":"start"},
+        "input":body.block.input, "nodes": {"workflow_start":{"type":"start"},
             "revise":{"type":"loop", "loop_count":2, "body":test_body(&serde_json::to_value(&body.block).unwrap()),
                 "break_condition":{"type":"equal","left":{"type":"reference","path":["review_plan","action"]},"right":{"type":"literal","value":"approve"}}},
-            "done":{"type":"return","output":{"type":"literal","value":{}}}
+            "done":{"type":"return","outputs":[]}
         },"edges": [{"from":"workflow_start","to":"revise"},{"from":"revise","to":"done"}],}});
     let compile = |value| {
         WorkflowProgram::compile(

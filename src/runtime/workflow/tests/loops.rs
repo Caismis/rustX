@@ -101,8 +101,9 @@ fn path(path: &[&str]) -> Value {
 fn around(id: &str, input: &Value, output: &Value, container: &Value) -> WorkflowDefinition {
     serde_json::from_value(
         json!({"description":"container","timeout_ms":600_000,"block":{
-        "input":input,"output":output,"nodes":{"workflow_start":{"type":"start"},id:container,
-            "done":{"type":"return","output":path(&[id])}},
+        "input":input,"nodes":{"workflow_start":{"type":"start"},id:container,
+            "done":{"type":"return","outputs":output["properties"].as_object().unwrap().keys()
+                .map(|key| json!({"variable":key,"value_selector":[id,key]})).collect::<Vec<_>>()}},
         "edges":[{"from":"workflow_start","to":id},{"from":id,"to":"done"}]}}),
     )
     .unwrap()
@@ -500,7 +501,7 @@ fn bodies_follow_difys_rules_at_compile() {
     body(&mut returns).nodes.insert(
         "back".into(),
         WorkflowNodeDefinition::Return {
-            output: reference("check"),
+            outputs: Vec::new(),
         },
     );
     body(&mut returns).edges.push(edge("save", "back"));

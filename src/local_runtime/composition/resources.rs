@@ -331,11 +331,11 @@ mod tests {
         let authored = json!({
             "description":"Demand contract",
             "block":{
-                "input":{"type":"object"}, "output":{"type":"object"},"nodes": {"workflow_start":{"type":"start"},
+                "input":{"type":"object"}, "nodes": {"workflow_start":{"type":"start"},
                     "leaf":{"type":"tool","selector":selector,"arguments":{"type":"literal","value":{}},
                         "result":{"type":"json","schema":{"type":"object"}}},
                     "agent":{"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],"output":{"type":"json_schema","schema":{"type":"object"}}},
-                    "done":{"type":"return","output":{"type":"reference","path":["agent"]}}
+                    "done":{"type":"return","outputs":[]}
                 },"edges": [{"from":"workflow_start","to":"leaf"},{"from":"leaf","to":"agent"},{"from":"agent","to":"done"}],}
         });
         let workflows = WorkflowCatalog::new([WorkflowProgram::compile(

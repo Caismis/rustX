@@ -9,17 +9,6 @@ block:
     required:
     - content
     additionalProperties: false
-  output:
-    type: object
-    properties:
-      risk:
-        type: string
-      reason:
-        type: string
-    required:
-    - risk
-    - reason
-    additionalProperties: false
   nodes:
     start:
       type: start
@@ -62,21 +51,9 @@ block:
           additionalProperties: false
     done:
       type: return
-      output:
-        type: object
-        fields:
-          risk:
-            type: reference
-            path:
-            - classify
-            - structured_output
-            - risk
-          reason:
-            type: reference
-            path:
-            - classify
-            - structured_output
-            - reason
+      outputs:
+      - {variable: risk, value_selector: [classify, structured_output, risk]}
+      - {variable: reason, value_selector: [classify, structured_output, reason]}
   edges:
   - from: start
     to: classify

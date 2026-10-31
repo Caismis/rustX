@@ -18,10 +18,9 @@ test('structured output uses transactional Dify-style visual and JSON editors wi
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   try {
     let document: WorkflowDocument = { description: 'Structured output editor.', block: rootBlock() };
-    document.block.output = { type: 'object', properties: { value: { type: 'string' } }, required: ['value'], additionalProperties: false };
     document.block.nodes.model = { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Classify the input.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Classify.' }] }],
       output: { type: 'json_schema', schema: { type: 'object', properties: { risk: { type: 'string', enum: ['low', 'high'] } }, required: ['risk'], additionalProperties: false } } };
-    document.block.nodes.done = { type: 'return', output: { type: 'object', fields: { value: { type: 'reference', path: ['model', 'structured_output', 'risk'] } } } };
+    document.block.nodes.done = { type: 'return', outputs: [{ variable: 'value', value_selector: ['model', 'structured_output', 'risk'] }]};
     document.block.edges = [{ from: 'start', to: 'model' }, { from: 'model', to: 'done' }];
     document = setNodePresentation(document, [], 'model', { title: 'Model call', position: { x: 360, y: 100 } });
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });

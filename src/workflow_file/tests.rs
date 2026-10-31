@@ -36,7 +36,8 @@ fn complete_file_round_trip_preserves_nested_metadata_markdown_order_and_numbers
             .unwrap()
     );
     let mut value = serde_json::to_value(&document).unwrap();
-    value["block"]["nodes"]["done"] = json!({"type":"return","output":{"type":"literal","value":{"large":9_007_199_254_740_993_u64,"fraction":0.25}}});
+    value["block"]["input"]["properties"]["numbers"] =
+        json!({"type":"object","default":{"large":9_007_199_254_740_993_u64,"fraction":0.25}});
     let numbers: WorkflowFileDocument = serde_json::from_value(value).unwrap();
     assert_eq!(
         numbers,

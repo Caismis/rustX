@@ -10,37 +10,6 @@ block:
     required:
     - proposal
     additionalProperties: false
-  output:
-    type: object
-    properties:
-      status:
-        type: string
-        enum:
-        - ready
-        - needs_revision
-      reviews:
-        type: object
-        properties:
-          quality: &id001
-            type: object
-            properties:
-              summary:
-                type: string
-              acceptable:
-                type: boolean
-            required:
-            - summary
-            - acceptable
-            additionalProperties: false
-          security: *id001
-        required:
-        - quality
-        - security
-        additionalProperties: false
-    required:
-    - status
-    - reviews
-    additionalProperties: false
   nodes:
     start:
       type: start
@@ -65,34 +34,14 @@ block:
               - acceptable
     ready:
       type: return
-      output:
-        type: object
-        fields:
-          status:
-            type: literal
-            value: ready
-          reviews:
-            type: object
-            fields: &id002
-              quality:
-                type: reference
-                path:
-                - reviews_quality_refine
-              security:
-                type: reference
-                path:
-                - reviews_security_review
+      outputs:
+      - {variable: quality, value_selector: [reviews_quality_refine]}
+      - {variable: security, value_selector: [reviews_security_review]}
     revise:
       type: return
-      output:
-        type: object
-        fields:
-          status:
-            type: literal
-            value: needs_revision
-          reviews:
-            type: object
-            fields: *id002
+      outputs:
+      - {variable: quality, value_selector: [reviews_quality_refine]}
+      - {variable: security, value_selector: [reviews_security_review]}
     reviews_quality_review:
       type: agent
       profile: reviewer

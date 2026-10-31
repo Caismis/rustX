@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within as uiWithin } from '@testing-library/react';
-import { useSelector } from '@xstate/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createActor, waitFor } from 'xstate';
 import { addNode, replaceNode } from '../src/app/workflows/document/commands';
 import { rootBlock } from './workflow-root';
 import { copyFragment, duplicateFragment, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
-import { blockField, encodeField, fieldValue, nodeField, setField, within, type FieldAddress } from '../src/app/workflows/document/fields';
+import { blockField, encodeField, nodeField, setField, type FieldAddress } from '../src/app/workflows/document/fields';
 import { putNote, setNodePresentation } from '../src/app/workflows/document/geometry';
 import { sameBlockPath, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../src/app/workflows/document/model';
 import { renameSchemaField, schemaPropertyAddress } from '../src/app/workflows/document/schema';
@@ -14,7 +13,6 @@ import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { projectScene } from '../src/app/workflows/ui/editor/scene';
 import { DraftOwner, FieldCommits } from '../src/app/workflows/ui/editor/forms/drafts';
 import { ReferencePicker } from '../src/app/workflows/ui/editor/forms/ReferencePicker';
-import { SchemaEditor } from '../src/app/workflows/ui/editor/forms/SchemaEditor';
 import { exampleSource } from './workflow-fixtures';
 import renameCases from '../../tests/fixtures/workflow/schema-rename.json';
 import collisionCases from '../../tests/fixtures/workflow/schema-rename-collisions.json';
@@ -36,39 +34,10 @@ function oneTransaction(actor: WorkflowEditorActor, before: WorkflowDocument, af
 }
 const positions = (document: WorkflowDocument, path: BlockPath) => new Map(projectScene(document).nodes.filter(node => node.data.view === 'node' && sameBlockPath(node.data.path, path)).map(node => [node.data.local, node.position]));
 
-describe('owned Object construction collisions', () => {
-
-  it('renames the exact nested construction while leaving an unrelated occupied key alone', () => {
-    let document = fixture();
-    document.block.output = { type: 'object', properties: { wrapper: { type: 'object', properties: { before: { type: 'string' } } } } };
-    document = setField(document, nodeField([], 'done', ['output']), { type: 'object', fields: { wrapper: { type: 'object', fields: { before: { type: 'literal', value: 'wanted' } } }, unrelated: { type: 'object', fields: { after: { type: 'literal', value: 'keep' } } } } });
-    const after = renameSchemaField(document, blockField([], ['output', 'properties', { key: 'wrapper' }]), 'before', 'after');
-    expect(after.block.nodes.done).toMatchObject({ output: { fields: { wrapper: { fields: { after: { value: 'wanted' } } }, unrelated: { fields: { after: { value: 'keep' } } } } } });
-  });
-
-  it('rejects a Literal leaf under an Object AST without rewriting unrelated business literals', () => {
-    let document = fixture();
-    document.block.output = { type: 'object', properties: { wrapper: { type: 'object', properties: { before: { type: 'string' } } } } };
-    document = setField(document, nodeField([], 'done', ['output']), { type: 'object', fields: { wrapper: { type: 'literal', value: { before: 'wanted', after: 'unrelated' } }, unrelated: { type: 'literal', value: { after: 'keep' } } } });
-    expect(() => renameSchemaField(document, blockField([], ['output', 'properties', { key: 'wrapper' }]), 'before', 'after')).toThrow('duplicate_identifier');
-    document = setField(document, nodeField([], 'done', ['output', 'fields', { key: 'wrapper' }]), { type: 'literal', value: { before: 'wanted' } });
-    const after = renameSchemaField(document, blockField([], ['output', 'properties', { key: 'wrapper' }]), 'before', 'after');
-    expect(after.block.nodes.done).toEqual(document.block.nodes.done);
-  });
-
-  it('renames explicit Object keys whose values are references', () => {
-    const document = fixture();
-    document.block.output = { type: 'object', properties: { before: { type: 'object' } } };
-    document.block.nodes.done = { type: 'return', output: { type: 'object', fields: { before: { type: 'reference', path: ['args'] } } } };
-    expect(renameSchemaField(document, blockField([], ['output']), 'before', 'after').block.nodes.done).toMatchObject({ output: { fields: { after: { type: 'reference', path: ['args'] } } } });
-  });
-});
-
-
 describe('finite schema renames', () => {
   it.each(renameCases)('keeps $name in one undoable native contract transaction', async example => {
     const before = fixture(); before.block.input = example.before;
-    before.block.nodes.done = { type: 'return', output: { type: 'literal', value: { before: 'Do not rewrite business literals' } } };
+    before.block.nodes.done = { type: 'return', outputs: [] };
     const path = example.path as FieldAddress['path'];
     const actor = await actorFor(before);
     actor.send({ type: 'EDIT', apply: document => renameSchemaField(document, blockField([], ['input', ...path]), 'before', 'after') });
@@ -147,42 +116,11 @@ describe('one duplicate command for every entry point', () => {
   });
 });
 
-function SchemaHarness({ actor }: { actor: WorkflowEditorActor }) {
-  const document = useSelector(actor, state => state.context.document)!;
-  return <DraftOwner value={{ editor: actor, commits: new FieldCommits() }}><SchemaEditor label="Input contract" value={document.block.input} address={blockField([], ['input'])} edit={apply => actor.send({ type: 'EDIT', apply })} /></DraftOwner>;
-}
-it('explicitly creates/omits optional array items and preserves exact detached item drafts', async () => {
-  const document = fixture(); document.block.input = { type: 'array' };
-  const actor = await actorFor(document), ui = render(<SchemaHarness actor={actor} />);
-  expect(actor.getSnapshot().context.document).toEqual(document); expect(actor.getSnapshot().context.past).toHaveLength(0);
-  expect(screen.queryByText('Array item contract', { selector: 'h3 span' })).toBeNull();
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Constrain array items' }));
-  expect(actor.getSnapshot().context.document!.block.input).toEqual({ type: 'array', items: { type: 'string' } });
-  const items = ui.container.querySelector('[data-schema-label="Array item contract"]')!;
-  fireEvent.change(uiWithin(items as HTMLElement).getByLabelText('Type', { exact: true }), { target: { value: 'object' } });
-  fireEvent.click(uiWithin(items as HTMLElement).getByRole('button', { name: 'Advanced JSON' }));
-  const text = '{ "type": "object",\n "properties": { unfinished';
-  fireEvent.change(uiWithin(items as HTMLElement).getByLabelText('Array item contract', { exact: true }), { target: { value: text } });
-  const key = encodeField(within(blockField([], ['input']), ['items']));
-  expect(actor.getSnapshot().context.drafts[key].text).toBe(text);
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Constrain array items' }));
-  expect(actor.getSnapshot().context.document!.block.input).toEqual({ type: 'array' });
-  const detached = Object.entries(actor.getSnapshot().context.drafts).find(([, draft]) => draft.text === text)!;
-  expect(detached[0]).not.toBe(key); expect(detached[1]).toMatchObject({ text, conflict: 'missing' });
-  await act(async () => actor.send({ type: 'UNDO' }));
-  expect(actor.getSnapshot().context.drafts[detached[0]]).toMatchObject({ text, conflict: 'missing' });
-  expect(actor.getSnapshot().context.document!.block.input).toMatchObject({ type: 'array', items: { type: 'object' } });
-  expect(fieldValue(actor.getSnapshot().context.document!, within(blockField([], ['input']), ['items']))?.value).toMatchObject({ type: 'object' });
-  await act(async () => actor.send({ type: 'REDO' }));
-  expect(actor.getSnapshot().context.drafts[detached[0]].text).toBe(text);
-  ui.unmount(); actor.stop();
-});
-
 it('sends the original search with every titled producer to the bounded native query', async () => {
-  const document = fixture(); document.block.nodes.done = { type: 'return', output: { type: 'reference', path: ['args'] } };
+  const document = fixture(); document.block.nodes.done = { type: 'return', outputs: [{ variable: 'args', value_selector: ['args'] }] };
   const titled = setNodePresentation(setNodePresentation(addNode(addNode(document, [], 'model', 'first'), [], 'model', 'second'), [], 'first', { title: 'First Draft' }), [], 'second', { title: 'Second Draft' });
   const queries: string[] = [], actor = await actorFor(titled, async (_id, _document, _generation, query) => { queries.push(query!.search ?? ''); return new Promise(() => {}); });
-  render(<DraftOwner value={{ editor: actor, commits: new FieldCommits() }}><ReferencePicker address={nodeField([], 'done', ['output'])} path={['args']} edit={apply => actor.send({ type: 'EDIT', apply })} /></DraftOwner>);
+  render(<DraftOwner value={{ editor: actor, commits: new FieldCommits() }}><ReferencePicker address={nodeField([], 'done', ['outputs', 0, 'value_selector'])} path={['args']} edit={apply => actor.send({ type: 'EDIT', apply })} /></DraftOwner>);
   fireEvent.click(screen.getByRole('button', { name: 'Choose a variable' }));
   fireEvent.change(screen.getByRole('textbox', { name: 'Search reference paths…' }), { target: { value: 'Draft' } });
   await act(async () => { await Promise.resolve(); });
@@ -195,7 +133,9 @@ it.each(['root Return', 'Loop variable', 'body Tool', 'break condition'])('title
   const body = [{ node: 'repeat' }];
   document = addNode(addNode(document, body, 'model', 'inner'), body, 'tool', 'use');
   document = setNodePresentation(document, body, 'inner', { title: 'Private producer' });
-  let address = nodeField([], 'done', ['output']), path = ['result'];
+  // An End output holds the variable's path itself.
+  let address = nodeField([], 'done', ['outputs', 0, 'value_selector']), path = ['result'];
+  document = replaceNode(document, [], 'done', { type: 'return', outputs: [{ variable: 'result', value_selector: path }] });
   if (kind === 'Loop variable') {
     document = replaceNode(document, [], 'repeat', { ...document.block.nodes.repeat as Extract<NodeDefinition, { type: 'loop' }>, loop_variables: [{ label: 'text', var_type: 'string', value: { type: 'literal', value: '' } }] });
     address = nodeField([], 'repeat', ['loop_variables', 0, 'value']);
@@ -207,7 +147,7 @@ it.each(['root Return', 'Loop variable', 'body Tool', 'break condition'])('title
     document = replaceNode(document, [], 'repeat', { ...document.block.nodes.repeat as Extract<NodeDefinition, { type: 'loop' }>, break_condition: { type: 'equal', left: { type: 'reference', path }, right: { type: 'literal', value: '' } } });
     address = nodeField([], 'repeat', ['break_condition', 'left']);
   }
-  document = setField(document, address, { type: 'reference', path });
+  if (kind !== 'root Return') document = setField(document, address, { type: 'reference', path });
   const actor = await actorFor(document);
   render(<DraftOwner value={{ editor: actor, commits: new FieldCommits() }}><ReferencePicker address={address} path={path} edit={apply => actor.send({ type: 'EDIT', apply })} /></DraftOwner>);
   expect(screen.getByRole('button', { name: 'Choose a variable' }).textContent).toBe(kind === 'break condition' ? 'Private producer' : 'Actual result producer');

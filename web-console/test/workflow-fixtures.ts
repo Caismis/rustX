@@ -9,3 +9,13 @@ export function exampleSource(id: string): WorkflowSource {
 }
 
 export const EXAMPLES = ['typed_agent', 'parallel_checks', 'human_plan', 'parallel_review', 'implement_and_review'] as const;
+
+/** parallel_review whose two outcomes are Tools no catalog describes, each
+ * with a literal `status` argument: plain values the inspector edits. */
+export function statusSource(): WorkflowSource {
+  const source = exampleSource('parallel_review'), nodes = source.document!.block.nodes;
+  for (const [id, status] of [['ready', 'ready'], ['revise', 'needs_revision']]) {
+    nodes[id] = { type: 'tool', selector: { origin: 'builtin', name: 'unlisted' }, result: { type: 'text' }, arguments: { type: 'object', fields: { status: { type: 'literal', value: status } } } };
+  }
+  return source;
+}

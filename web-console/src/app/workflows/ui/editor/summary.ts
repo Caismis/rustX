@@ -48,7 +48,8 @@ export function previewRowCount(node: NodeDefinition): number {
     case 'loop': return 1 + Math.min(node.loop_variables?.length ?? 0, 2);
     case 'iteration': return 2;
     case 'assigner': return Math.max(1, Math.min(node.items.length, 3));
-    case 'return': return Math.max(1, Math.min(node.output.type === 'object' ? Object.keys(node.output.fields).length : node.output.type === 'literal' && node.output.value && typeof node.output.value === 'object' && !Array.isArray(node.output.value) ? Object.keys(node.output.value).length : 1, 3));
+    // As Dify's End card: one row per chosen variable, none while unset.
+    case 'return': return node.outputs.filter(output => output.value_selector.length).length;
     case 'start': case 'branch': case 'loop_end': case 'review': return 0;
   }
 }

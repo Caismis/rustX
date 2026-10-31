@@ -17,12 +17,7 @@ fn agent(node: Value, exits: &[(&str, Option<WorkflowPort>, &str)]) -> WorkflowD
             None => edge("triage", to),
         });
     }
-    base_definition(
-        "triage",
-        nodes,
-        edges,
-        schema(json!({"result":{"type":"string"}}), &["result"]),
-    )
+    base_definition("triage", nodes, edges)
 }
 
 fn node(extra: &Value) -> Value {

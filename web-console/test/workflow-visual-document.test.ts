@@ -127,7 +127,7 @@ describe('atomic insertion and bounded clipboard', () => {
   it('rejects malformed shapes, runtime payloads, non-finite or oversized geometry and rounded JSON before mutation', () => {
     const fragment = JSON.parse(copyFragment(fixture(), 'owner', [], ['done']));
     const invalid = [
-      { ...fragment, nodes: { done: { type: 'return', output: { type: 'eval', source: 'alert(1)' } } } },
+      { ...fragment, nodes: { done: { type: 'return', outputs: [{ variable: 'x', value_selector: { type: 'eval', source: 'alert(1)' } }] } } },
       { ...fragment, runtime: { credentials: 'not accepted' } },
       { ...fragment, editor: { nodes: [{ address: { block: [], node: 'done' }, title: 'x'.repeat(257) }] } },
       { ...fragment, editor: { nodes: [{ address: { block: [], node: 'done' } }, { address: { node: 'done', block: [] } }] } },
@@ -137,7 +137,9 @@ describe('atomic insertion and bounded clipboard', () => {
       { ...fragment, editor: { notes: [{ id: 'bad', block: [], text: '', theme: 'amber', position: { x: 0, y: 0 }, dimensions: { width: 9000, height: 120 } }] } },
     ];
     for (const value of invalid) expect(() => parseFragment(JSON.stringify(value))).toThrow();
-    expect(() => parseFragment(JSON.stringify(fragment).replace('"value":{}', '"value":9007199254740993'))).toThrow();
+    const literal = { ...fragment, nodes: { ...fragment.nodes, use: { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'literal', value: {} }, result: { type: 'text' } } } };
+    expect(() => parseFragment(JSON.stringify(literal))).not.toThrow();
+    expect(() => parseFragment(JSON.stringify(literal).replace('"value":{}', '"value":9007199254740993'))).toThrow();
     expect(() => parseFragment(' '.repeat(768 * 1024 + 1))).toThrow('limit_exceeded');
     expect(() => parseFragment('{"a":'.repeat(140) + '0' + '}'.repeat(140))).toThrow('limit_exceeded');
   });
@@ -148,11 +150,11 @@ describe('schema contract identity', () => {
   it('renames root arguments, required/order metadata and only corresponding structured paths', () => {
     const document = fixture();
     document.block.input = { type: 'object', properties: { question: { type: 'string', description: 'User question' } }, required: ['question'], additionalProperties: false };
-    document.block.nodes = { model: { type: 'model', messages: [{ role: 'system', content: [{ type: 'literal', value: 'Keep question in literal text.' }] }, { role: 'user', content: [{ type: 'reference', path: ['args', 'question'] }] }], output: { type: 'text' } }, done: { type: 'return', output: { type: 'reference', path: ['args'] } } };
+    document.block.nodes = { model: { type: 'model', messages: [{ role: 'system', content: [{ type: 'literal', value: 'Keep question in literal text.' }] }, { role: 'user', content: [{ type: 'reference', path: ['args', 'question'] }] }], output: { type: 'text' } }, done: { type: 'return', outputs: [{ variable: 'args', value_selector: ['args'] }] } };
     const next = renameSchemaField(document, blockField([], ['input']), 'question', 'prompt');
     expect(next.block.input).toMatchObject({ properties: { prompt: { description: 'User question' } }, required: ['prompt'] });
     expect(next.block.nodes.model).toMatchObject({ messages: [{ content: [{ value: 'Keep question in literal text.' }] }, { content: [{ path: ['args', 'prompt'] }] }] });
-    expect(next.block.nodes.done).toMatchObject({ output: { path: ['args'] } });
+    expect(next.block.nodes.done).toMatchObject({ outputs: [{ value_selector: ['args'] }] });
     expect(next.editor?.orders?.[0].fields).toEqual(['prompt']);
     expect(schemaConsumers(next, blockField([], ['input'])).map(use => use.node).sort()).toEqual(['done', 'model']);
     const before = schemaPropertyAddress(blockField([], ['input']), 'question');
@@ -172,8 +174,6 @@ describe('schema contract identity', () => {
       expect(() => renameSchemaField(original, blockField([], ['input']), 'from', 'to')).toThrow('duplicate_identifier');
       expect(original).toEqual(before);
     }
-    const separate = { ...document, editor: { orders: [{ target: { kind: 'block_output' as const, block: [], path: [] }, fields: ['to'] }] } };
-    expect(() => renameSchemaField(separate, blockField([], ['input']), 'from', 'to')).not.toThrow();
   });
 
 });

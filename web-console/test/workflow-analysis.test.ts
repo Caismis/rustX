@@ -93,7 +93,7 @@ async function rejectedEdit(document: WorkflowDocument, apply: (document: Workfl
 
 function orphanNodeDocument(parent: BlockPath, metadata: WorkflowEditorMetadata): WorkflowDocument {
   const empty = { type: 'object', properties: {}, additionalProperties: false };
-  const leaf: Block = { input: empty, output: empty,  nodes: {workflow_start:{type:'start' as const}, ...{ done: { type: 'return', output: { type: 'literal', value: {} } } }}, edges: [{from:'workflow_start',to:'done'}, ...[]] };
+  const leaf: Block = { input: empty, nodes: {workflow_start:{type:'start' as const}, ...{ done: { type: 'return', outputs: []} }}, edges: [{from:'workflow_start',to:'done'}, ...[]] };
   const block: Block = parent.length ? { ...leaf, nodes: { ...leaf.nodes, repeat: { type: 'loop', loop_count: 1, body: { nodes: { loop_start: { type: 'start' }, done: { type: 'loop_end' } }, edges: [{ from: 'loop_start', to: 'done' }] } } },
     edges: [{ from: 'workflow_start', to: 'repeat' }, { from: 'repeat', to: 'done' }] } : leaf;
   return { description: 'Preserved orphan destination', block, editor: metadata };
@@ -108,7 +108,7 @@ const orphanDestinations = ([[], [{ node: 'repeat' }]] satisfies BlockPath[]).fl
     ['output order', { orders: [{ target: { kind: 'node_output', address, path: [] }, fields: ['x'] }] }],
     ['private node', { nodes: [{ address: { block: privateBlock, node: 'done' }, title: 'private title' }] }],
     ['private note', { notes: [{ id: 'old', block: privateBlock, text: 'Preserve me', theme: 'blue', position, dimensions }] }],
-    ['private order', { orders: [{ target: { kind: 'block_output', block: privateBlock, path: [] }, fields: ['x'] }] }],
+    ['private order', { orders: [{ target: { kind: 'block_input', block: privateBlock, path: [] }, fields: ['x'] }] }],
   ];
   return kinds.map(([kind, metadata]) => ({ parent, kind, metadata, nested: parent.length > 0 }));
 });

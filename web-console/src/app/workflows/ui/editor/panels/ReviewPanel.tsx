@@ -67,7 +67,7 @@ function ReviewActions(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'review'), exits = useReviewExits(props);
   // As Dify: `action_N` with "Button Text N", N one past the count.
   const add = () => exits(review => {
-    const id = freshIdentifier({ input: {}, output: {}, nodes: Object.fromEntries(review.actions.map(action => [action.id, { type: 'start' }])), edges: [] }, `action_${review.actions.length + 1}`);
+    const id = freshIdentifier({ input: {}, nodes: Object.fromEntries(review.actions.map(action => [action.id, { type: 'start' }])), edges: [] }, `action_${review.actions.length + 1}`);
     return { ...review, actions: [...review.actions, { id, title: tx('workflows:review.default-title', { p0: String(review.actions.length + 1) }) }] };
   });
   return <section className={css.group} aria-label={tx('workflows:review.actions')}>

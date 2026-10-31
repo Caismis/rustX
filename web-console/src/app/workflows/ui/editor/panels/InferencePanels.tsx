@@ -250,7 +250,7 @@ function AgentRoutes(props: PanelProps) {
     const { routes: _previous, ...rest } = agent;
     return next?.length ? { ...rest, routes: next } : rest;
   };
-  const fresh = (taken: readonly { id: string }[]) => freshIdentifier({ input: {}, output: {}, nodes: Object.fromEntries(taken.map(route => [route.id, { type: 'start' }])), edges: [] }, 'route');
+  const fresh = (taken: readonly { id: string }[]) => freshIdentifier({ input: {}, nodes: Object.fromEntries(taken.map(route => [route.id, { type: 'start' }])), edges: [] }, 'route');
   return <section className={css.group} aria-label={tx('workflows:routes.title')}>
     <h3 className={css.groupHeading}>
       <span className={css.headingText}>{tx('workflows:routes.title')}

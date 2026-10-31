@@ -113,15 +113,15 @@ fn program_definition() -> WorkflowDefinition {
         "description":"fixed verification",  "timeout_ms":100,
         "block": {
             "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
-            "output":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"nodes": {"workflow_start":{"type":"start"},
+            "nodes": {"workflow_start":{"type":"start"},
                 "check":{"type":"tool","selector":{"origin":"builtin","name":"check"},
                     "arguments":{"type":"object","fields":{
                         "passed":{"type":"reference","path":["args","passed"]},
                         "label":{"type":"literal","value":"fixed"}}},
                     "result":{"type":"json","schema":schema(json!({"passed":{"type":"boolean"}}), &["passed"])}},
                 "branch":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["check","passed"]}}}]},
-                "yes":{"type":"return","output":{"type":"reference","path":["check"]}},
-                "no":{"type":"return","output":{"type":"reference","path":["check"]}}
+                "yes":returns("check", &["passed"]),
+                "no":returns("check", &["passed"])
             },"edges": [{"from":"workflow_start","to":"check"},{"from":"check","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}
     })).unwrap()
 }
@@ -940,7 +940,6 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
         timeout_ms: 100,
         block: WorkflowBlock {
             input: json!({"type":"object"}),
-            output: json!({"type":"object"}),
             nodes: {
                 let mut nodes: std::collections::BTreeMap<
                     String,
@@ -964,7 +963,7 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
                     (
                         "done".into(),
                         WorkflowNodeDefinition::Return {
-                            output: WorkflowValue::Literal { value: json!({}) },
+                            outputs: Vec::new(),
                         },
                     ),
                 ]);
@@ -1049,27 +1048,19 @@ fn failing_program(failure: &Value) -> Arc<WorkflowProgram> {
         .unwrap()
         .extend(failure.as_object().unwrap().clone());
     let mut nodes = json!({"workflow_start":{"type":"start"},"check":tool,
-        "done":{"type":"return","output":{"type":"object","fields":{"passed":{"type":"reference","path":["check","passed"]}}}}});
+        "done":{"type":"return","outputs":[{"variable":"passed","value_selector":["check","passed"]}]}});
     let mut edges = json!([{"from":"workflow_start","to":"check"},{"from":"check","to":"done"}]);
-    let output = if fail_branch {
-        nodes["failed"] = json!({"type":"return","output":{"type":"object","fields":{"passed":{"type":"literal","value":false},
-            "error":{"type":"reference","path":["check","error_message"]}}}});
+    if fail_branch {
+        nodes["failed"] = returns("check", &["error_message"]);
         edges
             .as_array_mut()
             .unwrap()
             .push(json!({"from":"check","to":"failed","port":"fail"}));
-        nodes["done"]["output"]["fields"]["error"] = json!({"type":"literal","value":""});
-        schema(
-            json!({"passed":{"type":"boolean"},"error":{"type":"string"}}),
-            &["passed", "error"],
-        )
-    } else {
-        passed
-    };
+    }
     Arc::new(
         compile_test(
             serde_json::from_value(json!({"description":"flaky check","timeout_ms":60_000,
-                "block":{"input":schema(json!({}), &[]),"output":output,"nodes":nodes,"edges":edges}}))
+                "block":{"input":schema(json!({}), &[]),"nodes":nodes,"edges":edges}}))
             .unwrap(),
         )
         .unwrap(),
@@ -1133,10 +1124,10 @@ async fn a_failed_tool_is_retried_as_new_invocations_then_handled() {
     let (value, _) = run_flaky(1, &branch).await;
     assert_eq!(
         value.unwrap(),
-        json!({"passed": false, "error": "flaky check failed"})
+        json!({"error_message": "flaky check failed"})
     );
     let (value, _) = run_flaky(0, &branch).await;
-    assert_eq!(value.unwrap(), json!({"passed": true, "error": ""}));
+    assert_eq!(value.unwrap(), json!({"passed": true}));
 }
 
 #[test]

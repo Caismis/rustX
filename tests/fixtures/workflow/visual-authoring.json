@@ -14,66 +14,6 @@
       ],
       "additionalProperties": false
     },
-    "output": {
-      "type": "object",
-      "properties": {
-        "parallel": {
-          "type": "object",
-          "properties": {
-            "left": {
-              "type": "object",
-              "properties": {
-                "echo": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "echo"
-              ],
-              "additionalProperties": false
-            },
-            "right": {
-              "type": "object",
-              "properties": {
-                "echo": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "echo"
-              ],
-              "additionalProperties": false
-            }
-          },
-          "required": [
-            "left",
-            "right"
-          ],
-          "additionalProperties": false
-        },
-        "loop": {
-          "type": "object",
-          "properties": {
-            "count": {
-              "type": "number"
-            },
-            "echo": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "count",
-            "echo"
-          ],
-          "additionalProperties": false
-        }
-      },
-      "required": [
-        "parallel",
-        "loop"
-      ],
-      "additionalProperties": false
-    },
     "nodes": {
       "start": {
         "type": "start"
@@ -184,34 +124,26 @@
       },
       "done": {
         "type": "return",
-        "output": {
-          "type": "object",
-          "fields": {
-            "parallel": {
-              "type": "object",
-              "fields": {
-                "left": {
-                  "type": "reference",
-                  "path": [
-                    "left"
-                  ]
-                },
-                "right": {
-                  "type": "reference",
-                  "path": [
-                    "right"
-                  ]
-                }
-              }
-            },
-            "loop": {
-              "type": "reference",
-              "path": [
-                "repeat"
-              ]
-            }
+        "outputs": [
+          {
+            "variable": "left",
+            "value_selector": [
+              "left"
+            ]
+          },
+          {
+            "variable": "right",
+            "value_selector": [
+              "right"
+            ]
+          },
+          {
+            "variable": "loop",
+            "value_selector": [
+              "repeat"
+            ]
           }
-        }
+        ]
       }
     },
     "edges": [

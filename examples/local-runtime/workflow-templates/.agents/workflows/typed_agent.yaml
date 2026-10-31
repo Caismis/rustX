@@ -9,14 +9,6 @@ block:
     required:
     - topic
     additionalProperties: false
-  output: &id001
-    type: object
-    properties:
-      summary:
-        type: string
-    required:
-    - summary
-    additionalProperties: false
   nodes:
     start:
       type: start
@@ -30,13 +22,20 @@ block:
         value: "\n\ntopic: "
       - type: reference
         path: ["args", "topic"]
-      output: {type: json_schema, schema: *id001}
+      output:
+        type: json_schema
+        schema:
+          type: object
+          properties:
+            summary:
+              type: string
+          required:
+          - summary
+          additionalProperties: false
     return_summary:
       type: return
-      output:
-        type: reference
-        path:
-        - summarize
+      outputs:
+      - {variable: summary, value_selector: [summarize, summary]}
   edges:
   - from: start
     to: summarize

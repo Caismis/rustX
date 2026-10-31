@@ -86,9 +86,9 @@ mod tests {
         json!({
             "description":"selector contract",
             "block":{
-                "input":{"type":"object"}, "output":{"type":"object"},"nodes": {"workflow_start":{"type":"start"},
+                "input":{"type":"object"}, "nodes": {"workflow_start":{"type":"start"},
                     "work":node,
-                    "done":{"type":"return","output":{"type":"reference","path":["work"]}}
+                    "done":{"type":"return","outputs":[]}
                 },"edges": [{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}],}
         })
     }

@@ -15,21 +15,6 @@ block:
     required:
     - plan
     additionalProperties: false
-  output:
-    type: object
-    properties:
-      action:
-        type: string
-        enum:
-        - approve
-        - reject
-        - timeout
-      content:
-        type: string
-    required:
-    - action
-    - content
-    additionalProperties: false
   nodes:
     start:
       type: start
@@ -54,10 +39,9 @@ block:
       timeout_ms: 60000
     return_decision:
       type: return
-      output:
-        type: reference
-        path:
-        - review_plan
+      outputs:
+      - {variable: action, value_selector: [review_plan, action]}
+      - {variable: content, value_selector: [review_plan, content]}
   edges:
   - from: start
     to: review_plan

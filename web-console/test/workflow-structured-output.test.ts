@@ -16,12 +16,12 @@ function document(): WorkflowDocument {
 describe('structured output editing transactions', () => {
   it('renames declared fields and nested model-envelope references together without mutating the open document', () => {
     const original = putProperty(address, undefined, 'details', { type: 'object', properties: { accepted: { type: 'boolean' } }, required: ['accepted'], additionalProperties: false }, true)(document());
-    original.block.nodes.done = { type: 'return', output: { type: 'reference', path: ['model', 'structured_output', 'details', 'accepted'] } };
+    original.block.nodes.done = { type: 'return', outputs: [{ variable: 'accepted', value_selector: ['model', 'structured_output', 'details', 'accepted'] }] };
     const parent = within(address, ['properties', { key: 'details' }]);
     const edited = putProperty(parent, 'accepted', 'approved', { type: 'boolean', description: 'Approval.' }, true)(original);
     expect(schemaTarget(parent, original)).toEqual({ kind: 'node_output', address: { block: [], node: 'model' }, path: [{ kind: 'property', name: 'structured_output' }, { kind: 'property', name: 'details' }] });
-    expect(edited.block.nodes.done).toMatchObject({ output: { path: ['model', 'structured_output', 'details', 'approved'] } });
-    expect(original.block.nodes.done).toMatchObject({ output: { path: ['model', 'structured_output', 'details', 'accepted'] } });
+    expect(edited.block.nodes.done).toMatchObject({ outputs: [{ value_selector: ['model', 'structured_output', 'details', 'approved'] }] });
+    expect(original.block.nodes.done).toMatchObject({ outputs: [{ value_selector: ['model', 'structured_output', 'details', 'accepted'] }] });
     expect(schemaAt(edited, parent)).toMatchObject({ required: ['approved'], properties: { approved: { description: 'Approval.' } } });
   });
 

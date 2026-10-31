@@ -754,6 +754,13 @@
 .reviewActionId { flex: 0 0 120px; }
 .reviewActionTitle { font-family: inherit !important; }
 .reviewAction .iconButton { flex: none; width: 32px; height: 32px; }
+.endOutput { display: flex; align-items: center; gap: 4px; }
+.endOutput .routeIdInput { height: 32px; padding: 0 10px; border-color: transparent; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); font-size: 13px; }
+.endOutput .routeIdInput:hover { border-color: var(--dsw-alias-border-l3); }
+.endOutputName { flex: 0 0 32%; min-width: 0; }
+.endOutput > .referencePicker { flex: 1; min-width: 0; margin-bottom: 0; }
+.endOutput .branchVariableTrigger { width: 100%; min-height: 32px; padding: 0 8px; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); }
+.endOutput .iconButton { flex: none; width: 32px; height: 32px; }
 .reviewTimeout { display: flex; align-items: center; gap: 4px; }
 .nodeSettings > .reviewTimeout .groupHeading { flex: 1; margin: 0; }
 .reviewTimeout .input { width: 72px; height: 32px; }

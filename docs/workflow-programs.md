@@ -22,12 +22,13 @@ freezes all required capabilities before publication; a block never rediscovers 
 
 An executable definition contains `description`, `block`, and trusted `timeout_ms`
 (default 600000). There is no `workspace` key; authoring one is refused. The root
-block contains `input` and `output` JSON Schemas (an omitted one is the empty closed
-object), `nodes`, and `edges`. Exactly one node in each block has `type: start`;
+block contains an `input` JSON Schema (omitted, it is the empty closed object),
+`nodes`, and `edges`. As in Dify, there is no declared output schema: the
+workflow's result is what its Return nodes return (see below). Exactly one node in each block has `type: start`;
 its outgoing edges select the initial work. The node vocabulary is Start, Agent,
 Model, Tool, Branch, Review, Iteration, Loop, Exit Loop (`loop_end`), Variable
 Assigner (`assigner`) and Return. Iteration and Loop own a body, a block with no
-input or output of its own. There is no explicit Parallel node, scalar `entry`
+input of its own. There is no explicit Parallel node, scalar `entry`
 field, callable subworkflow, conversation or independent job.
 
 Parallelism is expressed by multiple edges from the same output port, following
@@ -212,7 +213,9 @@ block:
       result: {type: json, schema: *report}
     done:
       type: return
-      output: {type: reference, path: [check]}
+      outputs:
+        - {variable: exit_code, value_selector: [check, exit_code]}
+        - {variable: stdout, value_selector: [check, stdout]}
   edges: [{from: start, to: check}, {from: check, to: done}]
 ```
 
@@ -362,11 +365,6 @@ block:
     properties: {text: {type: string}}
     required: [text]
     additionalProperties: false
-  output:
-    type: object
-    properties: {clarity: {type: string}, brevity: {type: string}}
-    required: [clarity, brevity]
-    additionalProperties: false
   nodes:
     start: {type: start}
     clarity:
@@ -383,11 +381,9 @@ block:
       output: {type: text}
     done:
       type: return
-      output:
-        type: object
-        fields:
-          clarity: {type: reference, path: [clarity, text]}
-          brevity: {type: reference, path: [brevity, text]}
+      outputs:
+        - {variable: clarity, value_selector: [clarity, text]}
+        - {variable: brevity, value_selector: [brevity, text]}
   edges:
     - {from: start, to: clarity}
     - {from: start, to: brevity}
@@ -415,9 +411,30 @@ has no Return. Every incoming
 edge is resolved as selected or skipped. A join runs once, after all incoming
 paths resolve, if any incoming edge is selected. An inactive path never executes.
 All admitted work settles before the block returns. Multiple active Returns
-must each satisfy the block output contract; their object fields are merged in
-node ID order, and conflicting values for the same field fail the block. Use
-one explicit join Return when collecting distinct sibling outputs.
+merge their fields in node ID order, and conflicting values for the same field
+fail the block. Use one explicit join Return when collecting distinct sibling
+outputs.
+
+### Return (Dify's End)
+
+Return is the last node of its path: it has no outgoing edge, and the editor
+offers no next step after it. Its `outputs` are Dify's output variables, each a
+`variable` name and the `value_selector` path it reads:
+
+```yaml
+done:
+  type: return
+  outputs:
+    - {variable: summary, value_selector: [summarize, text]}
+    - {variable: passed, value_selector: [check, passed]}
+```
+
+The run's result is the JSON object of those fields, and it is what the calling
+Agent receives as the workflow tool's result. Names are unique local keys; each
+selector must name a variable available at the Return. The workflow's output
+schema is derived: every Return's fields, a field required when every Return
+has it. Two Returns may share a field only when one's type admits the other's,
+and the wider type is kept. A Return with no outputs returns `{}`.
 
 A producer is available to a consumer only if it is an ancestor and every
 possible activation of the consumer also activates the producer. The compiler
@@ -460,7 +477,7 @@ Values are a closed tagged AST:
 | `array` | `items: [<value expression>, ...]` | Atomic array construction |
 | `template` | `parts: [<string literal or reference>, ...]` | One string rendered from its parts |
 
-A Loop variable's `value` and a Return's `output` are each one value expression. An Agent's `task`,
+A Loop variable's `value` is one value expression. An Agent's `task`,
 like a Model message's `content`, is a list of fixed string literals and
 references, rendered in order when the AgentRun starts: a string is inserted
 as itself, any other value as JSON text. The task is the only way workflow
@@ -730,7 +747,7 @@ See [run projection](workflow-run-projection.md) and [product conformance](workf
 ## Loop, Iteration, Exit Loop and Variable Assigner
 
 These follow Dify's Loop, Iteration, Exit Loop and Variable Assigner nodes. A
-body is a graph with its own Start and no input, output or Return:
+body is a graph with its own Start and no input or Return:
 
 ```yaml
 repair:
@@ -828,7 +845,7 @@ handoff or rollback, and no implicit Git discovery, allocation or preparation:
 - Concurrent graph paths take no lock beyond existing native scheduling. Concurrent
   writers to the same files are the author's responsibility, exactly as for
   concurrent Tools in an Agent turn.
-- A successful run returns exactly the declared output value. Failure and
+- A successful run returns exactly the object its active Returns build. Failure and
   cancellation return the native terminal status with no workspace settlement.
 
 Agent physical settlement (process containment and nested-unit proof) remains
@@ -865,8 +882,9 @@ that plan, and an explicit Branch on `accepted` routes rejection to the declared
 `rejected` Return. Only the accepted branch reaches the bounded
 implementation/check Loop; its Assigners record the checker's verdict and
 feedback in loop variables, it breaks once `passed` holds, and a Branch on
-`repair.passed` returns `implemented` or, after three rounds, `needs_revision`. Every Return satisfies the declared
-output schema. The plan is data and cannot change the fixed graph or capability
+`repair.passed` reaches the Return for a passing or an exhausted repair; each
+returns the loop's `passed` and `feedback`, and a rejected plan returns the
+Human Input's action. The plan is data and cannot change the fixed graph or capability
 selectors.
 
 There are three distinct contracts:

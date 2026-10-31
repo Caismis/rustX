@@ -10,22 +10,6 @@ block:
     required:
     - requirement
     additionalProperties: false
-  output:
-    type: object
-    properties:
-      status:
-        type: string
-        enum:
-        - implemented
-        - rejected
-        - needs_revision
-        - unanswered
-      feedback:
-        type: string
-    required:
-    - status
-    - feedback
-    additionalProperties: false
   nodes:
     start:
       type: start
@@ -310,48 +294,22 @@ block:
           port: 'false'
     implemented:
       type: return
-      output:
-        type: object
-        fields:
-          status:
-            type: literal
-            value: implemented
-          feedback:
-            type: reference
-            path:
-            - repair
-            - feedback
+      outputs:
+      - {variable: passed, value_selector: [repair, passed]}
+      - {variable: feedback, value_selector: [repair, feedback]}
     rejected_plan:
       type: return
-      output:
-        type: object
-        fields:
-          status:
-            type: literal
-            value: rejected
-          feedback:
-            type: literal
-            value: The plan was not approved.
+      outputs:
+      - {variable: plan_decision, value_selector: [review_plan, action]}
     exhausted:
       type: return
-      output:
-        type: object
-        fields:
-          status:
-            type: literal
-            value: needs_revision
-          feedback:
-            type: reference
-            path:
-            - repair
-            - feedback
+      outputs:
+      - {variable: passed, value_selector: [repair, passed]}
+      - {variable: feedback, value_selector: [repair, feedback]}
     declined:
       type: return
-      output:
-        type: literal
-        value:
-          status: unanswered
-          feedback: Questionnaire declined; no implementation requested.
+      outputs:
+      - {variable: answers, value_selector: [intake_brief, answers]}
     intake_brief:
       type: loop
       loop_count: 1

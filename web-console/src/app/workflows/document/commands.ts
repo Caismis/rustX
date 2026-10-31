@@ -62,7 +62,7 @@ export function nodeTemplate(kind: NodeKind, id: string = kind): NodeDefinition 
     case 'iteration': return { type: 'iteration', iterator: { type: 'reference', path: [] }, output: { type: 'reference', path: [] }, parallel_nums: 10, body: emptyBody(`${id}_start`) };
     case 'loop_end': return { type: 'loop_end' };
     case 'assigner': return { type: 'assigner', items: [] };
-    case 'return': return { type: 'return', output: { type: 'literal', value: {} } };
+    case 'return': return { type: 'return', outputs: [] };
   }
 }
 

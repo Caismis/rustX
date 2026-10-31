@@ -6,7 +6,7 @@ fn cfg274_agent_source() -> WorkflowProgram {
     let agent = json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],"output":{"type":"json_schema","schema":schema(json!({}), &[])}});
     WorkflowProgram::compile(WorkflowId::parse("review").unwrap(), serde_json::from_value(json!({
         "description":"Static review", "block": {
-            "input":schema(json!({}), &[]), "output":schema(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},"agent":agent,"done":{"type":"return","output":{"type":"literal","value":{}}}},"edges": [{"from":"workflow_start","to":"agent"},{"from":"agent","to":"done"}],}
+            "input":schema(json!({}), &[]), "nodes": {"workflow_start":{"type":"start"},"agent":agent,"done":{"type":"return","outputs":[]}},"edges": [{"from":"workflow_start","to":"agent"},{"from":"agent","to":"done"}],}
     })).unwrap()).unwrap()
 }
 
@@ -600,11 +600,11 @@ fn tool_node_admission_is_capability_plane_selection_without_agents() {
     let program = |name: &str| {
         WorkflowProgram::compile(WorkflowId::parse("verify").unwrap(), serde_json::from_value(json!({
             "description":"Source verification", "block": {
-                "input":schema(json!({}), &[]), "output":schema(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},
+                "input":schema(json!({}), &[]), "nodes": {"workflow_start":{"type":"start"},
                     "check":{"type":"tool","selector":{"origin":"source","source_id":"github","name":name},
                         "arguments":{"type":"literal","value":{}},
                         "result":{"type":"json","schema":{"type":"object"}}},
-                    "done":{"type":"return","output":{"type":"literal","value":{}}}
+                    "done":{"type":"return","outputs":[]}
                 },"edges": [{"from":"workflow_start","to":"check"},{"from":"check","to":"done"}],}
         })).unwrap()).unwrap()
     };

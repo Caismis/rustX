@@ -49,7 +49,7 @@ function node(input: NodeDefinition, rewrite: PathRewrite): NodeDefinition {
       ...(input.break_condition ? { break_condition: predicate(input.break_condition, rewrite) } : {}), body: rewriteBlockReferences(input.body, rewrite) };
     case 'iteration': return { ...input, iterator: value(input.iterator, rewrite), output: value(input.output, rewrite), body: rewriteBlockReferences(input.body, rewrite) };
     case 'assigner': return { ...input, items: input.items.map(item => ({ ...item, variable: rewrite(item.variable) ?? item.variable, ...(item.value ? { value: value(item.value, rewrite) } : {}) })) };
-    case 'return': return { ...input, output: value(input.output, rewrite) };
+    case 'return': return { ...input, outputs: input.outputs.map(item => ({ ...item, value_selector: rewrite(item.value_selector) ?? item.value_selector })) };
   }
 }
 

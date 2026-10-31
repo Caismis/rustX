@@ -9,14 +9,6 @@ block:
     required:
     - question
     additionalProperties: false
-  output:
-    type: object
-    properties:
-      answer:
-        type: string
-    required:
-    - answer
-    additionalProperties: false
   nodes:
     start:
       type: start
@@ -31,10 +23,8 @@ block:
       output: {type: text}
     return_answer:
       type: return
-      output:
-        type: object
-        fields:
-          answer: {type: reference, path: [answer, text]}
+      outputs:
+      - {variable: answer, value_selector: [answer, text]}
   edges:
   - from: start
     to: answer

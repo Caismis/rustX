@@ -153,7 +153,10 @@ function node(input: unknown): void {
       }
       return;
     }
-    case 'return': keys(record, ['type', 'output']); value(record.output); return;
+    case 'return':
+      keys(record, ['type', 'outputs']);
+      for (const item of array(record.outputs)) { const output = keys(item, ['variable', 'value_selector']); text(output.variable); array(output.value_selector).forEach(text); }
+      return;
     case 'review': {
       keys(record, ['type', 'content', 'actions', 'timeout_ms']); array(record.content).forEach(value);
       if (typeof record.timeout_ms !== 'string' || !/^[1-9]\d*$/.test(record.timeout_ms)) fail();
@@ -193,7 +196,7 @@ function node(input: unknown): void {
 }
 function edges(input: unknown): void { for (const item of array(input ?? [])) { const edge = keys(item, ['from', 'to', 'port']); text(edge.from); text(edge.to); if (edge.port != null && typeof edge.port !== 'boolean' && (typeof edge.port !== 'string' || validLocalKey(edge.port))) fail(); } }
 function nodes(input: unknown): void { for (const [id, item] of Object.entries(object(input))) { if (validNodeId(id)) fail(); node(item); } }
-function block(input: unknown): void { const record = keys(input, ['input', 'output', 'nodes', 'edges']); if (record.input !== undefined) object(record.input); if (record.output !== undefined) object(record.output); nodes(record.nodes); edges(record.edges); }
+function block(input: unknown): void { const record = keys(input, ['input', 'nodes', 'edges']); if (record.input !== undefined) object(record.input); nodes(record.nodes); edges(record.edges); }
 
 /** This is a bounded transport-shape decoder, not a reachability/type proof.
  * Native authoring remains the only authority for program validity. */
@@ -226,7 +229,7 @@ export function parseFragment(source: string): Fragment {
     const order = keys(item, ['target', 'fields']), target = object(order.target), fields = array(order.fields); fields.forEach(text); unique(fields, value => value);
     if (fields.length > 256 || fields.some(field => !field || utf8Length(field as string) > 64)) fail();
     if (target.kind === 'node_output') { keys(target, ['kind', 'address', 'path']); address(target.address); }
-    else if (['block_input', 'block_output'].includes(target.kind as string)) { keys(target, ['kind', 'block', 'path']); path(target.block); } else fail();
+    else if (target.kind === 'block_input') { keys(target, ['kind', 'block', 'path']); path(target.block); } else fail();
     const steps = array(target.path); if (steps.length > 32) fail();
     for (const step of steps) { const part = object(step); if (part.kind === 'property') { keys(part, ['kind', 'name']); text(part.name); if (!part.name || utf8Length(part.name) > 64) fail(); } else if (part.kind === 'items') keys(part, ['kind']); else fail(); }
   }
@@ -247,7 +250,7 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
     if (!within(at, fragment.block) || at.length <= fragment.block.length) fail();
   }
   const ids = Object.keys(fragment.nodes).sort(), original = new Set(ids);
-  const block: Block = { input: {}, output: {}, nodes: fragment.nodes, edges: fragment.edges };
+  const block: Block = { input: {}, nodes: fragment.nodes, edges: fragment.edges };
   if ((source !== fragment.source || !sameBlockPath(path, fragment.block)) && blockReferences(block).some(reference => !original.has(reference[0]))) throw new CommandRejected('cross_scope');
   const names = new Map<string, string>(); let reserved = destination;
   for (const id of ids) {

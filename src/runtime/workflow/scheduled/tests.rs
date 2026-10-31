@@ -89,7 +89,7 @@ fn program(input: &Inputs<'_>) -> WorkflowProgram {
     if matches!(input.kind, NodeKind::PureReturn) {
         return WorkflowProgram::compile(id(),serde_json::from_value(json!({"description":input.description,"block":{
             "input":{"type":"object","properties":{"task":{"type":"string"}},"required":["task"],"additionalProperties":false},
-            "output":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false},"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","output":{"type":"literal","value":{"answer":"durable"}}}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap()).unwrap();
+            "nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[{"variable":"answer","value_selector":["args","task"]}]}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap()).unwrap();
     }
     let empty: Value = serde_json::from_str(EMPTY).unwrap();
     let work = match input.kind {
@@ -111,7 +111,7 @@ fn program(input: &Inputs<'_>) -> WorkflowProgram {
         "description":input.description,
         "block":{
             "input":{"type":"object","properties":{"task":{"type":"string"}},"required":["task"],"additionalProperties":false},
-            "output":empty,"nodes": {"workflow_start":{"type":"start"},"work":work,"done":{"type":"return","output":{"type":"literal","value":{}}}},"edges": [{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}],}
+            "nodes": {"workflow_start":{"type":"start"},"work":work,"done":{"type":"return","outputs":[]}},"edges": [{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}],}
     })).unwrap();
     if input.nested {
         let body = json!({"nodes": {"inner_start":{"type":"start"},"work":work},
@@ -121,9 +121,9 @@ fn program(input: &Inputs<'_>) -> WorkflowProgram {
             "edges": [{"from":"outer_start","to":"repeat"}]});
         let branch = json!({"type":"loop","loop_count":1,"body":repeat});
         definition.block = serde_json::from_value(json!({
-        "input":definition.block.input,"output":empty,"nodes": {
+        "input":definition.block.input,"nodes": {
             "workflow_start":{"type":"start"},"alpha":branch,"beta":branch,
-            "done":{"type":"return","output":{"type":"literal","value":{}}}
+            "done":{"type":"return","outputs":[]}
         },"edges": [
             {"from":"workflow_start","to":"alpha"},{"from":"workflow_start","to":"beta"},
             {"from":"alpha","to":"done"},{"from":"beta","to":"done"}

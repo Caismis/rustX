@@ -22,7 +22,7 @@ automatically composed Root-only capability group.
   no worktree, branch or copy. A missing or unusable binding fails before any
   allocation, with no fallback directory and no replacement directory.
 - **Workflows.** A Workflow owns no workspace resource. Agent and Tool nodes act
-  in the shared workspace; a successful run returns exactly its declared output.
+  in the shared workspace; a successful run returns exactly the object its Return outputs build.
   See [the Workflow contract](workflow-programs.md#shared-session-workspace-issue-462).
 - **Human Input.** The person chooses one of the node's actions, and the run
   continues through that action's exit; the node takes no filesystem lease and

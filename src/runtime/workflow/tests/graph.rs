@@ -1,10 +1,8 @@
 //! Multi-edge graphs use native nodes; no authored container owns parallelism.
 use super::*;
-fn literal_return() -> WorkflowNodeDefinition {
+fn empty_return() -> WorkflowNodeDefinition {
     WorkflowNodeDefinition::Return {
-        output: WorkflowValue::Literal {
-            value: json!({"message":"ok"}),
-        },
+        outputs: Vec::new(),
     }
 }
 fn decision() -> WorkflowNodeDefinition {
@@ -23,13 +21,12 @@ fn sibling_graph() -> WorkflowDefinition {
         timeout_ms: 60_000,
         block: WorkflowBlock {
             input: schema(json!({}), &[]),
-            output: schema(json!({"message":{"type":"string"}}), &["message"]),
             nodes: BTreeMap::from([
                 ("start".into(), WorkflowNodeDefinition::Start {}),
                 ("left".into(), decision()),
                 ("right".into(), decision()),
-                ("done".into(), literal_return()),
-                ("skipped".into(), literal_return()),
+                ("done".into(), empty_return()),
+                ("skipped".into(), empty_return()),
             ]),
             edges: vec![
                 edge("start", "left"),
@@ -45,10 +42,7 @@ fn sibling_graph() -> WorkflowDefinition {
 #[test]
 fn real_start_and_every_port_allow_distinct_targets_but_never_duplicate_edges() {
     let mut definition = sibling_graph();
-    definition
-        .block
-        .nodes
-        .insert("also".into(), literal_return());
+    definition.block.nodes.insert("also".into(), empty_return());
     definition
         .block
         .edges
@@ -88,10 +82,6 @@ fn join_sees_both_parallel_producers_but_not_an_optional_conditional_producer() 
             ])),
         ),
     ]);
-    definition.block.output = schema(
-        json!({"left":{"type":"string"},"right":{"type":"string"}}),
-        &["left", "right"],
-    );
     definition.block.edges = vec![
         edge("start", "left"),
         edge("start", "right"),
@@ -139,7 +129,7 @@ async fn joins_wait_for_selected_paths_run_once_and_skip_inactive_returns() {
         )
         .await
         .unwrap();
-    assert_eq!(result, json!({"message":"ok"}));
+    assert_eq!(result, json!({}));
     let snapshot = runtime.read_model.snapshot();
     let rows = &snapshot.runs[0].instances;
     assert_eq!(
@@ -200,20 +190,13 @@ async fn ordered_cases_take_only_the_first_match_and_otherwise_else() {
             ("elif", WorkflowPort::case("second")),
             ("else", WorkflowPort::False),
         ] {
-            definition.block.nodes.insert(
-                id.into(),
-                WorkflowNodeDefinition::Return {
-                    output: WorkflowValue::Literal {
-                        value: json!({"message":id}),
-                    },
-                },
-            );
+            definition.block.nodes.insert(id.into(), empty_return());
             definition.block.edges.push(branch_edge("choose", id, port));
         }
         let plane = workflow_test_plane(1);
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
-        let result = runtime
+        runtime
             .run_test_foreground(
                 Arc::new(compile_test(definition.clone()).unwrap()),
                 ToolCallId::new("ordered-cases"),
@@ -223,7 +206,6 @@ async fn ordered_cases_take_only_the_first_match_and_otherwise_else() {
             )
             .await
             .unwrap();
-        assert_eq!(result, json!({"message":expected}));
         let nodes = runtime.read_model.snapshot().runs[0]
             .instances
             .iter()

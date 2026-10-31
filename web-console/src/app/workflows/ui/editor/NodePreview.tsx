@@ -9,13 +9,6 @@ interface Row { label: string; value: string; reference?: readonly string[]; bad
 
 const valueRow = (label: string, value: Value): Row => ({ label, value: valueText(value), reference: value.type === 'reference' ? value.path : undefined });
 
-function objectRows(value: Value, fallback: string): Row[] {
-  if (value.type === 'object' && Object.keys(value.fields).length) return Object.entries(value.fields).slice(0, 3).map(([label, item]) => valueRow(label, item));
-  if (value.type === 'literal' && value.value && typeof value.value === 'object' && !Array.isArray(value.value))
-    return Object.entries(value.value).length ? Object.entries(value.value).slice(0, 3).map(([label, item]) => ({ label, value: valueText({ type: 'literal', value: item }) })) : [{ label: fallback, value: '{}' }];
-  return [valueRow(fallback, value)];
-}
-
 // Tool declarations do not reveal which arguments are secrets. Dify masks
 // secret parameters on the card; only reference paths are safe to preview here.
 function toolArgument(tx: Translate, label: string, value: Value): Row {
@@ -47,14 +40,16 @@ function rows(tx: Translate, node: PreviewNode): Row[] {
     case 'assigner': return node.items.length ? node.items.slice(0, 3).map(item => ({ label: item.variable.join('.'), value: tx(`workflows:assigner.op-${item.operation}`) }))
       : [{ label: tx('workflows:assigner.variables'), value: tx('workflows:assigner.unset') }];
     case 'loop_end': return [];
-    case 'return': return objectRows(node.output, tx('workflows:card.output'));
+    // As Dify's End card: each chosen variable, without its name.
+    case 'return': return node.outputs.filter(output => output.value_selector.length)
+      .map(output => ({ label: '', value: output.value_selector.join('.'), reference: output.value_selector }));
   }
 }
 
 /** Dify-style compact configuration rows, derived directly from native nodes. */
 export function NodePreview({ tx, node, sources }: { tx: Translate; node: PreviewNode; sources: VariableSources }) {
-  return <div className={css.nodePreview} data-node-preview>{rows(tx, node).map((row, index) => <div className={css.nodePreviewRow} key={`${row.label}:${index}`} title={`${row.label}: ${row.value}`}>
-    <span className={css.nodePreviewLabel}>{row.label}</span>
+  return <div className={css.nodePreview} data-node-preview>{rows(tx, node).map((row, index) => <div className={css.nodePreviewRow} key={`${row.label}:${index}`} title={row.label ? `${row.label}: ${row.value}` : row.value}>
+    {row.label && <span className={css.nodePreviewLabel}>{row.label}</span>}
     {row.reference ? <VariableLabel tx={tx} sources={sources} path={row.reference} className={css.nodePreviewReference} /> : <span className={css.nodePreviewValue}>{row.value}</span>}
     {row.badge && <span className={css.nodePreviewBadge}>{row.badge}</span>}
   </div>)}</div>;

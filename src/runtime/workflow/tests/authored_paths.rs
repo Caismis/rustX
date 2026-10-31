@@ -9,7 +9,6 @@ fn graph(node: WorkflowNodeDefinition, edges: Vec<WorkflowEdgeDefinition>) -> Wo
             ("done".into(), return_node(BTreeMap::new())),
         ]),
         edges,
-        schema(json!({}), &[]),
     )
 }
 
@@ -113,13 +112,8 @@ fn cycle_selects_lexicographically_smallest_kahn_residual() {
             nodes.reverse();
             edges.reverse();
         }
-        let error = compile_test(base_definition(
-            "entry",
-            nodes.into_iter().collect(),
-            edges,
-            schema(json!({}), &[]),
-        ))
-        .unwrap_err();
+        let error =
+            compile_test(base_definition("entry", nodes.into_iter().collect(), edges)).unwrap_err();
         assert_eq!(error.path(), "block.nodes.a");
         assert_eq!(
             error.cause(),

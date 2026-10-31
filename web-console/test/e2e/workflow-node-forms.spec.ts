@@ -58,7 +58,7 @@ test('shows each native node in the Dify-style card and grouped settings panel',
     document.block.nodes.tool = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: { path: { type: 'reference', path: ['args', 'topic'] }, token: { type: 'literal', value: 'super-secret' } } }, result: { type: 'text' } };
     document.block.nodes.review = { type: 'review', content: [{ type: 'literal', value: 'Approve ' }, { type: 'reference', path: ['model', 'text'] }], actions: [{ id: 'approve', title: 'Approve' }], timeout_ms: '3600000' };
     document.block.nodes.loop = { type: 'loop', loop_count: 3, body: { nodes: { loop_start: { type: 'start' } }, edges: [] } };
-    document.block.nodes.done = { type: 'return', output: { type: 'object', fields: { summary: { type: 'reference', path: ['model', 'text'] }, status: { type: 'literal', value: 'ready' } } } };
+    document.block.nodes.done = { type: 'return', outputs: [{ variable: 'summary', value_selector: ['model', 'text'] }] };
     document.block.edges = [{ from: 'start', to: 'agent' }, { from: 'agent', to: 'model' }, { from: 'model', to: 'tool' }, { from: 'tool', to: 'review' }, { from: 'review', to: 'loop', port: 'approve' }, { from: 'review', to: 'done', port: 'timeout' }, { from: 'loop', to: 'done' }];
     const positions: [string, number, number][] = [['agent', 340, 80], ['model', 690, 80], ['tool', 1040, 80], ['review', 340, 400], ['loop', 690, 400], ['done', 1040, 400]];
     for (const [id, x, y] of positions) document = setNodePresentation(document, [], id, { title: id, description: id === 'model' ? 'Configure model here.\nWrite a concise response.' : `Configure ${id} here.`, position: { x, y } });
@@ -78,10 +78,11 @@ test('shows each native node in the Dify-style card and grouped settings panel',
       { id: 'model', kind: 'model', row: 'Follow Attempt model', section: 'Output variables' },
       { id: 'tool', kind: 'tool', row: 'path', section: 'Tool configuration' },
       { id: 'loop', kind: 'loop', row: '3', section: 'Loop Variables' },
-      { id: 'done', kind: 'return', row: 'summary', section: 'Output contract' },
+      { id: 'done', kind: 'return', row: 'text', section: 'Output variables' },
     ];
     for (const { id, kind, row, section } of cases) {
-      const card = canvas(page).getByLabel(`${kind[0].toUpperCase()}${kind.slice(1)} node ${id}`, { exact: true });
+      const label = kind === 'return' ? 'Output' : `${kind[0].toUpperCase()}${kind.slice(1)}`;
+      const card = canvas(page).getByLabel(`${label} node ${id}`, { exact: true });
       await card.focus(); await card.press('Enter');
       if (id === 'loop') await card.getByRole('button', { name: 'Collapse loop' }).click();
       await expect(card.locator('[data-node-preview]')).toContainText(row);

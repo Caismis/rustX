@@ -404,12 +404,6 @@ pub struct WorkflowBlock {
         skip_serializing_if = "is_default_schema"
     )]
     pub input: Value,
-    /// The workflow output JSON Schema.
-    #[serde(
-        default = "empty_object_schema",
-        skip_serializing_if = "is_default_schema"
-    )]
-    pub output: Value,
     /// Stable node definitions keyed by explicit node id.
     #[serde(deserialize_with = "deserialize_unique_map")]
     pub nodes: BTreeMap<String, WorkflowNodeDefinition>,
@@ -526,11 +520,18 @@ pub enum WorkflowNodeDefinition {
     },
     /// Ordered IF / ELIF cases, followed by the false (ELSE) port.
     Branch { cases: Vec<WorkflowBranchCase> },
-    /// Constructs a value and completes exactly this owning block.
-    Return {
-        /// The owning block's declared result.
-        output: WorkflowValue,
-    },
+    /// As Dify's End: the workflow's result, one field per output variable.
+    /// It is the last node; nothing follows it.
+    Return { outputs: Vec<WorkflowReturnOutput> },
+}
+
+/// As Dify's End output variable: a result field and the variable it reads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
+pub struct WorkflowReturnOutput {
+    pub variable: String,
+    pub value_selector: Vec<String>,
 }
 
 fn empty_object_schema() -> Value {
@@ -1721,9 +1722,9 @@ fn compile_body(
     total_nodes: &mut usize,
     container: &Container,
 ) -> Result<(WorkflowBlockProgram, SchemaMap), WorkflowCompileError> {
-    if !is_empty_object_schema(&body.input) || !is_empty_object_schema(&body.output) {
+    if !is_empty_object_schema(&body.input) {
         return Err(WorkflowCompileError::InvalidField(
-            "a body declares no input or output; it reads the variables around it".into(),
+            "a body declares no input; it reads the variables around it".into(),
         )
         .at("body"));
     }
@@ -1754,7 +1755,6 @@ fn compile_block(
         ));
     }
     validate_root_schema(&definition.input, "input").map_err(|e| e.at("input"))?;
-    validate_root_schema(&definition.output, "output").map_err(|e| e.at("output"))?;
     let base = container.map_or_else(
         || SchemaMap::from_schema(&definition.input),
         |container| container.base.clone(),
@@ -1775,6 +1775,7 @@ fn compile_block(
 
     let mut nodes = BTreeMap::new();
     let mut available_after: BTreeMap<String, SchemaMap> = BTreeMap::new();
+    let mut returned = Vec::new();
     for node_id in topological {
         let node = definition
             .nodes
@@ -2073,7 +2074,7 @@ fn compile_block(
                 available_after.insert(node_id.clone(), available_before.clone());
                 WorkflowNodeProgram::Branch { cases: cases.clone() }
             }
-            WorkflowNodeDefinition::Return { output } => {
+            WorkflowNodeDefinition::Return { outputs } => {
                 if container.is_some() {
                     return Err(WorkflowCompileError::InvalidField(
                         "Return ends the workflow; a body ends where its nodes do".into(),
@@ -2084,16 +2085,10 @@ fn compile_block(
                         "Return node {node_id:?} cannot have outgoing edges"
                     )));
                 }
-                let actual = value_schema(output, &available_before, &node_id, 0).map_err(|e| e.at("output"))?;
-                if !schemas_compatible(&actual, &definition.output) {
-                    return Err(WorkflowCompileError::IncompatibleReference(format!(
-                        "Return {node_id} output contract mismatch"
-                    )).at("output"));
-                }
+                let (output, schema) = return_output(outputs, &available_before, &node_id)?;
+                returned.push(schema);
                 available_after.insert(node_id.clone(), available_before.clone());
-                WorkflowNodeProgram::Return {
-                    output: output.clone(),
-                }
+                WorkflowNodeProgram::Return { output }
             }
         }) })().map_err(|e: WorkflowCompileError| e.at(format!("nodes.{node_id}")))?;
         let edges = &outgoing[&node_id];
@@ -2125,7 +2120,7 @@ fn compile_block(
     Ok(WorkflowBlockProgram {
         path,
         input_schema: definition.input,
-        output_schema: definition.output,
+        output_schema: merge_return_schemas(&returned)?,
         entry,
         nodes,
         outgoing,
@@ -2731,6 +2726,75 @@ fn validate_agent(
 }
 
 /// Ports a Branch case or an Agent route cannot be named after.
+/// As Dify's End: each output variable a unique field read from a variable.
+/// The value is the object those fields make, and its schema.
+fn return_output(
+    outputs: &[WorkflowReturnOutput],
+    available: &SchemaMap,
+    node: &str,
+) -> Result<(WorkflowValue, Value), WorkflowCompileError> {
+    let (mut fields, mut properties) = (BTreeMap::new(), serde_json::Map::new());
+    for (index, output) in outputs.iter().enumerate() {
+        if !valid_local_key(&output.variable) || fields.contains_key(&output.variable) {
+            return Err(WorkflowCompileError::InvalidField(
+                "output variables must be unique valid local keys".into(),
+            )
+            .at(format!("outputs.{index}.variable")));
+        }
+        let value = WorkflowValue::Reference {
+            path: output.value_selector.clone(),
+        };
+        let schema = value_schema(&value, available, node, 0)
+            .map_err(|e| e.at(format!("outputs.{index}.value_selector")))?;
+        properties.insert(output.variable.clone(), schema);
+        fields.insert(output.variable.clone(), value);
+    }
+    let required = fields.keys().cloned().collect::<Vec<_>>();
+    Ok((
+        WorkflowValue::Object { fields },
+        serde_json::json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false}),
+    ))
+}
+
+/// The workflow's output: every Return's fields, required when every Return
+/// has it. A field two Returns share must have one type.
+fn merge_return_schemas(returned: &[Value]) -> Result<Value, WorkflowCompileError> {
+    let Some((first, rest)) = returned.split_first() else {
+        return Ok(empty_object_schema());
+    };
+    let mut merged = first.clone();
+    for schema in rest {
+        for (key, property) in schema["properties"].as_object().into_iter().flatten() {
+            let properties = merged["properties"].as_object_mut().expect("object schema");
+            // The wider of the two, when one admits every value of the other.
+            match properties.get(key) {
+                Some(existing) if schemas_compatible(property, existing) => {}
+                Some(existing) if !schemas_compatible(existing, property) => {
+                    return Err(WorkflowCompileError::IncompatibleReference(format!(
+                        "Return nodes give output {key:?} different types"
+                    )));
+                }
+                _ => {
+                    properties.insert(key.clone(), property.clone());
+                }
+            }
+        }
+        let required = merged["required"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|key| {
+                schema["required"]
+                    .as_array()
+                    .is_some_and(|keys| keys.contains(key))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        merged["required"] = Value::Array(required);
+    }
+    Ok(merged)
+}
+
 fn validate_review(
     content: &[WorkflowValue],
     actions: &[WorkflowReviewAction],
@@ -4497,6 +4561,15 @@ mod tests {
     #[cfg(unix)]
     use crate::tools::mcp::McpRuntimeLeaseAuthority;
 
+    /// An End returning these fields of `node`, each under its own name.
+    fn returns(node: &str, fields: &[&str]) -> Value {
+        let outputs = fields
+            .iter()
+            .map(|field| json!({"variable":field,"value_selector":[node,field]}))
+            .collect::<Vec<_>>();
+        json!({"type":"return","outputs":outputs})
+    }
+
     #[allow(clippy::needless_pass_by_value)]
     fn schema(properties: Value, required: &[&str]) -> Value {
         json!({
@@ -4548,9 +4621,19 @@ mod tests {
     }
 
     fn return_node(output: BTreeMap<String, WorkflowValue>) -> WorkflowNodeDefinition {
-        WorkflowNodeDefinition::Return {
-            output: WorkflowValue::Object { fields: output },
-        }
+        let outputs = output
+            .into_iter()
+            .map(|(variable, value)| {
+                let WorkflowValue::Reference { path } = value else {
+                    panic!("an End output reads a variable")
+                };
+                WorkflowReturnOutput {
+                    variable,
+                    value_selector: path,
+                }
+            })
+            .collect();
+        WorkflowNodeDefinition::Return { outputs }
     }
 
     fn edge(from: &str, to: &str) -> WorkflowEdgeDefinition {
@@ -4573,14 +4656,12 @@ mod tests {
         entry: &str,
         nodes: BTreeMap<String, WorkflowNodeDefinition>,
         edges: Vec<WorkflowEdgeDefinition>,
-        output: Value,
     ) -> WorkflowDefinition {
         WorkflowDefinition {
             timeout_ms: 600_000,
             description: "Test workflow".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"task": {"type": "string"}}), &["task"]),
-                output,
                 nodes: {
                     let mut nodes: std::collections::BTreeMap<
                         String,
@@ -4905,7 +4986,6 @@ chat_reasoning_replay = "omit"
                 timeout_ms: 600_000,
                 block: WorkflowBlock {
                     input: schema(json!({"task":{"type":"string"}}), &["task"]),
-                    output: schema(Value::Object(properties), keys),
                     nodes,
                     edges,
                 },
@@ -4938,7 +5018,6 @@ chat_reasoning_replay = "omit"
                 ),
             ]),
             vec![edge("work", "done")],
-            schema(json!({result_field:output}), &[result_field]),
         );
         definition.description = description.into();
         definition.block.input = schema(json!({}), &[]);
@@ -4959,7 +5038,6 @@ chat_reasoning_replay = "omit"
                     description: "Event journal test workflow".to_owned(),
                     block: WorkflowBlock {
                         input: output.clone(),
-                        output: output.clone(),
                         nodes: {
                             let mut nodes: std::collections::BTreeMap<
                                 String,
@@ -5019,13 +5097,13 @@ chat_reasoning_replay = "omit"
                         ("work".into(), agent(output.clone())),
                         (
                             "done".into(),
-                            WorkflowNodeDefinition::Return {
-                                output: reference("work"),
-                            },
+                            return_node(BTreeMap::from([(
+                                "summary".to_owned(),
+                                reference("work.summary"),
+                            )])),
                         ),
                     ]),
                     vec![edge("work", "done")],
-                    output,
                 ))
                 .unwrap(),
             );
@@ -5661,7 +5739,7 @@ chat_reasoning_replay = "omit"
             assert_eq!(
                 result,
                 json!({
-                    "parallel": {"left": {"echo": "verified"}, "right": {"echo": "verified"}},
+                    "left": {"echo": "verified"}, "right": {"echo": "verified"},
                     "loop": {"count": if broken {0} else {3}, "echo": "verified"}
                 })
             );
@@ -5689,10 +5767,8 @@ chat_reasoning_replay = "omit"
         ))
         .unwrap();
         for case in cases.as_array().unwrap() {
-            let empty =
-                json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
             let definition: WorkflowDefinition = serde_json::from_value(json!({"description":"Renamed finite contract","block":{
-                "input":case["after"],"output":empty,"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","output":{"type":"object","fields":{}}}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap();
+                "input":case["after"],"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[]}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap();
             let program = Arc::new(compile_test(definition).expect("renamed contract compiles"));
             let plane = workflow_test_plane(1);
             let runtime = workflow_runtime(&plane);
@@ -5738,10 +5814,8 @@ chat_reasoning_replay = "omit"
         ))
         .unwrap();
         for case in cases.as_array().unwrap() {
-            let empty =
-                json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
             let definition: WorkflowDefinition = serde_json::from_value(json!({"description":"Preserved finite contract","block":{
-                "input":case["schema"],"output":empty,"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","output":{"type":"object","fields":{}}}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap();
+                "input":case["schema"],"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[]}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap();
             let program = Arc::new(compile_test(definition).expect("preserved contract compiles"));
             let plane = workflow_test_plane(1);
             let runtime = workflow_runtime(&plane);
@@ -5773,10 +5847,6 @@ chat_reasoning_replay = "omit"
                 return_node(BTreeMap::from([("tone".into(), reference("args.tone"))])),
             )]),
             Vec::new(),
-            schema(
-                json!({"tone": {"type": "string", "maxLength": 16}}),
-                &["tone"],
-            ),
         );
         definition.block.input = schema(json!({"tone": tone}), &[]);
         definition
@@ -5792,11 +5862,6 @@ chat_reasoning_replay = "omit"
             (
                 json!({"type": "string", "maxLength": 8}),
                 "unavailable field",
-            ),
-            (json!({"type": "string", "default": "formal"}), ""),
-            (
-                json!({"type": "string", "maxLength": 32, "default": "formal"}),
-                "",
             ),
             (
                 json!({"type": "string", "maxLength": 4, "default": "formal"}),
@@ -5891,7 +5956,6 @@ chat_reasoning_replay = "omit"
             description: "Review".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"task": {"type": "string"}}), &["task"]),
-                output: schema(json!({"summary": {"type": "string"}}), &["summary"]),
                 nodes: {
                     let mut nodes: std::collections::BTreeMap<
                         String,
@@ -5900,14 +5964,10 @@ chat_reasoning_replay = "omit"
                         ("review".to_owned(), agent(output)),
                         (
                             "done".to_owned(),
-                            WorkflowNodeDefinition::Return {
-                                output: WorkflowValue::Object {
-                                    fields: BTreeMap::from([(
-                                        "summary".to_owned(),
-                                        reference("review.summary"),
-                                    )]),
-                                },
-                            },
+                            return_node(BTreeMap::from([(
+                                "summary".to_owned(),
+                                reference("review.summary"),
+                            )])),
                         ),
                     ]);
                     nodes.insert(
@@ -5956,7 +6016,6 @@ chat_reasoning_replay = "omit"
             description: "Branch".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"flag": {"type": "string"}}), &["flag"]),
-                output: schema(json!({"value": {"type": "string"}}), &["value"]),
                 nodes: {
                     let mut nodes: std::collections::BTreeMap<
                         String,
@@ -6002,7 +6061,7 @@ chat_reasoning_replay = "omit"
 
     #[test]
     fn yaml_is_serialization_and_does_not_supply_identity() {
-        let yaml = "description: Review\nblock:\n  input: {type: object, properties: {task: {type: string}}, required: [task]}\n  output: {type: object, properties: {summary: {type: string}}, required: [summary]}\n  nodes:\n    workflow_start:\n      type: start\n    done:\n      type: return\n      output:\n        type: object\n        fields:\n          summary: {type: reference, path: [args, task]}\n  edges:\n  - from: workflow_start\n    to: done\n";
+        let yaml = "description: Review\nblock:\n  input: {type: object, properties: {task: {type: string}}, required: [task]}\n  nodes:\n    workflow_start:\n      type: start\n    done:\n      type: return\n      outputs: [{variable: summary, value_selector: [args, task]}]\n  edges:\n  - from: workflow_start\n    to: done\n";
         let definition: WorkflowDefinition = serde_yaml::from_str(yaml).expect("yaml");
         assert!(WorkflowId::parse("review_pr").is_ok());
         assert!(!yaml.contains("name:"));
@@ -6021,12 +6080,11 @@ chat_reasoning_replay = "omit"
 description: Duplicate
 block:
   input: {type: object}
-  output: {type: object}
   nodes:
     workflow_start:
       type: start
-    done: {type: return, output: {type: literal, value: {}}}
-    done: {type: return, output: {type: literal, value: {}}}
+    done: {type: return, outputs: []}
+    done: {type: return, outputs: []}
   edges:
   - from: workflow_start
     to: done
@@ -6036,12 +6094,10 @@ block:
 
     #[test]
     fn rejects_dangling_unreachable_cyclic_and_unterminated_graphs() {
-        let empty_output = schema(json!({}), &[]);
         let dangling = base_definition(
             "done",
             BTreeMap::from([("done".to_owned(), return_node(BTreeMap::new()))]),
             vec![edge("done", "missing")],
-            empty_output.clone(),
         );
         assert!(matches!(
             compile_test(dangling),
@@ -6055,7 +6111,6 @@ block:
                 ("orphan".to_owned(), return_node(BTreeMap::new())),
             ]),
             Vec::new(),
-            empty_output.clone(),
         );
         assert!(matches!(
             compile_test(unreachable),
@@ -6071,7 +6126,6 @@ block:
                 ("b".to_owned(), agent(output)),
             ]),
             vec![edge("entry", "a"), edge("a", "b"), edge("b", "a")],
-            empty_output.clone(),
         );
         assert!(matches!(
             compile_test(cyclic),
@@ -6085,7 +6139,6 @@ block:
                 agent(schema(json!({"ok": {"type": "boolean"}}), &["ok"])),
             )]),
             Vec::new(),
-            empty_output,
         );
         assert!(matches!(
             compile_test(unterminated),
@@ -6108,7 +6161,6 @@ block:
             description: "Branch".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"flag": {"type": "boolean"}}), &["flag"]),
-                output: schema(json!({}), &[]),
                 nodes: {
                     let mut nodes: std::collections::BTreeMap<
                         String,
@@ -6161,7 +6213,6 @@ block:
                 ("done".to_owned(), return_node(BTreeMap::new())),
             ]),
             vec![edge("review", "done")],
-            schema(json!({}), &[]),
         );
         assert!(matches!(
             compile_test(use_before),
@@ -6182,7 +6233,6 @@ block:
                 ),
             ]),
             vec![edge("review", "done")],
-            schema(json!({"summary": {"type": "string"}}), &["summary"]),
         );
         assert!(matches!(
             compile_test(optional),
@@ -6236,81 +6286,16 @@ block:
                 edge("no", "join"),
                 edge("join", "done"),
             ],
-            schema(json!({}), &[]),
         );
         assert!(matches!(
             compile_test(path_dependent),
             Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidReference(_))
-        ));
-
-        let mismatch = base_definition(
-            "review",
-            BTreeMap::from([
-                (
-                    "review".to_owned(),
-                    agent(schema(json!({"passed": {"type": "boolean"}}), &["passed"])),
-                ),
-                (
-                    "done".to_owned(),
-                    return_node(BTreeMap::from([(
-                        "summary".to_owned(),
-                        reference("review.passed"),
-                    )])),
-                ),
-            ]),
-            vec![edge("review", "done")],
-            schema(json!({"summary": {"type": "string"}}), &["summary"]),
-        );
-        assert!(matches!(
-            compile_test(mismatch),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::IncompatibleReference(_))
         ));
     }
 
     #[test]
     #[allow(clippy::too_many_lines)] // one nested-schema rejection table
     fn rejects_nested_schema_mismatches_and_optional_nested_references() {
-        let nested_boolean = schema(
-            json!({
-                "result": {
-                    "type": "object",
-                    "properties": {"passed": {"type": "boolean"}},
-                    "required": ["passed"],
-                    "additionalProperties": false
-                }
-            }),
-            &["result"],
-        );
-        let nested_string_return = base_definition(
-            "review",
-            BTreeMap::from([
-                ("review".to_owned(), agent(nested_boolean)),
-                (
-                    "done".to_owned(),
-                    return_node(BTreeMap::from([(
-                        "result".to_owned(),
-                        reference("review.result"),
-                    )])),
-                ),
-            ]),
-            vec![edge("review", "done")],
-            schema(
-                json!({
-                    "result": {
-                        "type": "object",
-                        "properties": {"passed": {"type": "string"}},
-                        "required": ["passed"],
-                        "additionalProperties": false
-                    }
-                }),
-                &["result"],
-            ),
-        );
-        assert!(matches!(
-            compile_test(nested_string_return),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::IncompatibleReference(_))
-        ));
-
         let optional_input = WorkflowDefinition {
             timeout_ms: 600_000,
             description: "Optional nested input".to_owned(),
@@ -6325,7 +6310,6 @@ block:
                     }),
                     &["task"],
                 ),
-                output: schema(json!({}), &[]),
                 nodes: {
                     let mut nodes: std::collections::BTreeMap<
                         String,
@@ -6374,10 +6358,7 @@ block:
         ));
     }
 
-    fn single_agent_return_definition(
-        agent_output: Value,
-        workflow_output: Value,
-    ) -> WorkflowDefinition {
+    fn single_agent_return_definition(agent_output: Value) -> WorkflowDefinition {
         base_definition(
             "review",
             BTreeMap::from([
@@ -6391,88 +6372,29 @@ block:
                 ),
             ]),
             vec![edge("review", "done")],
-            workflow_output,
         )
     }
 
     #[test]
     fn workflow_schema_compilation_rejects_unsupported_narrowing_and_accepts_safe_subset_values() {
-        let plain_string = single_agent_return_definition(
-            schema(json!({"result": {"type": "string"}}), &["result"]),
-            schema(
-                json!({"result": {"type": "string", "minLength": 5}}),
-                &["result"],
+        for (result, keyword) in [
+            (json!({"type": "string", "minLength": 5}), "minLength"),
+            (json!({"type": "number", "minimum": 1}), "minimum"),
+            (
+                json!({"type": "array", "items": {"type": "string"}, "minItems": 1}),
+                "minItems",
             ),
-        );
-        assert!(matches!(
-            compile_test(plain_string),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("minLength"))
-        ));
-
-        let plain_number = single_agent_return_definition(
-            schema(json!({"result": {"type": "number"}}), &["result"]),
-            schema(
-                json!({"result": {"type": "number", "minimum": 1}}),
-                &["result"],
-            ),
-        );
-        assert!(matches!(
-            compile_test(plain_number),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("minimum"))
-        ));
-
-        let plain_array = single_agent_return_definition(
-            schema(
-                json!({
-                    "result": {"type": "array", "items": {"type": "string"}}
-                }),
-                &["result"],
-            ),
-            schema(
-                json!({
-                    "result": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "minItems": 1
-                    }
-                }),
-                &["result"],
-            ),
-        );
-        assert!(matches!(
-            compile_test(plain_array),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("minItems"))
-        ));
-
-        let enum_producer = schema(
-            json!({"result": {"type": "string", "enum": ["a", "b"]}}),
-            &["result"],
-        );
-        let enum_consumer = schema(
-            json!({"result": {"type": "string", "enum": ["a"]}}),
-            &["result"],
-        );
-        assert!(matches!(
-            compile_test(single_agent_return_definition(enum_producer, enum_consumer)),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::IncompatibleReference(_))
-        ));
-
-        let const_producer = schema(
-            json!({"result": {"type": "string", "const": "a"}}),
-            &["result"],
-        );
-        let const_consumer = schema(
-            json!({"result": {"type": "string", "const": "b"}}),
-            &["result"],
-        );
-        assert!(matches!(
-            compile_test(single_agent_return_definition(
-                const_producer,
-                const_consumer
-            )),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::IncompatibleReference(_))
-        ));
-
+        ] {
+            let narrowed =
+                single_agent_return_definition(schema(json!({"result": result}), &["result"]));
+            assert!(
+                matches!(
+                    compile_test(narrowed),
+                    Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains(keyword))
+                ),
+                "{keyword}"
+            );
+        }
         let nested = json!({
             "type": "object",
             "properties": {
@@ -6485,10 +6407,7 @@ block:
             "required": ["mode", "tags"],
             "additionalProperties": false
         });
-        let safe = single_agent_return_definition(
-            schema(json!({"result": nested.clone()}), &["result"]),
-            schema(json!({"result": nested}), &["result"]),
-        );
+        let safe = single_agent_return_definition(schema(json!({"result": nested}), &["result"]));
         compile_test(safe).expect("supported object/array/enum/const schemas are compatible");
     }
 
@@ -6498,7 +6417,6 @@ block:
             "done",
             BTreeMap::from([("done".to_owned(), return_node(BTreeMap::new()))]),
             Vec::new(),
-            schema(json!({}), &[]),
         );
         let program = compile_test(definition).expect("program");
         let catalog = WorkflowCatalog::new([program.clone()]).unwrap();

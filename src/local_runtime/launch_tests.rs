@@ -317,7 +317,6 @@ fn cfg237_online_schema_unresolved_and_disabled_source_are_distinct() {
     let text = r"description: Inspect a declared external capability.
 block:
   input: {type: object, properties: {}, additionalProperties: false}
-  output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}
   nodes:
     workflow_start:
       type: start
@@ -328,7 +327,7 @@ block:
       result: {type: text}
     done:
       type: return
-      output: {type: object, fields: {text: {type: reference, path: [inspect, text]}}}
+      outputs: [{variable: text, value_selector: [inspect, text]}]
   edges: [{from: workflow_start, to: inspect}, {from: inspect, to: done}]
 ";
     install_workflow(&f, text);
@@ -377,10 +376,10 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
         serde_yaml::from_str(&template_source("parallel_checks")).unwrap();
     let root = serde_json::to_value(definition.block).unwrap();
     let original = json!({"description":"Nested checks", "block":{
-        "input":root["input"], "output":{"type":"object","properties":{},"additionalProperties":false}, "nodes":{
+        "input":root["input"], "nodes":{
             "start":{"type":"start"},
             "repeat":{"type":"loop", "loop_count":1, "body":crate::runtime::workflow::test_body(&root)},
-            "done":{"type":"return","output":{"type":"literal","value":{}}}
+            "done":{"type":"return","outputs":[]}
         },"edges":[{"from":"start","to":"repeat"},{"from":"repeat","to":"done"}]
     }});
     for (pointer, value, expected) in [
@@ -2597,7 +2596,7 @@ fn cfg275_offline_generation_projects_native_facts_once_without_effects_or_secre
     .unwrap();
     install_workflow(
         &f,
-        "description: Missing tool\nblock:\n  input: {type: object}\n  output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}\n  nodes:\n    workflow_start:\n      type: start\n    inspect:\n      type: tool\n      selector: {origin: source, source_id: optional, name: inspect}\n      arguments: {type: literal, value: {}}\n      result: {type: text}\n    done:\n      type: return\n      output: {type: object, fields: {text: {type: reference, path: [inspect, text]}}}\n  edges: [{from: workflow_start, to: inspect}, {from: inspect, to: done}]\n",
+        "description: Missing tool\nblock:\n  input: {type: object}\n  nodes:\n    workflow_start:\n      type: start\n    inspect:\n      type: tool\n      selector: {origin: source, source_id: optional, name: inspect}\n      arguments: {type: literal, value: {}}\n      result: {type: text}\n    done:\n      type: return\n      outputs: [{variable: text, value_selector: [inspect, text]}]\n  edges: [{from: workflow_start, to: inspect}, {from: inspect, to: done}]\n",
     );
     let ((report, launch), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_show", &f.request, &f.host)

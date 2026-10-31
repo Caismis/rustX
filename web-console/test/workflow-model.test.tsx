@@ -24,9 +24,9 @@ const readTool: WorkflowToolChoice = { name: 'read', description: 'Read a file. 
 }, required: ['path'], additionalProperties: false }, result: { type: 'text' } };
 function source(model = modelNode): WorkflowSource {
   return { ...exampleSource('typed_agent'), vocabulary: { profiles: [], builtin_tools: [readTool] }, document: {
-    description: 'One model call.', block: { input: object, output: object,  nodes: {workflow_start:{type:'start'}, ...{
+    description: 'One model call.', block: { input: object, nodes: {workflow_start:{type:'start'}, ...{
       model,
-      done: { type: 'return', output: { type: 'literal', value: {} } },
+      done: { type: 'return', outputs: []},
     }}, edges: [{from:'workflow_start',to:'model'}, ...[{ from: 'model', to: 'done' }]] },
   } };
 }
@@ -78,12 +78,12 @@ describe('native candidate analysis presentation', () => {
     const right = { type: 'object', properties: { right: { type: 'string' } }, required: ['right'], additionalProperties: false };
     const input = { type: 'object', properties: { a: left, b: right, open: { type: 'object' } }, required: ['a', 'b', 'open'], additionalProperties: false };
     const ref = { type: 'reference' as const, path: ['args', 'a'] };
-    act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, block: { ...document.block, input,
-      output: { type: 'object', properties: { values: { type: 'array', items: { type: 'object' } } }, required: ['values'], additionalProperties: false },
-      nodes: { ...document.block.nodes, done: { type: 'return', output: { type: 'object', fields: { values: { type: 'array', items: [ref, ref] } } } } } } }) }));
-    select('Return node done');
+    // A Tool no catalog describes: its arguments are edited as a raw value.
+    const tool: NodeDefinition = { type: 'tool', selector: { origin: 'builtin', name: 'unlisted' }, result: { type: 'text' }, arguments: { type: 'object', fields: { values: { type: 'array', items: [ref, ref] } } } };
+    act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, block: { ...document.block, input, nodes: { ...document.block.nodes, pick: tool } } }) }));
+    select('Tool node pick');
     fireEvent.click(inspector().getAllByRole('button', { name: 'Choose a variable' })[1]);
-    expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'done' }, field: { kind: 'return_output' }, path: [{ kind: 'field', key: 'values' }, { kind: 'item', index: 1 }] });
+    expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'pick' }, field: { kind: 'arguments' }, path: [{ kind: 'field', key: 'values' }, { kind: 'item', index: 1 }] });
     await act(async () => native.complete({ references: [
       { producer: null, path: ['args', 'a'], schema: left, availability: 'available', compatibility: 'compatible', diagnostic: null },
       { producer: null, path: ['args', 'b'], schema: right, availability: 'available', compatibility: 'incompatible', diagnostic: 'constructed array element contracts are incompatible' },
@@ -93,22 +93,7 @@ describe('native candidate analysis presentation', () => {
     expect(incompatible.disabled).toBe(true); expect(incompatible.title).toContain('constructed array');
     const broader = inspector().getByRole('button', { name: /^args \/ open ·/ }) as HTMLButtonElement;
     expect(broader.disabled).toBe(false); fireEvent.click(broader);
-    expect(editor.getSnapshot().context.document!.block.nodes.done).toMatchObject({ output: { fields: { values: { items: [ref, { type: 'reference', path: ['args', 'open'] }] } } } });
-  });
-
-  it.each(['closed', 'open', 'declared'] as const)('renders the native %s destination field constraint without inferring types in Web', async kind => {
-    const native = controlledAnalysis(), editor = await open(native.analyze);
-    const input = { type: 'object', properties: { x: { type: 'string' } }, required: ['x'], additionalProperties: false };
-    const output = kind === 'declared' ? input : { type: 'object', properties: {}, additionalProperties: kind === 'open' };
-    act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, block: { ...document.block, input, output, nodes: { ...document.block.nodes, done: { type: 'return', output: { type: 'object', fields: { x: { type: 'reference', path: ['args', 'x'] } } } } } } }) }));
-    select('Return node done');
-    fireEvent.click(inspector().getByRole('button', { name: 'Choose a variable' }));
-    expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'done' }, field: { kind: 'return_output' }, path: [{ kind: 'field', key: 'x' }] });
-    await act(async () => native.complete({ references: [{ producer: null, path: ['args', 'x'], schema: { type: 'string' }, availability: 'available', compatibility: kind === 'closed' ? 'incompatible' : kind === 'open' ? 'unknown' : 'compatible', diagnostic: kind === 'closed' ? 'destination schema forbids this field (additionalProperties: false)' : null }] }));
-    const choice = inspector().getByRole('button', { name: /^args \/ x ·/ }) as HTMLButtonElement;
-    expect(choice.disabled).toBe(kind === 'closed');
-    if (kind === 'closed') expect(choice.title).toContain('additionalProperties: false');
-    else expect(choice.textContent).toContain(kind === 'open' ? 'Compatibility unknown' : 'Compatible type');
+    expect(editor.getSnapshot().context.document!.block.nodes.pick).toMatchObject({ arguments: { fields: { values: { items: [ref, { type: 'reference', path: ['args', 'open'] }] } } } });
   });
 
   const equalities = (['equal', 'not_equal'] as const).flatMap(operator => (['left', 'right'] as const).map(side => ({ operator, side })));

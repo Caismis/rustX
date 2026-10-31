@@ -9,14 +9,6 @@ block:
     required:
     - path
     additionalProperties: false
-  output:
-    type: object
-    properties:
-      text:
-        type: string
-    required:
-    - text
-    additionalProperties: false
   nodes:
     start:
       type: start
@@ -37,14 +29,8 @@ block:
         type: text
     done:
       type: return
-      output:
-        type: object
-        fields:
-          text:
-            type: reference
-            path:
-            - read
-            - text
+      outputs:
+      - {variable: text, value_selector: [read, text]}
   edges:
   - from: start
     to: read

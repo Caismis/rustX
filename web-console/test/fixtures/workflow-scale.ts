@@ -2,7 +2,7 @@
  * whose branch tree ends in Exit Loop nodes. */
 import type { WorkflowBlock, WorkflowFileDocument } from '../../../protocol/app-server/v62';
 const empty = { type: 'object', properties: {}, additionalProperties: false };
-const returned = { type: 'return' as const, output: { type: 'literal' as const, value: {} } };
+const returned = { type: 'return' as const, outputs: [] };
 function branchTree(): WorkflowBlock {
   const nodes: WorkflowBlock['nodes'] = { repeat_start: { type: 'start' } }, edges: NonNullable<WorkflowBlock['edges']> = [{ from: 'repeat_start', to: 'node_0' }];
   for (let index = 0; index < 251; index++) {
@@ -15,7 +15,7 @@ function branchTree(): WorkflowBlock {
   return { nodes, edges };
 }
 export function scaleWorkflow(): WorkflowFileDocument {
-  return { description: 'Native 256-node editor capacity fixture.', block: { input: empty, output: empty, nodes: {
+  return { description: 'Native 256-node editor capacity fixture.', block: { input: empty, nodes: {
     start: { type: 'start' },
     repeat: { type: 'loop', loop_count: 1, body: branchTree() },
     model: { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Return text.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } }, done: returned,

@@ -5,7 +5,7 @@
 //! Input gates later work only through the exit of the action chosen. Every proof uses the real registry, real native Bash and
 //! the native Review owner; ordering is driven by IPC frames and interaction
 //! publications, never by elapsed time.
-use super::human::{answer, owner, review_node, review_output};
+use super::human::{answer, owner, review_node};
 use super::*;
 
 const IMPLEMENT_FILE: &str = "greeting.txt";
@@ -81,7 +81,7 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
     let context = bash_context(&plane, None);
     let passed = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
     let definition = serde_json::from_value(json!({"description":"shared implement/check","timeout_ms":600_000,"block":{
-        "input":passed,"output":passed,"nodes": {"workflow_start":{"type":"start"},
+        "input":passed,"nodes": {"workflow_start":{"type":"start"},
             "repair":{"type":"loop","loop_count":3,
                 "loop_variables":[{"label":"passed","var_type":"boolean","value":{"type":"literal","value":false}}],
                 "break_condition":{"type":"boolean","value":{"type":"reference","path":["repair","passed"]}},
@@ -94,7 +94,7 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
                     "pass":{"type":"assigner","items":[{"variable":["repair","passed"],"operation":"set","value":{"type":"literal","value":true}}]}},
                     "edges":[{"from":"start","to":"implement"},{"from":"implement","to":"check"},{"from":"check","to":"verdict"},
                         {"from":"verdict","to":"pass","port":"true"}]}},
-            "done":{"type":"return","output":{"type":"reference","path":["repair"]}}
+            "done":returns("repair", &["passed"])
         },"edges": [{"from":"workflow_start","to":"repair"},{"from":"repair","to":"done"}],}}))
     .unwrap();
     let program = Arc::new(compile_test(definition).unwrap());
@@ -168,21 +168,12 @@ async fn explicit_review_branch_gates_implementation() {
         let workspace = plane.dir.path().join("workspace");
         let (owner, _audit, mut published) = owner(&plane);
         let context = bash_context(&plane, Some(owner.clone()));
-        let output = schema(
-            json!({"status":{"type":"string","enum":["implemented","rejected"]},
-                "action":{"type":"string"}}),
-            &["status", "action"],
-        );
         let definition = serde_json::from_value(json!({"description":"gated implementation","timeout_ms":600_000,"block":{
-            "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),"output":output,"nodes": {"workflow_start":{"type":"start"},
+            "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),"nodes": {"workflow_start":{"type":"start"},
                 "review":review_node(3_600_000),
                 "implement":implement_node(),
-                "implemented":{"type":"return","output":{"type":"object","fields":{
-                    "status":{"type":"literal","value":"implemented"},
-                    "action":{"type":"reference","path":["review","action"]}}}},
-                "rejected":{"type":"return","output":{"type":"object","fields":{
-                    "status":{"type":"literal","value":"rejected"},
-                    "action":{"type":"reference","path":["review","action"]}}}}
+                "implemented":returns("review", &["action"]),
+                "rejected":returns("review", &["action"])
             },"edges": [{"from":"workflow_start","to":"review"},{"from":"review","to":"implement","port":"yes"},
                 {"from":"review","to":"rejected","port":"no"},{"from":"review","to":"rejected","port":"timeout"},{"from":"implement","to":"implemented"}],}}))
         .unwrap();
@@ -225,13 +216,13 @@ async fn explicit_review_branch_gates_implementation() {
         }
         let value = task.await.unwrap().unwrap();
         if accepted {
-            assert_eq!(value["status"], "implemented");
+            assert_eq!(value["action"], "yes");
             assert_eq!(plane.registry.all_snapshots().len(), 1);
             assert!(workspace.join(IMPLEMENT_FILE).exists());
         } else {
             assert_eq!(
                 value,
-                json!({"status":"rejected","action":"no"}),
+                json!({"action":"no"}),
                 "rejection is the action's own exit"
             );
             assert!(
@@ -255,10 +246,10 @@ async fn rejection_after_a_write_never_rolls_it_back() {
     let mut child = stage_workflow_child(&plane);
     let definition = serde_json::from_value(json!({"description":"post-write review","timeout_ms":600_000,"block":{
         "input":schema(json!({"changed":{"type":"string"}}), &["changed"]),
-        "output":review_output(),"nodes": {"workflow_start":{"type":"start"},
+        "nodes": {"workflow_start":{"type":"start"},
             "implement":implement_node(),
             "review":review_node(3_600_000),
-            "done":{"type":"return","output":{"type":"reference","path":["review"]}}
+            "done":returns("review", &["action", "content"])
         },"edges": [{"from":"workflow_start","to":"implement"},{"from":"implement","to":"review"},{"from":"review","to":"done","port":"yes"},
             {"from":"review","to":"done","port":"no"},{"from":"review","to":"done","port":"timeout"}],}}))
     .unwrap();
@@ -309,20 +300,15 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
     let workspace = plane.dir.path().join("workspace");
     let (owner, _audit, mut published) = owner(&plane);
     let context = bash_context(&plane, Some(owner.clone()));
-    let review_output = review_output();
     let definition = serde_json::from_value(json!({"description":"parallel review","timeout_ms":600_000,"block":{
         "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),
-        "output":schema(json!({"decision":review_output,"write":check_report()}), &["decision", "write"]),
         "nodes": {
             "workflow_start":{"type":"start"},
             "review":review_node(3_600_000),
             "write":{"type":"tool","selector":{"origin":"builtin","name":"bash"},
                 "arguments":{"type":"literal","value":{"command":format!("printf independent > {IMPLEMENT_FILE}")}},
                 "result":{"type":"json","schema":check_report()}},
-            "done":{"type":"return","output":{"type":"object","fields":{
-                "decision":{"type":"reference","path":["review"]},
-                "write":{"type":"reference","path":["write"]}
-            }}}
+            "done":{"type":"return","outputs":[{"variable":"decision","value_selector":["review"]},{"variable":"write","value_selector":["write"]}]}
         },"edges": [
             {"from":"workflow_start","to":"review"},{"from":"workflow_start","to":"write"},
             {"from":"review","to":"done","port":"yes"},{"from":"review","to":"done","port":"no"},

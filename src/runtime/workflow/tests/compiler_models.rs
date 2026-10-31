@@ -16,7 +16,6 @@ fn model(output: WorkflowModelOutput) -> WorkflowNodeDefinition {
 }
 
 fn definition(output: WorkflowModelOutput) -> WorkflowDefinition {
-    let output_schema = output.schema();
     base_definition(
         "generate",
         BTreeMap::from([
@@ -27,7 +26,6 @@ fn definition(output: WorkflowModelOutput) -> WorkflowDefinition {
             ),
         ]),
         vec![edge("generate", "done")],
-        schema(json!({"result": output_schema}), &["result"]),
     )
 }
 
@@ -113,10 +111,6 @@ fn model_outputs_use_existing_branch_and_return_reference_rules() {
         assert!(matches!(compile_test(authored), Err(error)
             if matches!(error.cause(), WorkflowCompileError::InvalidReference(_))));
     }
-    let mut incompatible = definition(WorkflowModelOutput::Text {});
-    incompatible.block.output = schema(json!({"result":{"type":"boolean"}}), &["result"]);
-    assert!(matches!(compile_test(incompatible), Err(error)
-        if matches!(error.cause(), WorkflowCompileError::IncompatibleReference(_))));
 }
 
 #[test]
@@ -254,7 +248,6 @@ fn explicit_model_policy_is_structural_and_explain_redacts_parameters_and_prompt
 /// where its nodes do.
 fn loop_definition(id: &str, iterations: u32, mut body: WorkflowBlock) -> WorkflowDefinition {
     body.input = schema(json!({}), &[]);
-    body.output = schema(json!({}), &[]);
     body.nodes
         .retain(|_, node| !matches!(node, WorkflowNodeDefinition::Return { .. }));
     body.edges.retain(|edge| body.nodes.contains_key(&edge.to));
@@ -273,7 +266,6 @@ fn loop_definition(id: &str, iterations: u32, mut body: WorkflowBlock) -> Workfl
             ("done".into(), return_node(BTreeMap::new())),
         ]),
         vec![edge(id, "done")],
-        schema(json!({}), &[]),
     )
 }
 
@@ -327,12 +319,7 @@ fn handled(
         );
         edges.push(branch_edge("generate", "recover", WorkflowPort::Fail));
     }
-    base_definition(
-        "generate",
-        nodes,
-        edges,
-        schema(json!({"result":{"type":"string"}}), &["result"]),
-    )
+    base_definition("generate", nodes, edges)
 }
 
 #[test]

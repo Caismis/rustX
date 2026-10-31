@@ -8,7 +8,6 @@ import { blockField, workflowField } from '../../../document/fields';
 import { blockAt, type BlockPath, type WorkflowDocument } from '../../../document/model';
 import { Section, TextField } from './fields';
 import { InputFields } from './InputFields';
-import { SchemaEditor } from './SchemaEditor';
 import { NextStep } from '../NextStep';
 import type { Selection } from '../selection';
 import css from '../Editor.module.css';
@@ -53,7 +52,6 @@ export function BlockForm({ document, block, edit, onSelect, tools, start = fals
     </Section>}
     <Section title={tx('workflows:inspector.block-title')}>
       {input}
-      <SchemaEditor label={tx('workflows:inspector.block-output')} value={owner.output} address={blockField(block, ['output'])} edit={edit} />
     </Section>
   </>;
 }

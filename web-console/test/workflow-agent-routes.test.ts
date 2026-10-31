@@ -11,7 +11,7 @@ const routes = [{ id: 'approve', description: 'Ship it.' }, { id: 'revise', desc
 function document(node: Agent): WorkflowDocument {
   const block = rootBlock();
   block.nodes.triage = node;
-  block.nodes.edit = { type: 'return', output: { type: 'literal', value: {} } };
+  block.nodes.edit = { type: 'return', outputs: []};
   block.edges = [{ from: 'start', to: 'triage' }, { from: 'triage', to: 'done', port: 'approve' }, { from: 'triage', to: 'edit', port: 'revise' }, { from: 'triage', to: 'edit', port: 'fail' }];
   return { description: 'Routes.', block };
 }

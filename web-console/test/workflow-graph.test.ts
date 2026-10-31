@@ -81,10 +81,10 @@ it('inserts into one chosen edge and preserves every parallel sibling', () => {
 });
 
 it('renames a fanout producer in edges and typed references while preserving business text', () => {
-  const document = graph(); document.block.nodes.done = { type: 'return', output: { type: 'object', fields: { result: { type: 'reference', path: ['left'] }, text: { type: 'literal', value: 'left' } } } };
+  const document = graph(); document.block.nodes.done = { type: 'return', outputs: [{ variable: 'left', value_selector: ['left'] }] };
   const renamed = renameNode(document, [], 'left', 'draft');
   expect(renamed.block.edges?.filter(edge => edge.from === 'start').map(edge => edge.to)).toEqual(['draft', 'right']);
-  expect(renamed.block.nodes.done).toMatchObject({ output: { fields: { result: { path: ['draft'] }, text: { value: 'left' } } } });
+  expect(renamed.block.nodes.done).toEqual({ type: 'return', outputs: [{ variable: 'left', value_selector: ['draft'] }] });
 });
 
 it('copies selected graph edges and Loop scopes while protecting the one Start per block', () => {

@@ -1274,7 +1274,7 @@ mod tests {
         );
         let definition = serde_json::from_value(serde_json::json!({
             "description":"budget fixture", "block": {
-                "input":{"type":"object"},"output":{"type":"object"},"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","output":{"type":"literal","value":{}}}},"edges": [{"from":"workflow_start","to":"done"}],}
+                "input":{"type":"object"},"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[]}},"edges": [{"from":"workflow_start","to":"done"}],}
         })).unwrap();
         let program = Arc::new(
             WorkflowProgram::compile(WorkflowId::parse("budget").unwrap(), definition).unwrap(),

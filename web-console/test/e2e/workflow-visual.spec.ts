@@ -39,31 +39,10 @@ async function add(page: Page, name: string, after?: { node: string; port: strin
   }
 }
 const schema = (page: Page, label: string) => page.locator(`[data-schema-label="${label}"]`).first();
-async function property(page: Page, label: string, name: string, type = 'string') {
-  return propertyIn(page, schema(page, label), name, type);
-}
 /** Add one Start-node input field through the Add input field dialog. */
 async function chooseFieldType(page: Page, dialog: Locator, type: string) {
   await dialog.getByRole('button', { name: /^Field type/ }).click();
   await page.getByRole('menuitem', { name: new RegExp(`${type}$`) }).click();
-}
-async function propertyIn(page: Page, editor: Locator, name: string, type = 'string') {
-  await editor.getByPlaceholder('Field name', { exact: true }).last().fill(name);
-  await editor.getByRole('button', { name: 'Add field', exact: true }).last().click();
-  // Form values are live DOM properties, so locate this property's summary.
-  const item = editor.locator('details').filter({ has: page.locator('summary').filter({ hasText: new RegExp(`^${name}`) }) }).first();
-  if (!(await item.evaluate(element => (element as HTMLDetailsElement).open))) await item.locator(':scope > summary').click();
-  await item.getByLabel('Type', { exact: true }).selectOption(type);
-  await item.getByRole('checkbox', { name: 'Required', exact: true }).check();
-  return item;
-}
-async function addBinding(group: Locator, name: string) { await group.getByPlaceholder('Field name', { exact: true }).last().fill(name); await group.getByRole('button', { name: 'Add field', exact: true }).last().click(); }
-async function reference(page: Page, group: Locator, path: string) {
-  const radio = group.getByRole('radio', { name: 'Reference', exact: true }).first();
-  if (await radio.count() && await radio.getAttribute('aria-checked') !== 'true') await radio.click();
-  await group.getByRole('button', { name: 'Choose a variable', exact: true }).first().click();
-  const choice = page.getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: new RegExp(`^${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ·`) });
-  await expect(choice).toBeEnabled(); await choice.click();
 }
 async function capture(page: Page, info: TestInfo, name: string) {
   // Wait for the selected projection and one committed viewport frame, not a timer.
@@ -255,14 +234,14 @@ test('discovers every matching display title together with original field paths'
   try {
     let document: WorkflowDocument = { description: 'All matching titles and paths', block: rootBlock() };
     document.block.input = { type: 'object', properties: { Draft: { type: 'string' } }, required: ['Draft'], additionalProperties: false };
-    document.block.nodes.done = { type: 'return', output: { type: 'reference', path: ['args'] } };
+    document.block.nodes.done = { type: 'return', outputs: [] };
     document = addNode(addNode(document, [], 'model', 'first'), [], 'model', 'second');
     document = connect(connect(document, [], 'first', 'next', 'second'), [], 'second', 'next', 'done');
     document = connectStart(document, [], 'first');
     document = setNodePresentation(setNodePresentation(document, [], 'first', { title: 'First Draft' }), [], 'second', { title: 'Second Draft' });
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true }); writeFileSync(join(directory, 'title_search.yaml'), JSON.stringify(document));
     await openLibrary(page, fixture); await page.getByRole('button', { name: 'title_search', exact: true }).click();
-    await activate(page, 'Return node done'); await panel(page).getByRole('button', { name: 'Choose a variable', exact: true }).click();
+    await activate(page, 'Output node done'); await panel(page).getByRole('button', { name: 'Choose a variable', exact: true }).click();
     const picker = panel(page).getByRole('dialog', { name: 'Choose a variable' });
     await picker.getByRole('textbox', { name: 'Search reference paths…' }).fill('Draft');
     for (const path of ['args / Draft', 'first', 'second']) await expect(picker.getByRole('button', { name: new RegExp(`^${path} ·`) })).toBeVisible();
@@ -289,13 +268,13 @@ test('uses the same visible duplicate transaction from Inspector and canvas for 
       const values = (element as HTMLElement).style.transform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/)!;
       return { x: Number(values[1]), y: Number(values[2]) };
     });
-    await activate(page, 'Return node done'); await panel(page).getByRole('button', { name: 'Duplicate', exact: true }).click();
+    await activate(page, 'Output node done'); await panel(page).getByRole('button', { name: 'Duplicate', exact: true }).click();
     await expect(node([], 'node', 'done_copy')).toHaveClass(/selected/); await expect(node([], 'node', 'done_copy')).toBeInViewport();
     expect(await position(node([], 'node', 'done_copy'))).toEqual({ x: 532, y: 272 });
     await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(node([], 'node', 'done_copy')).toHaveCount(0);
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Redo', exact: true }).click(); await expect(node([], 'node', 'done_copy')).toBeVisible();
-    await activate(page, 'Return node done'); await node([], 'node', 'done').click({ button: 'right' });
+    await activate(page, 'Output node done'); await node([], 'node', 'done').click({ button: 'right' });
     await canvas(page).getByRole('dialog').getByRole('button', { name: 'Duplicate', exact: true }).click();
     await expect(node([], 'node', 'done_copy_2')).toHaveClass(/selected/);
     expect(await position(node([], 'node', 'done_copy_2'))).toEqual({ x: 564, y: 304 });
@@ -309,7 +288,7 @@ test('uses the same visible duplicate transaction from Inspector and canvas for 
     expect(await position(node(copied, 'note', 'private_2'))).toEqual({ x: origin.x + 32, y: origin.y + 320 });
     await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(node([], 'node', 'repeat_copy')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
-    await activate(page, 'Return node done');
+    await activate(page, 'Output node done');
     let copiedId = 'done';
     for (let index = 0; index < 8; index++) {
       await page.keyboard.press('Control+d'); copiedId += '_copy';
@@ -359,11 +338,15 @@ test('authors structured required output, nested contracts and repeated downstre
     }
     await chooseExistingNext(page, 'done');
     await capture(page, info, '19-structured-reuse');
-    await activate(page, 'Return node done');
-    await property(page, 'Output schema', 'risk'); await property(page, 'Output schema', 'tags', 'array'); await property(page, 'Output schema', 'accepted', 'boolean');
-    const output = panel(page).getByRole('group', { name: 'Output value', exact: true });
-    await output.getByRole('radio', { name: 'Object', exact: true }).first().click();
-    for (const [name, path] of [['risk', 'model / structured_output / risk'], ['tags', 'model / structured_output / tags'], ['accepted', 'model / structured_output / details / accepted']]) { await addBinding(output, name); await reference(page, output.getByRole('group', { name, exact: true }), path); }
+    await activate(page, 'Output node done');
+    // As Dify's End: each output variable takes its variable's own name.
+    const outputs = panel(page).getByRole('region', { name: 'Output variables', exact: true });
+    for (const path of ['model / structured_output / risk', 'model / structured_output / tags', 'model / structured_output / details / accepted']) {
+      await outputs.getByRole('button', { name: 'Add output variable', exact: true }).click();
+      await outputs.getByRole('button', { name: 'Choose a variable', exact: true }).last().click();
+      const choice = page.getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: new RegExp(`^${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ·`) });
+      await expect(choice).toBeEnabled(); await choice.click();
+    }
     await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
     await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     const file = join(fixture.workspaceA, '.agents/workflows/structured_authoring.yaml'), saved = parse(readFileSync(file, 'utf8'));

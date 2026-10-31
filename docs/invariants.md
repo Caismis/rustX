@@ -7714,7 +7714,7 @@ query.
 
 A Workflow owns no workspace resource and has no Candidate. Agent and Tool
 nodes run in the shared Session binding under their existing native owners; a
-successful run returns exactly its declared output. A Human Input
+successful run returns exactly the object its Return outputs build. A Human Input
 continues through the exit of the action chosen, acquires no filesystem lease,
 and never rolls back an earlier write. Stale responses, wrong node visits,
 wrong subject digests and responses after terminal cancellation remain

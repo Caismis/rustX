@@ -123,8 +123,8 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | Iteration | Array input and output variable pickers, parallel mode with a 1–10 maximum parallelism slider, error response method and flatten output |
 | Exit Loop | No configuration; offered only inside a Loop body |
 | Variable Assigner | One row per write: a variable of the enclosing Loop, an operation its type offers, and a variable or constant operand; offered only inside a Loop body |
-| Review | Plan subject/context and native accepted/feedback outputs |
-| Return | Whole or constructed output and the owning Block's output contract |
+| Human Input (Review) | Content with variables, user actions each with its own exit, a timeout exit, and `action`/`content` outputs |
+| Output (Return) | As Dify's End: output variables, each a name and a variable picker, added with + and removed per row; no next step. The card shows each chosen variable |
 
 Branch settings add or remove ELIF cases and build conditions from native variable
 choices. AND/OR groups use the existing predicate model; advanced conditions

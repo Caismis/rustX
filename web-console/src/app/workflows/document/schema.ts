@@ -21,8 +21,8 @@ export function schemaTemplate(type: string): Schema {
 export function schemaTarget(address: FieldAddress, document?: WorkflowDocument): Extract<WorkflowOrderTarget, { path: WorkflowSchemaStep[] }> | undefined {
   const parts = [...address.path], first = parts.shift();
   const path: WorkflowSchemaStep[] = [];
-  let kind: 'block_input' | 'block_output' | 'node_output';
-  if (!address.node && (first === 'input' || first === 'output')) kind = first === 'input' ? 'block_input' : 'block_output';
+  let kind: 'block_input' | 'node_output';
+  if (!address.node && first === 'input') kind = 'block_input';
   else if (address.node && first === 'output') {
     kind = 'node_output';
     if (parts[0] === 'schema') {
@@ -121,8 +121,6 @@ function renameContract(schema: Schema, path: readonly WorkflowSchemaStep[], fro
  * construction keys a contract rename can identify and move with certainty. */
 function schemaConstructions(document: WorkflowDocument, target: NonNullable<ReturnType<typeof schemaTarget>>): FieldAddress[] {
   if (target.kind === 'node_output') return [];
-  if (target.kind === 'block_output') return Object.entries(blockAt(document, target.block)?.nodes ?? {})
-    .filter(([, node]) => node.type === 'return').map(([id]) => nodeField(target.block, id, ['output']));
   const step = target.block.at(-1); if (!step) return [];
   const parent = target.block.slice(0, -1), owner = blockAt(document, parent)?.nodes[step.node];
   if (owner?.type === 'loop') return ['input', 'carry'].map(name => nodeField(parent, step.node, [name]));
@@ -212,9 +210,5 @@ export function schemaConsumers(document: WorkflowDocument, address: FieldAddres
   };
   if (target.kind === 'node_output') scan(address.block, [address.node!, ...property]);
   if (target.kind === 'block_input') scan(address.block, ['args', ...property]);
-  if (target.kind === 'block_output') {
-    const block = blockAt(document, address.block);
-    for (const [id, node] of Object.entries(block?.nodes ?? {})) if (node.type === 'return') add(address.block, id);
-  }
   return [...found.values()];
 }

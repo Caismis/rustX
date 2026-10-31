@@ -626,7 +626,7 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
     let program = WorkflowProgram::compile(id.clone(), serde_json::from_value(serde_json::json!({
         "description":"Return admitted input", "timeout_ms":1000,
         "block":{"input":{"type":"object","additionalProperties":false},
-        "output":{"type":"object","additionalProperties":false},"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","output":{"type":"reference","path":["args"]}}},"edges": [{"from":"workflow_start","to":"done"}],}
+        "nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[]}},"edges": [{"from":"workflow_start","to":"done"}],}
     })).unwrap()).unwrap();
     let mut workflows = WorkflowCatalog::new([program]).unwrap();
     workflows.admit(

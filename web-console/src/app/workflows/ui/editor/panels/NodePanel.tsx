@@ -16,5 +16,6 @@ export function NodePanel(props: PanelProps) {
   const node = nodeAt(blockAt(props.document, props.block)!, props.id);
   if (!node || node.type === 'start') return null;
   const Panel = PANELS[node.type];
-  return <div className={css.nodeSettings}><Panel {...props} /><NextStep document={props.document} block={props.block} source={props.id} tools={props.vocabulary?.builtin_tools ?? []} edit={props.edit} onSelect={props.onSelect} /></div>;
+  // As Dify's End, Return is the last node: nothing follows it.
+  return <div className={css.nodeSettings}><Panel {...props} />{node.type !== 'return' && <NextStep document={props.document} block={props.block} source={props.id} tools={props.vocabulary?.builtin_tools ?? []} edit={props.edit} onSelect={props.onSelect} />}</div>;
 }

@@ -25,7 +25,7 @@ export function consumerAddress(document: WorkflowDocument, field: FieldAddress)
     const index = parts.shift(); if (typeof index !== 'number' || parts.shift() !== 'condition' || !node.cases[index]) return undefined;
     consumer = { kind: 'condition', case_id: node.cases[index].id };
   }
-  else if (first === 'output' && node.type === 'return') consumer = { kind: 'return_output' };
+  else if (first === 'outputs' && node.type === 'return') return { address: { block: [...field.block], node: field.node }, field: { kind: 'return_output' }, path: [] };
   else if (node.type === 'loop' && first === 'loop_variables') {
     const index = parts.shift(); if (typeof index !== 'number' || parts.shift() !== 'value') return undefined; consumer = { kind: 'loop_variable', index };
   } else if (node.type === 'loop' && first === 'break_condition') consumer = { kind: 'break_condition' };

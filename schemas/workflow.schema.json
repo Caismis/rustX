@@ -105,9 +105,6 @@
           },
           "description": "Stable node definitions keyed by explicit node id.",
           "type": "object"
-        },
-        "output": {
-          "description": "The workflow output JSON Schema."
         }
       },
       "required": [
@@ -835,11 +832,13 @@
         },
         {
           "additionalProperties": false,
-          "description": "Constructs a value and completes exactly this owning block.",
+          "description": "As Dify's End: the workflow's result, one field per output variable.\nIt is the last node; nothing follows it.",
           "properties": {
-            "output": {
-              "$ref": "#/$defs/WorkflowValue",
-              "description": "The owning block's declared result."
+            "outputs": {
+              "items": {
+                "$ref": "#/$defs/WorkflowReturnOutput"
+              },
+              "type": "array"
             },
             "type": {
               "const": "return",
@@ -848,7 +847,7 @@
           },
           "required": [
             "type",
-            "output"
+            "outputs"
           ],
           "type": "object"
         }
@@ -958,33 +957,6 @@
             },
             "kind": {
               "const": "block_input",
-              "type": "string"
-            },
-            "path": {
-              "items": {
-                "$ref": "#/$defs/WorkflowSchemaStep"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "kind",
-            "block",
-            "path"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "block": {
-              "items": {
-                "$ref": "#/$defs/WorkflowBlockStep"
-              },
-              "type": "array"
-            },
-            "kind": {
-              "const": "block_output",
               "type": "string"
             },
             "path": {
@@ -1323,6 +1295,26 @@
       "required": [
         "max_retries",
         "interval_ms"
+      ],
+      "type": "object"
+    },
+    "WorkflowReturnOutput": {
+      "additionalProperties": false,
+      "description": "As Dify's End output variable: a result field and the variable it reads.",
+      "properties": {
+        "value_selector": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "variable": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "variable",
+        "value_selector"
       ],
       "type": "object"
     },

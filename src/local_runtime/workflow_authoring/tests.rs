@@ -415,7 +415,6 @@ const AGENT_PROGRAM: &str = r"
 description: Review one proposal.
 block:
   input: {type: object, properties: {proposal: {type: string}}, required: [proposal], additionalProperties: false}
-  output: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}
   nodes:
     workflow_start:
       type: start
@@ -429,7 +428,7 @@ block:
       output: {type: json_schema, schema: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}}
     done:
       type: return
-      output: {type: reference, path: [review]}
+      outputs: [{variable: summary, value_selector: [review, summary]}]
   edges:
   - from: workflow_start
     to: review
@@ -1170,7 +1169,7 @@ fn native_examples_round_trip_semantically_through_canonical_serialization() {
 fn oversized_identity(width: usize) -> String {
     let node = "N".repeat(width);
     format!(
-        "description: Oversized.\nblock:\n  input: {{type: object, properties: {{}}, additionalProperties: false}}\n  output: {{type: object, properties: {{}}, additionalProperties: false}}\n  edges:\n  - from: workflow_start\n    to: {node}\n  nodes:\n    workflow_start:\n      type: start\n    {node}:\n      type: return\n      output: {{type: literal, value: {{}}}}\n"
+        "description: Oversized.\nblock:\n  input: {{type: object, properties: {{}}, additionalProperties: false}}\n  edges:\n  - from: workflow_start\n    to: {node}\n  nodes:\n    workflow_start:\n      type: start\n    {node}:\n      type: return\n      outputs: []\n"
     )
 }
 
@@ -1272,23 +1271,14 @@ fn one_listing_entry_is_reduced_to_its_share_without_losing_its_identity() {
     assert_eq!(fitted.revision, "sha256:0");
 }
 
-/// `AGENT_PROGRAM` returning `{values: [...]}` constructed from the given
-/// numeric literals, under a `number` element contract.
+/// `AGENT_PROGRAM` whose input defaults `values` to the given numeric
+/// literals, under a `number` element contract.
 fn returning(literals: &[&str]) -> String {
-    let items = literals
-        .iter()
-        .map(|literal| format!("{{type: literal, value: {literal}}}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    AGENT_PROGRAM
-        .replace(
-            "output: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}\n  nodes",
-            "output: {type: object, properties: {values: {type: array, items: {type: number}}}, required: [values], additionalProperties: false}\n  nodes",
-        )
-        .replace(
-            "output: {type: reference, path: [review]}",
-            &format!("output: {{type: object, fields: {{values: {{type: array, items: [{items}]}}}}}}"),
-        )
+    let items = literals.join(", ");
+    AGENT_PROGRAM.replace(
+        "properties: {proposal: {type: string}}",
+        &format!("properties: {{proposal: {{type: string}}, values: {{type: array, items: {{type: number}}, default: [{items}]}}}}"),
+    )
 }
 
 #[test]
@@ -1315,10 +1305,7 @@ fn the_browser_number_contract_holds_for_reading_checking_and_replacing() {
     );
     let diagnostic = source.diagnostic.unwrap();
     assert_eq!(diagnostic.category, "unsupported_number");
-    assert_eq!(
-        diagnostic.path,
-        "block.nodes.done.output.fields.values.items.0.value"
-    );
+    assert_eq!(diagnostic.path, "block.input.properties.values.default.0");
     let library = roots.manager.workflow_library(&target).unwrap();
     assert_eq!(
         library.files[0].diagnostic.as_ref().unwrap().category,
@@ -2335,7 +2322,7 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     let roots = Roots::new();
     let empty = json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
     let model = json!({"type":"model","messages":[{"role":"system","content":[{"type":"literal","value":"Draft"}]},{"role":"user","content":[{"type":"literal","value":"Go."}]}],"output":{"type":"text"}});
-    let done = json!({"type":"return","output":{"type":"object","fields":{}}});
+    let done = json!({"type":"return","outputs":[]});
     let private = json!({"nodes": {"workflow_start":{"type":"start"},"inner":model},"edges": [{"from":"workflow_start","to":"inner"}],});
     let mut input = empty.clone();
     // More nonmatches than the UI's catalog bound must not hide later matches.
@@ -2344,7 +2331,7 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     }
     input["properties"]["Draft"] = json!({"type":"string"});
     let document: crate::workflow_file::WorkflowFileDocument = serde_json::from_value(json!({
-        "description":"Qualified title discovery", "block":{"input":input,"output":empty,"nodes": {"workflow_start":{"type":"start"},"first":model,"second":model,"done":done,"loop":{"type":"loop","loop_count":1,
+        "description":"Qualified title discovery", "block":{"input":input,"nodes": {"workflow_start":{"type":"start"},"first":model,"second":model,"done":done,"loop":{"type":"loop","loop_count":1,
                 "body":private}},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"second"},{"from":"second","to":"loop"},{"from":"loop","to":"done"}],},
         "editor":{"nodes":[
             {"address":{"block":[],"node":"first"},"title":"First Draft"},

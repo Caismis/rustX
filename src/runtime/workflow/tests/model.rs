@@ -98,11 +98,9 @@ fn model_definition(
     policy: crate::model::AuxiliaryModelPolicy,
 ) -> WorkflowDefinition {
     // The answer is the model's text, or its structured object.
-    let (answer, output_schema) = match &output {
-        WorkflowModelOutput::Text {} => ("generate.text", json!({"type":"string"})),
-        WorkflowModelOutput::JsonSchema { schema } => {
-            ("generate.structured_output", schema.clone())
-        }
+    let answer = match &output {
+        WorkflowModelOutput::Text {} => "generate.text",
+        WorkflowModelOutput::JsonSchema { .. } => "generate.structured_output",
     };
     base_definition(
         "generate",
@@ -126,7 +124,6 @@ fn model_definition(
             ),
         ]),
         vec![edge("generate", "done")],
-        schema(json!({"answer":output_schema}), &["answer"]),
     )
 }
 fn model_program(
@@ -638,7 +635,6 @@ fn parallel_model_program() -> WorkflowProgram {
     let mut nodes = BTreeMap::from([("workflow_start".into(), WorkflowNodeDefinition::Start {})]);
     let mut edges = Vec::new();
     let mut fields = BTreeMap::new();
-    let mut properties = serde_json::Map::new();
     for name in keys {
         nodes.insert(
             name.into(),
@@ -651,16 +647,7 @@ fn parallel_model_program() -> WorkflowProgram {
             },
         );
         edges.extend([edge("workflow_start", name), edge(name, "done")]);
-        fields.insert(
-            name.into(),
-            WorkflowValue::Object {
-                fields: BTreeMap::from([("answer".into(), reference(&format!("{name}.text")))]),
-            },
-        );
-        properties.insert(
-            name.into(),
-            schema(json!({"answer":{"type":"string"}}), &["answer"]),
-        );
+        fields.insert(name.into(), reference(&format!("{name}.text")));
     }
     nodes.insert("done".into(), return_node(fields));
     compile_test(WorkflowDefinition {
@@ -668,7 +655,6 @@ fn parallel_model_program() -> WorkflowProgram {
         timeout_ms: 600_000,
         block: WorkflowBlock {
             input: schema(json!({"task":{"type":"string"}}), &["task"]),
-            output: schema(Value::Object(properties), &keys),
             nodes,
             edges,
         },
@@ -729,7 +715,7 @@ async fn four_parallel_calls_use_three_general_slots_and_wait_for_confirmed_rele
         vec!["alpha", "bravo", "charlie", "delta"]
     );
     for (key, value) in value.as_object().unwrap() {
-        assert_eq!(value, &json!({"answer": key}));
+        assert_eq!(value, &json!(key));
     }
     executor.drain().await;
 }
@@ -1298,13 +1284,7 @@ fn failing_program(on_error: Value) -> WorkflowProgram {
         );
         edges.push(branch_edge("generate", "recover", WorkflowPort::Fail));
     }
-    compile_test(base_definition(
-        "generate",
-        nodes,
-        edges,
-        schema(json!({"answer":{"type":"string"}}), &["answer"]),
-    ))
-    .unwrap()
+    compile_test(base_definition("generate", nodes, edges)).unwrap()
 }
 
 #[tokio::test]

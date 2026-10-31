@@ -327,7 +327,7 @@ def workflow_reference_parallel() -> Scenario:
                           Stream(Gate(f"parallel-child-{index}"),
                                  ToolCall(f"output-{index}", "workflow_output", json.dumps({"summary": f"Assessment {index}", "acceptable": True})), Finish("tool_calls"))))
     steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
-                             tools_include=("parallel_review",), body_contains=("ready",)),
+                             tools_include=("parallel_review",), body_contains=("acceptable",)),
                       Stream(Text("Reviews ready."), Finish("stop"))))
     return Scenario("workflow_reference_parallel", *steps)
 
@@ -376,7 +376,7 @@ def workflow_reference_repair(exhausted: bool = False, tampered: bool = False) -
         ])
     steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
                              tools_include=("implement_and_review",),
-                             body_contains=(("needs_revision" if exhausted else "implemented"),), body_excludes=("PRIVATE CLAIM", "PRIVATE CHILD QUESTION")),
+                             body_contains=(("failed at least one fixed case" if exhausted else "Both fixed greeting cases passed"),), body_excludes=("PRIVATE CLAIM", "PRIVATE CHILD QUESTION")),
                       Stream(Text("Implementation finished."), Finish("stop"))))
     return Scenario("workflow_reference_tampering" if tampered else "workflow_reference_exhaustion" if exhausted else "workflow_reference_repair", *steps)
 

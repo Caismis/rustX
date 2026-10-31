@@ -57,8 +57,7 @@ fn minimal(
         "description": description,
         "block": {
             "input": empty,
-            "output": empty,
-            "nodes": {"start":{"type":"start"},"done": {"type": "return", "output": {"type": "literal", "value": {}}}},
+            "nodes": {"start":{"type":"start"},"done": {"type": "return", "outputs": []}},
             "edges": [{"from":"start","to":"done"}],
         },
     }))

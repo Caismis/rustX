@@ -43,8 +43,8 @@ fn reference(path: &[&str]) -> Value {
 fn model() -> Value {
     json!({"type":"model", "messages":[{"role":"system","content":[]}], "output":{"type":"text"}})
 }
-fn done(output: Value) -> Value {
-    field(json!({"type":"return"}), "output", output)
+fn done() -> Value {
+    json!({"type":"return","outputs":[]})
 }
 fn query(node: &str, field: WorkflowConsumerField, path: &[&str]) -> WorkflowAnalysisQuery {
     WorkflowAnalysisQuery {
@@ -101,7 +101,7 @@ fn selected_and_unknown_root(
 }
 fn text_candidate() -> WorkflowDefinition {
     definition(
-        json!({"input":object(json!({}), &[]), "output":object(json!({"summary":{"type":"string"}}), &["summary"]),"nodes": {"workflow_start":{"type":"start"},"text":model(), "done":done(json!({"type":"object", "fields":{"summary":reference(&["text", "text"])}}))},"edges": [{"from":"workflow_start","to":"text"},{"from":"text", "to":"done"}],}),
+        json!({"input":object(json!({}), &[]), "nodes": {"workflow_start":{"type":"start"},"text":model(), "done":done()},"edges": [{"from":"workflow_start","to":"text"},{"from":"text", "to":"done"}],}),
     )
 }
 
@@ -121,9 +121,6 @@ fn declarations_and_lexical_proofs_do_not_require_a_valid_program() {
         WorkflowConsumerField::ReturnOutput,
         &["text", "text"],
     );
-    query.consumer.path.push(WorkflowExpressionStep::Field {
-        key: "summary".into(),
-    });
     let analysis = analyze(&candidate, Some(&query)).unwrap();
     assert_eq!(analysis.outputs.len(), 1);
     assert_eq!(
@@ -131,10 +128,7 @@ fn declarations_and_lexical_proofs_do_not_require_a_valid_program() {
         Some(super::super::WorkflowModelOutput::Text {}.schema())
     );
     assert_eq!(analysis.selected.as_ref().unwrap().availability, Available);
-    assert_eq!(
-        analysis.selected.as_ref().unwrap().compatibility,
-        Compatible
-    );
+    assert_eq!(analysis.selected.as_ref().unwrap().compatibility, Unknown);
     query.reference = Some(vec!["text".into(), "text".into(), "text".into()]);
     assert_eq!(
         selected(&candidate, &query).availability,
@@ -165,27 +159,20 @@ fn a_real_node_named_result_retains_its_producer_identity() {
             edge.to = "result".into();
         }
     }
-    let WorkflowNodeDefinition::Return { output } = candidate.block.nodes.get_mut("done").unwrap()
-    else {
-        panic!("Return")
-    };
-    *output = serde_json::from_value(
-        json!({"type":"object","fields":{"summary":reference(&["result", "text"])}}),
-    )
-    .unwrap();
+    candidate.block.nodes.insert(
+        "done".into(),
+        serde_json::from_value(json!({"type":"return","outputs":[{"variable":"summary","value_selector":["result","text"]}]})).unwrap(),
+    );
     super::super::WorkflowProgram::compile(
         super::super::WorkflowId::parse("result-producer").unwrap(),
         candidate.clone(),
     )
     .unwrap();
-    let mut query = query(
+    let query = query(
         "done",
         WorkflowConsumerField::ReturnOutput,
         &["result", "text"],
     );
-    query.consumer.path.push(WorkflowExpressionStep::Field {
-        key: "summary".into(),
-    });
     let choice = selected(&candidate, &query);
     assert_eq!(choice.availability, Available);
     assert_eq!(
@@ -264,11 +251,6 @@ fn required_paths_whole_objects_arrays_and_type_compatibility_use_native_proofs(
         query.reference = Some(path.iter().map(|s| (*s).into()).collect());
         assert_eq!(selected(&candidate, &query).availability, Unavailable);
     }
-    query.consumer.path = vec![WorkflowExpressionStep::Field {
-        key: "summary".into(),
-    }];
-    query.reference = Some(vec!["args".into(), "flag".into()]);
-    assert_eq!(selected(&candidate, &query).compatibility, Incompatible);
 }
 
 fn finite_join_candidate(
@@ -304,15 +286,15 @@ fn finite_join_candidate(
     }
     let consumer_field = if tool_consumer {
         nodes["sink"] = tool(&json!({"type":"object"}), reference(&[producer]));
-        nodes["done"] = done(json!({"type":"literal","value":{}}));
+        nodes["done"] = done();
         edges.push(json!({"from":"sink","to":"done"}));
         WorkflowConsumerField::Arguments
     } else {
-        nodes["sink"] = done(reference(&[producer]));
+        nodes["sink"] = done();
         WorkflowConsumerField::ReturnOutput
     };
     let candidate = definition(
-        json!({"input":contract, "output":{"type":"object"},"nodes": ({ let mut nodes = serde_json::to_value(nodes).unwrap(); nodes.as_object_mut().unwrap().insert("workflow_start".into(), serde_json::json!({"type":"start"})); nodes }),"edges": ({ let mut edges = serde_json::to_value(edges).unwrap(); edges.as_array_mut().unwrap().insert(0, serde_json::json!({"from":"workflow_start","to":"source"})); edges }),}),
+        json!({"input":contract, "nodes": ({ let mut nodes = serde_json::to_value(nodes).unwrap(); nodes.as_object_mut().unwrap().insert("workflow_start".into(), serde_json::json!({"type":"start"})); nodes }),"edges": ({ let mut edges = serde_json::to_value(edges).unwrap(); edges.as_array_mut().unwrap().insert(0, serde_json::json!({"from":"workflow_start","to":"source"})); edges }),}),
     );
     (candidate, consumer_field)
 }
@@ -345,39 +327,8 @@ fn joins_preserve_producer_identity_independently_of_finite_contract_assignabili
                     for choice in selected_and_catalog(&report) {
                         assert_eq!(choice.availability, Available);
                         assert_eq!(choice.schema.as_ref(), Some(&contract));
-                        assert_eq!(
-                            choice.compatibility,
-                            if tool_consumer { Unknown } else { Compatible }
-                        );
+                        assert_eq!(choice.compatibility, Unknown);
                         assert!(choice.diagnostic.is_none());
-                    }
-
-                    // Scope presence does not establish type assignability.
-                    // A narrower consumer still rejects a mismatching value.
-                    if !tool_consumer {
-                        let mut incompatible = candidate.clone();
-                        incompatible.block.output =
-                            object(json!({"other":{"type":"string"}}), &["other"]);
-                        let report = analyze(
-                            &incompatible,
-                            Some(&query(
-                                "sink",
-                                WorkflowConsumerField::ReturnOutput,
-                                &[producer],
-                            )),
-                        )
-                        .unwrap();
-                        for choice in selected_and_catalog(&report) {
-                            assert_eq!(choice.availability, Available);
-                            assert_eq!(choice.compatibility, Incompatible);
-                        }
-                        assert!(
-                            super::super::WorkflowProgram::compile(
-                                super::super::WorkflowId::parse("finite-join-mismatch").unwrap(),
-                                incompatible,
-                            )
-                            .is_err()
-                        );
                     }
                 }
             }
@@ -388,9 +339,9 @@ fn joins_preserve_producer_identity_independently_of_finite_contract_assignabili
 #[test]
 fn joins_intersect_predecessor_values_and_never_export_branch_business_data() {
     let candidate = definition(
-        json!({"input":object(json!({"flag":{"type":"boolean"}}), &["flag"]), "output":object(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},
+        json!({"input":object(json!({"flag":{"type":"boolean"}}), &["flag"]), "nodes": {"workflow_start":{"type":"start"},
             "gate":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean", "value":reference(&["args","flag"])}}]},
-            "left":model(), "right":model(), "done":done(json!({"type":"literal", "value":{}}))},"edges": [{"from":"workflow_start","to":"gate"},{"from":"gate","to":"left","port":"true"},{"from":"gate","to":"right","port":"false"},{"from":"left","to":"done"},{"from":"right","to":"done"}],}),
+            "left":model(), "right":model(), "done":done()},"edges": [{"from":"workflow_start","to":"gate"},{"from":"gate","to":"left","port":"true"},{"from":"gate","to":"right","port":"false"},{"from":"left","to":"done"},{"from":"right","to":"done"}],}),
     );
     for producer in ["left", "right", "gate", "done"] {
         assert_eq!(
@@ -427,13 +378,13 @@ fn bodies_see_around_them_their_container_and_their_own_nodes() {
         "save":{"type":"assigner","items":[{"variable":["repeat","ok"],"operation":"overwrite","value":reference(&["private","text"])}]}},
         "edges": [{"from":"start","to":"private"},{"from":"private","to":"save"}]});
     let candidate = definition(
-        json!({"input":contract, "output":object(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},
+        json!({"input":contract, "nodes": {"workflow_start":{"type":"start"},
             "repeat":{"type":"loop","loop_count":2,
                 "loop_variables":[{"label":"ok","var_type":"boolean","value":reference(&["args","ok"])}],
                 "break_condition":{"type":"boolean","value":reference(&["repeat","ok"])},"body":body},
             "each":{"type":"iteration","iterator":reference(&["args","list"]),"output":reference(&["each","item"]),
                 "body":{"nodes":{"start":{"type":"start"}}}},
-            "done":done(json!({"type":"literal","value":{}}))},
+            "done":done()},
             "edges": [{"from":"workflow_start","to":"repeat"},{"from":"repeat","to":"each"},{"from":"each","to":"done"}]}),
     );
     let inside = |field, path: &[&str]| {
@@ -533,13 +484,7 @@ fn external_tool_expected_types_stay_unknown_and_bad_output_contracts_stay_pendi
     );
     assert_eq!(args.availability, Available);
     assert_eq!(args.compatibility, Unknown);
-    let mut output_query = query("done", WorkflowConsumerField::ReturnOutput, &["text"]);
-    output_query
-        .consumer
-        .path
-        .push(WorkflowExpressionStep::Field {
-            key: "summary".into(),
-        });
+    let output_query = query("done", WorkflowConsumerField::ReturnOutput, &["text"]);
     let report = analyze(&candidate, Some(&output_query)).unwrap();
     for reference in [
         report.selected.as_ref().unwrap(),
@@ -577,13 +522,13 @@ fn unknown_output_contracts_preserve_producer_scope_facts() {
             json!([{"role":"system","content":[]},{"role":"user","content":[reference(&["broken"])]}]),
         );
         let linear = definition(json!({
-            "input":object(json!({}), &[]), "output":object(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},"first":first, "broken":tool(),
-                "done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"broken"},{"from":"broken","to":"done"}],}));
+            "input":object(json!({}), &[]), "nodes": {"workflow_start":{"type":"start"},"first":first, "broken":tool(),
+                "done":done()},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"broken"},{"from":"broken","to":"done"}],}));
         let joined = definition(json!({
-            "input":object(json!({}), &[]), "output":object(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},"common":tool(),
+            "input":object(json!({}), &[]), "nodes": {"workflow_start":{"type":"start"},"common":tool(),
                 "gate":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"literal","value":true}}}]},
                 "broken":tool(), "skip":model(), "join":tool(),
-                "done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"common"},{"from":"common","to":"gate"},
+                "done":done()},"edges": [{"from":"workflow_start","to":"common"},{"from":"common","to":"gate"},
                 {"from":"gate","to":"broken","port":"true"},{"from":"gate","to":"skip","port":"false"},
                 {"from":"broken","to":"join"},{"from":"skip","to":"join"},
                 {"from":"join","to":"done"}],}));
@@ -654,10 +599,10 @@ fn tool_argument_roots_enforce_necessary_object_type_without_claiming_full_compa
         (object(json!({}), &[]), Unknown),
     ] {
         let mut candidate = definition(json!({
-            "input":object(json!({}), &[]), "output":object(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},
+            "input":object(json!({}), &[]), "nodes": {"workflow_start":{"type":"start"},
                 "source":{"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["args"]),"result":{"type":"json","schema":schema}},
                 "sink":{"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["source"]),"result":{"type":"text"}},
-                "done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"source"},{"from":"source","to":"sink"},{"from":"sink","to":"done"}],}));
+                "done":done()},"edges": [{"from":"workflow_start","to":"source"},{"from":"source","to":"sink"},{"from":"sink","to":"done"}],}));
         let root = query("sink", WorkflowConsumerField::Arguments, &["source"]);
         let report = analyze(&candidate, Some(&root)).unwrap();
         for choice in [
@@ -724,13 +669,13 @@ fn unfinished_input_contracts_preserve_control_flow_presence_and_absence() {
     let empty = object(json!({}), &[]);
     let tool = || json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["args"]),"result":{"type":"json","schema":empty}});
     let linear = definition(
-        json!({"input":empty,"output":empty,"nodes": {"workflow_start":{"type":"start"},
-        "first":tool(),"later":tool(),"done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"later"},{"from":"later","to":"done"}],}),
+        json!({"input":empty,"nodes": {"workflow_start":{"type":"start"},
+        "first":tool(),"later":tool(),"done":done()},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"later"},{"from":"later","to":"done"}],}),
     );
     let joined = definition(
-        json!({"input":empty,"output":empty,"nodes": {"workflow_start":{"type":"start"},
+        json!({"input":empty,"nodes": {"workflow_start":{"type":"start"},
         "common":tool(),"gate":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"literal","value":true}}}]},
-        "left":tool(),"right":tool(),"join":tool(),"done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"common"},{"from":"common","to":"gate"},{"from":"gate","to":"left","port":"true"},{"from":"gate","to":"right","port":"false"},
+        "left":tool(),"right":tool(),"join":tool(),"done":done()},"edges": [{"from":"workflow_start","to":"common"},{"from":"common","to":"gate"},{"from":"gate","to":"left","port":"true"},{"from":"gate","to":"right","port":"false"},
             {"from":"left","to":"join"},{"from":"right","to":"join"},{"from":"join","to":"done"}],}),
     );
     for (input, known) in [
@@ -811,7 +756,7 @@ fn equality_candidate(
         )
     };
     let candidate = definition(
-        json!({"input":schema,"output":schema,"nodes": {"workflow_start":{"type":"start"},"gate":node,"done":done(reference(&["args"]))},"edges": edges}),
+        json!({"input":schema,"nodes": {"workflow_start":{"type":"start"},"gate":node,"done":done()},"edges": edges}),
     );
     let mut query = query(
         "gate",
@@ -1014,87 +959,6 @@ fn make_equality_selected_type_unknown(candidate: &mut WorkflowDefinition, _loop
     candidate.block.input = json!({});
 }
 
-#[test]
-fn closed_destination_fields_reject_references_across_receivers_and_descendants() {
-    for receiver in ["return"] {
-        for shape in ["scalar", "object", "array"] {
-            let property = match shape {
-                "object" => object(json!({"leaf":{"type":"string"}}), &["leaf"]),
-                "array" => {
-                    json!({"type":"array","items":object(json!({"leaf":{"type":"string"}}), &["leaf"])})
-                }
-                _ => json!({"type":"string"}),
-            };
-            for (destination, compatibility, valid) in [
-                (object(json!({}), &[]), Incompatible, false),
-                (
-                    json!({"type":"object","additionalProperties":true}),
-                    Unknown,
-                    true,
-                ),
-                (object(json!({"x":property}), &[]), Compatible, true),
-                (
-                    json!({"type":"object","additionalProperties":false,"unknown":true}),
-                    Unknown,
-                    false,
-                ),
-            ] {
-                let (candidate, query) = field_projection_candidate(&destination, receiver, shape);
-                let report = analyze(&candidate, Some(&query)).unwrap();
-                for choice in selected_and_catalog(&report) {
-                    assert_eq!(choice.availability, Available);
-                    assert_eq!(
-                        choice.compatibility, compatibility,
-                        "{receiver}, {shape}, {destination}"
-                    );
-                    if compatibility == Incompatible {
-                        assert!(
-                            choice
-                                .diagnostic
-                                .as_ref()
-                                .unwrap()
-                                .contains("additionalProperties: false")
-                        );
-                    }
-                }
-                assert_eq!(
-                    super::super::WorkflowProgram::compile(
-                        super::super::WorkflowId::parse("projection").unwrap(),
-                        candidate
-                    )
-                    .is_ok(),
-                    valid,
-                    "{receiver}, {shape}, {destination}"
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn forbidden_destination_fields_do_not_require_known_producer_types() {
-    for receiver in ["return"] {
-        for shape in ["scalar", "object", "array"] {
-            let (mut candidate, query) =
-                field_projection_candidate(&object(json!({}), &[]), receiver, shape);
-            candidate.block.input = json!({});
-            let report = analyze(&candidate, Some(&query)).unwrap();
-            for choice in selected_and_unknown_root(&report) {
-                assert_eq!(choice.availability, Pending);
-                assert_eq!(choice.schema, None);
-                assert_eq!(choice.compatibility, Incompatible);
-                assert!(
-                    choice
-                        .diagnostic
-                        .as_ref()
-                        .unwrap()
-                        .contains("destination schema forbids this field")
-                );
-            }
-        }
-    }
-}
-
 fn assert_array_choice(
     candidate: &WorkflowDefinition,
     query: &WorkflowAnalysisQuery,
@@ -1125,13 +989,10 @@ fn assert_array_choice(
 
 #[test]
 fn array_choices_share_native_common_element_proofs_for_every_receiver() {
-    for receiver in ["return", "tool"] {
+    for receiver in ["tool"] {
         let root = "args";
-        let (candidate, mut query) = array_reference_candidate(
-            receiver,
-            &[reference(&[root, "a"]), reference(&[root, "a"])],
-            &json!({"type":"object"}),
-        );
+        let (candidate, mut query) =
+            array_reference_candidate(&[reference(&[root, "a"]), reference(&[root, "a"])]);
         assert!(
             super::super::WorkflowProgram::compile(
                 super::super::WorkflowId::parse("array").unwrap(),
@@ -1161,172 +1022,8 @@ fn array_choices_share_native_common_element_proofs_for_every_receiver() {
 }
 
 #[test]
-fn array_choices_preserve_finite_values_widening_unknown_siblings_and_repair() {
-    let object_type = json!({"type":"object"});
-    let a = reference(&["args", "a"]);
-    let (candidate, mut query) = array_reference_candidate(
-        "return",
-        &[a.clone(), a.clone(), reference(&["args", "open"])],
-        &object_type,
-    );
-    query.reference = Some(vec!["args".into(), "b".into()]);
-    assert_array_choice(&candidate, &query, Compatible, true);
-
-    for other in [
-        reference(&["unfinished"]),
-        json!({"type":"object","fields":{"pending":reference(&["unfinished"])}}),
-    ] {
-        let (candidate, mut query) =
-            array_reference_candidate("return", &[other, a.clone()], &object_type);
-        query.reference = Some(vec!["args".into(), "b".into()]);
-        assert_array_choice(&candidate, &query, Unknown, false);
-    }
-    let (candidate, query) = array_reference_candidate(
-        "return",
-        &[a.clone(), reference(&["unfinished"])],
-        &object_type,
-    );
-    assert_array_choice(&candidate, &query, Compatible, true);
-
-    for (left, right, element, expected) in [
-        (
-            json!({"type":"object","const":{"left":"a"}}),
-            json!({"type":"object","const":{"right":"b"}}),
-            object_type,
-            Compatible,
-        ),
-        (
-            json!({"type":"string","const":"a"}),
-            json!({"type":"string","const":"b"}),
-            json!({"type":"string"}),
-            Compatible,
-        ),
-        (
-            json!({"type":"string","enum":["a"]}),
-            json!({"type":"string","enum":["b"]}),
-            json!({"type":"string"}),
-            Incompatible,
-        ),
-        (
-            json!({"type":"integer"}),
-            json!({"type":"number"}),
-            json!({"type":"number"}),
-            Compatible,
-        ),
-        (
-            json!({"type":"null","const":null}),
-            json!({"type":"null","const":null}),
-            json!({"type":"null"}),
-            Compatible,
-        ),
-    ] {
-        let (mut candidate, mut query) =
-            array_reference_candidate("return", &[a.clone(), a.clone()], &element);
-        candidate.block.input = object(json!({"a":left,"b":right}), &["a", "b"]);
-        query.reference = Some(vec!["args".into(), "b".into()]);
-        assert_array_choice(&candidate, &query, expected, expected == Compatible);
-    }
-}
-
-#[test]
-fn nested_array_choices_replace_only_the_selected_descendant_and_keep_outer_constraints() {
-    let a = reference(&["args", "a"]);
-    let element = json!({"type":"object"});
-    let nested = json!({"type":"object","fields":{"slot":a}});
-    let inner = json!({"type":"array","items":[a,a]});
-    for (items, item_schema, steps) in [
-        (
-            vec![nested.clone(), nested],
-            object(json!({"slot":element}), &["slot"]),
-            vec![WorkflowExpressionStep::Field { key: "slot".into() }],
-        ),
-        (
-            vec![inner.clone(), inner],
-            json!({"type":"array","items":element}),
-            vec![WorkflowExpressionStep::Item { index: 1 }],
-        ),
-    ] {
-        let (candidate, mut query) = array_reference_candidate("return", &items, &item_schema);
-        query.consumer.path.extend(steps);
-        for field in ["a", "b", "open"] {
-            query.reference = Some(vec!["args".into(), field.into()]);
-            assert_array_choice(
-                &candidate,
-                &query,
-                if field == "b" {
-                    Incompatible
-                } else {
-                    Compatible
-                },
-                field != "b",
-            );
-        }
-    }
-}
-
-#[test]
-fn array_schema_markers_stay_unknown_and_large_repeated_arrays_keep_bounded_searches() {
-    let a = reference(&["args", "a"]);
-    let (mut candidate, mut query) = array_reference_candidate(
-        "return",
-        &[reference(&["unfinished"]), a.clone()],
-        &json!({"type":"object"}),
-    );
-    candidate.block.nodes.insert("unfinished".into(), serde_json::from_value(json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["args"]),"result":{"type":"json","schema":{"type":"object","unknown":true}}})).unwrap());
-    candidate.block.edges = serde_json::from_value(json!([
-        {"from":"workflow_start","to":"unfinished"},
-        {"from":"unfinished","to":"receive"}
-    ]))
-    .unwrap();
-    query.reference = Some(vec!["args".into(), "b".into()]);
-    assert_array_choice(&candidate, &query, Unknown, false);
-    query.reference = Some(vec!["unfinished".into()]);
-    for choice in selected_and_catalog(&analyze(&candidate, Some(&query)).unwrap()) {
-        assert_eq!(choice.availability, Pending);
-        assert_eq!(choice.schema, None);
-        assert_eq!(choice.compatibility, Unknown);
-    }
-
-    let (mut candidate, mut query) =
-        array_reference_candidate("return", &vec![a; 1500], &json!({"type":"object"}));
-    let right = candidate.block.input["properties"]["b"].clone();
-    for index in 0..64 {
-        let key = format!("bad_{index:03}");
-        candidate.block.input["properties"][&key] = right.clone();
-        candidate.block.input["required"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!(key));
-    }
-    query.consumer.path[1] = WorkflowExpressionStep::Item { index: 1499 };
-    query.reference = Some(vec!["args".into(), "b".into()]);
-    query.limit = 256;
-    let report = analyze(&candidate, Some(&query)).unwrap();
-    assert_eq!(
-        report.selected.as_ref().unwrap().compatibility,
-        Incompatible
-    );
-    let choices: Vec<_> = report
-        .references
-        .iter()
-        .filter(|choice| choice.path.len() == 2 && choice.path[1].starts_with("bad_"))
-        .collect();
-    assert_eq!(choices.len(), 64);
-    assert!(
-        choices
-            .iter()
-            .all(|choice| choice.compatibility == Incompatible)
-    );
-    assert_array_choice(&candidate, &query, Incompatible, false);
-}
-
-#[test]
 fn large_repeated_array_schemas_are_borrowed_before_any_proof_or_copy() {
-    let (mut candidate, mut query) = array_reference_candidate(
-        "tool",
-        &vec![reference(&["args"]); 1500],
-        &json!({"type":"object"}),
-    );
+    let (mut candidate, mut query) = array_reference_candidate(&vec![reference(&["args"]); 1500]);
     let keys: Vec<_> = (0..100).map(|index| format!("p{index:03}")).collect();
     candidate.block.input = object(
         Value::Object(
@@ -1404,11 +1101,10 @@ fn large_repeated_array_schemas_are_borrowed_before_any_proof_or_copy() {
 
 #[test]
 fn schema_materialization_budget_precedes_large_nested_sibling_copies() {
-    let (mut candidate, mut query) = array_reference_candidate(
-        "tool",
-        &vec![json!({"type":"object","fields":{"wrapped":reference(&["args"])}}); 20],
-        &json!({"type":"object"}),
-    );
+    let (mut candidate, mut query) = array_reference_candidate(&vec![
+        json!({"type":"object","fields":{"wrapped":reference(&["args"])}});
+        20
+    ]);
     candidate.block.input = object(
         json!({"text":{"type":"string","description":"x".repeat(4096)}}),
         &["text"],
@@ -1467,8 +1163,7 @@ fn distinct_large_schema_work_and_nested_array_expansion_share_one_request_budge
     let items: Vec<_> = (0..24)
         .map(|index| reference(&["args", &format!("p{index:03}")]))
         .collect();
-    let (mut candidate, mut query) =
-        array_reference_candidate("tool", &items, &json!({"type":"object"}));
+    let (mut candidate, mut query) = array_reference_candidate(&items);
     let properties: serde_json::Map<_, _> = (0..24)
         .map(|index| {
             (
@@ -1505,11 +1200,7 @@ fn distinct_large_schema_work_and_nested_array_expansion_share_one_request_budge
     // failure; a tiny budget cannot turn their unfinished proof into compatible.
     let a = reference(&["args", "a"]);
     let nested = json!({"type":"array","items":[{"type":"object","fields":{"slot":a}}, {"type":"object","fields":{"slot":a}}]});
-    let (candidate, mut query) = array_reference_candidate(
-        "return",
-        &[nested.clone(), nested],
-        &json!({"type":"array","items":{"type":"object"}}),
-    );
+    let (candidate, mut query) = array_reference_candidate(&[nested.clone(), nested]);
     query.consumer.path.extend([
         WorkflowExpressionStep::Item { index: 1 },
         WorkflowExpressionStep::Field { key: "slot".into() },
@@ -1533,10 +1224,10 @@ fn recursive_schema_proofs_and_reference_paths_share_the_inference_budget() {
         schema = object(json!({"child":schema}), &["child"]);
     }
     let candidate = definition(
-        json!({"input":schema,"output":schema,"nodes": {"workflow_start":{"type":"start"},"done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"done"}],}),
+        json!({"input":schema,"nodes": {"workflow_start":{"type":"start"},"done":done()},"edges": [{"from":"workflow_start","to":"done"}],}),
     );
     let query = query("done", WorkflowConsumerField::ReturnOutput, &["args"]);
-    assert_eq!(selected(&candidate, &query).compatibility, Compatible);
+    assert_eq!(selected(&candidate, &query).compatibility, Unknown);
     let report = analyze_with_schema_budget(
         &candidate,
         Some(&query),
@@ -1636,35 +1327,6 @@ fn finite_schema_proofs_reserve_validator_storage_and_each_value_validation() {
 }
 
 #[test]
-fn exhausted_analysis_retains_cached_incompatibility_and_native_scope_facts() {
-    let candidate = definition(
-        json!({"input":object(json!({"x":{"type":"integer"}}), &["x"]),"output":object(json!({"x":{"type":"string"}}), &["x"]),"nodes": {"workflow_start":{"type":"start"},"done":done(json!({"type":"object","fields":{"x":reference(&["args","x"])}}))},"edges": [{"from":"workflow_start","to":"done"}],}),
-    );
-    let mut query = query("done", WorkflowConsumerField::ReturnOutput, &["args", "x"]);
-    query.consumer.path = vec![WorkflowExpressionStep::Field { key: "x".into() }];
-    query.search = "args.x".into();
-    let report = analyze_with_schema_budget(
-        &candidate,
-        Some(&query),
-        SchemaBudget::limited(4096, 2000, 4096),
-    )
-    .unwrap();
-    assert!(report.truncated && report.incomplete);
-    for choice in selected_and_catalog(&report) {
-        assert_eq!(choice.availability, Available);
-        assert_eq!(choice.compatibility, Incompatible);
-    }
-    let (candidate, mut query) = array_reference_candidate("tool", &[], &json!({"type":"object"}));
-    query.consumer.path.clear();
-    query.reference = Some(vec!["receive".into()]);
-    query.search = "receive".into();
-    let report =
-        analyze_with_schema_budget(&candidate, Some(&query), SchemaBudget::limited(0, 0, 0))
-            .unwrap();
-    assert_eq!(report.selected.unwrap().availability, Unavailable);
-}
-
-#[test]
 fn equality_reads_a_known_type_without_materializing_or_measuring_the_schema() {
     let mut keys: Vec<_> = (0..12000).map(|index| format!("p{index:05}")).collect();
     keys.insert(0, "zzflag".into());
@@ -1686,7 +1348,7 @@ fn equality_reads_a_known_type_without_materializing_or_measuring_the_schema() {
         "the complete schema exceeds the measurement step budget"
     );
     let candidate = definition(
-        json!({"input":source,"output":object(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},"gate":{"type":"branch","cases": [{"id":"true", "condition":{"type":"equal","left":reference(&["args","p11999"]),"right":reference(&["args"])}}]},"done":done(json!({"type":"literal","value":{}}))},"edges": [{"from":"workflow_start","to":"gate"},{"from":"gate","to":"done","port":"true"},{"from":"gate","to":"done","port":"false"}],}),
+        json!({"input":source,"nodes": {"workflow_start":{"type":"start"},"gate":{"type":"branch","cases": [{"id":"true", "condition":{"type":"equal","left":reference(&["args","p11999"]),"right":reference(&["args"])}}]},"done":done()},"edges": [{"from":"workflow_start","to":"gate"},{"from":"gate","to":"done","port":"true"},{"from":"gate","to":"done","port":"false"}],}),
     );
     let mut query = query(
         "gate",
@@ -1735,94 +1397,20 @@ fn analysis_bounds_search_and_truncation_are_explicit() {
     assert!(analyze(&candidate, Some(&query)).is_err());
 }
 
-fn field_projection_candidate(
-    destination: &Value,
-    receiver: &str,
-    shape: &str,
-) -> (WorkflowDefinition, WorkflowAnalysisQuery) {
-    let value = reference(&["args", "x"]);
-    let (value, steps) = match shape {
-        "object" => (
-            json!({"type":"object","fields":{"leaf":value}}),
-            vec![WorkflowExpressionStep::Field { key: "leaf".into() }],
-        ),
-        "array" => (
-            json!({"type":"array","items":[{"type":"object","fields":{"leaf":value}}]}),
-            vec![
-                WorkflowExpressionStep::Item { index: 0 },
-                WorkflowExpressionStep::Field { key: "leaf".into() },
-            ],
-        ),
-        _ => (value, vec![]),
-    };
-    let value = json!({"type":"object","fields":{"x":value}});
-    let source = object(json!({"x":{"type":"string"}}), &["x"]);
-    let (node, field, output) = match receiver {
-        "return" => (
-            done(value),
-            WorkflowConsumerField::ReturnOutput,
-            destination.clone(),
-        ),
-        _ => unreachable!("receiver {receiver}"),
-    };
-    let candidate = if receiver == "return" {
-        definition(
-            json!({"input":source,"output":output,"nodes": {"workflow_start":{"type":"start"},"receive":node},"edges": [{"from":"workflow_start","to":"receive"}],}),
-        )
-    } else {
-        let edges = json!([{"from":"receive","to":"done"}]);
-        definition(
-            json!({"input":source,"output":output,"nodes": {"workflow_start":{"type":"start"},"receive":node,"done":done(json!({"type":"literal","value":{}}))},"edges": ({ let mut edges = serde_json::to_value(edges).unwrap(); edges.as_array_mut().unwrap().insert(0, serde_json::json!({"from":"workflow_start","to":"receive"})); edges }),}),
-        )
-    };
-    let mut query = query("receive", field, &["args", "x"]);
-    query
-        .consumer
-        .path
-        .push(WorkflowExpressionStep::Field { key: "x".into() });
-    query.consumer.path.extend(steps);
-    (candidate, query)
-}
-
-fn array_reference_candidate(
-    receiver: &str,
-    items: &[Value],
-    element: &Value,
-) -> (WorkflowDefinition, WorkflowAnalysisQuery) {
+fn array_reference_candidate(items: &[Value]) -> (WorkflowDefinition, WorkflowAnalysisQuery) {
     let left = object(json!({"left":{"type":"string"}}), &["left"]);
     let right = object(json!({"right":{"type":"string"}}), &["right"]);
     let source = object(
         json!({"a":left,"b":right,"open":{"type":"object"},"text":{"type":"string"}}),
         &["a", "b", "open", "text"],
     );
-    let destination = object(json!({"values":{"type":"array","items":element}}), &[]);
-    let empty = object(json!({}), &[]);
     let value = json!({"type":"object","fields":{"values":{"type":"array","items":items}}});
-    let literal = json!({"type":"literal","value":{}});
-    let (node, field, output) = match receiver {
-        "return" => (
-            done(value),
-            WorkflowConsumerField::ReturnOutput,
-            destination.clone(),
-        ),
-        "tool" => (
-            json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":value,"result":{"type":"text"}}),
-            WorkflowConsumerField::Arguments,
-            empty.clone(),
-        ),
-        _ => unreachable!("receiver {receiver}"),
-    };
-    let candidate = if receiver == "return" {
-        definition(
-            json!({"input":source,"output":output,"nodes": {"workflow_start":{"type":"start"},"receive":node},"edges": [{"from":"workflow_start","to":"receive"}],}),
-        )
-    } else {
-        let edges = json!([{"from":"receive","to":"done"}]);
-        definition(
-            json!({"input":source,"output":output,"nodes": {"workflow_start":{"type":"start"},"receive":node,"done":done(literal)},"edges": ({ let mut edges = serde_json::to_value(edges).unwrap(); edges.as_array_mut().unwrap().insert(0, serde_json::json!({"from":"workflow_start","to":"receive"})); edges }),}),
-        )
-    };
-    let mut query = query("receive", field, &["args", "a"]);
+    let node = json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":value,"result":{"type":"text"}});
+    let candidate = definition(
+        json!({"input":source,"nodes": {"workflow_start":{"type":"start"},"receive":node,"done":done()},
+            "edges": [{"from":"workflow_start","to":"receive"},{"from":"receive","to":"done"}]}),
+    );
+    let mut query = query("receive", WorkflowConsumerField::Arguments, &["args", "a"]);
     query.consumer.path = vec![
         WorkflowExpressionStep::Field {
             key: "values".into(),
@@ -1834,11 +1422,10 @@ fn array_reference_candidate(
 
 fn replace_array_reference(candidate: &mut WorkflowDefinition, query: &WorkflowAnalysisQuery) {
     let node = candidate.block.nodes.get_mut("receive").unwrap();
-    let mut value = match node {
-        WorkflowNodeDefinition::Return { output } => output,
-        WorkflowNodeDefinition::Tool { arguments, .. } => arguments,
-        _ => panic!("array receiver"),
+    let WorkflowNodeDefinition::Tool { arguments, .. } = node else {
+        panic!("array receiver")
     };
+    let mut value = arguments;
     for step in &query.consumer.path {
         value = match (value, step) {
             (WorkflowValue::Object { fields }, WorkflowExpressionStep::Field { key }) => {

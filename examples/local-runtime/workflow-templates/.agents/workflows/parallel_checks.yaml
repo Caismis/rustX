@@ -9,38 +9,14 @@ block:
     required:
     - text
     additionalProperties: false
-  output:
-    type: object
-    properties:
-      clarity: &id001
-        type: object
-        properties:
-          passed:
-            type: boolean
-        required:
-        - passed
-        additionalProperties: false
-      brevity: *id001
-    required:
-    - clarity
-    - brevity
-    additionalProperties: false
   nodes:
     start:
       type: start
     return_checks:
       type: return
-      output:
-        type: object
-        fields:
-          clarity:
-            type: reference
-            path:
-            - check_text_clarity_assess_clarity
-          brevity:
-            type: reference
-            path:
-            - check_text_brevity_assess_brevity
+      outputs:
+      - {variable: clarity, value_selector: [check_text_clarity_assess_clarity]}
+      - {variable: brevity, value_selector: [check_text_brevity_assess_brevity]}
     check_text_clarity_assess_clarity:
       type: agent
       profile: reviewer

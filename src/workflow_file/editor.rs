@@ -102,10 +102,6 @@ pub enum WorkflowOrderTarget {
         block: Vec<WorkflowBlockStep>,
         path: Vec<WorkflowSchemaStep>,
     },
-    BlockOutput {
-        block: Vec<WorkflowBlockStep>,
-        path: Vec<WorkflowSchemaStep>,
-    },
     NodeOutput {
         address: WorkflowNodeAddress,
         path: Vec<WorkflowSchemaStep>,
@@ -241,8 +237,7 @@ impl WorkflowEditorMetadata {
         }
         for order in &self.orders {
             let (valid, path) = match &order.target {
-                WorkflowOrderTarget::BlockInput { block, path }
-                | WorkflowOrderTarget::BlockOutput { block, path } => {
+                WorkflowOrderTarget::BlockInput { block, path } => {
                     (block_valid(block), path.as_slice())
                 }
                 WorkflowOrderTarget::NodeOutput { address, path } => {
@@ -335,10 +330,9 @@ fn order_fields(
     definition: &WorkflowDefinition,
     target: &WorkflowOrderTarget,
 ) -> Option<BTreeSet<String>> {
-    use WorkflowOrderTarget::{BlockInput, BlockOutput, NodeOutput};
+    use WorkflowOrderTarget::{BlockInput, NodeOutput};
     let (schema, path) = match target {
         BlockInput { block, path } => (block_at(&definition.block, block)?.input.clone(), path),
-        BlockOutput { block, path } => (block_at(&definition.block, block)?.output.clone(), path),
         NodeOutput { address, path } => (
             crate::runtime::workflow::authoring::declared_output(node_at(definition, address)?)
                 .ok()??,

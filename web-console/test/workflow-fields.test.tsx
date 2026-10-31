@@ -14,17 +14,23 @@ import WorkflowEditor from '../src/app/workflows/ui/editor/WorkflowEditor';
 /** The real editor: its fields, its Ctrl/Cmd+S handler and its machine,
  * over a port whose writes the test observes. */
 const writes: { expected: string; edit: WorkflowEdit }[] = [];
+// An input schema the field list cannot show stays JSON text.
+let rawInput: Record<string, unknown> | undefined;
 const port: WorkflowScopePort = {
   endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' },
   analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}),
-  read: async id => ({ ...exampleSource('parallel_review'), id, revision: 'sha256:base' }),
+  read: async id => {
+    const source = exampleSource('parallel_review');
+    if (rawInput) source.document!.block.input = rawInput;
+    return { ...source, id, revision: 'sha256:base' };
+  },
   check: () => new Promise(() => {}),
   write: (_id, expected, edit) => { writes.push({ expected, edit }); return new Promise<WorkflowCommit>(() => {}); },
 };
 const authority = { subscribe: () => () => {}, getCatalog: () => undefined } as unknown as WorkspaceAuthority;
 
 beforeEach(() => {
-  writes.length = 0;
+  writes.length = 0; rawInput = undefined;
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal('DOMMatrixReadOnly', class { m22 = 1; constructor() {} });
 });
@@ -39,8 +45,9 @@ async function mountSettings() {
   return editor;
 }
 async function openBlockSettings() {
+  rawInput = { type: 'object' };
   const editor = await mountSettings();
-  const field = showSchemaJson('Output schema');
+  const field = showSchemaJson('Input fields');
   field.focus();
   return { editor, field };
 }
@@ -48,13 +55,13 @@ const saveShortcut = (target: Element) => fireEvent.keyDown(target, { key: 's', 
 
 it('saves the focused field\'s valid text: Ctrl/Cmd+S applies it before writing', async () => {
   const { editor, field } = await openBlockSettings();
-  const schema = { type: 'object', properties: { proposal: { type: 'string' }, note: { type: 'string' } }, required: ['proposal'], additionalProperties: false };
+  const schema = { type: 'object', description: 'Any proposal' };
   fireEvent.change(field, { target: { value: JSON.stringify(schema) } });
   expect(document.activeElement).toBe(field);
   expect(editorHolds(editor)).toBe(true);
   saveShortcut(field);
   expect(writes).toHaveLength(1);
-  expect((writes[0].edit as { document: WorkflowFileDocument }).document.block.output).toEqual(schema);
+  expect((writes[0].edit as { document: WorkflowFileDocument }).document.block.input).toEqual(schema);
   // What was written is what the field shows, and no text is left unapplied.
   expect(JSON.parse(field.value)).toEqual(schema);
   expect(editor.getSnapshot().context.drafts).toEqual({});

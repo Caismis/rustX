@@ -2084,32 +2084,7 @@ export type WorkflowNodeDefinition =
       type: 'branch';
     }
   | {
-      /**
-       * Closed, explicitly tagged value syntax; no evaluation of expression strings.
-       */
-      output:
-        | {
-            path: string[];
-            type: 'reference';
-          }
-        | {
-            value: unknown;
-            type: 'literal';
-          }
-        | {
-            fields: {
-              [k: string]: WorkflowValue;
-            };
-            type: 'object';
-          }
-        | {
-            items: WorkflowValue[];
-            type: 'array';
-          }
-        | {
-            parts: WorkflowValue[];
-            type: 'template';
-          };
+      outputs: WorkflowReturnOutput[];
       type: 'return';
     };
 /**
@@ -2333,11 +2308,6 @@ export type WorkflowOrderTarget =
       block: WorkflowBlockStep[];
       path: WorkflowSchemaStep[];
       kind: 'block_input';
-    }
-  | {
-      block: WorkflowBlockStep[];
-      path: WorkflowSchemaStep[];
-      kind: 'block_output';
     }
   | {
       address: WorkflowNodeAddress;
@@ -9530,12 +9500,6 @@ export interface WorkflowBlock {
     [k: string]: unknown;
   };
   /**
-   * The workflow output JSON Schema.
-   */
-  output?: {
-    [k: string]: unknown;
-  };
-  /**
    * Stable node definitions keyed by explicit node id.
    */
   nodes: {
@@ -9623,12 +9587,6 @@ export interface WorkflowBlock1 {
     [k: string]: unknown;
   };
   /**
-   * The workflow output JSON Schema.
-   */
-  output?: {
-    [k: string]: unknown;
-  };
-  /**
    * Stable node definitions keyed by explicit node id.
    */
   nodes: {
@@ -9706,6 +9664,16 @@ export interface WorkflowAgentRoute {
 export interface WorkflowBranchCase {
   id: string;
   condition: WorkflowPredicate;
+}
+/**
+ * As Dify's End output variable: a result field and the variable it reads.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowReturnOutput".
+ */
+export interface WorkflowReturnOutput {
+  variable: string;
+  value_selector: string[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

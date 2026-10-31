@@ -43,11 +43,6 @@ async function accessible(page: Page, scope: string) {
 const editor = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 const card = (page: Page, id: string) => page.getByRole('listitem').filter({ has: page.getByRole('button', { name: id, exact: true }) });
 
-async function showSchemaJson(inspector: Locator, label: string) {
-  const section = inspector.locator(`[data-schema-label="${label}"]`).first();
-  const button = section.locator(':scope > h3').getByRole('button', { name: 'Advanced JSON', exact: true });
-  if (await button.count()) await button.click();
-}
 async function showAdvanced(inspector: Locator) {
   const summary = inspector.locator('summary').filter({ hasText: /^Advanced settings$/ });
   if (await summary.count() && !(await summary.evaluate(element => (element.parentElement as HTMLDetailsElement).open))) await summary.click();
@@ -64,7 +59,7 @@ test('unknown output contracts hide out-of-scope variables and keep pending upst
     const tool = (schema: unknown) => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'json', schema } });
     const unknown = { type: 'object', unknown: true };
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/scope_facts.yaml'), JSON.stringify({ description: 'Unknown schemas keep independent scope facts', block: {
-      input: empty, output: empty,  nodes: {workflow_start:{type:'start'}, ...{
+      input: empty, nodes: {workflow_start:{type:'start'}, ...{
         common: { type: 'model', messages: [{ role: 'system', content: [{ type: 'literal', value: 'Return a value.' }] }, { role: 'user', content: [{ type: 'reference', path: ['args'] }] }], output: { type: 'json_schema', schema: unknown } },
         gate: { type: 'branch', cases: [{ id: 'true', condition: { type: 'boolean', value: { type: 'literal', value: true } } }] },
         broken: tool(unknown), skip: { type: 'model', messages: [{ role: 'system', content: [{ type: 'literal', value: 'Return text.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } }, join: tool({ type: 'string' }),
@@ -114,8 +109,8 @@ test('unfinished input schemas hide self, forward and alternate branch outputs',
     const empty = { type: 'object', properties: {}, additionalProperties: false };
     const tool = () => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'json', schema: empty } });
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/unfinished_input.yaml'), JSON.stringify({ description: 'Input types are separate from producer presence', block: {
-      input: {}, output: empty,  nodes: {workflow_start:{type:'start'}, ...{ common: tool(), left: tool(), right: tool(), join: tool(),
-        gate: { type: 'branch', cases: [{ id: 'true', condition: { type: 'boolean', value: { type: 'literal', value: true } } }] }, done: { type: 'return', output: { type: 'literal', value: {} } } }},
+      input: {}, nodes: {workflow_start:{type:'start'}, ...{ common: tool(), left: tool(), right: tool(), join: tool(),
+        gate: { type: 'branch', cases: [{ id: 'true', condition: { type: 'boolean', value: { type: 'literal', value: true } } }] }, done: { type: 'return', outputs: []} }},
       edges: [{from:'workflow_start',to:'common'}, ...[{ from: 'common', to: 'gate' }, { from: 'gate', to: 'left', port: 'true' }, { from: 'gate', to: 'right', port: 'false' }, { from: 'left', to: 'join' }, { from: 'right', to: 'join' }, { from: 'join', to: 'done' }]],
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
@@ -142,10 +137,9 @@ test('equality picker rejects numeric operands and admits a matching string bind
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await seed(fixture);
-    const empty = { type: 'object', properties: {}, additionalProperties: false };
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/equality_types.yaml'), JSON.stringify({ description: 'Native equality type necessities', block: {
-      input: { type: 'object', properties: { count: { type: 'integer' }, text: { type: 'string' } }, required: ['count', 'text'], additionalProperties: false }, output: empty,
-      nodes: {workflow_start:{type:'start'}, ...{ gate: { type: 'branch', cases: [{ id: 'true', condition: { type: 'equal', left: { type: 'reference', path: ['args', 'count'] }, right: { type: 'literal', value: 1 } } }] }, done: { type: 'return', output: { type: 'literal', value: {} } } }},
+      input: { type: 'object', properties: { count: { type: 'integer' }, text: { type: 'string' } }, required: ['count', 'text'], additionalProperties: false }, 
+      nodes: {workflow_start:{type:'start'}, ...{ gate: { type: 'branch', cases: [{ id: 'true', condition: { type: 'equal', left: { type: 'reference', path: ['args', 'count'] }, right: { type: 'literal', value: 1 } } }] }, done: { type: 'return', outputs: []} }},
       edges: [{from:'workflow_start',to:'gate'}, ...[{ from: 'gate', to: 'done', port: 'true' }, { from: 'gate', to: 'done', port: 'false' }]],
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
@@ -170,92 +164,32 @@ test('equality picker rejects numeric operands and admits a matching string bind
   } finally { await fixture.stop(false); }
 });
 
-test('native array item choices preserve a common element contract and admit broader objects', async ({ page }) => {
-  const fixture = await startDogfood('web_console_dogfood');
-  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  try {
-    await seed(fixture);
-    const closed = (key: string) => ({ type: 'object', properties: { [key]: { type: 'string' } }, required: [key], additionalProperties: false });
-    const ref = { type: 'reference', path: ['args', 'a'] };
-    writeFileSync(join(fixture.workspaceA, '.agents/workflows/array_contract.yaml'), JSON.stringify({ description: 'Native array common element proof', block: {
-      input: { type: 'object', properties: { a: closed('left'), b: closed('right'), open: { type: 'object' } }, required: ['a', 'b', 'open'], additionalProperties: false },
-      output: { type: 'object', properties: { values: { type: 'array', items: { type: 'object' } } }, required: ['values'], additionalProperties: false },
-      nodes: {workflow_start:{type:'start'}, ...{ done: { type: 'return', output: { type: 'object', fields: { values: { type: 'array', items: [ref, ref] } } } } }}, edges: [{from:'workflow_start',to:'done'}, ...[]],
-    } }));
-    await routeWorkspaceHost(page, fixture); await page.goto('/');
-    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
-    await card(page, 'array_contract').getByRole('button', { name: 'array_contract', exact: true }).click();
-    await editor(page).getByLabel('Return node done', { exact: true }).focus(); await editor(page).getByLabel('Return node done', { exact: true }).press('Enter');
-    const inspector = page.getByRole('complementary', { name: 'Inspector' });
-    await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(inspector).toContainText('Structure check passed');
-    await editor(page).getByLabel('Return node done', { exact: true }).focus(); await editor(page).getByLabel('Return node done', { exact: true }).press('Enter');
-    await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).nth(1).click();
-    await expect(inspector.getByRole('button', { name: /^args \/ a ·/ })).toBeEnabled();
-    const incompatible = inspector.getByRole('button', { name: /^args \/ b ·/ });
-    await expect(incompatible).toBeDisabled(); await expect(incompatible).toHaveAttribute('title', /constructed array element contracts are incompatible/);
-    await inspector.getByRole('button', { name: /^args \/ open ·/ }).click();
-    await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(inspector).toContainText('Structure check passed');
-    expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
-});
-
 test('display titles keep node identity and orphan metadata separate', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await seed(fixture);
     const empty = { type: 'object', properties: {}, additionalProperties: false };
-    const bytes = JSON.stringify({ description: 'Keep orphan authorship', block: { input: empty, output: empty,  nodes: {workflow_start:{type:'start'}, ...{ done: { type: 'return', output: { type: 'literal', value: {} } } }}, edges: [{from:'workflow_start',to:'done'}, ...[]] }, editor: { nodes: [{ address: { block: [], node: 'renamed' }, title: 'old deleted node title' }] } });
+    const bytes = JSON.stringify({ description: 'Keep orphan authorship', block: { input: empty, nodes: {workflow_start:{type:'start'}, ...{ done: { type: 'return', outputs: []} }}, edges: [{from:'workflow_start',to:'done'}, ...[]] }, editor: { nodes: [{ address: { block: [], node: 'renamed' }, title: 'old deleted node title' }] } });
     const file = join(fixture.workspaceA, '.agents/workflows/orphan_node.yaml'); writeFileSync(file, bytes);
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'orphan_node').getByRole('button', { name: 'orphan_node', exact: true }).click();
-    await editor(page).getByLabel('Return node done', { exact: true }).focus(); await editor(page).getByLabel('Return node done', { exact: true }).press('Enter');
+    await editor(page).getByLabel('Output node done', { exact: true }).focus(); await editor(page).getByLabel('Output node done', { exact: true }).press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await expect(inspector.getByLabel('Node ID', { exact: true })).toHaveCount(0);
     await expect(inspector.getByText('Native identity and rename', { exact: true })).toHaveCount(0);
     await inspector.getByRole('textbox', { name: 'Node title', exact: true }).fill('Reviewed result');
     await inspector.getByRole('textbox', { name: 'Node title', exact: true }).press('Enter');
-    await expect(editor(page).getByLabel('Return node done', { exact: true })).toBeVisible();
-    await expect(editor(page).getByLabel('Return node renamed', { exact: true })).toHaveCount(0);
+    await expect(editor(page).getByLabel('Output node done', { exact: true })).toBeVisible();
+    await expect(editor(page).getByLabel('Output node renamed', { exact: true })).toHaveCount(0);
     await expect(editor(page).getByText('old deleted node title', { exact: true })).toHaveCount(0);
-    await expect(editor(page).getByLabel('Return node done', { exact: true })).toContainText('Reviewed result');
+    await expect(editor(page).getByLabel('Output node done', { exact: true })).toContainText('Reviewed result');
     await page.getByRole('button', { name: 'Check', exact: true }).first().click();
     await expect(inspector).toContainText('Structure check passed');
     await expect(inspector.getByText('editor.nodes.0', { exact: true })).toBeVisible();
     expect(readFileSync(file, 'utf8')).toBe(bytes);
-    expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
-});
-
-test('closed, open and declared native destination fields keep distinct picker states', async ({ page }) => {
-  const fixture = await startDogfood('web_console_dogfood');
-  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  try {
-    await seed(fixture);
-    const input = { type: 'object', properties: { x: { type: 'string' } }, required: ['x'], additionalProperties: false };
-    const files = (['closed', 'open', 'declared'] as const).map(kind => {
-      const id = `field_${kind}`, file = join(fixture.workspaceA, `.agents/workflows/${id}.yaml`);
-      const output = kind === 'declared' ? input : { type: 'object', properties: {}, additionalProperties: kind === 'open' };
-      const bytes = JSON.stringify({ description: 'Destination property constraints', block: { input, output,  nodes: {workflow_start:{type:'start'}, ...{ done: { type: 'return', output: { type: 'object', fields: { x: { type: 'reference', path: ['args', 'x'] } } } } }}, edges: [{from:'workflow_start',to:'done'}, ...[]] } });
-      writeFileSync(file, bytes); return { kind, id, file, bytes };
-    });
-    await routeWorkspaceHost(page, fixture); await page.goto('/');
-    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
-    for (const { kind, id, file, bytes } of files) {
-      await card(page, id).getByRole('button', { name: id, exact: true }).click();
-      await editor(page).getByLabel('Return node done', { exact: true }).focus(); await editor(page).getByLabel('Return node done', { exact: true }).press('Enter');
-      const inspector = page.getByRole('complementary', { name: 'Inspector' });
-      await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
-      const choice = inspector.getByRole('button', { name: /^args \/ x ·/ });
-      if (kind === 'closed') { await expect(choice).toBeDisabled(); await expect(choice).toHaveAttribute('title', /additionalProperties: false/); }
-      else { await expect(choice).toBeEnabled(); await expect(choice).toContainText(kind === 'open' ? 'Compatibility unknown' : 'Compatible type'); }
-      expect(readFileSync(file, 'utf8')).toBe(bytes);
-      await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
-    }
     expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
   } finally { await fixture.stop(false); }
 });
@@ -273,22 +207,22 @@ test('incomplete candidate variable picking and file-owned keyboard positions pr
     const notes = [{ id: 'note', block: [], text: '# Author note\n\n**Keep this**', theme: 'blue', position: { x: 0, y: 100 }, dimensions: { width: 240, height: 180 } }];
     const empty = { type: 'object', properties: {}, additionalProperties: false };
     writeFileSync(file, JSON.stringify({ description: 'Candidate with file metadata', block: {
-      input: empty, output: { type: 'object', properties: { summary: { type: 'string', description: 'Model-visible summary' } }, required: ['summary'], additionalProperties: false },
+      input: empty, 
        nodes: {workflow_start:{type:'start'}, ...{
         text: { type: 'model', messages: [{ role: 'system', content: [] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } },
-        done: { type: 'return', output: { type: 'object', fields: { summary: { type: 'reference', path: ['text', 'text'] } } } },
+        done: { type: 'return', outputs: [{ variable: 'summary', value_selector: ['text', 'text'] }]},
       }}, edges: [{from:'workflow_start',to:'text'}, ...[{ from: 'text', to: 'done' }]],
     }, editor: { notes, nodes: [{ address: { block: [], node: 'text' }, position: { x: 0, y: 0 } }] } }));
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'metadata_flow').getByRole('button', { name: 'metadata_flow', exact: true }).click();
-    await editor(page).getByLabel('Return node done', { exact: true }).focus(); await editor(page).getByLabel('Return node done', { exact: true }).press('Enter');
+    await editor(page).getByLabel('Output node done', { exact: true }).focus(); await editor(page).getByLabel('Output node done', { exact: true }).press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
     await inspector.getByRole('textbox', { name: 'Search reference paths…' }).fill('text');
-    await expect(inspector.getByRole('button', { name: 'text / text · Available here · Compatible type', exact: true })).toBeEnabled();
-    await inspector.getByRole('button', { name: 'text / text · Available here · Compatible type', exact: true }).click();
+    await expect(inspector.getByRole('button', { name: 'text / text · Available here · Compatibility unknown', exact: true })).toBeEnabled();
+    await inspector.getByRole('button', { name: 'text / text · Available here · Compatibility unknown', exact: true }).click();
     // Declarations and lexical proof were usable before the Model instruction
     // was complete. Save still requires the ordinary native compiler rules.
     const text = editor(page).getByLabel('Model node text', { exact: true });
@@ -407,7 +341,7 @@ block:
   edges: [{from: start, to: done}]
 `;
 
-test('keyboard selection, node-move undo, focused-field save and the browser number contract', async ({ page }, testInfo) => {
+test('keyboard selection and node-move undo', async ({ page }, testInfo) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -431,7 +365,7 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
 
     // Keyboard: focus an existing node, activate it, edit it in the inspector.
     await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
-    const ready = editor(page).getByLabel('Return node ready');
+    const ready = editor(page).getByLabel('Output node ready');
     await ready.focus();
     await page.keyboard.press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
@@ -479,29 +413,6 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     }).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('workflow-title-layout.png') });
 
-    // Ctrl/Cmd+S in a focused JSON field saves exactly the visible text.
-    const path = join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml');
-    const original = readFileSync(path, 'utf8');
-    await page.getByRole('button', { name: 'Block settings', exact: true }).click();
-    await showSchemaJson(inspector, 'Output schema');
-    const input = inspector.getByLabel('Output schema');
-    const contract = parse(original).block.output;
-    await input.fill(JSON.stringify({ ...contract, properties: { ...contract.properties, rubric: { type: 'string' } } }, null, 2));
-    await expect(input).toBeFocused();
-    await page.keyboard.press('Control+s');
-    await expect.poll(() => readFileSync(path, 'utf8')).toContain('rubric');
-    expect(readFileSync(path, 'utf8')).toContain('Accepted');
-    await expect(page.getByRole('status').filter({ hasText: 'No unsaved changes' })).toBeVisible();
-
-    // A number the browser would round is refused in the field; nothing is
-    // written and the visible text stays protected.
-    const saved = readFileSync(path, 'utf8');
-    expect(saved).not.toBe(original);
-    await input.fill('{"type": "object", "properties": {"proposal": {"type": "string", "const": 9007199254740993}}, "additionalProperties": false}');
-    await page.keyboard.press('Control+s');
-    await expect(inspector.getByText('This number would change in the browser editor', { exact: false })).toBeVisible();
-    await expect(input).toHaveValue(/9007199254740993/);
-    expect(readFileSync(path, 'utf8')).toBe(saved);
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
     await expect(page.getByRole('dialog', { name: 'Discard unsaved changes?' })).toBeVisible();
     expect(errors).toEqual([]);
@@ -527,7 +438,7 @@ test('object keys spelled like paths stay separate fields, and rejected field te
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await expect(inspector.getByText('Structure check passed').first()).toBeVisible();
 
-    const done = editor(page).getByLabel('Return node done');
+    const done = editor(page).getByLabel('Tool node done');
     await done.focus();
     await page.keyboard.press('Enter');
     // Each value editor is the group its authored key labels.
