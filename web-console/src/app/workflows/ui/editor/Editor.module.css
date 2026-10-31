@@ -53,7 +53,7 @@
 
 .moreButton { width: 32px; height: 32px; }
 .iconButton:hover, .moreButton:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.iconButton:focus-visible, .moreButton:focus-visible, .tool:focus-visible, .crumb:focus-visible, .smallButton:focus-visible, .linkButton:focus-visible, .checkStatus:focus-visible, .chip:focus-visible, .zoom button:focus-visible {
+.iconButton:focus-visible, .moreButton:focus-visible, .tool:focus-visible, .crumb:focus-visible, .smallButton:focus-visible, .linkButton:focus-visible, .chip:focus-visible, .zoom button:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 1px;
 }
@@ -124,19 +124,22 @@
   left: 16px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 5px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 10px;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
   background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 12px 16px -4px rgb(16 24 40 / 8%);
 }
+.railSeparator { flex: none; width: 14px; height: 0.5px; margin: 4px 0; background: var(--dsw-alias-border-l3); }
 
 .tool {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 29px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border: 0;
   border-radius: 6px;
@@ -171,7 +174,13 @@
 
 .zoom button { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 5px; background: none; color: inherit; cursor: pointer; }
 .zoom button:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.zoom span { min-width: 38px; text-align: center; color: var(--dsw-alias-label-primary); }
+.zoom .zoomLevel { width: auto; min-width: 44px; padding: 0 4px; color: var(--dsw-alias-label-primary); font: inherit; }
+.zoomPositioner { z-index: 60; }
+.zoomMenu { width: 145px; padding: 4px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); box-shadow: 0 12px 16px -4px rgb(16 24 40 / 8%); outline: none; }
+.zoomItem { display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 0 8px 0 12px; border-radius: 6px; font-size: 13px; cursor: pointer; outline: none; }
+.zoomItem[data-highlighted] { background: var(--dsw-alias-interactive-bg-hover); }
+.zoomItem svg { color: var(--dsw-alias-state-business-primary); }
+.zoomSeparator { height: 0.5px; margin: 4px -4px; background: var(--dsw-alias-border-l2); }
 .canvasStatus { position: absolute; z-index: 5; left: 20px; bottom: 18px; margin: 0; font-size: 11px; color: var(--dsw-alias-label-tertiary); pointer-events: none; }
 
 .palette {
@@ -376,21 +385,6 @@
 .nodeSettings > .nextSection { margin-top: 0; border-top: 0; }
 .nodeSettings > .branchSettings + .nextSection { margin-top: 12px; border-top: 1px solid var(--dsw-alias-border-l2); }
 
-.inspectFooter {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 12px 18px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
-  font-size: 11px;
-}
-
-.checkStatus { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 0; border: 0; background: none; font: inherit; font-size: 11.5px; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
-.check_passed { color: var(--dsw-alias-state-success-primary); }
-.check_failed { color: var(--dsw-alias-state-error-primary); }
-.check_outdated { color: var(--dsw-alias-state-warn-primary); }
-
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .fieldLabel { font-size: 11.5px; color: var(--dsw-alias-label-secondary); }
 .hint { font-size: 11px; color: var(--dsw-alias-label-tertiary); line-height: 1.5; }
@@ -465,15 +459,6 @@
 .pathRemove { padding: 0 4px; border: 0; background: none; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 .path .hint { flex-basis: 100%; }
 
-.explain { width: min(680px, 100%); }
-.explain .facts { padding: 0 24px; }
-.facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0; font-size: 12px; }
-.facts dt { color: var(--dsw-alias-label-tertiary); }
-.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-secondary); }
-.explainBlocks { margin: 0; padding: 0; list-style: none; }
-.explainBlocks li { padding: 2px 0; }
-.explainBlocks code { font-size: 11px; }
-
 /* File-backed visual authoring. The scene owns no executable state. */
 .nodeMenu { margin-left: auto; flex: none; opacity: 0.5; }
 .node:hover .nodeMenu, .nodeSelected .nodeMenu { opacity: 1; }
@@ -515,10 +500,17 @@
 .schemaProperty > summary > span:first-child { flex: 1; overflow-wrap: anywhere; }
 .schemaProperty > summary > code { font-size: 10px; color: var(--dsw-alias-label-tertiary); }
 .schemaProperty[open] > summary { margin-bottom: 12px; }
-.contextMenu, .nodeSearch { position: absolute; z-index: 32; background: var(--dsw-alias-bg-layer-3); border: 1px solid var(--dsw-alias-border-l3); border-radius: 9px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); }
-.contextMenu { min-width: 180px; }
-.contextMenu button, .nodeSearch button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; border: 0; border-radius: 5px; padding: 8px 10px; text-align: left; background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; cursor: pointer; }
-.contextMenu button:hover, .nodeSearch button:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.contextMenu, .nodeSearch { position: absolute; z-index: 32; background: var(--dsw-alias-bg-layer-3); border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 12px; padding: 4px; box-shadow: 0 12px 16px -4px rgb(16 24 40 / 12%); }
+/* As Dify's node menu: 240px wide, its shortcuts at the right. */
+.contextMenu { width: 240px; box-sizing: border-box; }
+.contextMenu > button, .nodeSearch button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 32px; border: 0; border-radius: 8px; padding: 0 8px 0 12px; text-align: left; background: none; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; cursor: pointer; }
+.nodeSearch button { height: auto; padding: 8px 10px; font-size: 12px; color: var(--dsw-alias-label-primary); }
+.contextMenu > button:hover:not(:disabled), .contextActive, .nodeSearch button:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.contextMenu > button:disabled { opacity: 0.45; cursor: default; }
+.contextDanger:hover:not(:disabled) { color: var(--dsw-alias-state-error-primary); }
+.contextSeparator { display: block; height: 0.5px; margin: 4px -4px; background: var(--dsw-alias-border-l2); }
+/* Dify's Change Node popup: the block selector to the right of the menu. */
+.changeNode { position: absolute; top: 0; left: calc(100% + 6px); max-height: 392px; box-sizing: border-box; overflow: auto; width: 300px; padding: 6px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 12px; background: var(--dsw-alias-bg-layer-3); box-shadow: 0 12px 16px -4px rgb(16 24 40 / 12%); }
 .nodeSearch { top: 65px; left: 72px; width: min(360px, calc(100% - 100px)); max-height: calc(100% - 120px); overflow: auto; }
 .nodeSearch small { max-width: 50%; overflow: hidden; text-overflow: ellipsis; color: var(--dsw-alias-label-tertiary); }
 .referencePicker { position: relative; margin-bottom: 8px; }
@@ -539,6 +531,7 @@
 .startIcon { --node-kind-color: #39ad74; }
 @container workflow-editor (max-width: 900px) {
   .rail { top: 58px; flex-direction: row; max-width: calc(100% - 32px); overflow-x: auto; gap: 3px; }
+  .railSeparator { width: 0.5px; height: 14px; margin: 0 4px; }
   .body:has(.inspector) .zoom, .body:has(.inspector) .canvasStatus { bottom: calc(60% + 12px); }
   .body:has(.inspector) .nodeSearch { max-height: calc(40% - 100px); }
 }
@@ -848,3 +841,35 @@
 .loopVariableHead .titleInput { border-color: var(--dsw-alias-border-l3); border-radius: 7px; background: var(--dsw-alias-bg-layer-2); font-weight: 550; }
 .inlineField { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .typeBadge { padding: 0 5px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 5px; color: var(--dsw-alias-label-tertiary); font-size: 10px; font-weight: 500; line-height: 16px; }
+
+/* Dify's checklist: a header button with a warning count, and a popover of
+ * the nodes with problems. */
+.checklistButton { position: relative; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.checklistButton:hover, .checklistButton[data-popup-open] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-state-business-primary); }
+.checklistButton:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
+.checklistCount { position: absolute; top: -6px; right: -6px; display: flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; box-sizing: border-box; border: 1px solid var(--dsw-alias-bg-layer-1); border-radius: 9px; background: var(--dsw-alias-state-warn-primary); color: #fff; font-size: 11px; font-weight: 600; }
+.checklistPositioner { z-index: 60; }
+.checklist { width: 420px; max-width: calc(100vw - 32px); max-height: calc(2 / 3 * 100vh); overflow-y: auto; box-sizing: border-box; padding: 14px 16px 16px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 16px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); box-shadow: 0 12px 24px -4px rgb(16 24 40 / 12%); outline: none; }
+.checklistHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.checklistTitle { margin: 0; font-size: 16px; font-weight: 600; line-height: 24px; }
+.checklistDescription { margin: 2px 0 8px; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+.checklistItems { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.checklistNode { overflow: hidden; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover); }
+.checklistNodeHead { display: flex; align-items: center; gap: 8px; padding: 8px 8px 0; }
+.checklistIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; background: var(--node-kind-color, #4c83df); color: #fff; }
+.checklistNodeTitle { min-width: 0; overflow: hidden; font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.checklistMessage { display: flex; align-items: center; gap: 8px; width: calc(100% - 8px); margin: 4px; padding: 0 4px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.checklistMessage:hover { background: var(--dsw-alias-interactive-bg-active); }
+.checklistMessage:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); }
+/* The timeline dot of Dify's ItemIndicator. */
+.checklistDot { position: relative; flex: none; width: 20px; height: 24px; }
+.checklistDot::before { content: ''; position: absolute; left: 9.5px; top: 0; bottom: 0; width: 1px; background: var(--dsw-alias-border-l2); }
+.checklistDot::after { content: ''; position: absolute; left: 5px; top: 7px; width: 7px; height: 7px; border: 1.5px solid #fff; border-radius: 50%; background: #f79009; }
+.checklistText { flex: 1; min-width: 0; overflow: hidden; font-size: 12px; line-height: 16px; color: var(--dsw-alias-state-warn-primary); text-overflow: ellipsis; white-space: nowrap; }
+.checklistGo { display: flex; flex: none; align-items: center; gap: 2px; font-size: 12px; font-weight: 500; color: var(--dsw-alias-state-business-primary); opacity: 0; transition: opacity 150ms; }
+.checklistMessage:hover .checklistGo, .checklistMessage:focus-visible .checklistGo { opacity: 1; }
+.checklistArrow { transform: scaleX(-1); }
+.checklistResolved { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 4px 0 0; padding: 16px 0; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+
+.stateActions { display: flex; justify-content: center; gap: 8px; margin-top: 16px; }
+.changeNodeLeft { left: auto; right: calc(100% + 6px); }

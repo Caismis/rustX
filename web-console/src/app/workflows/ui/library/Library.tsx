@@ -85,9 +85,11 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   // accepted observation it starts from; the UI only names the file.
   const open = (file: WorkflowFileSummary) => library.send({ type: 'OPEN', file: file.file_name });
   const confirm = (kind: 'create' | 'edit' | 'copy' | 'delete', file?: WorkflowFileSummary) => library.send({ type: 'CONFIRM', kind, file: file?.file_name });
+  // As a Dify draft, an unfinished workflow is still edited and copied;
+  // only a file that cannot be read is not.
   const actions = (file: WorkflowFileSummary) => [
-    { id: 'edit', label: tx('workflows:library.edit'), icon: <IconEditOutline16 />, disabled: !settled || !file.id || !file.revision || !!file.diagnostic },
-    { id: 'copy', label: tx('workflows:library.copy'), icon: <IconCopyOutline16 />, disabled: !settled || !file.id || !file.revision || !!file.diagnostic && !presentationWarning(file.diagnostic) },
+    { id: 'edit', label: tx('workflows:library.edit'), icon: <IconEditOutline16 />, disabled: !settled || !file.id || !file.revision || unreadable(file) },
+    { id: 'copy', label: tx('workflows:library.copy'), icon: <IconCopyOutline16 />, disabled: !settled || !file.id || !file.revision || unreadable(file) },
     { type: 'separator' as const, id: 'separator' },
     { id: 'delete', label: tx('workflows:library.delete'), icon: <IconTrashOutline16 />, danger: true, disabled: !settled || !file.id || !file.revision },
   ];
@@ -105,10 +107,10 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   else if (listing.diagnostic) body = <p className={css.state} role="alert">{tx('workflows:library.directory-invalid', { p0: listing.diagnostic.reason })}</p>;
   else if (!files.length) body = <p className={css.state}>{query.trim() ? tx('workflows:library.empty-search') : tx('workflows:library.empty')}</p>;
   else if (view === 'cards') body = <ul className={css.cards} aria-label={tx('workflows:library.title')}>
-    {files.map(file => <li key={file.file_name} className={clsx(css.card, file.diagnostic && css.invalidCard)}>
+    {files.map(file => <li key={file.file_name} className={clsx(css.card, unreadable(file) && css.invalidCard)}>
       <div className={css.cardHead}>
         <button type="button" className={css.cardOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision} aria-label={file.display?.title ?? file.id ?? file.file_name}>
-          <span className={css.fileTile}>{file.diagnostic ? <IconFile size={18} /> : <WorkflowIcon icon={file.display?.icon} />}</span>
+          <span className={css.fileTile}>{unreadable(file) ? <IconFile size={18} /> : <WorkflowIcon icon={file.display?.icon} />}</span>
           <span className={css.cardName}><span className={css.cardTitle}>{file.display?.title ?? file.id ?? file.file_name}</span>{file.display && <span className={css.cardId}>{file.id}</span>}</span>
         </button>
         <CardMenu label={tx('workflows:library.actions', { p0: file.file_name })} items={actions(file)} onSelect={action => act(file, action)} />
@@ -120,7 +122,7 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   else body = <table className={css.table}>
     <thead><tr><th>{tx('workflows:library.column-file')}</th><th>{tx('workflows:library.column-description')}</th><th>{tx('workflows:library.column-location')}</th><th>{tx('workflows:library.column-modified')}</th><th aria-label={tx('workflows:library.actions', { p0: '' })} /></tr></thead>
     <tbody>{files.map(file => <tr key={file.file_name}>
-      <td><button type="button" className={css.rowOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision}><WorkflowIcon icon={file.diagnostic ? undefined : file.display?.icon} size={15} />{file.display?.title ?? file.id ?? file.file_name}</button></td>
+      <td><button type="button" className={css.rowOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision}><WorkflowIcon icon={unreadable(file) ? undefined : file.display?.icon} size={15} />{file.display?.title ?? file.id ?? file.file_name}</button></td>
       <td><FileFacts file={file} compact /></td>
       <td><code>{file.relative_path}</code></td><td>{modified(file.modified_ms)}</td>
       <td><CardMenu label={tx('workflows:library.actions', { p0: file.file_name })} items={actions(file)} onSelect={action => act(file, action)} /></td>
@@ -164,16 +166,22 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   </section>;
 }
 
+/** A file the editor cannot open: unparseable, or not a Workflow at all.
+ * A parsed file the check rejects is an unfinished workflow instead. */
+const unreadable = (file: WorkflowFileSummary) => !!file.diagnostic && file.nodes == null;
+
 function FileFacts({ file, compact }: { file: WorkflowFileSummary; compact?: boolean }) {
   const tx = useTranslation();
-  if (file.diagnostic) {
-    const warning = presentationWarning(file.diagnostic);
-    return <p className={clsx(css.cardDescription, !warning && css.invalid, compact && css.compact)}>
-      <IconWarningOutline16 /><span><strong>{file.revision ? tx(warning ? 'workflows:library.presentation-warning' : 'workflows:library.invalid') : tx('workflows:library.unreadable')}</strong> · {file.diagnostic.reason}{file.diagnostic.path !== '$' && <> <code>{file.diagnostic.path}</code></>}</span>
-    </p>;
-  }
+  const diagnostic = file.diagnostic;
+  if (diagnostic && unreadable(file)) return <p className={clsx(css.cardDescription, css.invalid, compact && css.compact)}>
+    <IconWarningOutline16 /><span><strong>{tx('workflows:library.unreadable')}</strong> · {diagnostic.reason}{diagnostic.path !== '$' && <> <code>{diagnostic.path}</code></>}</span>
+  </p>;
+  const warning = presentationWarning(diagnostic);
   return <p className={clsx(css.cardDescription, compact && css.compact)}>
     {file.display?.description ?? file.description}
+    {diagnostic && <span className={clsx(css.badge, css.badgeWarning)} title={`${diagnostic.reason}${diagnostic.path !== '$' ? ` · ${diagnostic.path}` : ''}`}>
+      <IconWarningOutline16 />{tx(warning ? 'workflows:library.presentation-warning' : 'workflows:library.unchecked')}
+    </span>}
     {file.shadows_global && <span className={css.badge} title={tx('workflows:library.shadows-global-detail')}>{tx('workflows:library.shadows-global')}</span>}
   </p>;
 }

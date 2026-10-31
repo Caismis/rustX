@@ -4,7 +4,6 @@ import { createActor } from 'xstate';
 import { statusSource } from './workflow-fixtures';
 import type { WorkflowFileDocument, WorkflowEdit, WorkflowSource } from '../../protocol/app-server/v62';
 import type { WorkflowCommit } from '../src/workspaces/host';
-import type { WorkspaceAuthority } from '../src/workspaces/authority';
 import { blockAt } from '../src/app/workflows/document/model';
 import { renameNode } from '../src/app/workflows/document/commands';
 import { describeField, encodeField, nodeField } from '../src/app/workflows/document/fields';
@@ -26,7 +25,6 @@ function portFor(source: WorkflowSource): WorkflowScopePort {
     write: (_id, expected, edit) => { writes.push({ expected, edit }); return new Promise<WorkflowCommit>(() => {}); },
   };
 }
-const authority = { subscribe: () => () => {}, getCatalog: () => undefined } as unknown as WorkspaceAuthority;
 
 beforeEach(() => {
   writes.length = 0;
@@ -40,7 +38,7 @@ async function open(source: WorkflowSource) {
   const surface = createActor(workflowSurfaceMachine, { input: { ports: () => port } }).start();
   const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: 'flow' } } }).start();
   await act(async () => { await Promise.resolve(); });
-  render(<WorkflowEditor surface={surface} editor={editor} authority={authority} scopeLabel="Global" />);
+  render(<WorkflowEditor surface={surface} editor={editor} scopeLabel="Global" />);
   return editor;
 }
 /** Select a canvas node the way a keyboard user does: focus it, press Enter. */
@@ -120,10 +118,9 @@ describe('drafts across selection (F3)', () => {
     expect(retained.getAttribute('aria-invalid')).toBe('true');
     expect(inspector().getByText(/Not valid JSON/)).toBeTruthy();
     expect(isDirty(editor.getSnapshot().context)).toBe(true);
-    // Save and Check refuse while the text is pending, and say where it is.
+    // Save refuses while the text is pending, and says where it is.
     select('Tool node revise');
     save();
-    fireEvent.click(screen.getByRole('button', { name: 'Check' }));
     expect(writes).toHaveLength(0);
     const pending = screen.getByRole('list', { name: 'Fields with unapplied text' });
     expect(pending.textContent).toContain('ready · arguments.fields["status"].value');

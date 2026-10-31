@@ -1073,10 +1073,10 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         "workflow-check",
         MethodResult::WorkflowCheck {
             report: Box::new(WorkflowCheckReport {
+                revision: Some(revision.clone()),
                 presentation: Vec::new(),
                 structure: WorkflowStructure::Valid {
                     outputs: program.node_outputs(),
-                    revision: revision.clone(),
                 },
                 dependencies: WorkflowDependencies::Admitted {
                     context: "/workspace/fixture".into(),

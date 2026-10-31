@@ -222,6 +222,20 @@ export function replaceNode(document: WorkflowDocument, path: BlockPath, id: str
   return updateBlock(document, path, owner => ({ ...owner, nodes: { ...owner.nodes, [id]: node } }));
 }
 
+/** As Dify's Change Node: the node becomes a new `kind` in place, under its
+ * own ID. Its incoming connections stay; of its outgoing ones, those of
+ * its ordinary exit (else of its first exit) move to the new node's first
+ * exit, and the rest go, as their exits do. */
+export function changeNode(document: WorkflowDocument, path: BlockPath, id: string, kind: NodeKind): WorkflowDocument {
+  const block = require(blockAt(document, path)), current = nodeAt(block, id);
+  if (!current || current.type === 'start') throw new CommandRejected('missing_node');
+  const node = nodeTemplate(kind, id), exit = portsOf(node)[0];
+  const outgoing = edgesOf(block).filter(edge => edge.from === id);
+  const kept = outgoing.some(edge => edgePort(edge) === 'next') ? 'next' : outgoing[0] && edgePort(outgoing[0]);
+  const edges = edgesOf(block).flatMap(edge => edge.from !== id ? [edge] : exit !== undefined && edgePort(edge) === kept ? [authoredEdge(id, exit, edge.to)] : []);
+  return boundedDocument(updateBlock(document, path, owner => withEdges({ ...owner, nodes: { ...owner.nodes, [id]: node } }, edges)));
+}
+
 /** Set the Workflow description and total timeout. An omitted timeout uses the native default. */
 export function setWorkflow(document: WorkflowDocument, fields: { description: string; timeout_ms?: string }): WorkflowDocument {
   const { timeout_ms: _previous, ...rest } = document;

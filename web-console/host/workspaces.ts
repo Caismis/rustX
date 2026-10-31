@@ -551,10 +551,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'analyze', report };
         }
         case 'check': {
-          const params = operation.scope === 'workspace'
-            ? { target, id: operation.id, document: operation.document, explain: operation.explain }
-            : { target: { kind: 'user' as const }, id: operation.id, document: operation.document, context: cwd, explain: operation.explain };
-          const { report } = await client.call('workflow/check', params, 'workflow_check');
+          const { report } = await client.call('workflow/check', { target, id: operation.id, document: operation.document, explain: false }, 'workflow_check');
           await unchanged();
           return { kind: 'check', report };
         }
@@ -611,7 +608,7 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
         : value!.kind === 'tool_catalog' ? fields(['kind', 'source']) && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256)
         : value!.kind === 'model_choices' ? fields(['kind', 'query', 'expected_revision']) && choicesQuery(value!.query) && (value!.expected_revision == null || typeof value!.expected_revision === 'string')
         : value!.kind === 'analyze' ? fields(['kind', 'id', 'document', 'generation', 'query']) && id() && object(value!.document) && typeof value!.generation === 'string' && value!.generation.length > 0 && value!.generation.length <= 64 && (value!.query == null || object(value!.query))
-        : value!.kind === 'check' ? fields(['kind', 'scope', 'id', 'document', 'explain']) && id() && ['workspace', 'user'].includes(value!.scope as string) && object(value!.document) && typeof value!.explain === 'boolean'
+        : value!.kind === 'check' ? fields(['kind', 'id', 'document']) && id() && object(value!.document)
           : value!.kind === 'write' && fields(['kind', 'id', 'expected_revision', 'edit']) && id() && typeof value!.expected_revision === 'string' && object(value!.edit));
   if (!valid) throw new Error('Invalid Workflow operation');
 }

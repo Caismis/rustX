@@ -23,7 +23,7 @@ export function WorkflowsSurface({ surface, authority }: { surface: WorkflowSurf
   return <div className={css.surface} data-workflows-level={editor ? 'editor' : 'library'}>
     {editor
       ? <Suspense fallback={<p className={css.state} role="status">{tx('workflows:editor.loading')}</p>}>
-        <WorkflowEditor key={editor.id + (target ? JSON.stringify(target) : '')} surface={surface} editor={editor} authority={authority} scopeLabel={scopeLabel} />
+        <WorkflowEditor key={editor.id + (target ? JSON.stringify(target) : '')} surface={surface} editor={editor} scopeLabel={scopeLabel} />
       </Suspense>
       : <WorkflowLibrary surface={surface} authority={authority} />}
     <Modal open={confirming} onClose={() => surface.send({ type: 'CANCEL' })} title={tx('workflows:editor.leave-title')} closeLabel={tx('workflows:dialog.close')}

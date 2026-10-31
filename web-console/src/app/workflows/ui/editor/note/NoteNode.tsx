@@ -21,6 +21,7 @@ import { useTranslation } from '../../../../../locale/react';
 import { ShortcutKeys } from '../../../../../presentation/primitives/ShortcutKeys';
 import { IconCheckOutline16, IconEllipsisOutline16 } from '../../../../../presentation/primitives/icons';
 import { IconBold, IconBulletList, IconExternal, IconFontSize, IconItalic, IconLink, IconPencil, IconStrikethrough, IconUnlink } from '../../icons';
+import { COPY_KEYS, DELETE_KEYS, DUPLICATE_KEYS } from '../shortcuts';
 import css from './Note.module.css';
 
 /** What a note does to the document; the canvas owns selection and history. */
@@ -35,9 +36,6 @@ export const NoteActions = createContext<{
 const THEMES: readonly WorkflowNoteTheme[] = ['blue', 'cyan', 'green', 'yellow', 'pink', 'violet'];
 const FONT_SIZES = [['12px', 'small'], ['14px', 'medium'], ['16px', 'large']] as const;
 const DEFAULT_FONT_SIZE = '12px';
-// The canvas shortcuts, as Dify's note menu lists them.
-const MAC = /Mac|iPhone|iPad/.test(navigator.platform);
-const COPY_KEYS = MAC ? ['⌘', 'C'] : ['Ctrl', 'C'], DUPLICATE_KEYS = MAC ? ['⌘', 'D'] : ['Ctrl', 'D'], DELETE_KEYS = ['Del'];
 // Dify's note link check.
 const URL_PATTERN = /((([A-Za-z]{3,9}:(?:\/\/)?)(?:[-;:&=+$,\w]+@)?[A-Za-z0-9.-]+|(?:www.|[-;:&=+$,\w]+@)[A-Za-z0-9.-]+)((?:\/[+~%/.\w-]*)?\??[-+=&;%@.\w]*#?\w*))/;
 const THEME: EditorThemeClasses = {

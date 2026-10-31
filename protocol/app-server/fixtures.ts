@@ -6033,6 +6033,7 @@ export const fixtures = [
     "result": {
       "type": "workflow_check",
       "report": {
+        "revision": "sha256:a0b8ff6cabf4b3953f709882841b1627f2fb613838d2dd5a89f417336c89f001",
         "structure": {
           "status": "valid",
           "outputs": {
@@ -6084,8 +6085,7 @@ export const fixtures = [
               ],
               "additionalProperties": false
             }
-          },
-          "revision": "sha256:a0b8ff6cabf4b3953f709882841b1627f2fb613838d2dd5a89f417336c89f001"
+          }
         },
         "dependencies": {
           "status": "admitted",

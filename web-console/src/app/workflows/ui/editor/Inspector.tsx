@@ -1,15 +1,13 @@
 import { encodeField, type ArrayEdit, type FieldAddress } from '../../document/fields';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import clsx from 'clsx';
-import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../protocol/app-server/v62';
+import type { WorkflowVocabulary } from '../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../locale/react';
-import { IconCheckOutline14, IconCloseOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
+import { IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import { nodePresentation } from '../../document/geometry';
 import { nodeField } from '../../document/fields';
-import { locate, type DiagnosticLocation } from '../../document/diagnostics';
 import { blockAt, nodeAt, startOf, type BlockPath, type WorkflowDocument } from '../../document/model';
 import type { WorkflowScopePort } from '../../port';
-import type { CheckResult } from '../../machines/editor';
 import { IconBlock, IconEntry, KindIcon } from '../icons';
 import type { Selection } from './selection';
 import { BlockForm } from './forms/BlockForm';
@@ -19,19 +17,13 @@ import { readInspectorWidth, writeInspectorWidth } from './view-store';
 import css from './Editor.module.css';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
-export type CheckState = 'not_run' | 'passed' | 'failed' | 'outdated';
-export function checkState(check: CheckResult | undefined, generation: number): CheckState {
-  if (!check) return 'not_run';
-  if (check.generation !== generation) return 'outdated';
-  return check.report.structure.status === 'valid' ? 'passed' : 'failed';
-}
 
 /** A single Settings surface; specialized panels own node semantics and the
  * editor machine owns all deferred text, history and save state. */
-export function Inspector({ document, block, selection, onSelect, edit, navigate, vocabulary, check, generation, rejection, checks, port, focus }: {
+export function Inspector({ document, block, selection, onSelect, edit, navigate, vocabulary, rejection, port, focus }: {
   document: WorkflowDocument; block: BlockPath; selection: NonNullable<Selection>; onSelect: (selection: Selection) => void;
-  edit: Edit; navigate: (block: BlockPath) => void; vocabulary?: WorkflowVocabulary; check?: CheckResult; generation: number;
-  rejection?: string; checks: ReactNode; port: WorkflowScopePort;
+  edit: Edit; navigate: (block: BlockPath) => void; vocabulary?: WorkflowVocabulary;
+  rejection?: string; port: WorkflowScopePort;
   focus?: { address?: FieldAddress; field?: string; epoch: number };
 }) {
   const tx = useTranslation(), path = 'path' in selection ? selection.path ?? block : block;
@@ -63,7 +55,6 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop, { once: true });
     return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
   }, [resizing]);
-  const state = checkState(check, generation);
   let head: ReactNode, body: ReactNode, description: ReactNode;
   if (selection.kind === 'node' && node && owner) {
     const id = selection.id, metadata = nodePresentation(document, path, id);
@@ -74,8 +65,6 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />;
     // As Dify: duplicate and delete live on the canvas menu, not the panel.
     body = <NodePanel document={document} block={path} id={id} port={port} vocabulary={vocabulary} edit={edit} navigate={navigate} onSelect={onSelect} />;
-  } else if (selection.kind === 'check') {
-    head = <span className={css.nodeTitle}>{tx('workflows:check.problems')}</span>; body = checks;
   } else {
     const startId = owner && startOf(owner), entry = selection.kind === 'start' && startId ? nodePresentation(document, path, startId) : undefined;
     const startTitle = tx(path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title');
@@ -105,51 +94,5 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     <div className={clsx(css.inspectBody, 'nowheel')} key={selection.kind === 'node' || selection.kind === 'note' ? `${selection.kind}:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>
       {rejection && <p role="alert" className={css.hintError}>{rejection}</p>}{body}
     </div>
-    <footer className={css.inspectFooter}><button type="button" className={clsx(css.checkStatus, css[`check_${state}`])} onClick={() => onSelect({ kind: 'check' })}>
-      {state === 'passed' ? <IconCheckOutline14 /> : state === 'failed' ? <IconWarningOutline16 /> : null}{tx(state === 'passed' ? 'workflows:check.passed' : state === 'failed' ? 'workflows:check.failed' : state === 'outdated' ? 'workflows:check.outdated' : 'workflows:check.not-run')}
-    </button><span className={css.muted}>{tx('workflows:inspector.footer-scope')}</span></footer>
   </aside>;
-}
-
-/** Native check results: structure and dependencies as separate facts. */
-export function CheckResults({ check, generation, global, workspaces, context, setContext, run, go }: {
-  check?: CheckResult; generation: number; global: boolean;
-  workspaces: readonly { id: string; displayName: string; displayPath: string }[]; context?: string; setContext: (id: string | undefined) => void;
-  run: () => void; go: (location: DiagnosticLocation) => void;
-}) {
-  const tx = useTranslation();
-  const state = checkState(check, generation);
-  const diagnostic = (value: WorkflowDiagnostic) => <li className={css.problem}>
-    <code>{value.path}</code><span>{value.reason}</span>
-    {value.detail && <small>{value.detail}</small>}
-    {value.line != null && <small>{tx('workflows:check.line', { p0: value.line, p1: value.column ?? 0 })}</small>}
-    {value.path !== '$' && <button type="button" className={css.linkButton} onClick={() => go(locate(value.path))}>{tx('workflows:check.go')}</button>}
-  </li>;
-  const dependencies = check && (!global || check.context === context) ? check.report.dependencies : undefined;
-  const name = (path: string) => workspaces.find(row => row.displayPath === path)?.displayName ?? path;
-  return <>
-    <p className={clsx(css.checkStatus, css[`check_${state}`])}>{tx(state === 'passed' ? 'workflows:check.passed' : state === 'failed' ? 'workflows:check.failed' : state === 'outdated' ? 'workflows:check.outdated' : 'workflows:check.not-run')}</p>
-    <h4 className={css.groupHeading}>{tx('workflows:check.structure')}</h4>
-    {check?.report.structure.status === 'invalid' && <ul className={css.problems}>{diagnostic(check.report.structure.diagnostic)}</ul>}
-    {!!check?.report.presentation?.length && <ul className={css.problems}>{check.report.presentation.map(item => <li key={item.path} className={css.problem}><code>{item.path}</code><span>{item.reason}</span></li>)}</ul>}
-    <h4 className={css.groupHeading}>{tx('workflows:check.dependencies')}</h4>
-    {global && <label className={css.field}><span className={css.fieldLabel}>{tx('workflows:check.dependencies-context')}</span>
-      <select className={css.input} value={context ?? ''} onChange={event => setContext(event.target.value || undefined)}>
-        <option value="">{tx('workflows:check.dependencies-not-checked')}</option>
-        {workspaces.map(row => <option key={row.id} value={row.id}>{row.displayName}</option>)}
-      </select></label>}
-    {(!dependencies || dependencies.status === 'not_checked') && <p className={css.note}>{global && !context ? tx('workflows:check.dependencies-choose') : tx('workflows:check.dependencies-not-checked')}</p>}
-    {dependencies?.status === 'admitted' && <p className={css.note}>{tx('workflows:check.dependencies-admitted', { p0: name(dependencies.context) })}</p>}
-    {dependencies?.status === 'requires_attempt' && <p className={css.note}>{tx('workflows:check.dependencies-requires-attempt', { p0: dependencies.model_nodes.join(', '), p1: name(dependencies.context) })}</p>}
-    {dependencies?.status === 'unavailable' && <p className={css.note}>{tx('workflows:check.dependencies-unavailable', { p0: name(dependencies.context), p1: dependencies.reason })}</p>}
-    {dependencies?.status === 'blocked' && <>
-      <p className={css.note}>{tx('workflows:check.dependencies-blocked', { p0: dependencies.diagnostics.length, p1: name(dependencies.context) })}</p>
-      <ul className={css.problems}>{dependencies.diagnostics.map((item, index) => <li key={index} className={css.problem}>
-        <code>{item.path}</code><span>{item.reason.kind.replaceAll('_', ' ')}{'detail' in item.reason && item.reason.detail && typeof item.reason.detail === 'object' ? ` · ${JSON.stringify(item.reason.detail)}` : ''}</span>
-        <button type="button" className={css.linkButton} onClick={() => go(locate(item.path))}>{tx('workflows:check.go')}</button>
-      </li>)}</ul>
-    </>}
-    <p className={css.note}>{tx('workflows:check.dependency-note')}</p>
-    <button type="button" className={css.smallButton} onClick={run}>{tx('workflows:editor.check')}</button>
-  </>;
 }

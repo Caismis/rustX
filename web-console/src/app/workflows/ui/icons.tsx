@@ -16,7 +16,6 @@ export const IconFolder = glyph(<path d="M3.5 7a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 
 export const IconGrid = glyph(<><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>);
 export const IconList = glyph(<path d="M4 6h2M10 6h10M4 12h2M10 12h10M4 18h2M10 18h10" />);
 export const IconArrowLeft = glyph(<path d="m14 5-7 7 7 7M8 12h13" />);
-export const IconExplain = glyph(<path d="M5 5h14v14H5zM9 10h6M9 14h4" />);
 export const IconCursor = glyph(<path d="M4 3 18 12l-7 1.5L8 21z" />);
 export const IconHand = glyph(<path d="M9 13V6a2 2 0 0 1 4 0v6-4a2 2 0 0 1 4 0v5m0-2a2 2 0 0 1 4 0v4a7 7 0 0 1-7 7h-2c-2 0-3.5-.5-5-2l-3-3c-1-1-1-2.7 0-3.5s2-1 3 0l2 1" />);
 export const IconFit = glyph(<path d="M4 9V4h5M15 4h5v5M4 15v5h5M20 15v5h-5" />);
@@ -26,6 +25,10 @@ export const IconUndo = glyph(<path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3" /
 export const IconRedo = glyph(<path d="m15 14 5-5-5-5M20 9H10a6 6 0 0 0 0 12h3" />);
 export const IconBlock = glyph(<><rect x="3.5" y="3.5" width="17" height="17" rx="3" /><path d="M8 9h8M8 13h5" /></>);
 export const IconEntry = glyph(<path d="M3 12h11M10 7l5 5-5 5M18 4v16" />);
+// Dify's canvas toolbar glyphs.
+export const IconAddCircle = glyph(<><circle cx="12" cy="12" r="9" /><path d="M12 8v8M8 12h8" /></>);
+export const IconNoteAdd = glyph(<path d="M12 20H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v7M8 9h8M8 13h4M18 15v6M15 18h6" />);
+export const IconOrganize = glyph(<><rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><path d="M17 14v6M14 17h6" /></>);
 export const IconHome = glyph(<path d="M4 10.5 12 4l8 6.5V20h-5v-5H9v5H4z" />);
 // Dify's note toolbar glyphs.
 export const IconBold = glyph(<path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z" />);

@@ -97,7 +97,8 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
         ));
         assert!(report.explanation.is_some());
 
-        // A structurally invalid save is a typed rejection with its path.
+        // As a Dify draft, an unfinished save commits; reading it back
+        // keeps the document and names its first problem by path.
         let mut broken = document.clone();
         let start = broken
             .block
@@ -120,8 +121,12 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
                 port: None,
             },
         );
-        let ErrorData::WorkflowInvalid { diagnostic } = rejected(
+        let MethodResult::SourcesWritten {
+            revision: unfinished,
+            ..
+        } = call(
             &connection,
+            41,
             Method::SourcesWrite {
                 target: target.clone(),
                 expected_revision: revision.clone(),
@@ -135,9 +140,22 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
         )
         .await
         else {
-            panic!("invalid Workflow")
+            panic!("unfinished save")
         };
-        assert_eq!(diagnostic.path, "block.edges.0.to");
+        let MethodResult::WorkflowSource { source } = call(
+            &connection,
+            42,
+            Method::WorkflowRead {
+                target: target.clone(),
+                id: WorkflowId::parse("review").unwrap(),
+            },
+        )
+        .await
+        else {
+            panic!("source")
+        };
+        assert!(source.document.is_some());
+        assert_eq!(source.diagnostic.unwrap().path, "block.edges.0.to");
 
         let MethodResult::SourcesWritten {
             revision: copied, ..
@@ -151,7 +169,7 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
                     "review_copy",
                     WorkflowEdit::Copy {
                         source: WorkflowId::parse("review").unwrap(),
-                        source_revision: revision.clone(),
+                        source_revision: unfinished,
                     },
                 ),
             },

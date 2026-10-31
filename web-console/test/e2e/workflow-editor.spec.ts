@@ -158,8 +158,7 @@ test('equality picker rejects numeric operands and admits a matching string bind
     await expect(inspector.getByRole('button', { name: /^args \/ count ·/ })).toBeDisabled();
     const text = inspector.getByRole('button', { name: /^args \/ text ·/ });
     await expect(text).toBeEnabled(); await expect(text).toContainText('Compatible type'); await text.click();
-    await page.getByRole('button', { name: 'Check', exact: true }).first().click();
-    await expect(inspector).toContainText('Structure check passed');
+    await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
   } finally { await fixture.stop(false); }
 });
@@ -186,8 +185,7 @@ test('display titles keep node identity and orphan metadata separate', async ({ 
     await expect(editor(page).getByLabel('Output node renamed', { exact: true })).toHaveCount(0);
     await expect(editor(page).getByText('old deleted node title', { exact: true })).toHaveCount(0);
     await expect(editor(page).getByLabel('Output node done', { exact: true })).toContainText('Reviewed result');
-    await page.getByRole('button', { name: 'Check', exact: true }).first().click();
-    await expect(inspector).toContainText('Structure check passed');
+    await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     await expect(inspector.getByText('editor.nodes.0', { exact: true })).toBeVisible();
     expect(readFileSync(file, 'utf8')).toBe(bytes);
     expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
@@ -404,7 +402,7 @@ test('keyboard selection and node-move undo', async ({ page }, testInfo) => {
     await expect.poll(async () => Math.round((await ready.boundingBox())!.y)).toBe(Math.round(authored.y));
     await page.keyboard.press('Control+Shift+z');
     await expect.poll(async () => Math.round((await decision.boundingBox())!.y)).toBe(Math.round(moved.y));
-    await editor(page).getByRole('toolbar', { name: 'Canvas tools' }).getByRole('button', { name: 'Fit view', exact: true }).click();
+    await editor(page).getByRole('button', { name: 'Zoom', exact: true }).click(); await page.getByRole('menuitem', { name: 'Zoom to fit', exact: true }).click();
     await expect.poll(async () => {
       const node = (await ready.boundingBox())!;
       const canvas = (await editor(page).boundingBox())!;
@@ -433,10 +431,9 @@ test('object keys spelled like paths stay separate fields, and rejected field te
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'colliding').getByRole('button', { name: 'colliding', exact: true }).click();
 
-    // Native accepts the structure; dependencies are a separate fact.
-    await page.getByRole('button', { name: 'Check', exact: true }).click();
+    // Native accepts the structure: the checklist has nothing to resolve.
+    await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
-    await expect(inspector.getByText('Structure check passed').first()).toBeVisible();
 
     const done = editor(page).getByLabel('Tool node done');
     await done.focus();
@@ -486,8 +483,7 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
   const selectModel = async () => { await editor(page).getByLabel('Model node model', { exact: true }).focus(); await page.keyboard.press('Enter'); };
   // The saved Model is read back from the file after each check and save.
   const checkAndSave = async () => {
-    await page.getByRole('button', { name: 'Check', exact: true }).first().click();
-    await expect(inspector).toContainText('Structure check passed');
+    await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Save File', exact: true }).click();
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     await selectModel();

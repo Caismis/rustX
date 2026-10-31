@@ -98,7 +98,7 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expect.poll(height).toBe(configuredHeight);
     await expect(card.locator('[data-handleid="true"]')).toHaveCount(1);
-    await page.getByRole('button', { name: 'Check', exact: true }).click(); await expect(inspector(page)).toContainText('Structure check passed');
+    await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     const saved = parse(readFileSync(file, 'utf8'));
     expect(saved.block.nodes.choose).not.toHaveProperty('condition');

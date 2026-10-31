@@ -263,6 +263,8 @@ span.chooser { cursor: default; }
   color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
 }
+.badgeWarning { display: inline-flex; align-items: center; gap: 4px; border-color: var(--dsw-alias-state-warn-primary); color: var(--dsw-alias-state-warn-primary); }
+.badgeWarning svg { width: 12px; height: 12px; }
 
 .cardFoot {
   display: flex;

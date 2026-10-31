@@ -58,8 +58,7 @@ const document = exampleSource('parallel_review').document as unknown as Workflo
 const operations: WorkflowHostOperation[] = [
   { kind: 'list' },
   { kind: 'read', id: 'flow' },
-  { kind: 'check', scope: 'workspace', id: 'flow', document, explain: false },
-  { kind: 'check', scope: 'user', id: 'flow', document, explain: false },
+  { kind: 'check', id: 'flow', document },
   { kind: 'write', id: 'flow', expected_revision: 'missing', edit: { operation: 'create', description: 'Created' } },
   { kind: 'model_choices', query: { type: 'models', offset: 0 } },
 ];
@@ -91,7 +90,7 @@ describe('Workflow operations and Product Host authority (R1)', () => {
     expect(native.state.requests).toHaveLength(0);
 
     // The replacement's own scope reaches exactly its own mapping.
-    await h2.workflowWorkspace({ authorityId: current.authorityId, endpoint: current.endpoint }, 'native-a', registration.id, operations[4]);
+    await h2.workflowWorkspace({ authorityId: current.authorityId, endpoint: current.endpoint }, 'native-a', registration.id, operations.find(operation => operation.kind === 'write')!);
     const [write] = native.state.requests.filter(request => request.method === 'configuration/sourceWrite');
     expect(write.params.target).toEqual({ kind: 'workspace', directory: b });
   });
@@ -109,13 +108,11 @@ describe('Workflow operations and Product Host authority (R1)', () => {
     const [registration] = observed.catalog.workspaces;
     const client = fakeClient();
     const port = createWorkflowPort({ client: client.client, host: () => forwarding, hostAuthority: authority.capture(), scope: { kind: 'workspace', workspaceId: registration.id } });
-    const global = createWorkflowPort({ client: client.client, host: () => forwarding, hostAuthority: authority.capture(), scope: { kind: 'user' } });
 
     // H2 replaces H1 behind the same Product Host address.
     host = h2;
     // Before the browser observes the replacement, the Host refuses it.
     await expect(port.write('flow', 'missing', { operation: 'create', description: 'x' })).rejects.toMatchObject({ failure: { kind: 'unavailable' } });
-    await expect(global.check('flow', document, false, registration.id)).rejects.toMatchObject({ failure: { kind: 'unavailable' } });
     // After it does, the port refuses before calling the Host at all.
     await authority.observe();
     await expect(port.list()).rejects.toMatchObject({ failure: { kind: 'unavailable', message: 'product_host_replaced' } });
@@ -145,7 +142,7 @@ describe('Workflow operations and native App Server authority', () => {
     ['list', port => port.list()],
     ['read', port => port.read('flow')],
     ['model choices', port => port.modelChoices({ type: 'models', offset: 0 })],
-    ['check', port => port.check('flow', document, false)],
+    ['check', port => port.check('flow', document)],
     ['create (missing target)', port => port.write('flow', 'missing', { operation: 'create', description: 'x' })],
     ['replace (unchanged revision)', port => port.write('flow', 'sha256:same', { operation: 'replace', document })],
   ];
@@ -159,14 +156,6 @@ describe('Workflow operations and native App Server authority', () => {
     // Known and unavailable: never an uncertain write.
     expect((outcome as WorkflowOperationError).failure).toMatchObject({ kind: 'unavailable', message: 'App Server authority replaced' });
     expect(native.state.connects).toBe(1);
-    expect(dispatched()).toEqual([]);
-  });
-
-  it('refuses a Global dependency check routed through a Workspace on a replaced native server', async () => {
-    const { h, registration, authority } = await host();
-    const port = createWorkflowPort({ client: browser().client, host: () => h, hostAuthority: authority.capture(), scope: { kind: 'user' } });
-    native.state.native = 'native-b';
-    await expect(port.check('flow', document, false, registration)).rejects.toMatchObject({ failure: { kind: 'unavailable' } });
     expect(dispatched()).toEqual([]);
   });
 

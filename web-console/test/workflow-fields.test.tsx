@@ -5,7 +5,6 @@ import { createActor } from 'xstate';
 import { exampleSource } from './workflow-fixtures';
 import type { WorkflowFileDocument, WorkflowEdit } from '../../protocol/app-server/v62';
 import type { WorkflowCommit } from '../src/workspaces/host';
-import type { WorkspaceAuthority } from '../src/workspaces/authority';
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import { editorHolds, workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
@@ -27,7 +26,6 @@ const port: WorkflowScopePort = {
   check: () => new Promise(() => {}),
   write: (_id, expected, edit) => { writes.push({ expected, edit }); return new Promise<WorkflowCommit>(() => {}); },
 };
-const authority = { subscribe: () => () => {}, getCatalog: () => undefined } as unknown as WorkspaceAuthority;
 
 beforeEach(() => {
   writes.length = 0; rawInput = undefined;
@@ -40,8 +38,9 @@ async function mountSettings() {
   const surface = createActor(workflowSurfaceMachine, { input: { ports: () => port } }).start();
   const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: 'flow' } } }).start();
   await act(async () => { await Promise.resolve(); });
-  render(<WorkflowEditor surface={surface} editor={editor} authority={authority} scopeLabel="Global" />);
-  fireEvent.click(screen.getByRole('button', { name: 'Block settings' }));
+  render(<WorkflowEditor surface={surface} editor={editor} scopeLabel="Global" />);
+  fireEvent.click(screen.getByRole('button', { name: 'More file actions' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Workflow settings' }));
   return editor;
 }
 async function openBlockSettings() {

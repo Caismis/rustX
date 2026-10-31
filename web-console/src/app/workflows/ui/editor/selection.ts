@@ -8,7 +8,6 @@ export type Selection =
   | { kind: 'start'; path: BlockPath }
   | { kind: 'note'; id: string; path: BlockPath }
   | { kind: 'block'; path?: BlockPath }
-  | { kind: 'check' }
   | undefined;
 
 export function viewId(path: BlockPath, kind: 'node' | 'start' | 'note' | 'edge', id = ''): string {

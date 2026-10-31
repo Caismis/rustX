@@ -158,27 +158,18 @@ fn complete_file_revisions_fence_metadata_writes_copies_deletes_and_lost_ack_rep
             .manager
             .check_workflow(&target, &id("metadata"), first.clone(), None, false)
             .unwrap();
-        let WorkflowStructure::Valid {
-            revision: recognized,
-            ..
-        } = checked.structure
-        else {
-            panic!("valid file")
-        };
+        assert!(matches!(checked.structure, WorkflowStructure::Valid { .. }));
         assert_eq!(
-            recognized, first_revision,
+            checked.revision.unwrap(),
+            first_revision,
             "exact complete candidate recognizes a lost acknowledgement"
         );
-        let WorkflowStructure::Valid {
-            revision: other, ..
-        } = roots
+        let other = roots
             .manager
             .check_workflow(&target, &id("metadata"), next.clone(), None, false)
             .unwrap()
-            .structure
-        else {
-            panic!("valid file")
-        };
+            .revision
+            .unwrap();
         assert_ne!(
             other, first_revision,
             "program equivalence cannot recognize another note edit"
@@ -298,7 +289,7 @@ fn analysis_is_inert_correlated_to_complete_candidate_and_separate_from_save_val
 }
 
 #[test]
-fn unselected_authored_identities_round_trip_for_analysis_but_cannot_replace_a_file() {
+fn unselected_authored_identities_round_trip_and_save_as_unfinished() {
     use serde_json::json;
     let roots = Roots::new();
     let nodes = [
@@ -310,7 +301,7 @@ fn unselected_authored_identities_round_trip_for_analysis_but_cannot_replace_a_f
             "arguments":{"type":"reference","path":["args"]}, "result":{"type":"text"}}),
     ];
     for target in [SourceTarget::User, workspace(&roots.a)] {
-        let saved = roots.create(&target, "unselected", "Original file");
+        let mut saved = roots.create(&target, "unselected", "Original file");
         for node in &nodes {
             let mut value = serde_json::to_value(definition(AGENT_PROGRAM)).unwrap();
             value["block"]["nodes"]["review"] = node.clone();
@@ -340,18 +331,20 @@ fn unselected_authored_identities_round_trip_for_analysis_but_cannot_replace_a_f
                     .structure,
                 WorkflowStructure::Invalid { .. }
             ));
-            assert!(
-                roots
-                    .write(
-                        &target,
-                        "unselected",
-                        &saved,
-                        WorkflowEdit::Replace {
-                            document: Box::new(document),
-                        }
-                    )
-                    .is_err()
-            );
+            let unfinished = roots
+                .write(
+                    &target,
+                    "unselected",
+                    &saved,
+                    WorkflowEdit::Replace {
+                        document: Box::new(document.clone()),
+                    },
+                )
+                .unwrap();
+            let source = roots.read(&target, "unselected");
+            assert_eq!(source.document.as_deref(), Some(&document));
+            assert!(source.diagnostic.is_some());
+            saved = unfinished;
             assert_eq!(roots.read(&target, "unselected").revision, saved);
         }
     }
@@ -634,20 +627,22 @@ fn create_writes_the_native_minimal_program_and_never_overwrites() {
         ),
         Err(SettingsError::Invalid)
     ));
-    // An empty description is a structural rejection with its native path.
-    let Err(SettingsError::InvalidWorkflow(diagnostic)) = roots.write(
-        &target,
-        "empty",
-        "missing",
-        WorkflowEdit::Create {
-            description: " ".into(),
-            display: None,
-        },
-    ) else {
-        panic!("empty description must be invalid");
-    };
-    assert_eq!(diagnostic.path, "description");
-    assert!(!roots.read(&target, "empty").present);
+    // As a Dify draft, an empty description is still written; the file
+    // then reads as unfinished, its problem named by its native path.
+    roots
+        .write(
+            &target,
+            "empty",
+            "missing",
+            WorkflowEdit::Create {
+                description: " ".into(),
+                display: None,
+            },
+        )
+        .unwrap();
+    let empty = roots.read(&target, "empty");
+    assert!(empty.document.is_some());
+    assert_eq!(empty.diagnostic.unwrap().path, "description");
     assert_eq!(roots.read(&target, "fresh").revision, revision);
 }
 
@@ -1144,7 +1139,7 @@ fn native_examples_round_trip_semantically_through_canonical_serialization() {
         let wire: WorkflowFileDocument =
             serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
         assert_eq!(wire, original, "{name}");
-        let bytes = candidate::encode(&id(name), &path, &wire).unwrap();
+        let bytes = candidate::encode(&wire).unwrap();
         let canonical: WorkflowFileDocument = serde_yaml::from_slice(&bytes).unwrap();
         assert_eq!(canonical, original, "{name}");
         assert!(
@@ -1376,9 +1371,11 @@ fn a_checked_candidate_names_the_revision_its_normalized_commit_takes() {
         .manager
         .check_workflow(&target, &id("review"), candidate.clone(), None, false)
         .unwrap();
-    let WorkflowStructure::Valid { revision, .. } = report.structure else {
-        panic!("valid: {report:?}");
-    };
+    assert!(
+        matches!(report.structure, WorkflowStructure::Valid { .. }),
+        "valid: {report:?}"
+    );
+    let revision = report.revision.unwrap();
     let committed = roots
         .write(
             &target,

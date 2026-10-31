@@ -15867,7 +15867,7 @@
           ]
         },
         {
-          "description": "Replace the whole file with one native-validated definition.",
+          "description": "Replace the whole file with one definition, finished or not.",
           "type": "object",
           "properties": {
             "document": {
@@ -33741,6 +33741,13 @@
       "description": "One offline check of one exact candidate document.",
       "type": "object",
       "properties": {
+        "revision": {
+          "description": "The file revision a `replace` with this candidate commits: the native\nidentity of its canonical serialization, so a client recognizes its\nown normalized commit on reread. Absent when the file cannot hold it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "structure": {
           "$ref": "#/$defs/WorkflowStructure"
         },
@@ -33776,15 +33783,12 @@
       "description": "Whether the native compiler admits the candidate's structure.",
       "oneOf": [
         {
-          "description": "Compiled. `outputs` are the compiled output contracts of every node\nby authored path, including derived Loop results.\n`revision` is the file revision a `replace` with this candidate\ncommits: the native identity of its canonical serialization, so a\nclient recognizes its own normalized commit on reread.",
+          "description": "Compiled. `outputs` are the compiled output contracts of every node\nby authored path, including derived Loop results.",
           "type": "object",
           "properties": {
             "outputs": {
               "type": "object",
               "additionalProperties": true
-            },
-            "revision": {
-              "type": "string"
             },
             "status": {
               "type": "string",
@@ -33794,8 +33798,7 @@
           "additionalProperties": false,
           "required": [
             "status",
-            "outputs",
-            "revision"
+            "outputs"
           ]
         },
         {

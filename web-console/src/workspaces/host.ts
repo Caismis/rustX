@@ -25,17 +25,15 @@ export type WorkspaceConfigurationResult =
   | { kind: 'mcp_probe'; result: McpProbeResult }
   | { kind: 'read' | 'reconcile'; projection: SourceSettings }
   | { kind: 'write'; commit: WorkspaceConfigurationCommit };
-/** One native Workflow file operation in one registered Workspace (Issue #491).
- * `check` with `scope: 'user'` checks a User (Global) file with this
- * Workspace as its explicit dependency context; every other operation
- * addresses this Workspace's own files. */
+/** One native Workflow file operation on one registered Workspace's own
+ * files (Issue #491). */
 export type WorkflowHostOperation =
   | { kind: 'list' }
   | { kind: 'read'; id: string }
   | { kind: 'model_choices'; query: WorkflowModelChoicesQuery; expected_revision?: string | null }
   | { kind: 'tool_catalog'; source?: string | null }
   | { kind: 'analyze'; id: string; document: WorkflowFileDocument; generation: string; query?: WorkflowAnalysisQuery }
-  | { kind: 'check'; scope: 'workspace' | 'user'; id: string; document: WorkflowFileDocument; explain: boolean }
+  | { kind: 'check'; id: string; document: WorkflowFileDocument }
   | { kind: 'write'; id: string; expected_revision: string; edit: WorkflowEdit };
 /** The separate authoritative read attempted after a confirmed Workflow
  * write; its failure never turns the committed write into a failed one. */

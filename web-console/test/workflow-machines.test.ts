@@ -5,7 +5,7 @@ import { statusSource } from './workflow-fixtures';
 import type { WorkflowCheckReport, WorkflowFileDocument, WorkflowEdit, WorkflowLibrary, WorkflowSource } from '../../protocol/app-server/v62';
 import { RpcFailure } from '../src/client/errors';
 import { WorkspaceHostError, type WorkflowCommit } from '../src/workspaces/host';
-import { addNode, deleteNodes, renameNode, replaceNode, setWorkflow } from '../src/app/workflows/document/commands';
+import { addNode, deleteNodes, renameNode, setWorkflow } from '../src/app/workflows/document/commands';
 import { blockAt } from '../src/app/workflows/document/model';
 import { blockField, encodeField, fieldText, nodeField, setField, updateField, within } from '../src/app/workflows/document/fields';
 import { readJson } from '../shared/json-numbers';
@@ -34,7 +34,7 @@ const listing = (scope: WorkflowScope, files: string[]): WorkflowLibrary => ({
   directory: '/fixture', absent_revision: 'missing', diagnostic: null,
   files: files.map(id => ({ file_name: `${id}.yaml`, id, relative_path: `.agents/workflows/${id}.yaml`, revision: `sha256:${id}`, byte_length: '1', modified_ms: null, description: id, nodes: 1, diagnostic: null, shadows_global: false })),
 });
-const valid: WorkflowCheckReport = { structure: { status: 'valid', outputs: {}, revision: 'sha256:candidate' }, dependencies: { status: 'not_checked' }, explanation: null };
+const valid: WorkflowCheckReport = { revision: 'sha256:candidate', structure: { status: 'valid', outputs: {} }, dependencies: { status: 'not_checked' }, explanation: null };
 const commit = (revision: string, reread: WorkflowCommit['reread']): WorkflowCommit => ({ acknowledgement: { revision, configuration_revision: '7' }, reread });
 
 interface Scripted {
@@ -71,7 +71,7 @@ describe('Workflow editor races', () => {
   it('never lets a check of generation N validate generation N+1', async () => {
     const script = scripted();
     const editor = await readyEditor(script);
-    editor.send({ type: 'CHECK', explain: false });
+    editor.send({ type: 'CHECK' });
     const checked = editor.getSnapshot().context.generation;
     editor.send({ type: 'EDIT', apply: describeAs('edited during check') });
     script.checks[0].result.resolve(valid);
@@ -81,12 +81,12 @@ describe('Workflow editor races', () => {
     expect(generation).toBe(checked + 1);
     expect(sameDocument(script.checks[0].document, editor.getSnapshot().context.document)).toBe(false);
     // A newer check stops the older one: its late result has no path in.
-    editor.send({ type: 'CHECK', explain: false });
-    editor.send({ type: 'CHECK', explain: true });
+    editor.send({ type: 'CHECK' });
+    editor.send({ type: 'CHECK' });
     script.checks[2].result.resolve({ ...valid, dependencies: { status: 'admitted', context: '/w' } });
     script.checks[1].result.resolve(valid);
     await flush();
-    expect(editor.getSnapshot().context.check).toMatchObject({ generation, explain: true, report: { dependencies: { status: 'admitted' } } });
+    expect(editor.getSnapshot().context.check).toMatchObject({ generation, report: { dependencies: { status: 'admitted' } } });
     expect(script.checks).toHaveLength(3);
   });
 
@@ -144,7 +144,7 @@ describe('Workflow editor races', () => {
     await flush();
     // Native names the revision the attempted candidate commits as.
     expect(sameDocument(script.checks[0].document, attempted)).toBe(true);
-    script.checks[0].result.resolve({ ...valid, structure: { status: 'valid', outputs: {}, revision: 'sha256:landed' } });
+    script.checks[0].result.resolve({ ...valid, revision: 'sha256:landed' });
     await flush();
     const context = editor.getSnapshot().context;
     expect(context.notice).toEqual({ kind: 'reconciled' });
@@ -184,7 +184,7 @@ describe('Workflow editor races', () => {
     script.reads[1].result.resolve({ ...source('flow', 'sha256:n'), document: normalized as WorkflowSource['document'] });
     await flush();
     expect(sameDocument(script.checks[0].document, attempted)).toBe(true);
-    script.checks[0].result.resolve({ ...valid, structure: { status: 'valid', outputs: {}, revision: 'sha256:n' } });
+    script.checks[0].result.resolve({ ...valid, revision: 'sha256:n' });
     await flush();
     const context = editor.getSnapshot().context;
     expect(context.notice).toEqual({ kind: 'reconciled' });
@@ -208,7 +208,7 @@ describe('Workflow editor races', () => {
     editor.send({ type: 'RECONCILE' });
     script.reads[1].result.resolve(source('flow', 'sha256:theirs'));
     await flush();
-    script.checks[0].result.resolve({ ...valid, structure: { status: 'valid', outputs: {}, revision: 'sha256:mine' } });
+    script.checks[0].result.resolve({ ...valid, revision: 'sha256:mine' });
     await flush();
     const context = editor.getSnapshot().context;
     expect(context.notice).toEqual({ kind: 'changed_externally', revision: 'sha256:theirs' });
@@ -222,9 +222,7 @@ describe('Workflow editor races', () => {
     const context = editor.getSnapshot().context;
     expect(isDirty(context)).toBe(true);
     editor.send({ type: 'SAVE' });
-    editor.send({ type: 'CHECK', explain: false });
     expect(script.writes).toHaveLength(0);
-    expect(script.checks).toHaveLength(0);
     expect(editor.getSnapshot().context.notice).toEqual({ kind: 'pending_fields', count: 1 });
     expect(editor.getSnapshot().context.drafts[encodeField(blockField(ROOT, ['input']))].text).toBe('{ "type": ');
     // Discarding is explicit; then the document is clean and saves again.
@@ -326,17 +324,12 @@ describe('Workflow editor races', () => {
     expect(editor.getSnapshot().context.document?.description).toBe('abc');
   });
 
-  it('sends nothing while a typed identity is still unchosen', async () => {
+  it('saves an unfinished workflow, as a Dify draft', async () => {
     const script = scripted();
     const editor = await readyEditor(script);
     editor.send({ type: 'EDIT', apply: document => addNode(document, ROOT, 'agent', 'draft_agent') });
-    editor.send({ type: 'CHECK', explain: false });
     editor.send({ type: 'SAVE' });
-    expect(editor.getSnapshot().context.notice).toEqual({ kind: 'incomplete', identities: [{ block: [], node: 'draft_agent', field: 'profile' }] });
-    expect(script.checks).toHaveLength(0);
-    expect(script.writes).toHaveLength(0);
-    editor.send({ type: 'EDIT', apply: document => replaceNode(document, ROOT, 'draft_agent', { ...(document.block.nodes.draft_agent as Extract<WorkflowFileDocument['block']['nodes'][string], { type: 'agent' }>), profile: 'reviewer' }) });
-    editor.send({ type: 'SAVE' });
+    expect(editor.getSnapshot().context.notice).toBeUndefined();
     expect(script.writes).toHaveLength(1);
   });
 

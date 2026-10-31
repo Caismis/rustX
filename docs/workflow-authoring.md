@@ -191,8 +191,7 @@ Product Host's registration, and the browser never sends a Workspace path.
 A transaction is bound to the authorities it started under, not only to IDs.
 Each browser port captures the App Server endpoint and authority revision and
 the Product Host authority (`WorkspaceAuthorityScope`) current when it is
-created. Every Workspace operation, and a Global file's dependency check routed
-through a Workspace, carries that Product Host scope; the Host validates it in
+created. Every Workspace operation carries that Product Host scope; the Host validates it in
 the registration lane immediately before native dispatch. A replaced Host is
 refused (`authority_replaced`) even when it reuses the registration ID with a
 different directory, so revision equality never stands in for resource
@@ -201,8 +200,7 @@ identity.
 The native App Server is a separate constraint. A port also captures the
 native authority identity (the `authority_id` of the `initialize` the browser
 already observed) and every Host-routed Workflow operation carries it as
-`native`: Workspace list, read, analysis, check and write, and a Global file's dependency
-check routed through a Workspace. The Host opens its own connection per
+`native`: Workspace list, read, analysis, check and write. The Host opens its own connection per
 operation; after initializing it and before dispatching any Workflow request,
 it compares the server's identity with `native` and refuses a mismatch
 (`native_replaced`). Another App Server process at the same endpoint therefore
@@ -305,14 +303,14 @@ applied, so no rounded, retyped or re-signed value is ever sent.
 
 ### Checking
 
-`workflow/check` validates a candidate document without writing it. The report
-keeps two facts apart:
+`workflow/check` validates a candidate document without writing it. Its
+`revision` is the one a `replace` with this candidate commits as (the revision of
+its canonical serialization), absent only when the file could not hold it. The
+report keeps two facts apart:
 
 - **Structure** — the result of `WorkflowProgram::compile` (graph, lexical scope,
-  schemas, bindings, bounds): `valid` with every node's output contract and the
-  `revision` a `replace` with this candidate commits as (the revision of its
-  canonical serialization), or `invalid` with one bounded diagnostic at its
-  authored path.
+  schemas, bindings, bounds): `valid` with every node's output contract, or
+  `invalid` with one bounded diagnostic at its authored path.
 - **Dependencies** — `not_checked`, `admitted`, `blocked` with typed diagnostics,
   or `unavailable` with a reason, computed by the same metadata admission as
   `rustx workflow check` (`MetadataAdmission::compose`).
@@ -321,12 +319,20 @@ With `explain`, a structurally valid candidate also returns the compiled
 explanation described below. Checking executes no node, contacts no provider or
 MCP endpoint, reads no credential and writes nothing.
 
+The Web editor checks as Dify's checklist does: the current document is checked
+again shortly after every edit, and the header's checklist lists each node with
+problems — its first empty required field (each a field the compiler also
+rejects), whether it is connected, then the native check's own diagnostic where
+no message names one already. Choosing a problem selects its node and focuses the
+field. A Global file's dependencies are not checked; a Workspace file's are
+checked in its own Workspace.
+
 ### Candidate output catalogs and variable picking
 
 `workflow/analyze` accepts `{target, id, document, generation, query?}`. It performs
 no dependency discovery/preparation and constructs no `WorkflowProgram`. A
 candidate with an unfinished instruction, binding or graph can expose its output
-contracts before it could pass Save/Check. `outputs` distinguish declared/derived
+contracts before it could pass Check. `outputs` distinguish declared/derived
 contracts from incomplete contracts (`schema: null` with a static diagnostic).
 Start, Branch and Return are not business-data producers; neither are notes. Text Model output is a string, with no invented `.text` field.
 
@@ -377,7 +383,7 @@ Unsupported/optional field traversal remains invalid. Unknown external Tool
 argument contracts remain unknown; no MCP/Python preparation occurs. Whole-object
 and whole-array references are supported; array indexing and optional fallbacks
 are not introduced. The picker may preserve a pending reference in memory, while
-Save/Check keep their existing authoritative compiler rules.
+Check keeps its existing authoritative compiler rules.
 
 Tool argument roots share the compiler's necessary object requirement: a known
 string, array or other non-object root is incompatible. An object remains unknown
@@ -467,9 +473,15 @@ valid program with a description), `replace` (a complete document), `copy`
 revision (`sha256:<hex>`), or the listing's `absent_revision` for a file that
 must not exist yet. A changed revision is a conflict and nothing is written.
 
-Native code validates the candidate before writing; an invalid candidate leaves
-the file unchanged and returns `workflow_invalid` with its diagnostic. A valid
-candidate is serialized from the native types, reparsed and compared, and
+As a Dify draft, an unfinished workflow saves: the compiler does not gate a
+write. The file is then listed with its diagnostic (the library marks it as
+failing its check), and discovery loads it as invalid, so no Session can run it
+until it is finished. Only what the file cannot hold exactly — an invalid
+presentation entry or a number the browser could not preserve — is refused,
+leaving the file unchanged and returning `workflow_invalid` with its diagnostic.
+A file this version cannot parse (written by another version, or edited by
+hand) is never overwritten: the editor shows why and where, and changes nothing.
+The candidate is serialized from the native types, reparsed and compared, and
 published by the same staged-file and rename path as every configuration
 source. Serialization is normalized: comments and anchors are not preserved,
 defaulted fields are written explicitly, and an ordinary control port is

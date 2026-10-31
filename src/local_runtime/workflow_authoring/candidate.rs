@@ -1,10 +1,11 @@
 //! Canonical candidate bytes of one Workflow source mutation.
 //!
 //! Called by the native source commit transaction while it holds the
-//! destination's writer lock and has verified the expected revision. Every
-//! written definition is compiled under the destination identity first and
-//! serialized by the native YAML serializer; nothing invalid is staged, so a
-//! rejected candidate leaves the original file untouched.
+//! destination's writer lock and has verified the expected revision. As a
+//! Dify draft, a definition the compiler rejects is still written: the file
+//! is then listed and loaded as invalid until it is finished. Only what the
+//! file cannot hold exactly is refused, so a rejected candidate leaves the
+//! original file untouched.
 use super::{SourceDirectory, WorkflowDiagnostic, file_name};
 use crate::local_runtime::configuration::settings::SettingsError;
 use crate::runtime::resources::SourceScope;
@@ -30,7 +31,7 @@ pub enum WorkflowEdit {
         #[serde(default)]
         display: Option<crate::workflow_file::WorkflowDisplay>,
     },
-    /// Replace the whole file with one native-validated definition.
+    /// Replace the whole file with one definition, finished or not.
     Replace { document: Box<WorkflowFileDocument> },
     /// Copy another file of the same scope at exactly `source_revision`.
     Copy {
@@ -69,24 +70,16 @@ fn minimal(
     Ok(document)
 }
 
-/// Compile `definition` under `id` and serialize it canonically. The
-/// serialized bytes must parse back to exactly the compiled definition.
-/// These are exactly the bytes a `replace` of `definition` commits, so
-/// their revision is the candidate's native identity.
+/// Serialize `definition` canonically. The serialized bytes must parse
+/// back to exactly the definition. These are exactly the bytes a `replace`
+/// of `definition` commits, so their revision is the candidate's native
+/// identity. Whether it compiles is the check's concern, not the file's.
 pub(in crate::local_runtime) fn encode(
-    id: &WorkflowId,
-    path: &Path,
     definition: &WorkflowFileDocument,
 ) -> Result<Vec<u8>, SettingsError> {
     definition
         .validate()
         .map_err(|error| invalid(super::presentation_diagnostic(&error)))?;
-    crate::local_runtime::workflow_resources::compile_definition(
-        id,
-        path,
-        definition.definition.clone(),
-    )
-    .map_err(|error| invalid(WorkflowDiagnostic::from_resource(&error)))?;
     definition
         .canonical_bytes()
         .map_err(|error| invalid(super::presentation_diagnostic(&error)))
@@ -114,7 +107,7 @@ pub(in crate::local_runtime) fn candidate(
             if original.is_some() {
                 return Err(SettingsError::Invalid);
             }
-            encode(id, path, &minimal(&description, display)?).map(Some)
+            encode(&minimal(&description, display)?).map(Some)
         }
         WorkflowEdit::Replace { document } => {
             if original.is_none() {
@@ -125,7 +118,7 @@ pub(in crate::local_runtime) fn candidate(
             if let Some(diagnostic) = super::unrepresentable_number(&document) {
                 return Err(invalid(diagnostic));
             }
-            encode(id, path, &document).map(Some)
+            encode(&document).map(Some)
         }
         WorkflowEdit::Copy {
             source,
@@ -153,7 +146,7 @@ pub(in crate::local_runtime) fn candidate(
                 bytes.as_deref().unwrap_or_default(),
             )
             .map_err(|error| invalid(WorkflowDiagnostic::from_resource(&error)))?;
-            encode(id, path, &definition).map(Some)
+            encode(&definition).map(Some)
         }
         WorkflowEdit::Delete => {
             if original.is_none() {

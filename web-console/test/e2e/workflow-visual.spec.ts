@@ -119,7 +119,7 @@ test('adds parallel next nodes from the inspector and keeps every existing conne
     await panel(page).getByRole('button', { name: 'Add condition', exact: true }).click();
     await page.getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: /^args \/ flag ·/ }).click();
     await chooseExistingNext(page, 'done', 'IF'); await chooseExistingNext(page, 'done', 'ELSE');
-    await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
+    await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     const saved = parse(readFileSync(file, 'utf8'));
     expect(saved.block).not.toHaveProperty('entry'); expect(saved.block.nodes.start.type).toBe('start');
@@ -151,7 +151,7 @@ test('reconnects ordinary edges to the real Start without replacing its other su
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, 'start_fanout.yaml'), JSON.stringify(document));
     await openLibrary(page, fixture); await page.getByRole('button', { name: 'start_fanout', exact: true }).click();
-    await canvas(page).getByRole('button', { name: 'Fit view', exact: true }).click();
+    await canvas(page).getByRole('button', { name: 'Zoom', exact: true }).click(); await page.getByRole('menuitem', { name: 'Zoom to fit', exact: true }).click();
     const edge = canvas(page).getByRole('group', { name: `Edge from ${viewId([], 'node', 'model')} to ${viewId([], 'node', 'done')}`, exact: true });
     const start = canvas(page).getByLabel('Workflow Start', { exact: true });
     await edge.focus(); await edge.press('Enter'); await expect(edge).toHaveClass(/selected/);
@@ -180,7 +180,7 @@ test('renames input fields and edits optional array items through the field dial
     const edit = page.getByRole('dialog', { name: 'Edit input field', exact: true });
     await input.getByRole('button', { name: 'Edit before', exact: true }).first().click();
     await edit.getByLabel('Variable name', { exact: true }).fill('after'); await edit.getByRole('button', { name: 'Save', exact: true }).click();
-    await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
+    await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     expect(parse(readFileSync(file, 'utf8')).block.input).toEqual(renameCases[0].after);
     await activate(page, 'Workflow Start');
@@ -211,7 +211,7 @@ test('refuses destination-only finite schema collisions without adopting extra p
     for (const [index, example] of topLevel.entries()) {
       const file = join(directory, `finite_collision_${index}.yaml`), before = parse(readFileSync(file, 'utf8'));
       await page.getByRole('button', { name: `finite_collision_${index}`, exact: true }).click();
-      await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
+      await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
       await activate(page, 'Workflow Start');
       await schema(page, 'Input fields').getByRole('button', { name: 'Edit before', exact: true }).first().click();
       const dialog = page.getByRole('dialog', { name: 'Edit input field', exact: true });
@@ -275,7 +275,7 @@ test('uses the same visible duplicate transaction from Inspector and canvas for 
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Redo', exact: true }).click(); await expect(node([], 'node', 'done_copy')).toBeVisible();
     await activate(page, 'Output node done'); await node([], 'node', 'done').click({ button: 'right' });
-    await canvas(page).getByRole('dialog').getByRole('button', { name: 'Duplicate', exact: true }).click();
+    await canvas(page).getByRole('menu').getByRole('menuitem', { name: /^Duplicate/ }).click();
     await expect(node([], 'node', 'done_copy_2')).toHaveClass(/selected/);
     expect(await position(node([], 'node', 'done_copy_2'))).toEqual({ x: 564, y: 304 });
     await page.getByRole('button', { name: 'Undo', exact: true }).click(); await page.getByRole('button', { name: 'Undo', exact: true }).click();
@@ -347,7 +347,7 @@ test('authors structured required output, nested contracts and repeated downstre
       const choice = page.getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: new RegExp(`^${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ·`) });
       await expect(choice).toBeEnabled(); await choice.click();
     }
-    await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
+    await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     const file = join(fixture.workspaceA, '.agents/workflows/structured_authoring.yaml'), saved = parse(readFileSync(file, 'utf8'));
     expect(saved.block.nodes.model.output.schema).toMatchObject({ type: 'object', required: ['risk', 'tags', 'details'], properties: { risk: { type: 'string', enum: ['low', 'high'], description: 'Risk classification.' }, tags: { type: 'array', items: { type: 'string' } }, details: { required: ['accepted'], properties: { accepted: { type: 'boolean' } } } } });
@@ -374,9 +374,9 @@ test('measures the native 256-node nested fixture and one metadata-only organize
     await expect(canvas(page).locator('.react-flow__node')).toHaveCount(257);
     const renderMs = await page.evaluate(start => performance.now() - start, start);
     expect(renderMs).toBeLessThan(10_000);
-    await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
+    await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     await panel(page).getByRole('button', { name: 'Close inspector' }).click();
-    const organize = canvas(page).getByRole('button', { name: 'Organize layout', exact: true });
+    const organize = canvas(page).getByRole('button', { name: 'Organize nodes', exact: true });
     const before = await page.evaluate(() => performance.now()); await organize.click();
     await expect(organize).toBeEnabled(); await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
     const layoutMs = await page.evaluate(before => performance.now() - before, before); expect(layoutMs).toBeLessThan(10_000);

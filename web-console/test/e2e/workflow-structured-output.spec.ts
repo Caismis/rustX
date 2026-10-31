@@ -109,7 +109,7 @@ test('structured output uses transactional Dify-style visual and JSON editors wi
     expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.getByRole('button', { name: 'Check', exact: true }).click(); await expect(panel).toContainText('Structure check passed');
+    await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     await expect(panel).not.toContainText('presentation target no longer exists');
     await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     const saved = parse(readFileSync(file, 'utf8'));

@@ -6511,7 +6511,6 @@ export type WorkflowStructure =
       outputs: {
         [k: string]: unknown;
       };
-      revision: string;
       status: 'valid';
     }
   | {
@@ -18602,6 +18601,12 @@ export interface WorkflowToolSource {
  * via the `definition` "WorkflowCheckReport".
  */
 export interface WorkflowCheckReport {
+  /**
+   * The file revision a `replace` with this candidate commits: the native
+   * identity of its canonical serialization, so a client recognizes its
+   * own normalized commit on reread. Absent when the file cannot hold it.
+   */
+  revision?: string | null;
   structure: WorkflowStructure;
   dependencies: WorkflowDependencies;
   /**
