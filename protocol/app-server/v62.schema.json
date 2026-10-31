@@ -11852,7 +11852,12 @@
       "type": "object",
       "properties": {
         "input": {
-          "description": "The workflow input JSON Schema."
+          "description": "The workflow input JSON Schema.",
+          "default": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
         },
         "nodes": {
           "description": "Stable node definitions keyed by explicit node id.",

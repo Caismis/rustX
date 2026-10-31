@@ -97,6 +97,11 @@
           "type": "array"
         },
         "input": {
+          "default": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
           "description": "The workflow input JSON Schema."
         },
         "nodes": {

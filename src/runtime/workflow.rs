@@ -399,10 +399,7 @@ pub struct WorkflowDefinition {
 #[derive(schemars::JsonSchema)]
 pub struct WorkflowBlock {
     /// The workflow input JSON Schema.
-    #[serde(
-        default = "empty_object_schema",
-        skip_serializing_if = "is_default_schema"
-    )]
+    #[serde(default = "empty_object_schema")]
     pub input: Value,
     /// Stable node definitions keyed by explicit node id.
     #[serde(deserialize_with = "deserialize_unique_map")]
@@ -539,10 +536,6 @@ fn empty_object_schema() -> Value {
 }
 
 /// Exactly what an omitted schema reads back as.
-fn is_default_schema(schema: &Value) -> bool {
-    *schema == empty_object_schema()
-}
-
 /// A closed object with no fields, however its empty `required` is spelled.
 fn is_empty_object_schema(schema: &Value) -> bool {
     let mut schema = schema.clone();
