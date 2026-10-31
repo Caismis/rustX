@@ -6,11 +6,11 @@ import { useTranslation } from '../../../../locale/react';
 import { IconEllipsisOutline16 } from '../../../../presentation/primitives/icons';
 import { MarkdownText } from '../../../../presentation/markdown/MarkdownText';
 import { portsOf, type ControlPort, type BuiltinPort } from '../../document/ports';
-import { KindIcon, IconEntry, IconPlus } from '../icons';
+import { KindIcon, IconEntry, IconHome, IconPlus } from '../icons';
 import { predicateText } from './summary';
 import { NodePreview } from './NodePreview';
 import { PredicateView } from './VariableLabel';
-import type { SceneNode } from './scene';
+import { BODY_START_SIZE, type SceneNode } from './scene';
 import type { Predicate } from '../../document/model';
 import css from './Editor.module.css';
 
@@ -21,10 +21,9 @@ export const CanvasActions = createContext<{
   addBefore(id: string, anchor: HTMLElement): void;
   addIn(id: string, anchor: HTMLElement): void;
   menu(id: string, anchor: HTMLElement): void;
-  collapse(id: string): void;
   resize(id: string, geometry: ResizeParams): void;
   geometryStart(): void;
-}>({ editable: false, addAfter() {}, insertEdge() {}, addBefore() {}, addIn() {}, menu() {}, collapse() {}, resize() {}, geometryStart() {} });
+}>({ editable: false, addAfter() {}, insertEdge() {}, addBefore() {}, addIn() {}, menu() {}, resize() {}, geometryStart() {} });
 
 // Compound conditions stay text; Dify's card lists only flat comparisons.
 const simple = (predicate: Predicate) => predicate.type !== 'not' && predicate.type !== 'and' && predicate.type !== 'or';
@@ -46,13 +45,20 @@ function SourcePort({ id, port, label, title, adding, connected, outcome, classN
 export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isConnectable }: NodeProps<SceneNode>) {
   const tx = useTranslation(), actions = useContext(CanvasActions), connections = useNodeConnections();
   const node = data.definition, ports = node ? portsOf(node) : data.view === 'start' ? ['next'] as const : [];
-  const container = data.expanded, branch = node?.type === 'branch' ? branchGeometry(node) : undefined;
+  const container = data.container, branch = node?.type === 'branch' ? branchGeometry(node) : undefined;
   if (data.view === 'note' && data.note) return <div className={clsx(css.noteNode, css[`note_${data.note.theme}`], selected && css.nodeSelected)}>
     <NodeResizer isVisible={selected} minWidth={160} minHeight={88} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />
     <header className={css.noteHead}><span>{tx('workflows:note.title')}</span><button type="button" className={clsx(css.iconButton, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local })} onClick={event => actions.menu(id, event.currentTarget)}><IconEllipsisOutline16 /></button></header>
     <div className={clsx(css.notePreview, 'nowheel nodrag')}><MarkdownText text={data.note.text || tx('workflows:note.empty')} variant="compact" /></div>
   </div>;
   const adding = isConnectable && actions.editable, entered = connections.some(connection => connection.target === id);
+  // As Dify's LoopStartNode: a body's Start is a small square with a home
+  // glyph and its one exit.
+  if (data.view === 'start' && data.path.length) return <div className={clsx(css.bodyStart, selected && css.nodeSelected)} title={data.title || tx('workflows:canvas.nested-start')}>
+    <span className={css.bodyStartIcon}><IconHome size={12} /></span>
+    <SourcePort id={id} port="next" label={tx('workflows:canvas.start')} title={tx('workflows:canvas.start')} adding={adding} style={{ top: 21 }}
+      connected={connections.some(connection => connection.source === id && connection.sourceHandle === 'next')} />
+  </div>;
   // A fail branch's port sits on the card's error row and each Agent route's
   // on its own row, not beside the head.
   const routes = node?.type === 'agent' ? node.routes ?? [] : [];
@@ -66,9 +72,15 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
     <div className={clsx(css.nodeHead, container && css.containerHead)}>
       <span className={clsx(css.nodeIcon, node ? css[`kind_${node.type}`] : css.startIcon)}>{node ? <KindIcon kind={node.type} size={17} /> : <IconEntry size={17} />}</span>
       <span className={css.nodeText}><span className={css.nodeTitle}>{data.view === 'start' ? data.title || tx(data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : data.title}</span></span>
-      {node && (node.type === 'loop' || node.type === 'iteration') && <button type="button" className={clsx(css.iconButton, 'nodrag nopan')} aria-label={tx(data.expanded ? 'workflows:canvas.collapse' : 'workflows:canvas.expand', { p0: data.title })} onClick={event => { event.stopPropagation(); actions.collapse(id); }}>{data.expanded ? '−' : '+'}</button>}
       <button type="button" className={clsx(css.iconButton, css.nodeMenu, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local || tx('workflows:canvas.start') })} onClick={event => { event.stopPropagation(); data.view === 'start' ? actions.addIn(id, event.currentTarget) : actions.menu(id, event.currentTarget); }}><IconEllipsisOutline16 /></button>
     </div>
+    {/* As Dify's Loop and Iteration nodes: the body on a canvas of its own,
+        and while it holds only its Start, an "Add node" button after it. */}
+    {container && <div className={css.containerBody} />}
+    {container && data.emptyBody && <div className={css.addBlock} style={{ left: data.emptyBody.position.x + BODY_START_SIZE, top: data.emptyBody.position.y + 6 }}>
+      <span className={css.addBlockLine} />
+      {actions.editable && <button type="button" className={clsx(css.addBlockButton, 'nodrag nopan')} onClick={event => { event.stopPropagation(); actions.addAfter(data.emptyBody!.start, 'next', event.currentTarget); }}><IconPlus size={14} />{tx('workflows:canvas.add')}</button>}
+    </div>}
     {!container && <>
       {node && node.type !== 'branch' && node.type !== 'start' && <NodePreview tx={tx} node={node} sources={data.sources ?? {}} />}
       {node?.type === 'branch' && <div className={css.branchBody}>

@@ -17,7 +17,6 @@ import { BlockForm } from './forms/BlockForm';
 import { NodePanel } from './panels/NodePanel';
 import { DraftTextField, NumberField, SelectField } from './forms/fields';
 import { readInspectorWidth, writeInspectorWidth } from './view-store';
-import { viewId } from './selection';
 import css from './Editor.module.css';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
@@ -30,11 +29,10 @@ export function checkState(check: CheckResult | undefined, generation: number): 
 
 /** A single Settings surface; specialized panels own node semantics and the
  * editor machine owns all deferred text, history and save state. */
-export function Inspector({ document, block, selection, onSelect, edit, navigate, vocabulary, check, generation, rejection, checks, port, collapsed, toggleContainer, focus, onDuplicate }: {
+export function Inspector({ document, block, selection, onSelect, edit, navigate, vocabulary, check, generation, rejection, checks, port, focus, onDuplicate }: {
   document: WorkflowDocument; block: BlockPath; selection: NonNullable<Selection>; onSelect: (selection: Selection) => void;
   edit: Edit; navigate: (block: BlockPath) => void; vocabulary?: WorkflowVocabulary; check?: CheckResult; generation: number;
   rejection?: string; checks: ReactNode; port: WorkflowScopePort;
-  collapsed: ReadonlySet<string>; toggleContainer: (path: BlockPath, id: string) => void;
   focus?: { address?: FieldAddress; field?: string; epoch: number };
   onDuplicate: Duplicate;
 }) {
@@ -77,7 +75,6 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     </div>;
     description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />;
     body = <>
-      {node.type === 'loop' && <button type="button" className={css.smallButton} onClick={() => toggleContainer(path, id)}>{tx(collapsed.has(viewId(path, 'node', id)) ? 'workflows:canvas.expand' : 'workflows:canvas.collapse', { p0: metadata?.title ?? id })}</button>}
       <NodePanel document={document} block={path} id={id} port={port} vocabulary={vocabulary} edit={edit} navigate={navigate} onSelect={onSelect} />
       <div className={css.row}><button type="button" className={css.smallButton} onClick={() => onDuplicate(path, [id], [])}>{tx('workflows:canvas.duplicate')}</button>
         <button type="button" className={clsx(css.smallButton, css.dangerText)} onClick={() => edit(document => deleteNodes(document, path, [id]))}>{tx('workflows:inspector.delete-node')}</button></div>

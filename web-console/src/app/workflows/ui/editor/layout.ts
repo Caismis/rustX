@@ -25,7 +25,7 @@ export async function organizeDocument(document: WorkflowDocument, measured: Rea
   const visit = async (path: BlockPath) => {
     const block = blockAt(next, path)!;
     for (const [id, node] of Object.entries(block.nodes).sort(([a], [b]) => a.localeCompare(b))) for (const step of childSteps(id, node)) await visit([...path, step]);
-    const scene = projectScene(next, new Set(), measured);
+    const scene = projectScene(next, measured);
     const children: ElkNode[] = scene.nodes.filter(node => (node.data.view === 'start' || node.data.view === 'node') && sameBlockPath(node.data.path, path)).map(node => ({
       id: node.id, width: node.width, height: node.height,
       layoutOptions: { 'elk.portConstraints': 'FIXED_ORDER' },

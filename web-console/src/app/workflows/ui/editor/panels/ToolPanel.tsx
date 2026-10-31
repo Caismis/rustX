@@ -15,6 +15,7 @@ import { CommandRejected, replaceNodeExits } from '../../../document/commands';
 import { ErrorStrategy, RetrySettings, type Retry } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
 import { useToolCatalog } from '../toolCatalog';
+import { IconPencil } from '../../icons';
 import css from '../Editor.module.css';
 
 type ToolNode = ReturnType<typeof useNode<'tool'>>;
@@ -134,13 +135,14 @@ function ToolArgument({ name, schema, required, value, set, tool, edit }: PanelP
     {description && <p className={css.toolArgumentAbout}>{description}</p>}
     {kind === 'string' ? <TemplateInput parts={templateParts(value)} address={address} edit={edit} label={name} badge={tx('workflows:tool.type-string')} invalid={required && !value}
       onChange={(parts, session) => set(name, templateValue(parts), `${encodeField(address)}:${session}`)} />
-      : <div className={css.toolArgumentRow}>
+      // As Dify's FormInputItem: a JSON constant's editor sits under the switch.
+      : <div className={kind === 'json' && !variable ? css.toolArgumentStack : css.toolArgumentRow}>
         {/* As Dify's FormInputTypeSwitch: a variable, or a constant. */}
         <div className={css.typeSwitch} role="radiogroup" aria-label={tx('workflows:value.kind')}>
           <button type="button" role="radio" aria-checked={variable} title={tx('workflows:tool.variable')} aria-label={tx('workflows:tool.variable')} className={clsx(variable && css.typeSwitchActive)}
             onClick={() => { if (!variable) set(name, { type: 'reference', path: [] }); }}>{/* i18n-raw: Dify's variable glyph */ '{x}'}</button>
           <button type="button" role="radio" aria-checked={!variable} title={tx('workflows:tool.constant')} aria-label={tx('workflows:tool.constant')} className={clsx(!variable && css.typeSwitchActive)}
-            onClick={() => { if (variable) set(name, undefined); }}>{/* i18n-raw: a pencil, as Dify's constant glyph */ '✎'}</button>
+            onClick={() => { if (variable) set(name, undefined); }}><IconPencil size={14} /></button>
         </div>
         {variable ? <ReferencePicker address={address} path={value.path} edit={edit} placeholder={tx('workflows:branch.select-variable')} onChoose={choice => set(name, { type: 'reference', path: choice.path })} />
           : kind === 'boolean' ? <span className={css.toolBoolean}><Switch checked={constant === true} label={name} onChange={on => set(name, { type: 'literal', value: on })} /></span>

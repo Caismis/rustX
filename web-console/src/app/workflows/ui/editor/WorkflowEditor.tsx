@@ -52,12 +52,6 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   const catalog = useSyncExternalStore(authority.subscribe, authority.getCatalog);
   const [selection, choose] = useState<Selection>();
   const [fieldFocus, setFieldFocus] = useState<{ address?: FieldAddress; field?: string; epoch: number }>();
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
-  const toggleContainer = useCallback((path: BlockPath, id: string) => setCollapsed(current => {
-    const next = new Set(current), key = viewId(path, 'node', id);
-    if (next.has(key)) next.delete(key); else next.add(key);
-    return next;
-  }), []);
   // Another selection ends the current edit session (one undo step each).
   const setSelection = useCallback((next: Selection) => {
     if (next && 'path' in next && next.path) editor.send({ type: 'NAVIGATE', block: next.path });
@@ -82,11 +76,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
     let result: PastedFragment | undefined;
     edit(current => {
       if (Object.values(editor.getSnapshot().context.drafts).some(draft => fragmentOwnsField(path, ids, notes, draft.address))) throw new CommandRejected('pending_input');
-      // Accepted selection reveals a private owner. Measure that same scene,
-      // retaining every unrelated collapsed container and leaving rejected edits alone.
-      const visible = new Set(collapsed);
-      for (let index = 0; index < path.length; index++) visible.delete(viewId(path.slice(0, index), 'node', path[index].node));
-      const positions = new Map(projectScene(current, visible).nodes.filter(node => node.data.view === 'node' && sameBlockPath(node.data.path, path)).map(node => [node.data.local, node.position]));
+      const positions = new Map(projectScene(current).nodes.filter(node => node.data.view === 'node' && sameBlockPath(node.data.path, path)).map(node => [node.data.local, node.position]));
       result = duplicateFragment(current, path, ids, notes, positions);
       return result.document;
     });
@@ -94,7 +84,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
     const first = result.nodes[0] ? { kind: 'node' as const, id: result.nodes[0], path } : result.notes[0] ? { kind: 'note' as const, id: result.notes[0], path } : undefined;
     if (first) setSelection(first);
     return result;
-  }, [edit, editor, setSelection, collapsed]);
+  }, [edit, editor, setSelection]);
   const currentState = useCallback(() => editor.getSnapshot().context, [editor]);
   const navigate = useCallback((next: BlockPath) => setSelection({ kind: 'start', path: next }), [setSelection]);
   // Save and Check act on what the author sees: every shown field's valid
@@ -205,12 +195,12 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
           </span>)}
           {block.length === 0 && <><span aria-hidden>/</span><span className={css.crumbFile}>{target.id}</span></>}
         </nav>
-        <Canvas document={document} path={block} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection} currentState={currentState} organizeEpoch={layoutEpoch} collapsed={collapsed} setCollapsed={setCollapsed}
+        <Canvas document={document} path={block} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection} currentState={currentState} organizeEpoch={layoutEpoch}
           problems={problems} edit={edit} editable={editable && !saving} blockLabel={blockLabel} drafts={context.drafts} onDuplicate={duplicate} tools={base.source.vocabulary.builtin_tools} />
       </div>
     </ReactFlowProvider>
     {/* As Dify: a selected connection only highlights; it opens no panel. */}
-    {selection && selection.kind !== 'edge' && <DraftOwner.Provider value={owner$}><Inspector port={context.port} document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} navigate={navigate} collapsed={collapsed} toggleContainer={toggleContainer} focus={fieldFocus} onDuplicate={duplicate}
+    {selection && selection.kind !== 'edge' && <DraftOwner.Provider value={owner$}><Inspector port={context.port} document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} navigate={navigate} focus={fieldFocus} onDuplicate={duplicate}
       vocabulary={base.source.vocabulary} check={check} generation={generation} rejection={context.rejection ? tx(`workflows:rejection.${context.rejection}`) : undefined}
       checks={<CheckResults check={check} generation={generation} global={target.scope.kind === 'user'} workspaces={workspaces} context={dependencyContext} setContext={setDependencyContext} run={() => runCheck()} go={go} />} /></DraftOwner.Provider>}
   </div></ToolCatalogProvider>;

@@ -34,7 +34,7 @@ function ConstantField({ label, type, value, address, edit }: { label: string; t
     <select className={css.input} aria-label={label} value={String(value.value === true)} onChange={event => edit(document => setField(document, address, { type: 'literal', value: event.target.value === 'true' }))}>
       <option value="true">{tx('workflows:port.true')}</option><option value="false">{tx('workflows:port.false')}</option>
     </select></label>;
-  return <JsonField label={label} value={value.value} rows={type === 'number' ? 1 : 3} address={within(address, ['value'])} />;
+  return <JsonField label={label} value={value.value} rows={3} line={type === 'number'} address={within(address, ['value'])} />;
 }
 
 

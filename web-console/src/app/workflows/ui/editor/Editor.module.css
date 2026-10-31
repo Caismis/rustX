@@ -279,7 +279,8 @@
 .kind_tool { --node-kind-color: #4c83df; }
 .kind_branch { --node-kind-color: #43a4c8; }
 .kind_review { --node-kind-color: #39ad74; }
-.kind_loop { --node-kind-color: #35a8c6; }
+.kind_loop, .kind_iteration, .kind_loop_end { --node-kind-color: #35a8c6; }
+.kind_assigner { --node-kind-color: #4c83df; }
 .kind_return { --node-kind-color: #e39625; }
 .nodeText { display: flex; flex-direction: column; min-width: 0; }
 .nodeTitle { font-size: 13px; font-weight: 570; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -484,11 +485,21 @@
 .nodeFields span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); }
 .nodeFields small { font-size: 9.5px; color: var(--dsw-alias-label-tertiary); }
 .nodeFields code { color: var(--dsw-alias-label-tertiary); font-size: 10px; }
-.containerNode { height: 100%; padding: 0; background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 3%, var(--dsw-alias-bg-base)); border-style: solid; box-shadow: none; }
-.containerNode:not(.nodeSelected):hover { box-shadow: none; }
-.containerHead { display: flex; align-items: center; justify-content: space-between; height: 54px; gap: 10px; padding: 0 14px; box-sizing: border-box; border-bottom: 1px solid var(--dsw-alias-border-l2); font-size: 12px; font-weight: 550; }
-.containerHead .nodeIcon { width: 26px; height: 26px; }
-.containerHead .nodeText { margin-right: auto; }
+/* As Dify's Loop and Iteration: a translucent frame whose head sits as an
+   ordinary card's, over an inset canvas with the editor's own dots. */
+.containerNode { display: flex; flex-direction: column; height: 100%; padding: 0; background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 80%, transparent); }
+.containerHead { flex: none; padding: 13px 14px 8px; }
+.containerBody { flex: 1; min-height: 0; margin: 0 4px 4px; border-radius: 12px; background: var(--dsw-alias-bg-base) radial-gradient(var(--dsw-alias-border-l3) 1px, transparent 1px) 0 0 / 18px 18px; }
+.addBlock { position: absolute; z-index: 1; display: flex; align-items: center; height: 32px; }
+.addBlockLine { position: relative; width: 64px; height: 2px; background: var(--dsw-alias-label-tertiary); }
+.addBlockLine::after { content: ''; position: absolute; top: -3px; right: 0; width: 2px; height: 8px; background: var(--dsw-alias-state-business-primary); }
+.addBlockButton { display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; font-weight: 550; cursor: pointer; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.addBlockButton:hover { background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--dsw-alias-label-primary); }
+.addBlockButton:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
+/* As Dify's LoopStartNode: a 44px square holding a round home glyph. */
+.bodyStart { position: relative; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l3); border-radius: 16px; background: var(--dsw-alias-bg-layer-1); }
+.bodyStartIcon { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--dsw-alias-state-business-primary); color: #fff; }
+.bodyStart:hover .handleAdd { opacity: 1; pointer-events: auto; }
 .noteNode { display: flex; flex-direction: column; width: 100%; height: 100%; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); }
 .note_blue { background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 9%, var(--dsw-alias-bg-layer-1)); }
 .note_green { background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 9%, var(--dsw-alias-bg-layer-1)); }
@@ -773,9 +784,13 @@
 .toolArgumentHead b { color: var(--dsw-alias-label-primary); font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
 .toolArgumentHead .required { color: var(--dsw-alias-state-error-primary); font-size: 12px; }
 .toolArgumentAbout { margin: 0 0 2px; color: var(--dsw-alias-label-tertiary); font-size: 11.5px; line-height: 17px; overflow-wrap: anywhere; }
-.toolArgumentRow { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* As Dify's FormInputItem: the switch and the control share one 32px line. */
+.toolArgumentRow { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
 .toolArgumentRow > :last-child { flex: 1; min-width: 0; }
-.toolArgumentRow textarea { min-height: 60px; }
+.toolArgumentStack { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.toolArgumentStack > :last-child { align-self: stretch; min-height: 80px; }
+.toolArgumentRow > .referencePicker { margin: 0; }
+.toolArgumentRow .referenceTrigger { min-height: 32px; }
 .toolBoolean { display: flex; align-items: center; min-height: 32px; }
 .templateInput { position: relative; display: flex; align-items: flex-start; gap: 6px; min-height: 32px; box-sizing: border-box; padding: 4px 8px; border: 1px solid transparent; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
 .templateInput:hover { border-color: var(--dsw-alias-border-l3); }
@@ -784,7 +799,7 @@
 .templateInput .promptEditor { flex: 1; min-width: 0; }
 .typeBadge { flex: none; margin-top: 2px; padding: 0 5px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 5px; color: var(--dsw-alias-label-tertiary); font-size: 10.5px; font-weight: 500; line-height: 18px; }
 .typeSwitch { display: inline-flex; flex: none; gap: 2px; padding: 2px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
-.typeSwitch button { width: 30px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--dsw-alias-label-tertiary); font: inherit; font-family: var(--ds-font-family-code); font-size: 12px; cursor: pointer; }
+.typeSwitch button { display: flex; align-items: center; justify-content: center; width: 30px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--dsw-alias-label-tertiary); font: inherit; font-family: var(--ds-font-family-code); font-size: 12px; cursor: pointer; }
 .typeSwitch button:hover { color: var(--dsw-alias-label-primary); }
 .typeSwitch .typeSwitchActive { background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); box-shadow: 0 1px 2px rgba(0,0,0,.18); }
 
@@ -807,6 +822,11 @@
 .loopVariableHead > :first-child { flex: 1 1 auto; min-width: 0; }
 .loopVariableHead > select { flex: 0 0 96px; }
 .loopVariableHead > button { flex: none; }
-.loopVariableHead .input { min-height: 28px; padding: 3px 6px; font-size: 12px; }
+/* A variable value fills the line a constant's input does. */
+.loopVariable > .referencePicker { margin: 0; }
+.loopVariable .branchVariableTrigger { min-height: 32px; padding: 0 8px; border: 1px solid var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-layer-2); }
+.loopVariableHead .input, .loopVariableHead .titleInput { height: 28px; min-height: 28px; padding: 3px 6px; font-size: 12px; }
+/* The name is an ordinary field here, not a heading. */
+.loopVariableHead .titleInput { border-color: var(--dsw-alias-border-l3); border-radius: 7px; background: var(--dsw-alias-bg-layer-2); font-weight: 550; }
 .inlineField { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .typeBadge { padding: 0 5px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 5px; color: var(--dsw-alias-label-tertiary); font-size: 10px; font-weight: 500; line-height: 16px; }

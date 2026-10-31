@@ -26,6 +26,8 @@ export const IconUndo = glyph(<path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3" /
 export const IconRedo = glyph(<path d="m15 14 5-5-5-5M20 9H10a6 6 0 0 0 0 12h3" />);
 export const IconBlock = glyph(<><rect x="3.5" y="3.5" width="17" height="17" rx="3" /><path d="M8 9h8M8 13h5" /></>);
 export const IconEntry = glyph(<path d="M3 12h11M10 7l5 5-5 5M18 4v16" />);
+export const IconHome = glyph(<path d="M4 10.5 12 4l8 6.5V20h-5v-5H9v5H4z" />);
+export const IconPencil = glyph(<path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />);
 export const IconBraces = glyph(<path d="M8 3H6a2 2 0 0 0-2 2v4a3 3 0 0 1-2 3 3 3 0 0 1 2 3v4a2 2 0 0 0 2 2h2M16 3h2a2 2 0 0 1 2 2v4a3 3 0 0 0 2 3 3 3 0 0 0-2 3v4a2 2 0 0 1-2 2h-2" />);
 
 const KIND_ICONS = {

@@ -108,7 +108,7 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | `connections.ts` | One connection policy for previews and committed gestures |
 | `layout.ts` | Lazy ELK, measured layout, stale-request cancellation and metadata-only updates |
 | File `editor` | Node geometry, titles/descriptions, notes and field order |
-| Personal view state | Exact-file viewport, Loop collapse and inspector width |
+| Personal view state | Exact-file viewport and inspector width |
 
 ## Node panels and scopes
 

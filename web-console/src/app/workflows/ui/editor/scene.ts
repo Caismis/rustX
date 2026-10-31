@@ -11,6 +11,9 @@ import { previewRowCount } from './summary';
 import type { VariableSources } from './VariableLabel';
 
 export const NODE_WIDTH = 256;
+/** As Dify's LoopStart/IterationStart: a 44px square at (24, 68). */
+export const BODY_START_SIZE = 44;
+const BODY_START_POSITION = { x: 24, y: 68 };
 export interface Size { width: number; height: number }
 export interface SceneData extends Record<string, unknown> {
   view: 'node' | 'start' | 'note';
@@ -21,7 +24,11 @@ export interface SceneData extends Record<string, unknown> {
   title: string;
   description?: string;
   fields?: { name: string; type: string; required: boolean }[];
-  expanded?: boolean;
+  /** Loop and Iteration show their body inside them, as Dify's. */
+  container?: boolean;
+  /** A container whose body holds only its Start: that Start's
+   * position, where Dify's "Add node" button follows it. */
+  emptyBody?: { start: string; position: { x: number; y: number } };
   /** Titles for the references a card shows, shared by the block's nodes. */
   sources?: VariableSources;
   minSize: Size;
@@ -47,7 +54,7 @@ export function schemaFields(value: unknown, order = (keys: string[]) => keys.so
 
 /** One recursive scene over the native document. Parent relationships express
  * presentation only; every command still addresses the native Block path. */
-export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<string> = new Set(), measured: ReadonlyMap<string, Size> = new Map()): { nodes: SceneNode[]; edges: SceneEdge[] } {
+export function projectScene(document: WorkflowDocument, measured: ReadonlyMap<string, Size> = new Map()): { nodes: SceneNode[]; edges: SceneEdge[] } {
   const nodes: SceneNode[] = [], edges: SceneEdge[] = [];
   const visit = (block: Block, path: BlockPath, parentId?: string, around?: VariableSources): Size => {
     const local: SceneNode[] = [];
@@ -61,17 +68,17 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
     // Start renders at its intrinsic height, as Dify's EntryNodeContainer does.
     // Before measurement, estimate its header/padding, field rows and at most
     // two description lines; Organize uses the actual measured footprint.
-    const startSize = { width: NODE_WIDTH, height: 57 + (fields.length ? 8 + fields.length * 26 : 0)
-      + (start?.description?.trim() ? 42 : 0) + (path.length ? 0 : ENTRY_BADGE_HEIGHT) };
-    if (startId) local.push({ id: entryId, type: 'workflow', parentId, position: start?.position ?? START_POSITION, width: NODE_WIDTH, height: measured.get(entryId)?.height ?? startSize.height, deletable: false,
+    const startSize = path.length ? { width: BODY_START_SIZE, height: BODY_START_SIZE } : { width: NODE_WIDTH, height: 57 + (fields.length ? 8 + fields.length * 26 : 0)
+      + (start?.description?.trim() ? 42 : 0) + ENTRY_BADGE_HEIGHT };
+    if (startId) local.push({ id: entryId, type: 'workflow', parentId, position: start?.position ?? (path.length ? BODY_START_POSITION : START_POSITION), width: startSize.width, height: path.length ? startSize.height : measured.get(entryId)?.height ?? startSize.height, deletable: false,
       data: { view: 'start', path, local: startId, title: start?.title ?? '', description: start?.description ?? undefined, fields, minSize: startSize } });
     let x = 360;
     const ids = [...new Set([...edgesOf(block).flatMap(edge => [edge.from, edge.to]), ...Object.keys(block.nodes).sort()])].filter(id => nodeAt(block, id) && block.nodes[id].type !== 'start');
     for (const id of ids) {
       const node = block.nodes[id], qualified = viewId(path, 'node', id), metadata = nodePresentation(document, path, id);
-      const expanded = isContainer(node) && !collapsed.has(qualified);
-      // A shown description (two clamped lines) extends a collapsed node.
-      const described = !expanded && node.type !== 'branch' && !!metadata?.description?.trim();
+      const container = isContainer(node);
+      // A shown description (two clamped lines) extends a card.
+      const described = !container && node.type !== 'branch' && !!metadata?.description?.trim();
       const preview = node.type === 'branch' ? 0 : previewRowCount(node);
       // A Model or Agent handling errors shows its strategy on one more row,
       // and each Agent route is a row carrying its exit.
@@ -81,16 +88,17 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
       // their intrinsic height, and Organize uses their measured footprint.
       const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? branchGeometry(node).height : 57 + (preview ? 8 + preview * 27 : 0)) + (described ? CARD_DESCRIPTION_HEIGHT : 0) + (handled ? ERROR_ROW_HEIGHT : 0) + (routes ? ROUTE_ROWS_MARGIN + routes * ROUTE_ROW_HEIGHT : 0) };
       const projected: SceneNode = { id: qualified, type: 'workflow', parentId, position: metadata?.position ?? { x, y: 80 }, width: NODE_WIDTH, height: minimum.height,
-        data: { view: 'node', path, local: id, definition: node, title: metadata?.title || id, description: metadata?.description ?? undefined, expanded, sources, minSize: minimum } };
+        data: { view: 'node', path, local: id, definition: node, title: metadata?.title || id, description: metadata?.description ?? undefined, container, sources, minSize: minimum } };
       // Parents precede children, as React Flow requires.
       nodes.push(projected);
-      if (expanded && isContainer(node)) {
-        const body = visit(node.body, [...path, { node: id }], qualified, sources);
+      if (isContainer(node)) {
+        const inner: BlockPath = [...path, { node: id }], body = visit(node.body, inner, qualified, sources), bodyStart = startOf(node.body);
+        if (bodyStart && Object.keys(node.body.nodes).length === 1) projected.data.emptyBody = { start: viewId(inner, 'start'), position: nodePresentation(document, inner, bodyStart)?.position ?? BODY_START_POSITION };
         minimum.width = Math.max(480, body.width + 32); minimum.height = Math.max(260, body.height + 32);
       }
-      const size = expanded ? metadata?.dimensions : measured.get(qualified);
+      const size = container ? metadata?.dimensions : measured.get(qualified);
       projected.width = Math.max(minimum.width, size?.width ?? 0);
-      projected.height = expanded ? Math.max(minimum.height, size?.height ?? 0) : size?.height ?? minimum.height;
+      projected.height = container ? Math.max(minimum.height, size?.height ?? 0) : size?.height ?? minimum.height;
       local.push(projected); x += projected.width + 96;
     }
     for (const note of document.editor?.notes ?? []) if (sameBlockPath(note.block, path)) local.push({ id: viewId(path, 'note', note.id), type: 'workflow', parentId,

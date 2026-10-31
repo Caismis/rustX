@@ -1,6 +1,6 @@
 import type { ArrayEdit } from '../../document/fields';
 import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v62';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Background, BackgroundVariant, MiniMap, ReactFlow, applyNodeChanges, useReactFlow, useViewport, useNodesInitialized, type Connection, type EdgeChange, type NodeChange, type Viewport } from '@xyflow/react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
@@ -42,10 +42,9 @@ interface Addition {
 
 /** One React Flow scene, one native editing document. Local nodes retain only
  * transient pointer geometry/selection, never executable definitions. */
-export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch, selection, onSelect, problems, edit, editable, blockLabel, currentState, organizeEpoch = 0, collapsed, setCollapsed, drafts, onDuplicate, tools }: {
+export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch, selection, onSelect, problems, edit, editable, blockLabel, currentState, organizeEpoch = 0, drafts, onDuplicate, tools }: {
   document: WorkflowDocument; path: BlockPath; viewKey: string; viewEpoch: number; selection: Selection; onSelect: (selection: Selection) => void;
   problems: Problems; edit: Edit; editable: boolean; blockLabel: string; currentState: () => LayoutOwner; organizeEpoch?: number;
-  collapsed: ReadonlySet<string>; setCollapsed: Dispatch<SetStateAction<ReadonlySet<string>>>;
   drafts: Readonly<Record<string, FieldDraft>>; onDuplicate: Duplicate; tools: readonly WorkflowToolChoice[];
 }) {
   const tx = useTranslation(), flow = useReactFlow<SceneNode, SceneEdge>(), initialized = useNodesInitialized(), container = useRef<HTMLDivElement>(null);
@@ -72,24 +71,14 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
   const selectedId = selection?.kind === 'node' ? viewId(scope, 'node', selection.id) : selection?.kind === 'start' ? viewId(scope, 'start') : selection?.kind === 'note' ? viewId(scope, 'note', selection.id) : undefined;
   // A located hidden child expands exactly its ancestors; it does not create a
   // second focused graph or discard the current panel's unapplied text.
-  const selectionKey = JSON.stringify(selection);
   useEffect(() => {
     setSelected(current => selectedId && current.has(selectedId) ? current : new Set(selectedId ? [selectedId] : []));
   }, [selectedId]);
-  useEffect(() => {
-    if (!selection || !('path' in selection)) return;
-    const selectedPath = selection.path ?? path;
-    setCollapsed(current => {
-      const next = new Set(current);
-      for (let index = 0; index < selectedPath.length; index++) next.delete(viewId(selectedPath.slice(0, index), 'node', selectedPath[index].node));
-      return next.size === current.size ? current : next;
-    });
-  }, [selectionKey, keyOfBlock(path)]);
-  const scene = useMemo(() => projectScene(document, collapsed), [document, collapsed]);
+  const scene = useMemo(() => projectScene(document), [document]);
   const projected = useMemo(() => scene.nodes.map(node => ({ ...node,
-    // As Dify: ordinary cards size to their content. Only expanded containers
+    // As Dify: ordinary cards size to their content. Only containers
     // and notes have an explicit, user-resizable height.
-    height: node.data.expanded || node.data.view === 'note' ? node.height : undefined,
+    height: node.data.container || node.data.view === 'note' ? node.height : undefined,
     selected: selected.has(node.id) || node.id === selectedId,
     draggable: editable && node.draggable !== false, connectable: editable && node.connectable !== false,
     ...(node.parentId ? { extent: [[24, 64], [1_000_000, 1_000_000]] as [[number, number], [number, number]] } : {}),
@@ -205,7 +194,6 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     addBefore: (id: string, anchor: HTMLElement) => { if (editable) openBefore(id, anchor); },
     addIn: (id: string, anchor: HTMLElement) => { if (editable) openFor(id, anchor); },
     menu(id: string, anchor: HTMLElement) { const rect = anchor.getBoundingClientRect(), bounds = container.current!.getBoundingClientRect(); setMenu({ id, at: { x: Math.max(8, Math.min(rect.left - bounds.left, bounds.width - 200)), y: Math.max(8, Math.min(rect.bottom - bounds.top, bounds.height - 180)) } }); setPalette(undefined); },
-    collapse(id: string) { setCollapsed(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); },
     geometryStart() { session.current.cancel(); },
     resize(id: string, geometry: { x: number; y: number; width: number; height: number }) {
       if (!editable) return;
@@ -319,7 +307,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       if (dx || dy) void flow.setViewport({ ...viewport, x: viewport.x + dx, y: viewport.y + dy });
     });
     return () => cancelAnimationFrame(frame);
-  }, [locateId, initialized, flow, collapsed, viewEpoch, frameSize, minimap]);
+  }, [locateId, initialized, flow, viewEpoch, frameSize, minimap]);
   useEffect(() => { if (viewEpoch) setSelected(new Set()); }, [viewEpoch]);
   const found = search === undefined ? [] : projectScene(document).nodes.filter(node => `${node.data.title} ${node.data.local} ${keyOfBlock(node.data.path)}`.toLowerCase().includes(search.toLowerCase())).slice(0, 64);
   return <div ref={container} className={css.canvas} aria-label={tx('workflows:canvas.label')} role="region" tabIndex={0}

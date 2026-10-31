@@ -78,13 +78,16 @@ export function jsonCommand(address: FieldAddress): FieldCommand {
  * the editor (see `useFieldDraft`); blur, Ctrl/Cmd+Enter, Save or Check
  * request its application, which the editor accepts only when it parses
  * within the browser number contract. */
-export function JsonField({ label, hint, value, rows = 6, address }: { label: string; hint?: ReactNode; value: unknown; rows?: number; address: FieldAddress }) {
+/** `line` edits a scalar (a number) on one line. */
+export function JsonField({ label, hint, value, rows = 6, line, address }: { label: string; hint?: ReactNode; value: unknown; rows?: number; line?: boolean; address: FieldAddress }) {
   const describe = useFieldError();
   const field = useFieldDraft({ address, canonical: JSON.stringify(value, null, 2) ?? 'null', command: jsonCommand(address) });
   return <Field label={label} hint={hint} error={describe(field.error)}>{(id, describedBy) => <>
-    <textarea id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(css.input, css.textarea, css.mono)} rows={rows} value={field.text} spellCheck={false}
+    {line ? <input id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(css.input, css.mono)} value={field.text} spellCheck={false}
+      onChange={event => field.change(event.target.value)} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); field.apply(); } }} />
+    : <textarea id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(css.input, css.textarea, css.mono)} rows={rows} value={field.text} spellCheck={false}
       onChange={event => field.change(event.target.value)} onBlur={field.apply}
-      onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); field.apply(); } }} />
+      onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); field.apply(); } }} />}
     <ConflictActions field={field} />
   </>}</Field>;
 }

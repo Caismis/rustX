@@ -57,24 +57,21 @@ it('appends and reconnects Start edges using the same native connection command'
 it('organizes a described Start using its measured content height', () => {
   const document = setNodePresentation(graph(), [], 'start', { description: 'Workflow input.' });
   const id = viewId([], 'start');
-  const scene = projectScene(document, new Set(), new Map([[id, { width: 256, height: 103 }]]));
+  const scene = projectScene(document, new Map([[id, { width: 256, height: 103 }]]));
   expect(scene.nodes.find(node => node.id === id)?.height).toBe(103);
 });
 
-it.each(['agent', 'model', 'tool', 'branch', 'review', 'loop', 'return'] as const)('uses the measured %s card height instead of its description estimate', kind => {
+it.each(['agent', 'model', 'tool', 'branch', 'review', 'return'] as const)('uses the measured %s card height instead of its description estimate', kind => {
   const document = setNodePresentation(addNode(graph(), [], kind, 'card'), [], 'card', { description: 'One line.' });
   const id = viewId([], 'node', 'card');
-  const scene = projectScene(document, new Set([id]), new Map([[id, { width: 256, height: 103 }]]));
+  const scene = projectScene(document, new Map([[id, { width: 256, height: 103 }]]));
   expect(scene.nodes.find(node => node.id === id)?.height).toBe(103);
 });
 
-it('keeps the expanded Loop container dimensions while sizing its collapsed card from content', () => {
+it('keeps a Loop container at its authored dimensions', () => {
   const document = setNodePresentation(addNode(graph(), [], 'loop', 'repeat'), [], 'repeat', { dimensions: { width: 900, height: 800 } });
-  const id = viewId([], 'node', 'repeat'), measured = new Map([[id, { width: 256, height: 146 }]]);
-  const expanded = projectScene(document, new Set(), measured).nodes.find(node => node.id === id)!;
-  expect(expanded.width).toBe(900); expect(expanded.height).toBe(800);
-  const collapsed = projectScene(document, new Set([id]), measured).nodes.find(node => node.id === id)!;
-  expect(collapsed.width).toBe(256); expect(collapsed.height).toBe(146);
+  const container = projectScene(document).nodes.find(node => node.id === viewId([], 'node', 'repeat'))!;
+  expect(container.width).toBe(900); expect(container.height).toBe(800);
 });
 
 it('inserts into one chosen edge and preserves every parallel sibling', () => {
