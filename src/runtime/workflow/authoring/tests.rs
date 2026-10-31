@@ -72,12 +72,20 @@ fn selected_and_catalog(analysis: &WorkflowCandidateAnalysis) -> [&WorkflowRefer
     let selected = analysis.selected.as_ref().unwrap();
     [
         selected,
-        analysis
-            .references
-            .iter()
-            .find(|choice| choice.path == selected.path)
-            .unwrap(),
+        catalog(analysis, &selected.path).unwrap_or(selected),
     ]
+}
+/// The catalog lists the workflow input's fields, never the whole input.
+fn catalog<'a>(
+    analysis: &'a WorkflowCandidateAnalysis,
+    path: &[String],
+) -> Option<&'a WorkflowReferenceChoice> {
+    let found = analysis
+        .references
+        .iter()
+        .find(|choice| choice.path == path);
+    assert_eq!(found.is_none(), path == ["args"]);
+    found
 }
 fn selected_and_unknown_root(
     analysis: &WorkflowCandidateAnalysis,
@@ -92,11 +100,7 @@ fn selected_and_unknown_root(
     );
     [
         selected,
-        analysis
-            .references
-            .iter()
-            .find(|choice| choice.path == selected.path[..1])
-            .unwrap(),
+        catalog(analysis, &selected.path[..1]).unwrap_or(selected),
     ]
 }
 fn text_candidate() -> WorkflowDefinition {

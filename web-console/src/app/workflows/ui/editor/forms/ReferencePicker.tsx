@@ -39,7 +39,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
     return () => window.document.removeEventListener('pointerdown', outside, true);
   }, [open]);
   const titleOf = (choice: WorkflowReferenceChoice) => choice.producer && document ? nodePresentation(document, choice.producer.block, choice.producer.node)?.title || choice.path[0]
-    : choice.path[0] === 'args' ? tx('workflows:value.block-inputs') : choice.path[0];
+    : choice.path[0] === 'args' ? startTitle() : choice.path[0];
   const query = useMemo<WorkflowAnalysisQuery | undefined>(() => {
     const original = document && consumerAddress(document, address);
     // A condition's token lists every comparable variable, whatever the
@@ -66,7 +66,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const owning = (id: string): BlockPath | undefined => document ? [...(address.node ? [[...address.block, { node: address.node }]] : []), ...address.block.map((_, depth) => address.block.slice(0, address.block.length - depth)), []]
     .find(at => { const owner = blockAt(document, at); return owner && nodeAt(owner, id); }) : undefined;
   const producer = path[0], producerBlock = producer ? owning(producer) : undefined;
-  const currentTitle = producer === 'args' ? token ? startTitle() : tx('workflows:value.block-inputs') : document && producerBlock ? nodePresentation(document, producerBlock, producer)?.title || producer : producer;
+  const currentTitle = producer === 'args' ? startTitle() : document && producerBlock ? nodePresentation(document, producerBlock, producer)?.title || producer : producer;
   const currentNode = document && producerBlock ? nodeAt(blockAt(document, producerBlock)!, producer) : undefined;
   const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx('workflows:value.whole');
   const present = (content: import('react').ReactNode) => token ? createPortal(content, window.document.body) : content;
