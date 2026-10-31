@@ -36,6 +36,9 @@ const KIND_ICONS = {
   branch: glyph(<><path d="M7 4v9a5 5 0 0 0 5 5h5M7 13a5 5 0 0 1 5-5h5" /><circle cx="7" cy="4" r="2" /><circle cx="17" cy="8" r="2" /><circle cx="17" cy="18" r="2" /></>),
   review: glyph(<path d="M4 4h16v13H9l-5 4zM8 9h8M8 13h5" />),
   loop: glyph(<path d="M19 7h-9a6 6 0 0 0 0 12h8M15 4l4 3-4 3M7 17l3 2-3 2" />),
+  iteration: glyph(<path d="M4 6h9M4 12h9M4 18h6M17 8a4 4 0 0 1 0 8h-1M18 13l-2 3 2 3" />),
+  loop_end: glyph(<><circle cx="12" cy="12" r="9" /><rect x="9" y="9" width="6" height="6" rx="1" /></>),
+  assigner: glyph(<path d="M4 9h7M4 15h7M15 6l5 12M20 6l-5 12" />),
   return: glyph(<path d="M20 6v7a5 5 0 0 1-5 5H5m5-5-5 5 5 5" />),
 } satisfies Record<NodeKind | 'start', ReturnType<typeof glyph>>;
 

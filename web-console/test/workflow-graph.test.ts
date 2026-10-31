@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { addBranchCase, removeBranchCase, addNode, connect, disconnect, emptyBlock, insertNode, reconnect, renameNode } from '../src/app/workflows/document/commands';
+import { addBranchCase, removeBranchCase, addNode, connect, disconnect, insertNode, reconnect, renameNode } from '../src/app/workflows/document/commands';
+import { rootBlock } from './workflow-root';
 import { copyFragment, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
 import { sameDocument, type WorkflowDocument } from '../src/app/workflows/document/model';
 import { applySceneConnection } from '../src/app/workflows/ui/editor/connections';
@@ -11,7 +12,7 @@ import { setNodePresentation } from '../src/app/workflows/document/geometry';
 import { viewId } from '../src/app/workflows/ui/editor/selection';
 
 function graph(): WorkflowDocument {
-  let document: WorkflowDocument = { description: 'Implicit parallelism', block: emptyBlock() };
+  let document: WorkflowDocument = { description: 'Implicit parallelism', block: rootBlock() };
   document = disconnect(document, [], [0]);
   document = addNode(document, [], 'model', 'left', { from: 'start', port: 'next' });
   document = addNode(document, [], 'model', 'right', { from: 'start', port: 'next' });
@@ -94,7 +95,7 @@ it('copies selected graph edges and Loop scopes while protecting the one Start p
   const copied = pasteFragment(document, 'owner', [], parseFragment(copyFragment(document, 'owner', [], ['left', 'right', 'done', 'repeat']))).document;
   expect(copied.block.edges).toContainEqual({ from: 'left_copy', to: 'done_copy' });
   expect(copied.block.edges).toContainEqual({ from: 'right_copy', to: 'done_copy' });
-  expect(copied.block.nodes.repeat_copy).toMatchObject({ body: { nodes: { start: { type: 'start' } }, edges: [{ from: 'start', to: 'done' }] } });
+  expect(copied.block.nodes.repeat_copy).toMatchObject({ body: { nodes: { repeat_start: { type: 'start' } }, edges: [] } });
   expect(() => copyFragment(document, 'owner', [], ['start'])).toThrow('invalid_port');
 });
 
@@ -133,7 +134,7 @@ it('keeps surviving CASE exits stable when an earlier case is removed', () => {
 });
 
 it('renames a producer inside a Tool argument template and copies the template as a fragment', () => {
-  let document: WorkflowDocument = { description: 'Template', block: emptyBlock() };
+  let document: WorkflowDocument = { description: 'Template', block: rootBlock() };
   document = addNode(document, [], 'model', 'search');
   document = addNode(document, [], 'tool', 'read', { from: 'search', port: 'next' });
   const tool = document.block.nodes.read;

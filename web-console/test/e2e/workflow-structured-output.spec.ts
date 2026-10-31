@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { emptyBlock } from '../../src/app/workflows/document/commands';
+import { rootBlock } from '../workflow-root';
 import { setNodePresentation } from '../../src/app/workflows/document/geometry';
 import type { WorkflowDocument } from '../../src/app/workflows/document/model';
 import { startDogfood } from './dogfood-server';
@@ -17,7 +17,7 @@ test('structured output uses transactional Dify-style visual and JSON editors wi
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   try {
-    let document: WorkflowDocument = { description: 'Structured output editor.', block: emptyBlock() };
+    let document: WorkflowDocument = { description: 'Structured output editor.', block: rootBlock() };
     document.block.output = { type: 'object', properties: { value: { type: 'string' } }, required: ['value'], additionalProperties: false };
     document.block.nodes.model = { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Classify the input.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Classify.' }] }],
       output: { type: 'json_schema', schema: { type: 'object', properties: { risk: { type: 'string', enum: ['low', 'high'] } }, required: ['risk'], additionalProperties: false } } };

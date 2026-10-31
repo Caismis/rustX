@@ -6,9 +6,9 @@ import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
 import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v62';
 import { IconCloseOutline16 } from '../../../../presentation/primitives/icons';
-import { addNode, connect, disconnect, freshIdentifier } from '../../document/commands';
+import { addNode, connect, disconnect, freshNodeId } from '../../document/commands';
 import { nodePresentation, setNodePresentation } from '../../document/geometry';
-import { blockAt, edgesOf, nodeAt, startOf, sameBlockPath, type BlockPath, type NodeKind, type WorkflowDocument } from '../../document/model';
+import { blockAt, edgesOf, nodeAt, startOf, sameBlockPath, unavailableKinds, type BlockPath, type NodeKind, type WorkflowDocument } from '../../document/model';
 import { edgePort, portsOf, type ControlPort, type BuiltinPort } from '../../document/ports';
 import { IconBlock, IconEntry, IconPlus, KindIcon } from '../icons';
 import { NODE_WIDTH, projectScene } from './scene';
@@ -113,7 +113,7 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
     let added = '';
     edit(current => {
       const owner = blockAt(current, block)!;
-      const id = freshIdentifier(owner, choice.kind);
+      const id = freshNodeId(current, block, choice.kind);
       const next = addNode(current, block, choice.kind, id, { from: sourceId, port });
       const scene = projectScene(current).nodes;
       const origin = scene.find(node => node.id === viewId(block, sourceNode?.type === 'start' ? 'start' : 'node', sourceNode?.type === 'start' ? undefined : sourceId));
@@ -165,7 +165,7 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
     {openPort && createPortal(<div ref={element => { panel.current = element; refs.setFloating(element); }} className={css.nextPicker}
       style={{ ...floatingStyles, visibility: isPositioned ? 'visible' : 'hidden' }} role="dialog" aria-label={tx('workflows:next-step.picker')}
       onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); close(true); } }}>
-      <NodeChooser tools={tools} input={input} preview="left" onChoose={choose}
+      <NodeChooser tools={tools} input={input} preview="left" omit={unavailableKinds(document, block)} onChoose={choose}
         existing={Object.keys(owner.nodes).filter(id => id !== sourceId && owner.nodes[id].type !== 'start' && (!openPort || !targetsFor(openPort).includes(id))).map(id => ({ id, title: nodeTitle(id), kind: owner.nodes[id].type as NodeKind }))} />
     </div>, window.document.body)}
   </section>;

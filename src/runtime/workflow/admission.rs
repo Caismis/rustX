@@ -181,7 +181,8 @@ fn admit_block(
                     });
                 }
             }
-            WorkflowNodeProgram::Loop { body, .. } => admit_block(
+            WorkflowNodeProgram::Loop { body, .. }
+            | WorkflowNodeProgram::Iteration { body, .. } => admit_block(
                 body,
                 &format!("{path}.body"),
                 agents,

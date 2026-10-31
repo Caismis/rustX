@@ -11905,7 +11905,7 @@
       ]
     },
     "WorkflowBlock": {
-      "description": "A fixed lexical graph shared by the root and Loop bodies.",
+      "description": "A fixed graph: the root, or a Loop or Iteration body. A body declares no\ninput or output: as in Dify, it reads the variables of the nodes around\nit, its container's variables and its own nodes.",
       "type": "object",
       "properties": {
         "input": {
@@ -11932,8 +11932,6 @@
       },
       "additionalProperties": false,
       "required": [
-        "input",
-        "output",
         "nodes"
       ]
     },
@@ -12002,26 +12000,35 @@
           ]
         },
         {
-          "description": "Repeat one fixed typed body until its committed result satisfies `until`.",
+          "description": "As Dify's Loop: run the body again and again, until its break\ncondition holds after a round, an Exit Loop node ran, or `loop_count`\nrounds are done. Its value is its loop variables.",
           "type": "object",
           "properties": {
-            "input": {
-              "$ref": "#/$defs/WorkflowValue"
+            "loop_variables": {
+              "description": "Variables the body reads and an Assigner node writes, under the\nLoop's own ID.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowLoopVariable"
+              }
             },
-            "body": {
-              "$ref": "#/$defs/WorkflowBlock"
+            "break_condition": {
+              "description": "Checked before the first round and after every round.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowPredicate"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
-            "until": {
-              "$ref": "#/$defs/WorkflowPredicate"
-            },
-            "carry": {
-              "$ref": "#/$defs/WorkflowValue"
-            },
-            "max_iterations": {
+            "loop_count": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0,
               "maximum": 4294967295
+            },
+            "body": {
+              "$ref": "#/$defs/WorkflowBlock"
             },
             "type": {
               "type": "string",
@@ -12031,11 +12038,89 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "input",
-            "body",
-            "until",
-            "carry",
-            "max_iterations"
+            "loop_count",
+            "body"
+          ]
+        },
+        {
+          "description": "As Dify's Iteration: run the body once for each item of an array,\nwhich the body reads as `item` and `index` under the Iteration's ID.\nIts value is `output`, the body's chosen value of every round.",
+          "type": "object",
+          "properties": {
+            "iterator": {
+              "description": "The array to iterate.",
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "output": {
+              "description": "What each round contributes, read after the round.",
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "is_parallel": {
+              "type": "boolean"
+            },
+            "parallel_nums": {
+              "description": "Rounds run at once in parallel mode.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "default": 10,
+              "maximum": 4294967295
+            },
+            "error_handle_mode": {
+              "$ref": "#/$defs/WorkflowIterationErrorMode"
+            },
+            "flatten_output": {
+              "description": "Join the rounds' arrays into one array.",
+              "type": "boolean"
+            },
+            "body": {
+              "$ref": "#/$defs/WorkflowBlock"
+            },
+            "type": {
+              "type": "string",
+              "const": "iteration"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "iterator",
+            "output",
+            "body"
+          ]
+        },
+        {
+          "description": "As Dify's Exit Loop: ends its Loop once this round settles.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "loop_end"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "As Dify's Variable Assigner: writes variables of the Loop it is in.",
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowAssignment"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "assigner"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "items"
           ]
         },
         {
@@ -12486,6 +12571,42 @@
         }
       ]
     },
+    "WorkflowLoopVariable": {
+      "description": "A Loop variable: Dify's `label`, `var_type` and constant or variable value.",
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "var_type": {
+          "$ref": "#/$defs/WorkflowVarType"
+        },
+        "value": {
+          "description": "A literal, or a reference read once before the first round.",
+          "$ref": "#/$defs/WorkflowValue"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "var_type",
+        "value"
+      ]
+    },
+    "WorkflowVarType": {
+      "description": "The value types of a Loop variable, as Dify offers them.",
+      "type": "string",
+      "enum": [
+        "string",
+        "number",
+        "boolean",
+        "object",
+        "array[string]",
+        "array[number]",
+        "array[boolean]",
+        "array[object]"
+      ]
+    },
     "WorkflowPredicate": {
       "description": "Typed predicates. Equality requires matching scalar types; no coercion.",
       "oneOf": [
@@ -12733,6 +12854,75 @@
         }
       ]
     },
+    "WorkflowIterationErrorMode": {
+      "description": "How an Iteration treats a round that failed.",
+      "oneOf": [
+        {
+          "description": "The Iteration fails.",
+          "type": "string",
+          "const": "terminated"
+        },
+        {
+          "description": "The round contributes `null`.",
+          "type": "string",
+          "const": "continue_on_error"
+        },
+        {
+          "description": "The round contributes nothing.",
+          "type": "string",
+          "const": "remove_abnormal_output"
+        }
+      ]
+    },
+    "WorkflowAssignment": {
+      "description": "One write of a Variable Assigner.",
+      "type": "object",
+      "properties": {
+        "variable": {
+          "description": "The written Loop variable: `[loop, label]`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "operation": {
+          "$ref": "#/$defs/WorkflowWriteMode"
+        },
+        "value": {
+          "description": "The operand; `clear`, `remove_first` and `remove_last` take none.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "variable",
+        "operation"
+      ]
+    },
+    "WorkflowWriteMode": {
+      "description": "Dify's write modes. `overwrite` writes a variable's value and `set` a\nconstant; both assign.",
+      "type": "string",
+      "enum": [
+        "overwrite",
+        "clear",
+        "set",
+        "append",
+        "extend",
+        "remove_first",
+        "remove_last",
+        "increment",
+        "decrement",
+        "multiply",
+        "divide"
+      ]
+    },
     "WorkflowReviewSubject": {
       "oneOf": [
         {
@@ -12962,7 +13152,7 @@
           "type": "string"
         },
         "port": {
-          "description": "Required Branch/Loop outcome port. Ordinary nodes must omit it.",
+          "description": "The Branch case, Agent route or fail port. Ordinary nodes omit it.",
           "anyOf": [
             {
               "$ref": "#/$defs/WorkflowPort"
@@ -13122,7 +13312,7 @@
       ]
     },
     "WorkflowBlockStep": {
-      "description": "Structured lexical address of a Loop body.",
+      "description": "Structured lexical address of a Loop or Iteration body.",
       "type": "object",
       "properties": {
         "node": {
@@ -13541,11 +13731,47 @@
           "additionalProperties": false
         },
         {
+          "description": "The value of one Loop variable.",
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "kind": {
+              "type": "string",
+              "const": "loop_variable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "index"
+          ]
+        },
+        {
+          "description": "The Loop's break condition, read in its body's scope.",
           "type": "object",
           "properties": {
             "kind": {
               "type": "string",
-              "const": "loop_input"
+              "const": "break_condition"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Select a comparable variable of the break condition.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "break_condition_variable"
             }
           },
           "required": [
@@ -13558,7 +13784,7 @@
           "properties": {
             "kind": {
               "type": "string",
-              "const": "loop_until"
+              "const": "iteration_iterator"
             }
           },
           "required": [
@@ -13567,17 +13793,39 @@
           "additionalProperties": false
         },
         {
+          "description": "The Iteration's output, read in its body's scope.",
           "type": "object",
           "properties": {
             "kind": {
               "type": "string",
-              "const": "loop_carry"
+              "const": "iteration_output"
             }
           },
           "required": [
             "kind"
           ],
           "additionalProperties": false
+        },
+        {
+          "description": "The operand of one Variable Assigner write.",
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "kind": {
+              "type": "string",
+              "const": "assigner_value"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "index"
+          ]
         }
       ]
     },
@@ -24193,15 +24441,25 @@
         "start",
         "review",
         "loop",
+        "iteration",
+        "loop_end",
+        "assigner",
         "return"
       ]
     },
     "WorkflowLoopExit": {
-      "description": "Normal finite Loop completion; neither case claims business verification passed.",
-      "type": "string",
-      "enum": [
-        "satisfied",
-        "exhausted"
+      "description": "Why a Loop finished, as Dify's `completed_reason`.",
+      "oneOf": [
+        {
+          "description": "The break condition held or an Exit Loop node ran.",
+          "type": "string",
+          "const": "loop_break"
+        },
+        {
+          "description": "It ran `loop_count` rounds.",
+          "type": "string",
+          "const": "loop_completed"
+        }
       ]
     },
     "AdoptionEligibility": {
@@ -33918,7 +34176,7 @@
             "null"
           ]
         },
-        "max_iterations": {
+        "loop_count": {
           "type": [
             "integer",
             "null"

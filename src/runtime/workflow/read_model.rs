@@ -95,6 +95,9 @@ pub enum WorkflowNodeKind {
     Start,
     Review,
     Loop,
+    Iteration,
+    LoopEnd,
+    Assigner,
     Return,
 }
 
@@ -153,12 +156,15 @@ impl WorkflowInstanceView {
             WorkflowNodeProgram::Start => WorkflowNodeKind::Start,
             WorkflowNodeProgram::Review { .. } => WorkflowNodeKind::Review,
             WorkflowNodeProgram::Loop { .. } => WorkflowNodeKind::Loop,
+            WorkflowNodeProgram::Iteration { .. } => WorkflowNodeKind::Iteration,
+            WorkflowNodeProgram::LoopEnd => WorkflowNodeKind::LoopEnd,
+            WorkflowNodeProgram::Assigner { .. } => WorkflowNodeKind::Assigner,
             WorkflowNodeProgram::Return { .. } => WorkflowNodeKind::Return,
         };
         let mut view = Self::new(node.block.clone(), Some(node.node.clone()), kind);
         view.visit = Some(node.visit);
-        if let WorkflowNodeProgram::Loop { max_iterations, .. } = program {
-            view.iterations_max = Some(*max_iterations);
+        if let WorkflowNodeProgram::Loop { loop_count, .. } = program {
+            view.iterations_max = Some(*loop_count);
         }
         view
     }

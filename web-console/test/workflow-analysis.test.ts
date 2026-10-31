@@ -94,7 +94,8 @@ async function rejectedEdit(document: WorkflowDocument, apply: (document: Workfl
 function orphanNodeDocument(parent: BlockPath, metadata: WorkflowEditorMetadata): WorkflowDocument {
   const empty = { type: 'object', properties: {}, additionalProperties: false };
   const leaf: Block = { input: empty, output: empty,  nodes: {workflow_start:{type:'start' as const}, ...{ done: { type: 'return', output: { type: 'literal', value: {} } } }}, edges: [{from:'workflow_start',to:'done'}, ...[]] };
-  const block: Block = parent.length ? { ...leaf,  nodes: {workflow_start:{type:'start' as const}, ...{ ...leaf.nodes, repeat: { type: 'loop', input: { type: 'literal', value: {} }, body: leaf, until: { type: 'boolean', value: { type: 'literal', value: true } }, carry: { type: 'literal', value: {} }, max_iterations: 1 } }}, edges: [{from:'workflow_start',to:'repeat'}, ...[{ from: 'repeat', to: 'done', port: 'satisfied' as const }, { from: 'repeat', to: 'done', port: 'exhausted' as const }]] } : leaf;
+  const block: Block = parent.length ? { ...leaf, nodes: { ...leaf.nodes, repeat: { type: 'loop', loop_count: 1, body: { nodes: { loop_start: { type: 'start' }, done: { type: 'loop_end' } }, edges: [{ from: 'loop_start', to: 'done' }] } } },
+    edges: [{ from: 'workflow_start', to: 'repeat' }, { from: 'repeat', to: 'done' }] } : leaf;
   return { description: 'Preserved orphan destination', block, editor: metadata };
 }
 

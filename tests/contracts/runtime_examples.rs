@@ -264,9 +264,9 @@ fn reference_authoring_errors_fail_before_execution() {
         ),
         (
             "/block/nodes/repair/body/nodes/implement/task/2/path",
-            serde_json::json!(["plan"]),
+            serde_json::json!(["implemented"]),
         ),
-        ("/block/nodes/repair/max_iterations", serde_json::json!(0)),
+        ("/block/nodes/repair/loop_count", serde_json::json!(0)),
         (
             "/block/nodes/plan/task/2/path",
             serde_json::json!(["repair"]),
@@ -292,7 +292,7 @@ fn reference_authoring_errors_fail_before_execution() {
             "check"
         } else if pointer.contains("/implement/") {
             "implement"
-        } else if pointer.ends_with("max_iterations") {
+        } else if pointer.ends_with("loop_count") {
             "repair"
         } else {
             "plan"

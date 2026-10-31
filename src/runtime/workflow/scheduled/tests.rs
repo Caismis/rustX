@@ -114,27 +114,21 @@ fn program(input: &Inputs<'_>) -> WorkflowProgram {
             "output":empty,"nodes": {"workflow_start":{"type":"start"},"work":work,"done":{"type":"return","output":{"type":"literal","value":{}}}},"edges": [{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}],}
     })).unwrap();
     if input.nested {
-        let body = serde_json::to_value(&definition.block).unwrap();
-        let repeat = json!({
-            "input":body["input"], "output":empty,"nodes": {"workflow_start":{"type":"start"},
-                "repeat":{"type":"loop","input":{"type":"literal","value":{"task":"Review this"}},
-                    "body":body,"until":{"type":"boolean","value":{"type":"literal","value":false}},
-                    "carry":{"type":"literal","value":{"task":"Review this"}},"max_iterations":2},
-                "done":{"type":"return","output":{"type":"literal","value":{}}}
-            },"edges": [{"from":"workflow_start","to":"repeat"},{"from":"repeat","to":"done","port":"satisfied"},{"from":"repeat","to":"done","port":"exhausted"}],});
-        let branch = json!({"type":"loop", "max_iterations":1,
-            "input":{"type":"literal","value":{"task":"Review this"}},
-            "body":repeat,"until":{"type":"boolean","value":{"type":"literal","value":true}},
-            "carry":{"type":"literal","value":{"task":"Review this"}}});
+        let body = json!({"nodes": {"inner_start":{"type":"start"},"work":work},
+            "edges": [{"from":"inner_start","to":"work"}]});
+        let repeat = json!({"nodes": {"outer_start":{"type":"start"},
+                "repeat":{"type":"loop","loop_count":2,"body":body}},
+            "edges": [{"from":"outer_start","to":"repeat"}]});
+        let branch = json!({"type":"loop","loop_count":1,"body":repeat});
         definition.block = serde_json::from_value(json!({
-            "input":definition.block.input,"output":empty,"nodes": {
-                "workflow_start":{"type":"start"},"alpha":branch,"beta":branch,
-                "done":{"type":"return","output":{"type":"literal","value":{}}}
-            },"edges": [
-                {"from":"workflow_start","to":"alpha"},{"from":"workflow_start","to":"beta"},
-                {"from":"alpha","to":"done","port":"satisfied"},{"from":"alpha","to":"done","port":"exhausted"},
-                {"from":"beta","to":"done","port":"satisfied"},{"from":"beta","to":"done","port":"exhausted"}
-            ]})).unwrap();
+        "input":definition.block.input,"output":empty,"nodes": {
+            "workflow_start":{"type":"start"},"alpha":branch,"beta":branch,
+            "done":{"type":"return","output":{"type":"literal","value":{}}}
+        },"edges": [
+            {"from":"workflow_start","to":"alpha"},{"from":"workflow_start","to":"beta"},
+            {"from":"alpha","to":"done"},{"from":"beta","to":"done"}
+        ]}))
+        .unwrap();
     }
     WorkflowProgram::compile(id(), definition).unwrap()
 }

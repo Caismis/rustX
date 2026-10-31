@@ -2,16 +2,15 @@ import type { Edge, NodeDefinition } from './model';
 
 /** A native control port. `next` is the ordinary outgoing port, written
  * by omitting `port`. */
-export type BuiltinPort = 'next' | 'true' | 'false' | 'satisfied' | 'exhausted' | 'fail';
+export type BuiltinPort = 'next' | 'true' | 'false' | 'fail';
 export type ControlPort = string;
 
-/** The exact native outgoing ports of each node kind. Return ends its own
- * block and has none. */
+/** The exact native outgoing ports of each node kind. */
 export function outputPorts(kind: NodeDefinition['type']): readonly ControlPort[] {
   switch (kind) {
     case 'branch': return ['true', 'false'];
-    case 'loop': return ['satisfied', 'exhausted'];
-    case 'return': return [];
+    // As Dify's Exit Loop, it ends its round; Return ends the workflow.
+    case 'loop_end': case 'return': return [];
     default: return ['next'];
   }
 }
@@ -32,7 +31,7 @@ export function authoredEdge(from: string, port: ControlPort, to: string): Edge 
 }
 
 /** Exits a Branch case or an Agent route cannot be named after. */
-export const RESERVED_PORTS: readonly string[] = ['false', 'next', 'satisfied', 'exhausted', 'fail'];
+export const RESERVED_PORTS: readonly string[] = ['false', 'next', 'fail'];
 
 export function portsOf(node: NodeDefinition): readonly ControlPort[] {
   if (node.type === 'branch') return [...node.cases.map(item => item.id), 'false'];

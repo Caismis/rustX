@@ -1925,12 +1925,91 @@ export type WorkflowNodeDefinition =
       type: 'model';
     }
   | {
-      input: WorkflowValue;
+      /**
+       * Variables the body reads and an Assigner node writes, under the
+       * Loop's own ID.
+       */
+      loop_variables?: WorkflowLoopVariable[];
+      /**
+       * Checked before the first round and after every round.
+       */
+      break_condition?: WorkflowPredicate | null;
+      loop_count: number;
       body: WorkflowBlock1;
-      until: WorkflowPredicate;
-      carry: WorkflowValue;
-      max_iterations: number;
       type: 'loop';
+    }
+  | {
+      /**
+       * Closed, explicitly tagged value syntax; no evaluation of expression strings.
+       */
+      iterator:
+        | {
+            path: string[];
+            type: 'reference';
+          }
+        | {
+            value: unknown;
+            type: 'literal';
+          }
+        | {
+            fields: {
+              [k: string]: WorkflowValue;
+            };
+            type: 'object';
+          }
+        | {
+            items: WorkflowValue[];
+            type: 'array';
+          }
+        | {
+            parts: WorkflowValue[];
+            type: 'template';
+          };
+      /**
+       * Closed, explicitly tagged value syntax; no evaluation of expression strings.
+       */
+      output:
+        | {
+            path: string[];
+            type: 'reference';
+          }
+        | {
+            value: unknown;
+            type: 'literal';
+          }
+        | {
+            fields: {
+              [k: string]: WorkflowValue;
+            };
+            type: 'object';
+          }
+        | {
+            items: WorkflowValue[];
+            type: 'array';
+          }
+        | {
+            parts: WorkflowValue[];
+            type: 'template';
+          };
+      is_parallel?: boolean;
+      /**
+       * Rounds run at once in parallel mode.
+       */
+      parallel_nums?: number;
+      error_handle_mode?: WorkflowIterationErrorMode;
+      /**
+       * Join the rounds' arrays into one array.
+       */
+      flatten_output?: boolean;
+      body: WorkflowBlock1;
+      type: 'iteration';
+    }
+  | {
+      type: 'loop_end';
+    }
+  | {
+      items: WorkflowAssignment[];
+      type: 'assigner';
     }
   | {
       subject: WorkflowReviewSubject;
@@ -2108,10 +2187,20 @@ export type WorkflowModelOutput =
       type: 'json_schema';
     };
 /**
+ * The value types of a Loop variable, as Dify offers them.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowPort".
+ * via the `definition` "WorkflowVarType".
  */
-export type WorkflowPort = boolean | string;
+export type WorkflowVarType =
+  | 'string'
+  | 'number'
+  | 'boolean'
+  | 'object'
+  | 'array[string]'
+  | 'array[number]'
+  | 'array[boolean]'
+  | 'array[object]';
 /**
  * Typed predicates. Equality requires matching scalar types; no coercion.
  *
@@ -2173,6 +2262,38 @@ export type WorkflowPredicate =
       predicates: WorkflowPredicate[];
       type: 'or';
     };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowPort".
+ */
+export type WorkflowPort = boolean | string;
+/**
+ * How an Iteration treats a round that failed.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowIterationErrorMode".
+ */
+export type WorkflowIterationErrorMode =
+  'terminated' | 'continue_on_error' | 'remove_abnormal_output';
+/**
+ * Dify's write modes. `overwrite` writes a variable's value and `set` a
+ * constant; both assign.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowWriteMode".
+ */
+export type WorkflowWriteMode =
+  | 'overwrite'
+  | 'clear'
+  | 'set'
+  | 'append'
+  | 'extend'
+  | 'remove_first'
+  | 'remove_last'
+  | 'increment'
+  | 'decrement'
+  | 'multiply'
+  | 'divide';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowReviewSubject".
@@ -2286,13 +2407,24 @@ export type WorkflowConsumerField =
       kind: 'return_output';
     }
   | {
-      kind: 'loop_input';
+      index: number;
+      kind: 'loop_variable';
     }
   | {
-      kind: 'loop_until';
+      kind: 'break_condition';
     }
   | {
-      kind: 'loop_carry';
+      kind: 'break_condition_variable';
+    }
+  | {
+      kind: 'iteration_iterator';
+    }
+  | {
+      kind: 'iteration_output';
+    }
+  | {
+      index: number;
+      kind: 'assigner_value';
     };
 /**
  * Exact authored position within a value construction or predicate.
@@ -4572,14 +4704,25 @@ export type WorkflowExecutionOutcome =
  * via the `definition` "WorkflowNodeKind".
  */
 export type WorkflowNodeKind =
-  'block' | 'agent' | 'model' | 'tool' | 'branch' | 'start' | 'review' | 'loop' | 'return';
+  | 'block'
+  | 'agent'
+  | 'model'
+  | 'tool'
+  | 'branch'
+  | 'start'
+  | 'review'
+  | 'loop'
+  | 'iteration'
+  | 'loop_end'
+  | 'assigner'
+  | 'return';
 /**
- * Normal finite Loop completion; neither case claims business verification passed.
+ * Why a Loop finished, as Dify's `completed_reason`.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowLoopExit".
  */
-export type WorkflowLoopExit = 'satisfied' | 'exhausted';
+export type WorkflowLoopExit = 'loop_break' | 'loop_completed';
 /**
  * The canonical conversation message.
  *
@@ -9401,13 +9544,13 @@ export interface WorkflowBlock {
   /**
    * The workflow input JSON Schema.
    */
-  input: {
+  input?: {
     [k: string]: unknown;
   };
   /**
    * The workflow output JSON Schema.
    */
-  output: {
+  output?: {
     [k: string]: unknown;
   };
   /**
@@ -9447,7 +9590,45 @@ export interface WorkflowRetry {
   interval_ms: number;
 }
 /**
- * A fixed lexical graph shared by the root and Loop bodies.
+ * A Loop variable: Dify's `label`, `var_type` and constant or variable value.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowLoopVariable".
+ */
+export interface WorkflowLoopVariable {
+  label: string;
+  var_type: WorkflowVarType;
+  /**
+   * A literal, or a reference read once before the first round.
+   */
+  value:
+    | {
+        path: string[];
+        type: 'reference';
+      }
+    | {
+        value: unknown;
+        type: 'literal';
+      }
+    | {
+        fields: {
+          [k: string]: WorkflowValue;
+        };
+        type: 'object';
+      }
+    | {
+        items: WorkflowValue[];
+        type: 'array';
+      }
+    | {
+        parts: WorkflowValue[];
+        type: 'template';
+      };
+}
+/**
+ * A fixed graph: the root, or a Loop or Iteration body. A body declares no
+ * input or output: as in Dify, it reads the variables of the nodes around
+ * it, its container's variables and its own nodes.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowBlock".
@@ -9456,13 +9637,13 @@ export interface WorkflowBlock1 {
   /**
    * The workflow input JSON Schema.
    */
-  input: {
+  input?: {
     [k: string]: unknown;
   };
   /**
    * The workflow output JSON Schema.
    */
-  output: {
+  output?: {
     [k: string]: unknown;
   };
   /**
@@ -9492,9 +9673,26 @@ export interface WorkflowEdgeDefinition {
    */
   to: string;
   /**
-   * Required Branch/Loop outcome port. Ordinary nodes must omit it.
+   * The Branch case, Agent route or fail port. Ordinary nodes omit it.
    */
   port?: WorkflowPort | null;
+}
+/**
+ * One write of a Variable Assigner.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAssignment".
+ */
+export interface WorkflowAssignment {
+  /**
+   * The written Loop variable: `[loop, label]`.
+   */
+  variable: string[];
+  operation: WorkflowWriteMode;
+  /**
+   * The operand; `clear`, `remove_first` and `remove_last` take none.
+   */
+  value?: WorkflowValue | null;
 }
 /**
  * One exit an Agent may choose, as Dify's Agent output route. The child
@@ -9568,7 +9766,7 @@ export interface WorkflowNodeAddress {
   node: string;
 }
 /**
- * Structured lexical address of a Loop body.
+ * Structured lexical address of a Loop or Iteration body.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowBlockStep".
@@ -18503,7 +18701,7 @@ export interface NodeInspection {
   selector?: ExactToolSelector | null;
   output_schema?: unknown;
   result_kind?: string | null;
-  max_iterations?: number | null;
+  loop_count?: number | null;
   review_subject?: string | null;
 }
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyBlock } from '../src/app/workflows/document/commands';
+import { rootBlock } from './workflow-root';
 import { nodeField, within } from '../src/app/workflows/document/fields';
 import type { WorkflowDocument } from '../src/app/workflows/document/model';
 import { orderedKeys } from '../src/app/workflows/document/presentation';
@@ -8,7 +8,7 @@ import { emptySchema, putProperty, readSchema, removeProperty, replaceSchema, sc
 
 const address = nodeField([], 'model', ['output', 'schema']);
 function document(): WorkflowDocument {
-  const block = emptyBlock();
+  const block = rootBlock();
   block.nodes.model = { type: 'model', model: { mode: 'session' }, messages: [], output: { type: 'json_schema', schema: emptySchema() } };
   return { description: 'Schema editing.', block };
 }

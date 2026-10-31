@@ -21,16 +21,18 @@ freezes all required capabilities before publication; a block never rediscovers 
 ## Authoring and lexical scope
 
 An executable definition contains `description`, `block`, and trusted `timeout_ms`
-(default 600000). There is no `workspace` key; authoring one is refused. Every block contains
-`input` and `output` JSON Schemas, `nodes`, and `edges`. Exactly one node in
-each block has `type: start`; its outgoing edges select the initial work.
-The node vocabulary is Start, Agent, Model, Tool, Branch, Review, Loop, Return.
-Only Loop owns a nested block. There is no explicit Parallel node, scalar
-`entry` field, callable subworkflow, conversation or independent job.
+(default 600000). There is no `workspace` key; authoring one is refused. The root
+block contains `input` and `output` JSON Schemas (an omitted one is the empty closed
+object), `nodes`, and `edges`. Exactly one node in each block has `type: start`;
+its outgoing edges select the initial work. The node vocabulary is Start, Agent,
+Model, Tool, Branch, Review, Iteration, Loop, Exit Loop (`loop_end`), Variable
+Assigner (`assigner`) and Return. Iteration and Loop own a body, a block with no
+input or output of its own. There is no explicit Parallel node, scalar `entry`
+field, callable subworkflow, conversation or independent job.
 
 Parallelism is expressed by multiple edges from the same output port, following
 Dify's graph convention. Ordinary edges omit `port`; Branch uses stable case IDs
-and `false` for ELSE; Loop uses `satisfied`/`exhausted`. Each port may have
+and `false` for ELSE. Each port may have
 multiple distinct targets. Identical `(from, port, to)` connections are rejected.
 
 ## Direct Model nodes (Issue #496)
@@ -399,13 +401,17 @@ strings are unsupported. A whole-source reference such as `[clarity]` is valid.
 `args` is reserved and cannot be a node ID. Local keys use ASCII letters,
 digits, underscores and hyphens, with a 64-byte maximum.
 
-A Loop body sees only its projected `args` and its own committed values. Its
-parent receives the Loop's declared structural result. Sibling Loop bodies may
-reuse local names, but cannot reference each other's private values.
+As in Dify, a body reads every variable in scope where its Loop or Iteration
+is, `args` included, plus its container's own variables under the container's
+ID and its own nodes. Node IDs never hide one another: a body node cannot reuse
+an ID it could read. Sibling bodies may reuse local names, but cannot reference
+each other's values.
 
 The compiler requires one Start with no incoming edges and validates dangling
-edges, cycles, reachability, termination and complete Branch/Loop ports.
-Ordinary nodes require at least one successor; Return has none. Every incoming
+edges, cycles, reachability, termination and complete Branch ports.
+At the root, ordinary nodes require at least one successor and Return has none.
+A body's path may end at any node, including an unconnected Branch case; a body
+has no Return. Every incoming
 edge is resolved as selected or skipped. A join runs once, after all incoming
 paths resolve, if any incoming edge is selected. An inactive path never executes.
 All admitted work settles before the block returns. Multiple active Returns
@@ -437,7 +443,7 @@ present objects and array items. The block's `args` reference type therefore
 treats defaulted properties as required: an optional field with a default can be
 referenced, one without cannot.
 The [visual editor](workflow-visual-editor.md) authors these same native schemas
-and nested Blocks. Its real Start edits the owning Block's input schema; Loop geometry and notes
+and nested Blocks. Its root Start edits the workflow's input schema; Loop geometry and notes
 are presentation only. Editor titles/author notes/layout/order are separate file presentation and never
 enter Tool contracts, trusted Model/Agent instructions or execution state. See
 [the complete file and authoring analysis contract](workflow-authoring.md#complete-native-file-document).
@@ -454,7 +460,7 @@ Values are a closed tagged AST:
 | `array` | `items: [<value expression>, ...]` | Atomic array construction |
 | `template` | `parts: [<string literal or reference>, ...]` | One string rendered from its parts |
 
-A Loop's `input` and a Return's `output` are each one value expression. An Agent's `task`,
+A Loop variable's `value` and a Return's `output` are each one value expression. An Agent's `task`,
 like a Model message's `content`, is a list of fixed string literals and
 references, rendered in order when the AgentRun starts: a string is inserted
 as itself, any other value as JSON text. The task is the only way workflow
@@ -467,8 +473,7 @@ partial local value.
 Branch evaluates `cases` in order: the first matching condition selects that
 case's exit; otherwise it selects `false` (ELSE). Every case and ELSE requires
 at least one outgoing edge. Case IDs are stable local keys, independent of their
-IF/ELIF position; they must be unique and cannot be `false`, `next`, `satisfied`
-or `exhausted`. A Branch has 1–32 cases. Each condition is explicitly tagged:
+IF/ELIF position; they must be unique and cannot be `false`, `next` or `fail`. A Branch has 1–32 cases. Each condition is explicitly tagged:
 
 ```yaml
 type: branch
@@ -536,13 +541,13 @@ and against the consuming node's immutable contract.
 ## Identity and lifecycle ownership
 
 `WorkflowProgram` contains one immutable root `WorkflowBlockProgram`.
-Every compiled Loop body holds a `WorkflowBlockProgram`.
-`WorkflowRuntime::execute_block` is the shared root/body execution and lifecycle
-entry point. It owns private input/local-value lifetime and schedules ready
-nodes with the same dispatch in every scope.
+Every compiled Loop or Iteration body holds a `WorkflowBlockProgram`.
+`WorkflowRuntime::execute_graph` is the shared root/body execution and lifecycle
+entry point. It owns local-value lifetime and schedules ready nodes with the
+same dispatch in every scope; a body round starts from the variables around it.
 
 `WorkflowDefinitionPath` contains the configured Workflow id and alternating
-Loop owner-node/child keys, with the fixed child key `body`.
+Loop or Iteration owner-node/child keys, with the fixed child key `body`.
 A `WorkflowRunId` contains the conversation, native
 admitted `AttemptId`, and a WorkflowRuntime-owned invocation ordinal.
 Cloned runtimes share the ordinal allocator, including across configuration publication.
@@ -550,9 +555,9 @@ Recovery creates a fresh native attempt identity rather than resuming a run.
 `WorkflowBlockInstance` combines
 that run, the static path and structural invocation components.
 `WorkflowNodeInstance` adds the local node and visit ordinal (zero within an acyclic block).
-Root starts with invocation path `[0]`; each Loop appends its one-based
-iteration. Nested scopes inherit the complete path: `[0,2,3]` identifies inner
-iteration three inside outer iteration two.
+Root starts with invocation path `[0]`; each Loop or Iteration round appends
+its one-based round. Nested scopes inherit the complete path: `[0,2,3]`
+identifies inner round three inside outer round two.
 The static paths disambiguate siblings. No static definition is cloned to
 obtain a new identity. Display diagnostics include invocation components too.
 No identity uses prose, PID, provider
@@ -620,8 +625,9 @@ root block terminal, WorkflowRun terminal. Terminal outcomes are unique.
 | --- | --- | --- |
 | Complete YAML file / expanded file document / executable definition | 1 MiB / 768 KiB / 512 KiB | Native file owner and finite reader; compiler budgets executable bytes only |
 | Static nodes, including every nested graph | 256 | One compiler counter shared by all blocks |
-| Nested Loop block depth | 8, root depth zero | Recursive compiler admission |
-| Local Loop maximum | 1–256 iterations | Trusted compiler ceiling |
+| Nested body depth | 8, root depth zero | Recursive compiler admission |
+| Loop `loop_count` | 1–100 rounds (Dify's `LOOP_NODE_MAX_COUNT`) | Trusted compiler ceiling |
+| Iteration `parallel_nums` | 1–10 rounds at once (Dify's `MAX_PARALLEL_LIMIT`) | Trusted compiler ceiling |
 | Reference path | 32 components, 64 bytes each | Expression static validation |
 | Native conversation/attempt identity components | 256 bytes each | Run admission; static paths have at most 16 bounded keys |
 | Expression/predicate serialized size | 64 KiB each | Compiler; aggregate program bytes still apply |
@@ -721,139 +727,85 @@ of journal delivery. TUI receives that projection through App Server, the sole
 external product control protocol.
 See [run projection](workflow-run-projection.md) and [product conformance](workflow-conformance.md).
 
-## Bounded feedback (WF-05)
+## Loop, Iteration, Exit Loop and Variable Assigner
 
-There is one repeat-until form, with no retries, catch paths or graph back edges:
+These follow Dify's Loop, Iteration, Exit Loop and Variable Assigner nodes. A
+body is a graph with its own Start and no input, output or Return:
 
 ```yaml
-feedback:
+repair:
   type: loop
-  input: {type: reference, path: [args]}
-  max_iterations: 3
+  loop_count: 3
+  loop_variables:
+  - {label: passed, var_type: boolean, value: {type: literal, value: false}}
+  - {label: feedback, var_type: string, value: {type: reference, path: [plan, summary]}}
+  break_condition: {type: boolean, value: {type: reference, path: [repair, passed]}}
   body:
-    input: &state
-      type: object
-      properties: {passed: {type: boolean}}
-      required: [passed]
-      additionalProperties: false
-    output: *state
     nodes:
-      start: {type: start}
-      done:
-        type: return
-        output: {type: reference, path: [args]}
-    edges: [{from: start, to: done}]
-  until:
-    type: boolean
-    value: {type: reference, path: [result, passed]}
-  carry: {type: reference, path: [result]}
+      repair_start: {type: start}
+      check: {type: tool, ...}
+      save:
+        type: assigner
+        items:
+        - {variable: [repair, passed], operation: overwrite, value: {type: reference, path: [check, passed]}}
+    edges: [{from: repair_start, to: check}, {from: check, to: save}]
+each:
+  type: iteration
+  iterator: {type: reference, path: [args, files]}
+  output: {type: reference, path: [review, text]}
+  is_parallel: true
+  parallel_nums: 4
+  error_handle_mode: continue_on_error
 ```
 
-`input` is evaluated once in the containing block. `body` is an ordinary fixed
-block with explicit input/output contracts. Its Return ends only that iteration.
-The first body always runs. After native settlement and validated output export,
-`until` and `carry` use the existing value/predicate AST in a scope containing
-only `result`, the declared body output. They cannot read parent args, prior body
-locals, transcripts or historical outputs. `carry` is required even when input
-and output schemas match; when they differ, it explicitly projects the next
-input. Both initial input and carry must statically prove compatibility with
-the body's input, with runtime validation before admission. The copyable
-`implement_and_review.yaml` example carries structured implementation feedback through real checks.
+**Loop.** Its variables (`string`, `number`, `boolean`, `object` and the four
+`array[...]` types) start from a literal or a reference read once in the Loop's
+scope. The body reads them under the Loop's ID, and a Variable Assigner in the
+body writes them. The optional `break_condition` is checked before the first
+round, where a reference no round has set yet does not break, and after every
+round, in the body's scope: the variables around the Loop, the Loop variables and
+every body node. The Loop also ends once a round in which an Exit Loop node ran
+settles, or after `loop_count` rounds. Its value is its variables
+(`{label: value}`), and it has one ordinary exit. `WorkflowLoopExited` reports
+`loop_break` or `loop_completed`, Dify's `completed_reason`.
 
-The Loop node always commits this exact structural result:
+**Iteration.** `iterator` references an array with declared items. Each round
+reads `item` and `index` under the Iteration's ID, and contributes the value of
+`output`, a reference read in the body's scope after the round. The value is
+`{output: [...]}` in item order. With `is_parallel`, up to `parallel_nums` rounds
+run at once; otherwise one at a time. A round whose node failed or timed out is
+handled by `error_handle_mode`: `terminated` (the default) fails the Iteration
+once running rounds settle, `continue_on_error` contributes `null`, and
+`remove_abnormal_output` contributes nothing. Cancellation, deadlines and run
+limits are never handled. `flatten_output` (default true) joins the rounds'
+values when every round that produced one produced an array. With
+`continue_on_error` the output's items are untyped, since `null` may appear.
 
-```json
-{
-  "type": "object",
-  "properties": {
-    "status": {"type": "string", "enum": ["satisfied", "exhausted"]},
-    "iterations": {"type": "integer"},
-    "result": {
-      "type": "object",
-      "properties": {"passed": {"type": "boolean"}},
-      "required": ["passed"],
-      "additionalProperties": false
-    }
-  },
-  "required": ["status", "iterations", "result"],
-  "additionalProperties": false
-}
-```
+**Exit Loop** (`loop_end`) has no configuration or exit and belongs directly in
+a Loop body. **Variable Assigner** (`assigner`) belongs directly in a Loop body
+and writes that Loop's variables (`variable: [loop, label]`) with Dify's write
+modes: `overwrite` and `set` assign (from a variable or a constant), `clear`
+leaves the type's empty value, `append`/`extend`/`remove_first`/`remove_last`
+change arrays, and `increment`/`decrement`/`multiply`/`divide` change numbers.
+The compiler checks each mode against the variable's type and its operand. Later
+nodes in the round read the written value; parallel writers of one variable keep
+the last write, as in Dify.
 
-Here `result` uses the example body's schema; each Loop embeds its own body schema.
-`iterations` is exactly 1 through the trusted local maximum. `satisfied` means
-the typed predicate was true; `exhausted` means every consumed body was valid
-and the last predicate was false at the maximum. Every Loop must explicitly
-route exactly two normal outcome ports, `satisfied` and `exhausted`.
-Default/`next` and Branch case/ELSE ports are rejected on Loops, as are
-missing outcomes and duplicate connections.
-The full structural result is available on either path:
-
-```yaml
-edges:
-  - {from: feedback, port: satisfied, to: accepted}
-  - {from: feedback, port: exhausted, to: needs_revision}
-```
-
-Authors may intentionally target the same successor with both ports or merge
-the paths afterward. Projection of business fields is possible only after this
-explicit routing decision; it cannot replace routing exhaustion. Failures never
-take either normal outcome port. Exhaustion is finite normal control flow, not
-predicate satisfaction, and a completed Workflow is not a claim that checks passed.
-
-Iteration reservation begins after validating the carried input. Reservation,
-admission and consumption form one synchronous run-budget critical section:
-check capacity, then the final cancellation observation commits admission;
-install the infallible step increment before unlocking. If cancellation is
-observable at that final observation, no iteration is consumed or dispatched.
-Cancellation arriving after it cancels admitted work through the existing node
-and native start guards. Ordinals advance only in this one sequential owner;
-there is no pending reservation queue, redispatch path or resumable continuation.
-
-The body's output commits at its ordinary Return validation/export reservation,
-and becomes available to Loop only after block finalization, including every
-native borrower and all concurrent siblings. A carry commits only after projection,
-input validation, byte reservation and cancellation
-observation all succeed. Exit similarly validates/reserves the complete tagged
-result before its one local insertion and `WorkflowLoopExited` fact, then selects
-exactly the successor matching that committed status. Neither a
-failed projection nor a rejected byte reservation installs partial state.
-
-The compiler expands worst-case node and iteration counts across all fixed
-branches and nested Loops, rejecting more than 4096 steps or 256 AgentRuns.
-Each child expansion is checked before multiplying by a maximum of 256, so
-integer overflow is never used as a bound. Mutually exclusive paths may be
-conservatively overcounted. Runtime counters are shared across all scopes and
-never refunded; `WorkflowRunError::LimitExceeded` distinguishes Steps, Agents
-and RetainedData. Such failures are not normal exhaustion.
-
-Retained bytes count one live body, explicit carry and bounded transfer overlap,
-plus the final Loop result. They do not multiply private memory by iteration
-count. The existing parent locals and simultaneous graph paths remain
-charged. Each iteration's private locals retire on body exit; its exported
-result retires after carry or final-result transfer. No output history is retained
-by Loop. Native child records and durable journal facts retain their existing
-bounded observation ownership, with at most 256 admitted children and 4096 steps.
-
-Native Agent/Tool execution, supervised process containment and
-Review/Questionnaire settlement are unchanged owners. Loop awaits their
-existing block boundary. It does not own a process supervisor or any workspace
-resource. Fresh invocation vectors make Review and Questionnaire authority
-distinct in every iteration.
+**Bounds.** Each Loop round and Iteration round is one admitted step. The
+compiler multiplies a Loop body's worst case by `loop_count`. An Iteration's
+rounds follow its array, so a program with one is bounded by the run's own step,
+Agent and Model-call limits, which are shared across all scopes and never
+refunded. Retained bytes count one live Loop round plus its variables, and up to
+`parallel_nums` live Iteration rounds plus the collected output. A round's own
+locals retire when it settles. Each round gets fresh invocation components, so
+Review and Questionnaire authority is distinct in every round.
 
 Failed, Denied, TimedOut, Cancelled, unavailable human interaction and
-OutcomeUnknown stop execution without another feedback attempt. Interrupted
-native children and abandoned native terminal publication retain OutcomeUnknown;
-a child's own committed execution deadline maps to TimedOut. The outer deadline
-never resets. Every terminal path leaves completed workspace effects in place;
-cancellation and failure are not rollback.
-
-`WorkflowLoopIterationAdmitted`, `WorkflowLoopIterationSettled` (including typed
-failure/cancellation/unknown outcome) and `WorkflowLoopExited` (satisfied or
-exhausted) correlate concrete Loop and body instances. Existing Agent/Tool facts,
-interaction waits and native cancellation/drain facts continue to describe work
-inside an iteration. These are observations, not an executable Event Journal.
-No Goal round, Scheduler, cross-run budget renewal or durable resume is added.
+OutcomeUnknown stop a Loop without another round. Every terminal path leaves
+completed workspace effects in place; cancellation and failure are not rollback.
+`WorkflowLoopIterationAdmitted` and `WorkflowLoopIterationSettled` correlate each
+Loop or Iteration round with its body instance; they are observations, not an
+executable Event Journal.
 
 ## Shared Session workspace (Issue #462)
 
@@ -886,9 +838,10 @@ workspace. The replacement example gates implementation on an explicit Branch:
 ```text
 Plan -> Review -> Branch(review.accepted)
                     | false -> Return(rejected)
-                    | true  -> Loop[Implement -> Check -> Branch(passed)]
-                                 | satisfied -> Return(implemented)
-                                 | exhausted -> Return(needs_revision)
+                    | true  -> Loop[Implement -> Check -> Branch(passed) -> Assigner]
+                             -> Branch(repair.passed)
+                                 | true  -> Return(implemented)
+                                 | false -> Return(needs_revision)
 ```
 
 ## Human questions and business Review (WF-04)
@@ -910,8 +863,9 @@ empty requirement takes the fixed question path. A planning Agent consumes that
 committed business context and produces a structured plan; Review accepts or rejects
 that plan, and an explicit Branch on `accepted` routes rejection to the declared
 `rejected` Return. Only the accepted branch reaches the bounded
-implementation/check Loop, which returns `implemented` when the frozen checker
-passes or `needs_revision` on exhaustion. Every Return satisfies the declared
+implementation/check Loop; its Assigners record the checker's verdict and
+feedback in loop variables, it breaks once `passed` holds, and a Branch on
+`repair.passed` returns `implemented` or, after three rounds, `needs_revision`. Every Return satisfies the declared
 output schema. The plan is data and cannot change the fixed graph or capability
 selectors.
 

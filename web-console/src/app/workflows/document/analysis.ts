@@ -27,10 +27,14 @@ export function consumerAddress(document: WorkflowDocument, field: FieldAddress)
     consumer = { kind: 'condition', case_id: node.cases[index].id };
   }
   else if (first === 'output' && node.type === 'return') consumer = { kind: 'return_output' };
-  else if (node.type === 'loop' && first === 'input') consumer = { kind: 'loop_input' };
-  else if (node.type === 'loop' && first === 'until') consumer = { kind: 'loop_until' };
-  else if (node.type === 'loop' && first === 'carry') consumer = { kind: 'loop_carry' };
-  else return undefined;
+  else if (node.type === 'loop' && first === 'loop_variables') {
+    const index = parts.shift(); if (typeof index !== 'number' || parts.shift() !== 'value') return undefined; consumer = { kind: 'loop_variable', index };
+  } else if (node.type === 'loop' && first === 'break_condition') consumer = { kind: 'break_condition' };
+  else if (node.type === 'iteration' && first === 'iterator') consumer = { kind: 'iteration_iterator' };
+  else if (node.type === 'iteration' && first === 'output') consumer = { kind: 'iteration_output' };
+  else if (node.type === 'assigner' && first === 'items') {
+    const index = parts.shift(); if (typeof index !== 'number' || parts.shift() !== 'value') return undefined; consumer = { kind: 'assigner_value', index };
+  } else return undefined;
   const path: WorkflowExpressionStep[] = [];
   while (parts.length) {
     const part = parts.shift();

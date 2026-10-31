@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CommandRejected, emptyBlock, renameAgentRoute, replaceNodeExits } from '../src/app/workflows/document/commands';
+import { CommandRejected, renameAgentRoute, replaceNodeExits } from '../src/app/workflows/document/commands';
+import { rootBlock } from './workflow-root';
 import type { NodeDefinition, WorkflowDocument } from '../src/app/workflows/document/model';
 import { portsOf } from '../src/app/workflows/document/ports';
 
@@ -8,7 +9,7 @@ const agent = (extra: Partial<Agent> = {}): Agent => ({ type: 'agent', profile: 
 const routes = [{ id: 'approve', description: 'Ship it.' }, { id: 'revise', description: 'Needs edits.' }];
 
 function document(node: Agent): WorkflowDocument {
-  const block = emptyBlock();
+  const block = rootBlock();
   block.nodes.triage = node;
   block.nodes.edit = { type: 'return', output: { type: 'literal', value: {} } };
   block.edges = [{ from: 'start', to: 'triage' }, { from: 'triage', to: 'done', port: 'approve' }, { from: 'triage', to: 'edit', port: 'revise' }, { from: 'triage', to: 'edit', port: 'fail' }];

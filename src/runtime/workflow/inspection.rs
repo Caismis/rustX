@@ -2,7 +2,7 @@
 //! No executor, runtime owner, discovery service, or authority is accepted here.
 
 use super::{
-    BTreeMap, BTreeSet, MAX_BLOCK_DEPTH, MAX_LOCAL_BYTES, MAX_LOOP_ITERATIONS, MAX_VALUE_BYTES,
+    BTreeMap, BTreeSet, LOOP_NODE_MAX_COUNT, MAX_BLOCK_DEPTH, MAX_LOCAL_BYTES, MAX_VALUE_BYTES,
     MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_MODEL_CALLS, MAX_WORKFLOW_NODES, MAX_WORKFLOW_STEPS,
     Serialize, SubagentName, Value, WorkflowBlockProgram, WorkflowNodeProgram, WorkflowPort,
     WorkflowPredicate, WorkflowProgram, WorkflowReviewSubject, WorkflowToolIdentity, WorkflowValue,
@@ -27,7 +27,8 @@ impl WorkflowProgram {
                         path: format!("{path}.model"),
                         policy: &model.model,
                     }),
-                    WorkflowNodeProgram::Loop { body, .. } => {
+                    WorkflowNodeProgram::Loop { body, .. }
+                    | WorkflowNodeProgram::Iteration { body, .. } => {
                         walk(body, &format!("{path}.body"), found);
                     }
                     _ => {}
@@ -62,13 +63,20 @@ impl WorkflowProgram {
                         body,
                         output_schema,
                         ..
+                    }
+                    | WorkflowNodeProgram::Iteration {
+                        body,
+                        output_schema,
+                        ..
                     } => {
                         walk(body, &format!("{path}.body"), found);
                         Some(output_schema.clone())
                     }
                     WorkflowNodeProgram::Start
                     | WorkflowNodeProgram::Branch { .. }
-                    | WorkflowNodeProgram::Return { .. } => None,
+                    | WorkflowNodeProgram::Return { .. }
+                    | WorkflowNodeProgram::LoopEnd
+                    | WorkflowNodeProgram::Assigner { .. } => None,
                 };
                 if let Some(output) = output {
                     found.insert(path, output);
@@ -128,7 +136,7 @@ pub struct NodeInspection {
     pub selector: Option<crate::capabilities::selection::ExactToolSelector>,
     pub output_schema: Option<Value>,
     pub result_kind: Option<Cow<'static, str>>,
-    pub max_iterations: Option<u32>,
+    pub loop_count: Option<u32>,
     pub review_subject: Option<Cow<'static, str>>,
 }
 
@@ -167,7 +175,7 @@ impl WorkflowProgram {
                 ("model_message_bytes".into(), super::MAX_MODEL_MESSAGE_BYTES),
                 ("model_message_parts".into(), super::MAX_MODEL_MESSAGE_PARTS),
                 ("nodes".into(), MAX_WORKFLOW_NODES),
-                ("loop_iterations".into(), MAX_LOOP_ITERATIONS as usize),
+                ("loop_count".into(), LOOP_NODE_MAX_COUNT as usize),
                 ("block_depth".into(), MAX_BLOCK_DEPTH),
                 ("value_bytes".into(), MAX_VALUE_BYTES),
                 ("retained_bytes".into(), MAX_LOCAL_BYTES),
@@ -297,7 +305,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             selector: None,
             output_schema: None,
             result_kind: None,
-            max_iterations: None,
+            loop_count: None,
             review_subject: None,
         };
         match node {
@@ -405,23 +413,55 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 }
             }
             WorkflowNodeProgram::Loop {
-                input,
+                loop_variables,
+                break_condition,
+                loop_count,
                 body,
-                until,
-                carry,
-                max_iterations,
                 output_schema,
             } => {
                 result.runtime_requirements.insert("actual_loop_iterations");
                 view.kind = "loop".into();
-                view.max_iterations = Some(*max_iterations);
+                view.loop_count = Some(*loop_count);
+                view.output_schema = Some(schema(output_schema));
+                for variable in loop_variables {
+                    view.bindings.insert(
+                        format!("loop_variables.{}", variable.label),
+                        binding(&variable.value),
+                    );
+                }
+                if let Some(condition) = break_condition {
+                    view.bindings
+                        .insert("break_condition".into(), predicate(condition));
+                }
+                block(body, &format!("{path}.nodes.{id}.body"), result);
+            }
+            WorkflowNodeProgram::Iteration {
+                iterator,
+                output,
+                body,
+                output_schema,
+                ..
+            } => {
+                result.runtime_requirements.insert("actual_loop_iterations");
+                view.kind = "iteration".into();
                 view.output_schema = Some(schema(output_schema));
                 view.bindings.extend([
-                    ("input".into(), binding(input)),
-                    ("carry".into(), binding(carry)),
-                    ("until".into(), predicate(until)),
+                    ("iterator".into(), binding(iterator)),
+                    ("output".into(), binding(output)),
                 ]);
                 block(body, &format!("{path}.nodes.{id}.body"), result);
+            }
+            WorkflowNodeProgram::LoopEnd => {
+                view.kind = "loop_end".into();
+            }
+            WorkflowNodeProgram::Assigner { items, .. } => {
+                view.kind = "assigner".into();
+                for (index, item) in items.iter().enumerate() {
+                    if let Some(value) = &item.value {
+                        view.bindings
+                            .insert(format!("items.{index}.value"), binding(value));
+                    }
+                }
             }
             WorkflowNodeProgram::Review { subject, context } => {
                 result

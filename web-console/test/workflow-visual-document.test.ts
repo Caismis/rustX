@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { createActor } from 'xstate';
-import { addNode, connectAddressed, emptyBlock, insertNode, nodeTemplate, renameNode } from '../src/app/workflows/document/commands';
+import { addNode, connectAddressed, freshNodeId, insertNode, nodeTemplate, renameNode, replaceNode } from '../src/app/workflows/document/commands';
+import { rootBlock } from './workflow-root';
 import { copyFragment, fragmentOwnsField, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
 import { blockField, encodeField, nodeField, renameAddress } from '../src/app/workflows/document/fields';
 import { nodePresentation, putNote, setNodePresentation } from '../src/app/workflows/document/geometry';
-import { blockAt, sameDocument, type WorkflowDocument } from '../src/app/workflows/document/model';
+import { blockAt, sameDocument, unavailableKinds, type WorkflowDocument } from '../src/app/workflows/document/model';
 import { renameSchemaField, schemaConsumers, schemaPropertyAddress } from '../src/app/workflows/document/schema';
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { LayoutSession } from '../src/app/workflows/ui/editor/layout';
 import { exampleSource } from './workflow-fixtures';
 
-const fixture = (): WorkflowDocument => ({ description: 'Visual document fixture', block: emptyBlock() });
+const fixture = (): WorkflowDocument => ({ description: 'Visual document fixture', block: rootBlock() });
 const deferred = <T>() => { let resolve!: (value: T) => void; let reject!: (reason: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 
 describe('qualified scene ownership', () => {
@@ -19,11 +20,55 @@ describe('qualified scene ownership', () => {
   it('moves a container without changing child-relative geometry or lexical ownership', () => {
     const path = [{ node: 'repeat' }];
     let document = addNode(fixture(), [], 'loop', 'repeat');
-    document = setNodePresentation(document, path, 'done', { position: { x: 100, y: 180 } });
+    document = setNodePresentation(document, path, 'repeat_start', { position: { x: 100, y: 180 } });
     const moved = setNodePresentation(document, [], 'repeat', { position: { x: 700, y: 300 } });
-    expect(nodePresentation(moved, path, 'done')?.position).toEqual({ x: 100, y: 180 });
+    expect(nodePresentation(moved, path, 'repeat_start')?.position).toEqual({ x: 100, y: 180 });
     expect(moved.block).toBe(document.block);
-    expect(() => connectAddressed(moved, { block: [], node: 'repeat', port: 'satisfied' }, { block: path, node: 'done' })).toThrow('cross_scope');
+    expect(() => connectAddressed(moved, { block: [], node: 'repeat', port: 'next' }, { block: path, node: 'repeat_start' })).toThrow('cross_scope');
+  });
+});
+
+describe('Dify Loop and Iteration bodies', () => {
+  const loopWith = (document: WorkflowDocument) => {
+    let next = addNode(addNode(document, [], 'model', 'first'), [], 'loop', 'repeat');
+    const repeat = next.block.nodes.repeat;
+    if (repeat.type !== 'loop') throw new Error('loop fixture');
+    next = replaceNode(next, [], 'repeat', { ...repeat, loop_variables: [{ label: 'text', var_type: 'string', value: { type: 'reference', path: ['first', 'text'] } }],
+      break_condition: { type: 'boolean', value: { type: 'reference', path: ['inner'] } } });
+    next = addNode(next, [{ node: 'repeat' }], 'tool', 'inner');
+    return replaceNode(next, [{ node: 'repeat' }], 'inner', { type: 'tool', selector: { origin: 'builtin', name: 'read' }, result: { type: 'text' },
+      arguments: { type: 'object', fields: { path: { type: 'reference', path: ['first', 'text'] }, text: { type: 'reference', path: ['repeat', 'text'] } } } });
+  };
+
+  it('offers each block only the kinds it can hold', () => {
+    let document = addNode(addNode(fixture(), [], 'loop', 'repeat'), [], 'iteration', 'each');
+    expect(unavailableKinds(document, [])).toEqual(['loop_end', 'assigner']);
+    expect(unavailableKinds(document, [{ node: 'repeat' }])).toEqual(['return']);
+    expect(unavailableKinds(document, [{ node: 'each' }])).toEqual(['return', 'loop_end', 'assigner']);
+    document = addNode(document, [{ node: 'repeat' }], 'assigner', 'save');
+    expect(document.block.nodes.repeat).toMatchObject({ body: { nodes: { repeat_start: { type: 'start' }, save: { type: 'assigner', items: [] } } } });
+  });
+
+  it('renames a producer through the bodies that read it, and a body node through its container', () => {
+    const document = loopWith(fixture());
+    const outer = renameNode(document, [], 'first', 'draft');
+    expect(outer.block.nodes.repeat).toMatchObject({ loop_variables: [{ value: { path: ['draft', 'text'] } }],
+      body: { nodes: { inner: { arguments: { fields: { path: { path: ['draft', 'text'] } } } } } } });
+    const container = renameNode(document, [], 'repeat', 'refine');
+    expect(blockAt(container, [{ node: 'refine' }])!.nodes.inner).toMatchObject({ arguments: { fields: { text: { path: ['refine', 'text'] } } } });
+    const inner = renameNode(document, [{ node: 'repeat' }], 'inner', 'check');
+    expect(inner.block.nodes.repeat).toMatchObject({ break_condition: { value: { path: ['check'] } } });
+    // As Dify's ids, a body never hides a node around it, nor the reverse.
+    expect(() => renameNode(document, [{ node: 'repeat' }], 'inner', 'first')).toThrow('duplicate_identifier');
+    expect(() => renameNode(document, [], 'first', 'inner')).toThrow('duplicate_identifier');
+    expect(freshNodeId(document, [{ node: 'repeat' }], 'first')).toBe('first_2');
+  });
+
+  it('copies a Loop whose body reads its own variables without crossing scopes', () => {
+    const document = loopWith(fixture());
+    const pasted = pasteFragment(document, 'owner', [], parseFragment(copyFragment(document, 'owner', [], ['first', 'repeat']))).document;
+    expect(pasted.block.nodes.repeat_copy).toMatchObject({ loop_variables: [{ value: { path: ['first_copy', 'text'] } }],
+      body: { nodes: { inner: { arguments: { fields: { path: { path: ['first_copy', 'text'] }, text: { path: ['repeat_copy', 'text'] } } } } } } });
   });
 });
 
@@ -34,7 +79,7 @@ describe('atomic insertion and bounded clipboard', () => {
     document.block.edges = [{ from: 'read', to: 'done' }];
     const next = insertNode(document, [], 0, 'model', 'summarize');
     expect(next.block.edges).toEqual([{ from: 'read', to: 'summarize' }, { from: 'summarize', to: 'done' }]);
-    for (const kind of ['branch', 'loop', 'return'] as const) expect(() => insertNode(document, [], 0, kind, kind)).toThrow('unsupported_insertion');
+    for (const kind of ['branch', 'loop_end', 'return'] as const) expect(() => insertNode(document, [], 0, kind, kind)).toThrow('unsupported_insertion');
     expect(document.block.edges).toEqual([{ from: 'read', to: 'done' }]);
     expect(Object.keys(document.block.nodes)).toEqual(['read', 'done']);
   });
@@ -44,13 +89,13 @@ describe('atomic insertion and bounded clipboard', () => {
     document = addNode(document, [], 'loop', 'repeat');
     const repeat = document.block.nodes.repeat;
     if (repeat.type !== 'loop') throw new Error('loop fixture');
-    repeat.input = { type: 'object', fields: { text: { type: 'reference', path: ['first'] } } };
+    repeat.loop_variables = [{ label: 'text', var_type: 'string', value: { type: 'reference', path: ['first', 'text'] } }];
     document = setNodePresentation(document, [], 'repeat', { title: 'Refine', position: { x: 500, y: 100 } });
     document = putNote(document, { id: 'explain', block: [{ node: 'repeat' }], text: '**Private**', theme: 'blue', position: { x: 32, y: 300 }, dimensions: { width: 240, height: 120 } });
     const fragment = parseFragment(copyFragment(document, 'file-owner', [], ['first', 'repeat']));
     const next = pasteFragment(document, 'file-owner', [], fragment).document;
-    expect(next.block.nodes.repeat_copy).toMatchObject({ input: { fields: { text: { path: ['first_copy'] } } } });
-    expect(blockAt(next, [{ node: 'repeat_copy' }])!.nodes.done).toEqual(repeat.body.nodes.done);
+    expect(next.block.nodes.repeat_copy).toMatchObject({ loop_variables: [{ value: { path: ['first_copy', 'text'] } }] });
+    expect(blockAt(next, [{ node: 'repeat_copy' }])!.nodes.repeat_start).toEqual(repeat.body.nodes.repeat_start);
     expect(nodePresentation(next, [], 'repeat_copy')).toMatchObject({ title: 'Refine', position: { x: 532, y: 132 } });
     expect(next.editor?.notes).toHaveLength(2);
     expect(next.editor?.notes?.[1]).toMatchObject({ id: 'explain_2', block: [{ node: 'repeat_copy' }], text: '**Private**', position: { x: 32, y: 300 } });
@@ -131,18 +176,6 @@ describe('schema contract identity', () => {
     expect(() => renameSchemaField(separate, blockField([], ['input']), 'from', 'to')).not.toThrow();
   });
 
-  it('renames body outputs in Return constructions, post-body result scope and parent aggregate consumers', () => {
-    let document = addNode(fixture(), [], 'loop', 'repeat');
-    const repeat = document.block.nodes.repeat;
-    if (repeat.type !== 'loop') throw new Error('loop fixture');
-    repeat.body.output = { type: 'object', properties: { ready: { type: 'boolean' } }, required: ['ready'], additionalProperties: false };
-    repeat.body.nodes.done = { type: 'return', output: { type: 'object', fields: { ready: { type: 'literal', value: true } } } };
-    repeat.until = { type: 'boolean', value: { type: 'reference', path: ['result', 'ready'] } };
-    document.block.nodes.done = { type: 'return', output: { type: 'reference', path: ['repeat', 'result', 'ready'] } };
-    document = renameSchemaField(document, blockField([{ node: 'repeat' }], ['output']), 'ready', 'accepted');
-    expect(document.block.nodes.repeat).toMatchObject({ until: { value: { path: ['result', 'accepted'] } }, body: { nodes: { done: { output: { fields: { accepted: { value: true } } } } } } });
-    expect(document.block.nodes.done).toMatchObject({ output: { path: ['repeat', 'result', 'accepted'] } });
-  });
 });
 
 describe('organize generation and native capacity', () => {

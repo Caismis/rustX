@@ -1,4 +1,4 @@
-//! The shared root/Loop block executor. Native children settle inline.
+//! The shared root and body executor. Native children settle inline.
 use super::read_model::{WorkflowInstanceView, WorkflowState};
 use super::{
     BTreeMap, MAX_VALUE_BYTES, MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_MODEL_CALLS, MAX_WORKFLOW_STEPS,
@@ -21,15 +21,34 @@ pub(super) struct IterationFrontierHook {
     pub release: tokio::sync::oneshot::Receiver<()>,
 }
 
-pub(super) fn loop_result_schema(body: &Value) -> Value {
-    serde_json::json!({"type":"object", "properties": {
-        "status":{"type":"string","enum":["satisfied","exhausted"]},
-        "iterations":{"type":"integer"}, "result":body
-    }, "required":["status","iterations","result"], "additionalProperties":false})
+/// An Iteration's value, as Dify's `output`: the rounds' values in order. A
+/// round left out by `continue_on_error` is `null`, so its items are open;
+/// flattening joins rounds that produced arrays.
+pub(super) fn iteration_result_schema(
+    produced: Option<&Value>,
+    mode: super::WorkflowIterationErrorMode,
+    flatten: bool,
+) -> Value {
+    let item = produced.and_then(|produced| {
+        if flatten && super::schema_type(produced) == Some("array") {
+            produced.get("items").cloned()
+        } else {
+            Some(produced.clone())
+        }
+    });
+    let array = match item {
+        Some(item) if mode != super::WorkflowIterationErrorMode::ContinueOnError => {
+            serde_json::json!({"type": "array", "items": item})
+        }
+        _ => serde_json::json!({"type": "array"}),
+    };
+    serde_json::json!({"type": "object", "properties": {"output": array}, "required": ["output"], "additionalProperties": false})
 }
 
-/// Deliberate worst-case expansion, including iteration admission steps. Each
+/// Deliberate worst-case expansion, including round admission steps. Each
 /// recursion is checked before multiplication, so overflow is not a bound.
+/// An Iteration's rounds follow its array, so only the run's own limits
+/// bound a program that has one.
 pub(super) fn static_execution_bound(
     block: &WorkflowBlockProgram,
 ) -> Result<(usize, usize, usize), super::WorkflowCompileError> {
@@ -44,14 +63,22 @@ pub(super) fn static_execution_bound(
                 model_calls += 1 + model.retry.map_or(0, |retry| retry.max_retries as usize);
             }
             WorkflowNodeProgram::Loop {
-                body,
-                max_iterations,
-                ..
+                body, loop_count, ..
             } => {
                 let (child_steps, child_agents, child_models) = static_execution_bound(body)?;
-                steps += (child_steps + 1) * *max_iterations as usize;
-                agents += child_agents * *max_iterations as usize;
-                model_calls += child_models * *max_iterations as usize;
+                steps += (child_steps + 1) * *loop_count as usize;
+                agents += child_agents * *loop_count as usize;
+                model_calls += child_models * *loop_count as usize;
+            }
+            WorkflowNodeProgram::Iteration { body, .. } => {
+                let (_, child_agents, child_models) = static_execution_bound(body)?;
+                steps = MAX_WORKFLOW_STEPS;
+                if child_agents > 0 {
+                    agents = MAX_WORKFLOW_AGENTS;
+                }
+                if child_models > 0 {
+                    model_calls = MAX_WORKFLOW_MODEL_CALLS;
+                }
             }
             _ => {}
         }
@@ -149,17 +176,26 @@ pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
             WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.value_schema()),
             WorkflowNodeProgram::Model(model) => schema_value_bound(&model.output.schema()),
             WorkflowNodeProgram::Tool { result, .. } => schema_value_bound(&result.schema()),
-            WorkflowNodeProgram::Start | WorkflowNodeProgram::Branch { .. } => 0,
+            WorkflowNodeProgram::Start
+            | WorkflowNodeProgram::Branch { .. }
+            | WorkflowNodeProgram::LoopEnd
+            | WorkflowNodeProgram::Assigner { .. } => 0,
             WorkflowNodeProgram::Loop {
                 body,
                 output_schema,
                 ..
             } => {
-                // One live body, one explicit carry plus transfer overlap; no history.
-                static_retained_bound(body)
-                    + 2 * schema_value_bound(&body.input_schema)
-                    + schema_value_bound(output_schema)
+                // One live round, the variables it started from and the Loop's value.
+                static_retained_bound(body) + 2 * schema_value_bound(output_schema)
             }
+            WorkflowNodeProgram::Iteration {
+                body,
+                parallel,
+                output_schema,
+                ..
+            } => (static_retained_bound(body) + MAX_VALUE_BYTES)
+                .saturating_mul(*parallel as usize)
+                .saturating_add(schema_value_bound(output_schema)),
             WorkflowNodeProgram::Review { .. } => {
                 schema_value_bound(&super::review::result_schema())
             }
@@ -250,20 +286,89 @@ pub(super) struct BlockOutput<'a> {
     _reservation: LocalReservation<'a>,
 }
 
+/// A settled block: its variables, its Returns' values and whether an Exit
+/// Loop node ran. The reservation holds the block's own locals.
+pub(super) struct GraphOutcome<'a> {
+    values: imbl::OrdMap<String, Value>,
+    returned: BTreeMap<String, Value>,
+    ended: bool,
+    _reservation: LocalReservation<'a>,
+}
+
 impl WorkflowRuntime {
-    /// Every lexical scope, including root, enters and exits here. Boxed only
-    /// because fixed nested blocks recursively invoke the same executor.
-    pub(super) fn execute_block<'a>(
+    /// The root block: the workflow's input in, its Return's output out.
+    pub(super) async fn execute_block<'a>(
         &'a self,
         run: &'a WorkflowRun,
         block: &'a WorkflowBlockProgram,
         context: &'a crate::runtime::subagent::NativeExecutionContext,
-        input: Value,
+        mut input: Value,
+        invocations: Vec<u32>,
+        cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
+    ) -> Result<BlockOutput<'a>, WorkflowRunError> {
+        super::apply_schema_defaults(&block.input_schema, &mut input);
+        validate_commit(&block.input_schema, &input)?;
+        let mut reservation = LocalReservation::new(run);
+        reservation.retain(&input)?;
+        let graph = self
+            .execute_graph(
+                run,
+                block,
+                context,
+                &input,
+                imbl::OrdMap::new(),
+                invocations,
+                cancellation,
+            )
+            .await?;
+        if graph.returned.is_empty() {
+            return Err(WorkflowRunError::InvalidProgram(
+                "no active Return node".into(),
+            ));
+        }
+        let mut result = serde_json::Map::new();
+        for value in graph.returned.values() {
+            let object = value.as_object().ok_or_else(|| {
+                WorkflowRunError::InvalidValue("Return output must be an object".into())
+            })?;
+            for (key, value) in object {
+                if result.get(key).is_some_and(|previous| previous != value) {
+                    return Err(WorkflowRunError::InvalidValue(format!(
+                        "active Return nodes conflict on output {key:?}"
+                    )));
+                }
+                result.insert(key.clone(), value.clone());
+            }
+        }
+        let value = Value::Object(result);
+        validate_commit(&block.output_schema, &value)?;
+        let mut exported = LocalReservation::new(run);
+        exported.retain(&value)?;
+        Ok(BlockOutput {
+            value,
+            _reservation: exported,
+        })
+    }
+
+    /// Every block instance, root or body round, enters and exits here.
+    /// Boxed only because bodies recursively invoke the same executor. A body
+    /// starts from the variables around it and ends with every variable it
+    /// set; its own locals retire with the returned reservation.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute_graph<'a>(
+        &'a self,
+        run: &'a WorkflowRun,
+        block: &'a WorkflowBlockProgram,
+        context: &'a crate::runtime::subagent::NativeExecutionContext,
+        input: &'a Value,
+        values: imbl::OrdMap<String, Value>,
         invocations: Vec<u32>,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<Output = Result<BlockOutput<'a>, WorkflowRunError>> + Send + 'a,
+            dyn std::future::Future<Output = Result<GraphOutcome<'a>, WorkflowRunError>>
+                + Send
+                + 'a,
         >,
     > {
         Box::pin(async move {
@@ -288,6 +393,7 @@ impl WorkflowRuntime {
                 &instance,
                 context,
                 input,
+                values,
                 cancellation,
             ))
             .await;
@@ -313,21 +419,19 @@ impl WorkflowRuntime {
         })
     }
 
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     async fn execute_block_body<'a>(
         &'a self,
         run: &'a WorkflowRun,
         block: &'a WorkflowBlockProgram,
         instance: &WorkflowBlockInstance,
         context: &'a crate::runtime::subagent::NativeExecutionContext,
-        mut input: Value,
+        input: &'a Value,
+        mut values: imbl::OrdMap<String, Value>,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<BlockOutput<'a>, WorkflowRunError> {
+    ) -> Result<GraphOutcome<'a>, WorkflowRunError> {
         use futures_util::{StreamExt, stream::FuturesUnordered};
-        super::apply_schema_defaults(&block.input_schema, &mut input);
-        validate_commit(&block.input_schema, &input)?;
         let mut reservation = LocalReservation::new(run);
-        reservation.retain(&input)?;
-        let mut values = imbl::OrdMap::new();
         let mut waiting = block
             .nodes
             .keys()
@@ -341,12 +445,12 @@ impl WorkflowRuntime {
         let mut pending = FuturesUnordered::new();
         let mut failures = BTreeMap::new();
         let mut returned = BTreeMap::new();
+        let mut ended = false;
         loop {
             while failures.is_empty()
                 && let Some(id) = ready.pop_first()
             {
                 let scope = values.clone();
-                let input = &input;
                 pending.push(async move {
                     let result = self
                         .execute_node(
@@ -375,6 +479,8 @@ impl WorkflowRuntime {
                         value,
                         returned: result,
                         port,
+                        ended: exit,
+                        writes,
                         _reservation,
                     } = output;
                     reservation.absorb(_reservation);
@@ -383,6 +489,15 @@ impl WorkflowRuntime {
                     }
                     if let Some(value) = result {
                         returned.insert(id.clone(), value);
+                    }
+                    ended |= exit;
+                    // Each write lands on the variable as it is now, so
+                    // parallel Assigners keep each other's other writes;
+                    // the last write to one variable wins, as in Dify.
+                    for (owner, label, value) in writes {
+                        if let Some(Value::Object(variables)) = values.get_mut(&owner) {
+                            variables.insert(label, value);
+                        }
                     }
                     // Resolve every edge, including inactive outcomes. A join is
                     // admitted once all incoming paths are settled, and runs once
@@ -418,33 +533,77 @@ impl WorkflowRuntime {
         if cancellation.is_cancelled() {
             return Err(WorkflowRunError::from_cancellation(cancellation));
         }
-        if returned.is_empty() {
-            return Err(WorkflowRunError::InvalidProgram(
-                "no active Return node".into(),
-            ));
-        }
-        let mut result = serde_json::Map::new();
-        for value in returned.values() {
-            let object = value.as_object().ok_or_else(|| {
-                WorkflowRunError::InvalidValue("Return output must be an object".into())
-            })?;
-            for (key, value) in object {
-                if result.get(key).is_some_and(|previous| previous != value) {
-                    return Err(WorkflowRunError::InvalidValue(format!(
-                        "active Return nodes conflict on output {key:?}"
-                    )));
-                }
-                result.insert(key.clone(), value.clone());
-            }
-        }
-        let value = Value::Object(result);
-        validate_commit(&block.output_schema, &value)?;
-        let mut exported = LocalReservation::new(run);
-        exported.retain(&value)?;
-        Ok(BlockOutput {
-            value,
-            _reservation: exported,
+        Ok(GraphOutcome {
+            values,
+            returned,
+            ended,
+            _reservation: reservation,
         })
+    }
+
+    /// Test-only pause before round `round` is admitted.
+    #[cfg(test)]
+    async fn round_frontier(&self, round: u32) {
+        let hook = {
+            let mut slot = self.iteration_frontier.lock().expect("iteration frontier");
+            if slot.as_ref().is_some_and(|hook| hook.iteration == round) {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        if let Some(hook) = hook {
+            let _ = hook.entered.send(());
+            let _ = hook.release.await;
+        }
+    }
+
+    /// Admit one Loop or Iteration round: one step, under the same lock
+    /// that orders every other admission, then its block instance.
+    fn admit_round(
+        &self,
+        run: &WorkflowRun,
+        instance: &WorkflowBlockInstance,
+        node: &WorkflowNodeInstance,
+        body: &WorkflowBlockProgram,
+        round: u32,
+        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+    ) -> Result<(WorkflowBlockInstance, Vec<u32>), WorkflowRunError> {
+        {
+            let mut budgets = run.budgets.lock().expect("run budgets");
+            budgets.admit(run.program.execution_bound, false, false, cancellation)?;
+            self.read_model.update(&run.run_id, |view| {
+                view.steps_consumed = budgets.steps;
+                view.agents_consumed = budgets.agents;
+                view.model_calls_consumed = budgets.model_calls;
+                if let Some(row) = view
+                    .instances
+                    .iter_mut()
+                    .find(|row| row.block == node.block && row.node.as_ref() == Some(&node.node))
+                {
+                    row.iteration = Some(round);
+                }
+            });
+        }
+        let mut invocations = instance.invocations.clone();
+        invocations.push(round);
+        let body_instance = WorkflowBlockInstance {
+            run: run.run_id.clone(),
+            definition: WorkflowDefinitionPath {
+                workflow_id: run.program.id.clone(),
+                blocks: body.path.clone(),
+            },
+            invocations: invocations.clone(),
+        };
+        self.emit_observability(
+            run,
+            RuntimeEvent::WorkflowLoopIterationAdmitted {
+                node: node.clone(),
+                body: body_instance.clone(),
+                iteration: round,
+            },
+        );
+        Ok((body_instance, invocations))
     }
 
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
@@ -454,13 +613,15 @@ impl WorkflowRuntime {
         block: &'a WorkflowBlockProgram,
         instance: &WorkflowBlockInstance,
         context: &'a crate::runtime::subagent::NativeExecutionContext,
-        input: &Value,
+        input: &'a Value,
         mut values: imbl::OrdMap<String, Value>,
         node_id: &str,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<NodeCompletion<'a>, WorkflowRunError> {
         let mut reservation = LocalReservation::new(run);
         let mut selected = WorkflowPort::Next;
+        let mut ended = false;
+        let mut writes = Vec::new();
         context.check_workflow_deadline(cancellation);
         let node = &block.nodes[node_id];
         let node_instance = WorkflowNodeInstance {
@@ -534,86 +695,125 @@ impl WorkflowRuntime {
             }
             match node {
                 WorkflowNodeProgram::Start => Ok(None),
-                WorkflowNodeProgram::Loop { input: initial, body, until, carry, max_iterations, output_schema } => {
-                    let mut carried = evaluate_value(initial, &input, &values)?;
-                    let mut carried_reservation = LocalReservation::new(run);
-                    carried_reservation.retain(&carried)?;
-                    for iteration in 1..=*max_iterations {
-                        validate_commit(&body.input_schema, &carried)?;
+                WorkflowNodeProgram::Loop { loop_variables, break_condition, loop_count, body, output_schema } => {
+                    let mut variables = serde_json::Map::new();
+                    for variable in loop_variables {
+                        variables.insert(variable.label.clone(), evaluate_value(&variable.value, input, &values)?);
+                    }
+                    let mut current = Value::Object(variables);
+                    validate_commit(output_schema, &current)?;
+                    let mut carried = LocalReservation::new(run);
+                    carried.retain(&current)?;
+                    values.insert(node_id.to_owned(), current.clone());
+                    // As Dify, a condition on what no round has set yet does
+                    // not break before the first round.
+                    let breaks = |values: &imbl::OrdMap<String, Value>| break_condition.as_ref().map_or(Ok(false), |condition| evaluate_predicate(condition, input, values));
+                    let mut status = breaks(&values).unwrap_or(false).then_some(super::WorkflowLoopExit::LoopBreak);
+                    let mut round = 0;
+                    while status.is_none() {
+                        round += 1;
                         #[cfg(test)]
-                        {
-                            let hook = {
-                                let mut slot = self.iteration_frontier.lock().expect("iteration frontier");
-                                if slot.as_ref().is_some_and(|hook| hook.iteration == iteration) { slot.take() } else { None }
-                            };
-                            if let Some(hook) = hook {
-                                let _ = hook.entered.send(());
-                                let _ = hook.release.await;
-                            }
+                        self.round_frontier(round).await;
+                        let (body_instance, invocations) = self.admit_round(run, instance, &node_instance, body, round, cancellation)?;
+                        let settled = self.execute_graph(run, body, context, input, values.clone(), invocations, cancellation).await;
+                        self.emit_observability(run, RuntimeEvent::WorkflowLoopIterationSettled {
+                            node: node_instance.clone(), body: body_instance, iteration: round, outcome: outcome(&settled),
+                        });
+                        let graph = settled?;
+                        current = graph.values.get(node_id).cloned().ok_or_else(|| WorkflowRunError::InvalidProgram("Loop variables left the round".into()))?;
+                        validate_commit(output_schema, &current)?;
+                        let mut next = LocalReservation::new(run);
+                        next.retain(&current)?;
+                        carried = next;
+                        if graph.ended || breaks(&graph.values)? {
+                            status = Some(super::WorkflowLoopExit::LoopBreak);
+                        } else if round == *loop_count {
+                            status = Some(super::WorkflowLoopExit::LoopCompleted);
                         }
-                        // Reservation, cancellation observation, admission and
-                        // consumption are one synchronous decision. No failed
-                        // reservation or detached continuation can dispatch.
-                        {
-                            let mut budgets = run.budgets.lock().expect("run budgets");
-                            budgets.admit(run.program.execution_bound, false, false, cancellation)?;
-                            self.read_model.update(&run.run_id, |view| {
-                                view.steps_consumed = budgets.steps;
-                                view.agents_consumed = budgets.agents;
-                                view.model_calls_consumed = budgets.model_calls;
-                                if let Some(row) = view.instances.iter_mut().find(|row| row.block == node_instance.block && row.node.as_ref() == Some(&node_instance.node)) {
-                                    row.iteration = Some(iteration);
-                                }
+                        // The round's own locals retire here; its variables carry on.
+                        drop(graph);
+                        values.insert(node_id.to_owned(), current.clone());
+                    }
+                    let status = status.expect("a Loop ends with a reason");
+                    reservation.retain(&current)?;
+                    drop(carried);
+                    if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
+                    self.emit_observability(run, RuntimeEvent::WorkflowLoopExited { node: node_instance.clone(), iterations: round, status });
+                    self.read_model.node(&node_instance, |view| view.loop_exit = Some(status));
+                    Ok(None)
+                }
+                WorkflowNodeProgram::Iteration { iterator, output, parallel, error_handle_mode, flatten_output, body, output_schema } => {
+                    use futures_util::{StreamExt, stream::FuturesUnordered};
+                    let Value::Array(items) = evaluate_value(iterator, input, &values)? else {
+                        return Err(WorkflowRunError::InvalidValue("Iteration input must be an array".into()));
+                    };
+                    let mut rounds = FuturesUnordered::new();
+                    let mut produced = BTreeMap::new();
+                    let mut failure = None;
+                    let mut next = 0;
+                    loop {
+                        while failure.is_none() && rounds.len() < *parallel as usize && next < items.len() {
+                            let index = next;
+                            next += 1;
+                            let round = u32::try_from(index + 1).map_err(|_| WorkflowRunError::LimitExceeded(super::WorkflowLimit::Steps))?;
+                            #[cfg(test)]
+                            self.round_frontier(round).await;
+                            let (body_instance, invocations) = match self.admit_round(run, instance, &node_instance, body, round, cancellation) {
+                                Ok(admitted) => admitted,
+                                Err(error) => { failure = Some(error); break; }
+                            };
+                            let mut scope = values.clone();
+                            scope.insert(node_id.to_owned(), serde_json::json!({"item": items[index], "index": index}));
+                            rounds.push(async move {
+                                let settled = self.execute_graph(run, body, context, input, scope, invocations, cancellation).await;
+                                let outcome = outcome(&settled);
+                                (index, body_instance, outcome, settled.and_then(|graph| evaluate_value(output, input, &graph.values)))
                             });
                         }
-                        let mut invocations = instance.invocations.clone();
-                        invocations.push(iteration);
-                        let body_instance = WorkflowBlockInstance {
-                            run: run.run_id.clone(),
-                            definition: WorkflowDefinitionPath { workflow_id: run.program.id.clone(), blocks: body.path.clone() },
-                            invocations: invocations.clone(),
-                        };
-                        self.emit_observability(run, RuntimeEvent::WorkflowLoopIterationAdmitted {
-                            node: node_instance.clone(), body: body_instance.clone(), iteration,
-                        });
-                        let settled = self.execute_block(run, body, context, carried, invocations, cancellation).await;
+                        let Some((index, body_instance, settled, result)) = rounds.next().await else { break };
                         self.emit_observability(run, RuntimeEvent::WorkflowLoopIterationSettled {
-                            node: node_instance.clone(), body: body_instance, iteration, outcome: outcome(&settled),
+                            node: node_instance.clone(), body: body_instance, iteration: u32::try_from(index + 1).unwrap_or(u32::MAX), outcome: settled,
                         });
-                        // The same block engine has validated/exported the body
-                        // output and finalized every native owner before returning.
-                        drop(carried_reservation);
-                        let BlockOutput { value, _reservation: _result_reservation } = settled?;
-                        let scope = [("result".to_owned(), value)].into_iter().collect::<imbl::OrdMap<String, Value>>();
-                        let satisfied = evaluate_predicate(until, &Value::Null, &scope)?;
-                        if satisfied || iteration == *max_iterations {
-                            let status = if satisfied { super::WorkflowLoopExit::Satisfied } else { super::WorkflowLoopExit::Exhausted };
-                            let value = serde_json::json!({"status":status,"iterations":iteration,"result":scope["result"]});
-                            validate_commit(output_schema, &value)?;
-                            reservation.retain(&value)?;
-                            // Exit commits only the structural result, never a bare body value.
-                            if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
-                            values.insert(node_id.to_owned(), value);
-                            self.emit_observability(run, RuntimeEvent::WorkflowLoopExited { node: node_instance.clone(), iterations: iteration, status });
-                            self.read_model.node(&node_instance, |view| view.loop_exit = Some(status));
-                            let port = match status {
-                                super::WorkflowLoopExit::Satisfied => WorkflowPort::Satisfied,
-                                super::WorkflowLoopExit::Exhausted => WorkflowPort::Exhausted,
-                            };
-                            selected = port;
-                            return Ok(None);
+                        match result {
+                            Ok(value) => { produced.insert(index, value); }
+                            Err(error) if round_failed(&error) && !cancellation.is_cancelled() => match error_handle_mode {
+                                super::WorkflowIterationErrorMode::Terminated => { failure.get_or_insert(error); }
+                                super::WorkflowIterationErrorMode::ContinueOnError => { produced.insert(index, Value::Null); }
+                                super::WorkflowIterationErrorMode::RemoveAbnormalOutput => {}
+                            },
+                            Err(error) => { failure.get_or_insert(error); }
                         }
-                        let next = evaluate_value(carry, &Value::Null, &scope)?;
-                        validate_commit(&body.input_schema, &next)?;
-                        let mut next_reservation = LocalReservation::new(run);
-                        next_reservation.retain(&next)?;
-                        if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
-                        // Atomic carry commit after full validation and byte reservation.
-                        carried = next;
-                        carried_reservation = next_reservation;
-                        // Private body locals are already retired; only this carry survives.
                     }
-                    unreachable!("compiled positive finite Loop")
+                    if let Some(error) = failure { return Err(error); }
+                    let outputs = flatten(produced.into_values().collect(), *flatten_output);
+                    let value = serde_json::json!({"output": outputs});
+                    validate_commit(output_schema, &value)?;
+                    reservation.retain(&value)?;
+                    if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
+                    values.insert(node_id.to_owned(), value);
+                    Ok(None)
+                }
+                WorkflowNodeProgram::LoopEnd => {
+                    ended = true;
+                    Ok(None)
+                }
+                WorkflowNodeProgram::Assigner { items, types } => {
+                    for (item, var_type) in items.iter().zip(types) {
+                        let [owner, label] = item.variable.as_slice() else {
+                            return Err(WorkflowRunError::InvalidProgram("assigned variable".into()));
+                        };
+                        // Earlier writes of this node are already visible to later ones.
+                        let current = values.get(owner).and_then(|variables| variables.get(label)).cloned()
+                            .ok_or_else(|| WorkflowRunError::InvalidValue(format!("Loop variable {label:?} is missing")))?;
+                        let operand = item.value.as_ref().map(|value| evaluate_value(value, input, &values)).transpose()?;
+                        let value = assign(item.operation, *var_type, &current, operand)?;
+                        validate_commit(&var_type.schema(), &value)?;
+                        if let Some(Value::Object(variables)) = values.get_mut(owner) {
+                            variables.insert(label.clone(), value.clone());
+                        }
+                        writes.push((owner.clone(), label.clone(), value));
+                    }
+                    Ok(None)
                 }
                 WorkflowNodeProgram::Review {
                     subject,
@@ -822,7 +1022,7 @@ impl WorkflowRuntime {
         .await
         .and_then(|returned| {
             if let Some(value) = &returned { reservation.retain(value)?; }
-            Ok(NodeCompletion { value: values.remove(node_id), returned, port: selected, _reservation: reservation })
+            Ok(NodeCompletion { value: values.remove(node_id), returned, port: selected, ended, writes, _reservation: reservation })
         });
         if effect_started && let Some(effects) = &run.effects {
             effects.finish(&node_instance)?;
@@ -849,7 +1049,120 @@ struct NodeCompletion<'a> {
     value: Option<Value>,
     returned: Option<Value>,
     port: WorkflowPort,
+    /// An Exit Loop node ran.
+    ended: bool,
+    /// Loop variables an Assigner wrote: owner, label and value.
+    writes: Vec<(String, String, Value)>,
     _reservation: LocalReservation<'a>,
+}
+
+/// Whether an Iteration's error mode may handle a round's failure: a node
+/// failed or timed out, never the run's cancellation, deadline or limits.
+fn round_failed(error: &WorkflowRunError) -> bool {
+    !matches!(
+        error,
+        WorkflowRunError::LimitExceeded(_)
+            | WorkflowRunError::Deadline(_)
+            | WorkflowRunError::Cancelled(_)
+    ) && matches!(
+        error.execution_status(),
+        crate::tools::types::ToolExecutionStatus::Failed { .. }
+            | crate::tools::types::ToolExecutionStatus::TimedOut
+    )
+}
+
+/// As Dify: when every round that produced a value produced an array,
+/// their items form one array.
+fn flatten(outputs: Vec<Value>, flatten: bool) -> Vec<Value> {
+    let produced = || outputs.iter().filter(|output| !output.is_null());
+    if !flatten || produced().next().is_none() || !produced().all(Value::is_array) {
+        return outputs;
+    }
+    outputs
+        .into_iter()
+        .flat_map(|output| match output {
+            Value::Array(items) => items,
+            Value::Null => Vec::new(),
+            other => vec![other],
+        })
+        .collect()
+}
+
+/// One Variable Assigner write, as Dify's operations.
+fn assign(
+    operation: super::WorkflowWriteMode,
+    var_type: super::WorkflowVarType,
+    current: &Value,
+    operand: Option<Value>,
+) -> Result<Value, WorkflowRunError> {
+    use super::WorkflowWriteMode as Mode;
+    let number = |value: &Value| {
+        value
+            .as_f64()
+            .ok_or_else(|| WorkflowRunError::InvalidValue("arithmetic needs numbers".into()))
+    };
+    let arithmetic = |apply: fn(f64, f64) -> Option<f64>| -> Result<Value, WorkflowRunError> {
+        let operand = operand
+            .as_ref()
+            .ok_or_else(|| WorkflowRunError::InvalidProgram("operand".into()))?;
+        let result = apply(number(current)?, number(operand)?)
+            .filter(|result| result.is_finite())
+            .ok_or_else(|| {
+                WorkflowRunError::InvalidValue("the arithmetic has no finite result".into())
+            })?;
+        // Keep integers integral, as JSON numbers.
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(if result.fract() == 0.0 && result.abs() < 9.0e15 {
+            serde_json::json!(result as i64)
+        } else {
+            serde_json::json!(result)
+        })
+    };
+    let array = || match current.clone() {
+        Value::Array(items) => Ok(items),
+        _ => Err(WorkflowRunError::InvalidValue(
+            "the variable is not an array".into(),
+        )),
+    };
+    Ok(match operation {
+        Mode::Overwrite | Mode::Set => {
+            operand.ok_or_else(|| WorkflowRunError::InvalidProgram("operand".into()))?
+        }
+        Mode::Clear => var_type.empty(),
+        Mode::Append => {
+            let mut items = array()?;
+            items.push(operand.ok_or_else(|| WorkflowRunError::InvalidProgram("operand".into()))?);
+            Value::Array(items)
+        }
+        Mode::Extend => {
+            let mut items = array()?;
+            match operand {
+                Some(Value::Array(more)) => items.extend(more),
+                _ => {
+                    return Err(WorkflowRunError::InvalidValue(
+                        "extend needs an array".into(),
+                    ));
+                }
+            }
+            Value::Array(items)
+        }
+        Mode::RemoveFirst => {
+            let mut items = array()?;
+            if !items.is_empty() {
+                items.remove(0);
+            }
+            Value::Array(items)
+        }
+        Mode::RemoveLast => {
+            let mut items = array()?;
+            items.pop();
+            Value::Array(items)
+        }
+        Mode::Increment => arithmetic(|left, right| Some(left + right))?,
+        Mode::Decrement => arithmetic(|left, right| Some(left - right))?,
+        Mode::Multiply => arithmetic(|left, right| Some(left * right))?,
+        Mode::Divide => arithmetic(|left, right| (right != 0.0).then(|| left / right))?,
+    })
 }
 
 pub(super) fn validate_commit(schema: &Value, value: &Value) -> Result<(), WorkflowRunError> {

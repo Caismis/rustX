@@ -147,22 +147,12 @@ fn omit_ordinary_ports(block: &mut serde_yaml::Value) {
     }
     if let Some(Value::Mapping(nodes)) = block.get_mut("nodes") {
         for node in nodes.values_mut() {
-            match node.get("type").and_then(Value::as_str) {
-                Some("loop") => {
-                    if let Some(body) = node.get_mut("body") {
-                        omit_ordinary_ports(body);
-                    }
-                }
-                Some("parallel") => {
-                    if let Some(Value::Mapping(branches)) = node.get_mut("branches") {
-                        for branch in branches.values_mut() {
-                            if let Some(child) = branch.get_mut("block") {
-                                omit_ordinary_ports(child);
-                            }
-                        }
-                    }
-                }
-                _ => {}
+            if matches!(
+                node.get("type").and_then(Value::as_str),
+                Some("loop" | "iteration")
+            ) && let Some(body) = node.get_mut("body")
+            {
+                omit_ordinary_ports(body);
             }
         }
     }

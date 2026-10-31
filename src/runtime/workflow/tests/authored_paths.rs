@@ -25,41 +25,10 @@ fn branch() -> WorkflowNodeDefinition {
 }
 
 fn loop_node() -> WorkflowNodeDefinition {
-    WorkflowNodeDefinition::Loop {
-        input: WorkflowValue::Literal { value: json!({}) },
-        body: Box::new(WorkflowBlock {
-            input: schema(json!({}), &[]),
-            output: schema(json!({}), &[]),
-            nodes: {
-                let mut nodes: std::collections::BTreeMap<
-                    String,
-                    crate::runtime::workflow::WorkflowNodeDefinition,
-                > = BTreeMap::from([("done".into(), return_node(BTreeMap::new()))]);
-                nodes.insert(
-                    "workflow_start".into(),
-                    crate::runtime::workflow::WorkflowNodeDefinition::Start {},
-                );
-                nodes
-            },
-            edges: {
-                let mut edges = vec![];
-                edges.insert(
-                    0,
-                    crate::runtime::workflow::WorkflowEdgeDefinition {
-                        from: "workflow_start".into(),
-                        to: "done".into(),
-                        port: None,
-                    },
-                );
-                edges
-            },
-        }),
-        until: Box::new(WorkflowPredicate::Boolean {
-            value: WorkflowValue::Literal { value: json!(true) },
-        }),
-        carry: WorkflowValue::Literal { value: json!({}) },
-        max_iterations: 1,
-    }
+    serde_json::from_value(json!({"type":"loop","loop_count":1,"body":{
+        "nodes":{"workflow_start":{"type":"start"},"stop":{"type":"loop_end"}},
+        "edges":[{"from":"workflow_start","to":"stop"}]}}))
+    .unwrap()
 }
 
 #[test]
@@ -85,8 +54,8 @@ fn dangling_to_has_exact_authored_edge_path() {
 #[test]
 fn invalid_branch_loop_and_ordinary_ports_have_exact_edge_paths() {
     for (node, ports) in [
-        (branch(), vec![None, Some(WorkflowPort::Satisfied)]),
-        (loop_node(), vec![None, Some(WorkflowPort::True)]),
+        (branch(), vec![None, Some(WorkflowPort::Next)]),
+        (loop_node(), vec![Some(WorkflowPort::True)]),
         (
             agent(schema(json!({}), &[])),
             vec![Some(WorkflowPort::False), Some(WorkflowPort::Next)],
@@ -107,10 +76,7 @@ fn invalid_branch_loop_and_ordinary_ports_have_exact_edge_paths() {
 
 #[test]
 fn duplicate_connection_identifies_later_authored_edge_before_sorting() {
-    for (node, port) in [
-        (branch(), WorkflowPort::True),
-        (loop_node(), WorkflowPort::Satisfied),
-    ] {
+    for (node, port) in [(branch(), WorkflowPort::True)] {
         for targets in [["done", "done"], ["other", "other"]] {
             let mut definition = graph(
                 node.clone(),
@@ -182,15 +148,8 @@ fn loop_body_edge_path_composes_with_parent_context() {
     let WorkflowNodeDefinition::Loop { body, .. } = &mut node else {
         unreachable!()
     };
-    body.edges.push(edge("done", "missing"));
-    let error = compile_test(graph(
-        node,
-        vec![
-            branch_edge("route", "done", WorkflowPort::Satisfied),
-            branch_edge("route", "done", WorkflowPort::Exhausted),
-        ],
-    ))
-    .unwrap_err();
+    body.edges.push(edge("stop", "missing"));
+    let error = compile_test(graph(node, vec![edge("route", "done")])).unwrap_err();
     assert_eq!(error.path(), "block.nodes.route.body.edges.1.to");
     assert!(matches!(
         error.cause(),

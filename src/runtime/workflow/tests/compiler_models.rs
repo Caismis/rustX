@@ -250,34 +250,29 @@ fn explicit_model_policy_is_structural_and_explain_redacts_parameters_and_prompt
     }
 }
 
-fn loop_definition(iterations: u32, body: WorkflowBlock) -> WorkflowDefinition {
+/// A Loop running `body`, a graph whose Returns are dropped: a body ends
+/// where its nodes do.
+fn loop_definition(id: &str, iterations: u32, mut body: WorkflowBlock) -> WorkflowDefinition {
+    body.input = schema(json!({}), &[]);
+    body.output = schema(json!({}), &[]);
+    body.nodes
+        .retain(|_, node| !matches!(node, WorkflowNodeDefinition::Return { .. }));
+    body.edges.retain(|edge| body.nodes.contains_key(&edge.to));
     base_definition(
-        "repeat",
+        id,
         BTreeMap::from([
             (
-                "repeat".into(),
+                id.into(),
                 WorkflowNodeDefinition::Loop {
-                    input: WorkflowValue::Literal {
-                        value: json!({"task":"data"}),
-                    },
+                    loop_variables: Vec::new(),
+                    break_condition: None,
+                    loop_count: iterations,
                     body: Box::new(body),
-                    until: Box::new(WorkflowPredicate::Boolean {
-                        value: WorkflowValue::Literal {
-                            value: json!(false),
-                        },
-                    }),
-                    carry: WorkflowValue::Literal {
-                        value: json!({"task":"data"}),
-                    },
-                    max_iterations: iterations,
                 },
             ),
             ("done".into(), return_node(BTreeMap::new())),
         ]),
-        vec![
-            branch_edge("repeat", "done", WorkflowPort::Satisfied),
-            branch_edge("repeat", "done", WorkflowPort::Exhausted),
-        ],
+        vec![edge(id, "done")],
         schema(json!({}), &[]),
     )
 }
@@ -285,10 +280,7 @@ fn loop_definition(iterations: u32, body: WorkflowBlock) -> WorkflowDefinition {
 #[test]
 fn expanded_model_calls_are_independent_of_agents_steps_and_live_retention() {
     let body = definition(WorkflowModelOutput::Text {}).block;
-    let at_cap = loop_definition(
-        u32::try_from(MAX_WORKFLOW_MODEL_CALLS).unwrap(),
-        body.clone(),
-    );
+    let at_cap = loop_definition("outer", 64, loop_definition("inner", 4, body.clone()).block);
     let program = compile_test(at_cap).unwrap();
     assert_eq!(
         program.inspect().conservative_model_calls,
@@ -296,7 +288,7 @@ fn expanded_model_calls_are_independent_of_agents_steps_and_live_retention() {
     );
     assert_eq!(program.inspect().conservative_agent_runs, 0);
     assert!(program.inspect().conservative_steps < MAX_WORKFLOW_STEPS);
-    let nested = loop_definition(2, loop_definition(129, body).block);
+    let nested = loop_definition("outer", 65, loop_definition("inner", 4, body).block);
     let error = compile_test(nested).unwrap_err();
     assert!(matches!(
         error.cause(),

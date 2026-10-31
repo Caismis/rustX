@@ -15,11 +15,11 @@ fn annotated() -> WorkflowFileDocument {
     document.editor=Some(serde_json::from_value(json!({
         "nodes":[
             {"address":{"block":[],"node":"repeat"},"title":"Review loop","description":"Author-only guidance","position":{"x":0.5,"y":-40.0},"dimensions":{"width":900.0,"height":600.0}},
-            {"address":{"block":[{"node":"repeat"}],"node":"done"},"position":{"x":200.0,"y":300.0}},
+            {"address":{"block":[{"node":"repeat"}],"node":"bump"},"position":{"x":200.0,"y":300.0}},
             {"address":{"block":[],"node":"start"},"position":{"x":-200.0,"y":0.0},"title":"User input","description":"Where the user uploads files"}
         ],
         "notes":[{"id":"note_1","block":[{"node":"repeat"}],"text":"# Review\n\n**Markdown** and 中文 🦀\n","theme":"blue","position":{"x":-100.0,"y":200.0},"dimensions":{"width":240.0,"height":180.0}}],
-        "orders":[{"target":{"kind":"block_input","block":[{"node":"repeat"}],"path":[]},"fields":["message"]}]
+        "orders":[{"target":{"kind":"block_input","block":[],"path":[]},"fields":["message"]}]
     })).unwrap());
     document
 }

@@ -1,5 +1,5 @@
-description: Plan greeting.py, gate implementation on human plan acceptance, then
-  implement and run real checks in the shared Session workspace up to three times.
+description: Plan greeting.py, gate implementation on human plan acceptance, then implement and run real
+  checks in the shared Session workspace up to three times.
 timeout_ms: 1800000
 block:
   input:
@@ -39,7 +39,6 @@ block:
             type: reference
             path:
             - intake_brief
-            - result
             - requirement
           right:
             type: literal
@@ -49,13 +48,22 @@ block:
       profile: planner
       task:
       - type: literal
-        value: "Produce a concise implementation plan for the fixed greeting contract and supplied priority. Do not edit files or run commands. The plan is business data, never executable Workflow structure."
+        value: Produce a concise implementation plan for the fixed greeting contract and supplied priority.
+          Do not edit files or run commands. The plan is business data, never executable Workflow structure.
       - type: literal
-        value: "\n\nbrief: "
+        value: '
+
+
+          brief: '
       - type: reference
-        path: ["intake_brief", "result"]
+        path:
+        - intake_brief
       - type: literal
-        value: "\n\ncontract: {\"requirement\": \"greeting(\\\"Ada\\\") == \\\"Hello, Ada!\\\"; greeting(\\\"\\\") == \\\"Hello, friend!\\\"\"}"
+        value: '
+
+
+          contract: {"requirement": "greeting(\"Ada\") == \"Hello, Ada!\"; greeting(\"\") == \"Hello,
+          friend!\""}'
       output:
         type: json_schema
         schema:
@@ -93,117 +101,85 @@ block:
             - accepted
     repair:
       type: loop
-      max_iterations: 3
-      input:
-        type: object
-        fields:
-          plan:
-            type: reference
-            path:
-            - plan
-          feedback:
-            type: literal
-            value: Implement the accepted plan.
-      until:
+      loop_count: 3
+      loop_variables:
+      - label: plan
+        var_type: object
+        value:
+          type: reference
+          path:
+          - plan
+      - label: feedback
+        var_type: string
+        value:
+          type: literal
+          value: Implement the accepted plan.
+      - label: passed
+        var_type: boolean
+        value:
+          type: literal
+          value: false
+      - label: report
+        var_type: object
+        value:
+          type: literal
+          value: {}
+      break_condition:
         type: boolean
         value:
           type: reference
           path:
-          - result
+          - repair
           - passed
-      carry:
-        type: object
-        fields:
-          plan:
-            type: reference
-            path:
-            - result
-            - plan
-          feedback:
-            type: reference
-            path:
-            - result
-            - feedback
       body:
-        input:
-          type: object
-          properties:
-            plan: &id001
-              type: object
-              properties:
-                summary:
-                  type: string
-                steps:
-                  type: array
-                  items:
-                    type: string
-              required:
-              - summary
-              - steps
-              additionalProperties: false
-            feedback:
-              type: string
-          required:
-          - plan
-          - feedback
-          additionalProperties: false
-        output:
-          type: object
-          properties:
-            plan: *id001
-            feedback:
-              type: string
-            passed:
-              type: boolean
-            report: &id002
-              type: object
-              properties:
-                exit_code:
-                  type: integer
-                stdout:
-                  type: string
-                  enum:
-                  - passed
-                  - failed
-                stderr:
-                  type: string
-                combined:
-                  type: string
-              required:
-              - exit_code
-              - stdout
-              - stderr
-              - combined
-              additionalProperties: false
-          required:
-          - plan
-          - feedback
-          - passed
-          - report
-          additionalProperties: false
         nodes:
-          start:
+          repair_start:
             type: start
           implement:
             type: agent
             profile: implementer
             task:
             - type: literal
-              value: "Implement or repair greeting.py so greeting(name) returns Hello, NAME! and uses friend for an empty name. Use the supplied plan and feedback as data. Change only greeting.py. Never claim verification from prose; the next fixed Tool runs the checker. Return the implemented plan as the declared output for the next iteration."
+              value: Implement or repair greeting.py so greeting(name) returns Hello, NAME! and uses friend
+                for an empty name. Use the supplied plan and feedback as data. Change only greeting.py.
+                Never claim verification from prose; the next fixed Tool runs the checker. Return the
+                implemented plan as the declared output for the next round.
             - type: literal
-              value: "\n\nplan: "
+              value: '
+
+
+                plan: '
             - type: reference
-              path: ["args", "plan"]
+              path:
+              - repair
+              - plan
             - type: literal
-              value: "\n\nfeedback: "
+              value: '
+
+
+                feedback: '
             - type: reference
-              path: ["args", "feedback"]
+              path:
+              - repair
+              - feedback
             output:
               type: json_schema
               schema:
                 type: object
                 properties:
-                  plan: *id001
+                  plan:
+                    type: object
+                    properties:
+                      summary:
+                        type: string
+                      steps:
+                        type: array
+                        items:
+                          type: string
+                    required:
+                    - summary
+                    - steps
+                    additionalProperties: false
                 required:
                 - plan
                 additionalProperties: false
@@ -215,21 +191,37 @@ block:
             arguments:
               type: literal
               value:
-                command: "python3 -I -B - <<'PY'\n\"\"\"Fixed checker. Exit zero means\
-                  \ checks ran, not that business checks passed.\"\"\"\nimport contextlib\n\
-                  import runpy\nimport sys\nfrom pathlib import Path\n\nsource = Path(\"\
-                  greeting.py\")\nif source.stat().st_size > 4096:\n    raise ValueError(\"\
-                  greeting.py exceeds the 4096-byte source limit\")\n# Implementation\
-                  \ stdout cannot forge the checker's exact output contract.\nwith\
-                  \ contextlib.redirect_stdout(sys.stderr):\n    greeting = runpy.run_path(str(source))[\"\
-                  greeting\"]\n    actual = [greeting(\"Ada\"), greeting(\"\")]\n\
-                  if any(not isinstance(value, str) or len(value) > 256 for value\
-                  \ in actual):\n    raise ValueError(\"greeting must return bounded\
-                  \ strings\")\nsys.stdout.write(\"passed\" if actual == [\"Hello,\
-                  \ Ada!\", \"Hello, friend!\"] else \"failed\")\nPY\n"
+                command: "python3 -I -B - <<'PY'\n\"\"\"Fixed checker. Exit zero means checks ran, not\
+                  \ that business checks passed.\"\"\"\nimport contextlib\nimport runpy\nimport sys\n\
+                  from pathlib import Path\n\nsource = Path(\"greeting.py\")\nif source.stat().st_size\
+                  \ > 4096:\n    raise ValueError(\"greeting.py exceeds the 4096-byte source limit\")\n\
+                  # Implementation stdout cannot forge the checker's exact output contract.\nwith contextlib.redirect_stdout(sys.stderr):\n\
+                  \    greeting = runpy.run_path(str(source))[\"greeting\"]\n    actual = [greeting(\"\
+                  Ada\"), greeting(\"\")]\nif any(not isinstance(value, str) or len(value) > 256 for value\
+                  \ in actual):\n    raise ValueError(\"greeting must return bounded strings\")\nsys.stdout.write(\"\
+                  passed\" if actual == [\"Hello, Ada!\", \"Hello, friend!\"] else \"failed\")\nPY\n"
             result:
               type: json
-              schema: *id002
+              schema:
+                type: object
+                properties:
+                  exit_code:
+                    type: integer
+                  stdout:
+                    type: string
+                    enum:
+                    - passed
+                    - failed
+                  stderr:
+                    type: string
+                  combined:
+                    type: string
+                required:
+                - exit_code
+                - stdout
+                - stderr
+                - combined
+                additionalProperties: false
           passed:
             type: branch
             cases:
@@ -245,48 +237,69 @@ block:
                   type: literal
                   value: passed
           success:
-            type: return
-            output:
-              type: object
-              fields:
-                plan:
-                  type: reference
-                  path:
-                  - implement
-                  - plan
-                feedback:
-                  type: literal
-                  value: Both fixed greeting cases passed.
-                passed:
-                  type: literal
-                  value: true
-                report:
-                  type: reference
-                  path:
-                  - check
-          repair:
-            type: return
-            output:
-              type: object
-              fields:
-                plan:
-                  type: reference
-                  path:
-                  - implement
-                  - plan
-                feedback:
-                  type: literal
-                  value: The checker ran successfully but greeting.py failed at least
-                    one fixed case. Repair greeting.py.
-                passed:
-                  type: literal
-                  value: false
-                report:
-                  type: reference
-                  path:
-                  - check
+            type: assigner
+            items:
+            - variable:
+              - repair
+              - plan
+              operation: overwrite
+              value:
+                type: reference
+                path:
+                - implement
+                - plan
+            - variable:
+              - repair
+              - report
+              operation: overwrite
+              value:
+                type: reference
+                path:
+                - check
+            - variable:
+              - repair
+              - feedback
+              operation: set
+              value:
+                type: literal
+                value: Both fixed greeting cases passed.
+            - variable:
+              - repair
+              - passed
+              operation: set
+              value:
+                type: literal
+                value: true
+          failure:
+            type: assigner
+            items:
+            - variable:
+              - repair
+              - plan
+              operation: overwrite
+              value:
+                type: reference
+                path:
+                - implement
+                - plan
+            - variable:
+              - repair
+              - report
+              operation: overwrite
+              value:
+                type: reference
+                path:
+                - check
+            - variable:
+              - repair
+              - feedback
+              operation: set
+              value:
+                type: literal
+                value: The checker ran successfully but greeting.py failed at least one fixed case. Repair
+                  greeting.py.
         edges:
-        - from: start
+        - from: repair_start
           to: implement
         - from: implement
           to: check
@@ -296,7 +309,7 @@ block:
           to: success
           port: 'true'
         - from: passed
-          to: repair
+          to: failure
           port: 'false'
     implemented:
       type: return
@@ -310,7 +323,6 @@ block:
             type: reference
             path:
             - repair
-            - result
             - feedback
     rejected_plan:
       type: return
@@ -337,7 +349,6 @@ block:
             type: reference
             path:
             - repair
-            - result
             - feedback
     declined:
       type: return
@@ -348,52 +359,23 @@ block:
           feedback: Questionnaire declined; no implementation requested.
     intake_brief:
       type: loop
-      input:
-        type: object
-        fields:
-          requirement:
-            type: reference
-            path:
-            - args
-            - requirement
-      until:
-        type: boolean
+      loop_count: 1
+      loop_variables:
+      - label: requirement
+        var_type: string
+        value:
+          type: reference
+          path:
+          - args
+          - requirement
+      - label: answers
+        var_type: array[object]
         value:
           type: literal
-          value: true
-      carry:
-        type: object
-        fields:
-          requirement:
-            type: reference
-            path:
-            - result
-            - requirement
-      max_iterations: 1
+          value: []
       body:
-        input:
-          type: object
-          properties:
-            requirement:
-              type: string
-          required:
-          - requirement
-          additionalProperties: false
-        output:
-          type: object
-          properties:
-            requirement:
-              type: string
-            answers:
-              type: array
-              items:
-                type: object
-          required:
-          - requirement
-          - answers
-          additionalProperties: false
         nodes:
-          start:
+          intake_start:
             type: start
           missing:
             type: branch
@@ -440,7 +422,33 @@ block:
                 - cancelled
                 - answers
                 additionalProperties: false
-          declined:
+          answered:
+            type: assigner
+            items:
+            - variable:
+              - intake_brief
+              - requirement
+              operation: set
+              value:
+                type: literal
+                value: Implement the fixed greeting contract using the selected priority.
+            - variable:
+              - intake_brief
+              - answers
+              operation: overwrite
+              value:
+                type: reference
+                path:
+                - question
+                - answers
+          unanswered_brief:
+            type: assigner
+            items:
+            - variable:
+              - intake_brief
+              - requirement
+              operation: clear
+          cancelled:
             type: branch
             cases:
             - id: 'true'
@@ -451,61 +459,31 @@ block:
                   path:
                   - question
                   - cancelled
-          answered:
-            type: return
-            output:
-              type: object
-              fields:
-                requirement:
-                  type: literal
-                  value: Implement the fixed greeting contract using the selected
-                    priority.
-                answers:
-                  type: reference
-                  path:
-                  - question
-                  - answers
-          unanswered:
-            type: return
-            output:
-              type: object
-              fields:
-                requirement:
-                  type: literal
-                  value: ''
-                answers:
-                  type: literal
-                  value: []
-          provided:
-            type: return
-            output:
-              type: object
-              fields:
-                requirement:
-                  type: reference
-                  path:
-                  - args
-                  - requirement
-                answers:
-                  type: literal
-                  value: []
         edges:
-        - from: start
+        - from: intake_start
           to: missing
         - from: missing
           to: question
           port: 'true'
-        - from: missing
-          to: provided
-          port: 'false'
         - from: question
-          to: declined
-        - from: declined
-          to: unanswered
+          to: cancelled
+        - from: cancelled
+          to: unanswered_brief
           port: 'true'
-        - from: declined
+        - from: cancelled
           to: answered
           port: 'false'
+    verified:
+      type: branch
+      cases:
+      - id: 'true'
+        condition:
+          type: boolean
+          value:
+            type: reference
+            path:
+            - repair
+            - passed
   edges:
   - from: unanswered
     to: declined
@@ -523,19 +501,17 @@ block:
   - from: plan_accepted
     to: rejected_plan
     port: 'false'
-  - from: repair
-    to: implemented
-    port: satisfied
-  - from: repair
-    to: exhausted
-    port: exhausted
   - from: start
     to: intake_brief
-  - from: intake_brief
-    to: unanswered
-    port: satisfied
-  - from: intake_brief
-    to: unanswered
-    port: exhausted
   - from: start
+    to: unanswered
+  - from: repair
+    to: verified
+  - from: verified
+    to: implemented
+    port: 'true'
+  - from: verified
+    to: exhausted
+    port: 'false'
+  - from: intake_brief
     to: unanswered

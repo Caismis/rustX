@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { emptyBlock } from '../src/app/workflows/document/commands';
+import { rootBlock } from './workflow-root';
 import { nodePresentation } from '../src/app/workflows/document/geometry';
 import type { WorkflowDocument } from '../src/app/workflows/document/model';
 import type { WorkflowToolSource } from '../../protocol/app-server/v62';
@@ -12,7 +12,7 @@ import { ToolCatalogProvider } from '../src/app/workflows/ui/editor/toolCatalog'
 afterEach(cleanup);
 
 it('keeps a dangling authored successor removable without hiding its valid sibling', () => {
-  const initial: WorkflowDocument = { description: 'Repair an incomplete graph', block: emptyBlock() };
+  const initial: WorkflowDocument = { description: 'Repair an incomplete graph', block: rootBlock() };
   initial.block.edges!.push({ from: 'start', to: 'missing' });
   let current = initial;
   function Harness() {
@@ -32,7 +32,7 @@ it('keeps a dangling authored successor removable without hiding its valid sibli
 
 it('adds a node per builtin Tool from the Tools tab, titled and described by that Tool, as Dify', () => {
   const read = { name: 'read', description: 'Read a file. Lines are numbered.', input_schema: { type: 'object', properties: {} }, result: { type: 'text' } } as const;
-  let current: WorkflowDocument = { description: 'Read', block: emptyBlock() };
+  let current: WorkflowDocument = { description: 'Read', block: rootBlock() };
   current.block.edges = [];
   function Harness() {
     const [document, setDocument] = useState(current);
@@ -66,7 +66,7 @@ it('lists each MCP server and Python package of the scope as a provider of its T
     ? sources.map(item => ({ ...item, state: item.state === 'listed' ? 'pending' as const : item.state, tools: [] }))
     : sources.filter(item => item.source_id === source) }));
   const port = { toolCatalog } as unknown as WorkflowScopePort;
-  let current: WorkflowDocument = { description: 'Search', block: emptyBlock() };
+  let current: WorkflowDocument = { description: 'Search', block: rootBlock() };
   current.block.edges = [];
   function Harness() {
     const [document, setDocument] = useState(current);

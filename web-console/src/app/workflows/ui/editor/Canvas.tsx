@@ -7,10 +7,10 @@ import { useTranslation } from '../../../../locale/react';
 import { IconSearchOutline16 } from '../../../../presentation/primitives/icons';
 import { writeClipboard } from '../../../../presentation/primitives/clipboard';
 import type { FieldDraft } from '../../machines/editor';
-import { CommandRejected, addBefore, addNode, deleteNodes, disconnect, freshIdentifier, insertNode } from '../../document/commands';
+import { CommandRejected, addBefore, addNode, deleteNodes, disconnect, freshNodeId, insertNode } from '../../document/commands';
 import { copyFragment, fragmentOwnsField, parseFragment, pasteFragment } from '../../document/clipboard';
 import { freshNote, putNote, removeNotes, setNodePresentation } from '../../document/geometry';
-import { blockAt, blockKey as keyOfBlock, deepNodeCount, edgesOf, sameBlockPath, sameDocument, type Block, type BlockPath, type WorkflowDocument } from '../../document/model';
+import { blockAt, blockKey as keyOfBlock, deepNodeCount, edgesOf, sameBlockPath, sameDocument, unavailableKinds, type Block, type BlockPath, type WorkflowDocument } from '../../document/model';
 import { type ControlPort } from '../../document/ports';
 import { IconCursor, IconFit, IconHand, IconMinus, IconPlus, IconBlock, IconFile, IconGrid, IconWorkflow } from '../icons';
 import { LayoutSession, organizeDocument, type LayoutOwner, type Point } from './layout';
@@ -260,7 +260,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     const chosen = palette, kind = choice.kind; let added = '';
     mutate(document => {
       const block = blockAt(document, chosen.path); if (!block) throw new CommandRejected('missing_node');
-      const id = freshIdentifier(block, kind); added = id;
+      const id = freshNodeId(document, chosen.path, kind); added = id;
       if (chosen.edge && !sameDocument(edgesOf(block)[chosen.edge.index], chosen.edge.value)) throw new CommandRejected('missing_edge');
       let next = chosen.edge ? insertNode(document, chosen.path, chosen.edge.index, kind, id)
         : chosen.before ? addBefore(document, chosen.path, kind, id, chosen.before) : addNode(document, chosen.path, kind, id, chosen.from && { from: chosen.from.node, port: chosen.from.port });
@@ -370,7 +370,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       </div>
       <Zoom />
       <p className={css.canvasStatus} aria-live="polite">{message ?? (organizing ? tx('workflows:canvas.organizing') : tx('workflows:canvas.status', { p0: blockLabel, p1: deepNodeCount(document.block) }))}</p>
-      {palette && <Palette at={palette.at} tools={tools} insertion={!!palette.insertion} onChoose={add} onClose={() => { setPalette(undefined); container.current?.focus(); }} />}
+      {palette && <Palette at={palette.at} tools={tools} omit={unavailableKinds(document, palette.path)} insertion={!!palette.insertion} onChoose={add} onClose={() => { setPalette(undefined); container.current?.focus(); }} />}
       {menu && <div className={css.contextMenu} role="dialog" aria-label={tx('workflows:canvas.node-actions', { p0: byId.get(menu.id)?.data.title ?? '' })} style={{ left: menu.at.x, top: menu.at.y }} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(undefined); container.current?.focus(); } }}>
         {['node', 'note'].includes(byId.get(menu.id)?.data.view ?? '') ? <>
           <button type="button" autoFocus onClick={() => { try { const text = fragmentFor(menu.id); void writeClipboard(text).then(ok => setMessage(tx(ok ? 'workflows:canvas.copied' : 'workflows:notice.copy-failed'))); } catch (error) { report(error); } setMenu(undefined); }}>{tx('workflows:canvas.copy')}</button>

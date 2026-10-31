@@ -375,16 +375,13 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
     f.project(json!({"subagents": {}}));
     let definition: crate::runtime::workflow::WorkflowDefinition =
         serde_yaml::from_str(&template_source("parallel_checks")).unwrap();
-    let body = serde_json::to_value(definition.block).unwrap();
+    let root = serde_json::to_value(definition.block).unwrap();
     let original = json!({"description":"Nested checks", "block":{
-        "input":body["input"], "output":body["output"], "nodes":{
+        "input":root["input"], "output":{"type":"object","properties":{},"additionalProperties":false}, "nodes":{
             "start":{"type":"start"},
-            "repeat":{"type":"loop", "input":{"type":"reference","path":["args"]},
-                "body":body, "until":{"type":"boolean","value":{"type":"literal","value":true}},
-                "carry":{"type":"literal","value":{"text":"fixed"}}, "max_iterations":1},
-            "done":{"type":"return","output":{"type":"reference","path":["repeat","result"]}}
-        },"edges":[{"from":"start","to":"repeat"},
-            {"from":"repeat","to":"done","port":"satisfied"},{"from":"repeat","to":"done","port":"exhausted"}]
+            "repeat":{"type":"loop", "loop_count":1, "body":crate::runtime::workflow::test_body(&root)},
+            "done":{"type":"return","output":{"type":"literal","value":{}}}
+        },"edges":[{"from":"start","to":"repeat"},{"from":"repeat","to":"done"}]
     }});
     for (pointer, value, expected) in [
         (
@@ -396,11 +393,6 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
             "/block/nodes/repeat/body/nodes/check_text_clarity_assess_clarity/output/schema/properties/passed",
             json!({"type":"boolean","pattern":"SECRET_SCHEMA"}),
             "block.nodes.repeat.body.nodes.check_text_clarity_assess_clarity.output.schema.properties.passed",
-        ),
-        (
-            "/block/nodes/repeat/body/nodes/return_checks/output",
-            json!({"type":"reference","path":["args"]}),
-            "block.nodes.repeat.body.nodes.return_checks.output",
         ),
     ] {
         let mut shape = original.clone();

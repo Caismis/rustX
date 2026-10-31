@@ -1,11 +1,11 @@
 import { expect, it } from 'vitest';
-import { emptyBlock } from '../src/app/workflows/document/commands';
+import { rootBlock } from './workflow-root';
 import { nodePresentation, setNodePresentation } from '../src/app/workflows/document/geometry';
 import { fieldValue, nodeField, setField } from '../src/app/workflows/document/fields';
 import type { WorkflowDocument } from '../src/app/workflows/document/model';
 
 it('edits real Start node presentation without changing the executable graph', () => {
-  const document: WorkflowDocument = { description: 'Start presentation', block: emptyBlock() };
+  const document: WorkflowDocument = { description: 'Start presentation', block: rootBlock() };
   const title = { ...nodeField([], 'start', ['title']), domain: { kind: 'node_presentation' as const } };
   expect(fieldValue(document, title)).toEqual({ value: 'start' });
   const named = setField(document, title, 'User input');

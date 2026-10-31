@@ -2,7 +2,7 @@
 //! settle; only selected paths run. A producer is in scope exactly when it is
 //! an ancestor and every activation of the consumer also activates it.
 use super::{
-    BTreeMap, BTreeSet, SchemaMap, Value, WorkflowBlock, WorkflowCompileError, WorkflowEdgeProgram,
+    BTreeMap, BTreeSet, SchemaMap, WorkflowBlock, WorkflowCompileError, WorkflowEdgeProgram,
     WorkflowModelErrorStrategy, WorkflowNodeDefinition, WorkflowPort, WorkflowValueErrorStrategy,
 };
 use biodivine_lib_bdd::{Bdd, BddVariableSet, op_function};
@@ -35,8 +35,7 @@ impl ActivationScopes {
                     routes.len().saturating_sub(1)
                         + usize::from(*on_error == WorkflowValueErrorStrategy::FailBranch)
                 }
-                WorkflowNodeDefinition::Loop { .. }
-                | WorkflowNodeDefinition::Model {
+                WorkflowNodeDefinition::Model {
                     on_error: WorkflowModelErrorStrategy::FailBranch,
                     ..
                 }
@@ -75,11 +74,6 @@ impl ActivationScopes {
                         .ok_or_else(too_complex)?;
                     }
                     ports.insert(WorkflowPort::False, remaining);
-                }
-                WorkflowNodeDefinition::Loop { .. } => {
-                    let selected = variables.mk_var(allocated.next().expect("allocated Loop"));
-                    ports.insert(WorkflowPort::Satisfied, selected.clone());
-                    ports.insert(WorkflowPort::Exhausted, selected.not());
                 }
                 WorkflowNodeDefinition::Model {
                     on_error: WorkflowModelErrorStrategy::FailBranch,
@@ -183,9 +177,9 @@ impl ActivationScopes {
         &self,
         node: &str,
         after: &BTreeMap<String, SchemaMap>,
-        input: &Value,
+        base: &SchemaMap,
     ) -> SchemaMap {
-        let mut scope = SchemaMap::from_schema(input);
+        let mut scope = base.clone();
         for producer in &self.ancestors[node] {
             if Bdd::binary_op_with_limit(
                 2,

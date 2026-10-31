@@ -5,7 +5,7 @@ import { startDogfood } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
-import { emptyBlock } from '../../src/app/workflows/document/commands';
+import { rootBlock } from '../workflow-root';
 import { setNodePresentation } from '../../src/app/workflows/document/geometry';
 import type { NodeKind, WorkflowDocument } from '../../src/app/workflows/document/model';
 
@@ -51,15 +51,15 @@ test('shows each native node in the Dify-style card and grouped settings panel',
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   try {
-    let document: WorkflowDocument = { description: 'Node surfaces', block: emptyBlock() };
+    let document: WorkflowDocument = { description: 'Node surfaces', block: rootBlock() };
     document.block.input = { type: 'object', properties: { topic: { type: 'string' } }, required: ['topic'], additionalProperties: false };
     document.block.nodes.agent = { type: 'agent', profile: 'reviewer', task: [{ type: 'literal', value: 'Research the requested topic' }], output: { type: 'json_schema', schema: { type: 'object', properties: { summary: { type: 'string' } }, additionalProperties: false } } };
     document.block.nodes.model = { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Write a concise summary.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } };
     document.block.nodes.tool = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: { path: { type: 'reference', path: ['args', 'topic'] }, token: { type: 'literal', value: 'super-secret' } } }, result: { type: 'text' } };
     document.block.nodes.review = { type: 'review', subject: { type: 'plan', value: { type: 'reference', path: ['model'] } }, context: [{ type: 'reference', path: ['args', 'topic'] }] };
-    document.block.nodes.loop = { type: 'loop', input: { type: 'reference', path: ['args'] }, body: emptyBlock(), until: { type: 'boolean', value: { type: 'literal', value: true } }, carry: { type: 'reference', path: ['result'] }, max_iterations: 3 };
+    document.block.nodes.loop = { type: 'loop', loop_count: 3, body: { nodes: { loop_start: { type: 'start' } }, edges: [] } };
     document.block.nodes.done = { type: 'return', output: { type: 'object', fields: { summary: { type: 'reference', path: ['model', 'text'] }, status: { type: 'literal', value: 'ready' } } } };
-    document.block.edges = [{ from: 'start', to: 'agent' }, { from: 'agent', to: 'model' }, { from: 'model', to: 'tool' }, { from: 'tool', to: 'review' }, { from: 'review', to: 'loop' }, { from: 'loop', to: 'done', port: 'satisfied' }];
+    document.block.edges = [{ from: 'start', to: 'agent' }, { from: 'agent', to: 'model' }, { from: 'model', to: 'tool' }, { from: 'tool', to: 'review' }, { from: 'review', to: 'loop' }, { from: 'loop', to: 'done' }];
     const positions: [string, number, number][] = [['agent', 340, 80], ['model', 690, 80], ['tool', 1040, 80], ['review', 340, 400], ['loop', 690, 400], ['done', 1040, 400]];
     for (const [id, x, y] of positions) document = setNodePresentation(document, [], id, { title: id, description: id === 'model' ? 'Configure model here.\nWrite a concise response.' : `Configure ${id} here.`, position: { x, y } });
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
@@ -78,7 +78,7 @@ test('shows each native node in the Dify-style card and grouped settings panel',
       { id: 'model', kind: 'model', row: 'Follow Attempt model', section: 'Output variables' },
       { id: 'tool', kind: 'tool', row: 'path', section: 'Tool configuration' },
       { id: 'review', kind: 'review', row: 'model', section: 'Review request' },
-      { id: 'loop', kind: 'loop', row: '3', section: 'Loop body' },
+      { id: 'loop', kind: 'loop', row: '3', section: 'Loop Variables' },
       { id: 'done', kind: 'return', row: 'summary', section: 'Output contract' },
     ];
     for (const { id, kind, row, section } of cases) {

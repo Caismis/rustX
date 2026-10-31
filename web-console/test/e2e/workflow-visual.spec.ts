@@ -9,7 +9,8 @@ import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
 import { addOutputField, structuredDialog } from './workflow-schema-actions';
-import { addNode, connect, emptyBlock } from '../../src/app/workflows/document/commands';
+import { addNode, connect } from '../../src/app/workflows/document/commands';
+import { rootBlock } from '../workflow-root';
 import { putNote, setNodePresentation } from '../../src/app/workflows/document/geometry';
 import { type BlockPath, type WorkflowDocument } from '../../src/app/workflows/document/model';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
@@ -108,7 +109,7 @@ test('adds parallel next nodes from the inspector and keeps every existing conne
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   try {
-    let document: WorkflowDocument = { description: 'Implicit parallel next steps', block: emptyBlock() };
+    let document: WorkflowDocument = { description: 'Implicit parallel next steps', block: rootBlock() };
     document.block.input = { type: 'object', properties: { flag: { type: 'boolean' } }, required: ['flag'], additionalProperties: false };
     document = addNode(document, [], 'model', 'model'); document = connectStart(document, [], 'model');
     document.block.nodes.model = { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Return a short string.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } };
@@ -163,7 +164,7 @@ test('adds parallel next nodes from the inspector and keeps every existing conne
 test('reconnects ordinary edges to the real Start without replacing its other successor', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   try {
-    let document: WorkflowDocument = { description: 'Real Start fanout', block: emptyBlock() };
+    let document: WorkflowDocument = { description: 'Real Start fanout', block: rootBlock() };
     document = addNode(document, [], 'model', 'model'); document = addNode(document, [], 'return', 'other');
     document = connectStart(document, [], 'model'); document = connect(document, [], 'model', 'next', 'done'); document = connect(document, [], 'model', 'next', 'other');
     document = setNodePresentation(document, [], 'model', { position: { x: 380, y: 80 } });
@@ -190,7 +191,7 @@ test('reconnects ordinary edges to the real Start without replacing its other su
 test('renames input fields and edits optional array items through the field dialog', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   try {
-    const document: WorkflowDocument = { description: 'Finite input rename and optional items', block: emptyBlock() };
+    const document: WorkflowDocument = { description: 'Finite input rename and optional items', block: rootBlock() };
     document.block.input = renameCases[0].before;
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
     const file = join(directory, 'finite_schema.yaml'); writeFileSync(file, JSON.stringify(document));
@@ -226,7 +227,7 @@ test('refuses destination-only finite schema collisions without adopting extra p
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
     // Nested contracts are edited as JSON; the dialog renames top-level fields.
     const topLevel = collisionCases.filter(example => Object.hasOwn(example.schema.properties, 'before'));
-    for (const [index, example] of topLevel.entries()) writeFileSync(join(directory, `finite_collision_${index}.yaml`), JSON.stringify({ description: example.name, block: { ...emptyBlock(), input: example.schema } }));
+    for (const [index, example] of topLevel.entries()) writeFileSync(join(directory, `finite_collision_${index}.yaml`), JSON.stringify({ description: example.name, block: { ...rootBlock(), input: example.schema } }));
     await openLibrary(page, fixture);
     for (const [index, example] of topLevel.entries()) {
       const file = join(directory, `finite_collision_${index}.yaml`), before = parse(readFileSync(file, 'utf8'));
@@ -252,7 +253,7 @@ test('refuses destination-only finite schema collisions without adopting extra p
 test('discovers every matching display title together with original field paths', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   try {
-    let document: WorkflowDocument = { description: 'All matching titles and paths', block: emptyBlock() };
+    let document: WorkflowDocument = { description: 'All matching titles and paths', block: rootBlock() };
     document.block.input = { type: 'object', properties: { Draft: { type: 'string' } }, required: ['Draft'], additionalProperties: false };
     document.block.nodes.done = { type: 'return', output: { type: 'reference', path: ['args'] } };
     document = addNode(addNode(document, [], 'model', 'first'), [], 'model', 'second');
@@ -275,15 +276,15 @@ test('discovers every matching display title together with original field paths'
 test('uses the same visible duplicate transaction from Inspector and canvas for nodes and private containers', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   try {
-    let document: WorkflowDocument = addNode({ description: 'Unified visible duplicate', block: emptyBlock() }, [], 'loop', 'repeat');
+    let document: WorkflowDocument = addNode({ description: 'Unified visible duplicate', block: rootBlock() }, [], 'loop', 'repeat');
     document = setNodePresentation(document, [], 'done', { title: 'Finish', position: { x: 500, y: 240 } });
     document = setNodePresentation(document, [], 'repeat', { position: { x: 900, y: 240 } });
     const child = [{ node: 'repeat' }];
-    document = setNodePresentation(document, child, 'done', { position: { x: 360, y: 90 } });
+    document = setNodePresentation(document, child, 'repeat_start', { position: { x: 360, y: 90 } });
     document = putNote(document, { id: 'private', block: child, text: 'Keep relative', theme: 'blue', position: { x: 32, y: 320 }, dimensions: { width: 220, height: 100 } });
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true }); writeFileSync(join(directory, 'visible_duplicate.yaml'), JSON.stringify(document));
     await openLibrary(page, fixture); await page.getByRole('button', { name: 'visible_duplicate', exact: true }).click();
-    const node = (path: BlockPath, kind: 'node' | 'note', id: string) => canvas(page).locator(`.react-flow__node[data-id=${JSON.stringify(viewId(path, kind, id))}]`);
+    const node = (path: BlockPath, kind: 'node' | 'note' | 'start', id: string) => canvas(page).locator(`.react-flow__node[data-id=${JSON.stringify(viewId(path, kind, id))}]`);
     const position = (item: Locator) => item.evaluate(element => {
       const values = (element as HTMLElement).style.transform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/)!;
       return { x: Number(values[1]), y: Number(values[2]) };
@@ -304,7 +305,7 @@ test('uses the same visible duplicate transaction from Inspector and canvas for 
     await expect(node([], 'node', 'repeat_copy')).toHaveClass(/selected/); await expect(node([], 'node', 'repeat_copy')).toBeInViewport();
     expect(await position(node([], 'node', 'repeat_copy'))).toEqual({ x: 932, y: 272 });
     const origin = await position(node([], 'node', 'repeat_copy'));
-    expect(await position(node(copied, 'node', 'done'))).toEqual({ x: origin.x + 360, y: origin.y + 90 });
+    expect(await position(node(copied, 'start', ''))).toEqual({ x: origin.x + 360, y: origin.y + 90 });
     expect(await position(node(copied, 'note', 'private_2'))).toEqual({ x: origin.x + 32, y: origin.y + 320 });
     await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(node([], 'node', 'repeat_copy')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
@@ -411,7 +412,7 @@ test('measures the native 256-node nested fixture and one metadata-only organize
 test('appends siblings from connected canvas handles instead of inserting into the first edge', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   try {
-    let document: WorkflowDocument = { description: 'Canvas handle fanout', block: emptyBlock() };
+    let document: WorkflowDocument = { description: 'Canvas handle fanout', block: rootBlock() };
     document = addNode(document, [], 'model', 'model'); document = connectStart(document, [], 'model'); document = connect(document, [], 'model', 'next', 'done');
     document = setNodePresentation(document, [], 'model', { position: { x: 380, y: 80 } });
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });

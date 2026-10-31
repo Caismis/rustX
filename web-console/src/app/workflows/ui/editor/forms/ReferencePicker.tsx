@@ -7,7 +7,7 @@ import { useTranslation } from '../../../../../locale/react';
 import { consumerAddress } from '../../../document/analysis';
 import { encodeField, setField, type FieldAddress } from '../../../document/fields';
 import { nodePresentation } from '../../../document/geometry';
-import { blockAt, nodeAt, startOf, type WorkflowDocument } from '../../../document/model';
+import { blockAt, nodeAt, startOf, type BlockPath, type WorkflowDocument } from '../../../document/model';
 import { IconEntry, KindIcon } from '../../icons';
 import { DraftOwner } from './drafts';
 import { useCandidateAnalysis } from './analysis';
@@ -39,11 +39,13 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
     return () => window.document.removeEventListener('pointerdown', outside, true);
   }, [open]);
   const titleOf = (choice: WorkflowReferenceChoice) => choice.producer && document ? nodePresentation(document, choice.producer.block, choice.producer.node)?.title || choice.path[0]
-    : choice.path[0] === 'args' ? tx('workflows:value.block-inputs') : choice.path[0] === 'result' ? tx('workflows:value.result') : choice.path[0];
+    : choice.path[0] === 'args' ? tx('workflows:value.block-inputs') : choice.path[0];
   const query = useMemo<WorkflowAnalysisQuery | undefined>(() => {
     const original = document && consumerAddress(document, address);
-    const consumer = original && token && original.field.kind === 'condition'
-      ? { ...original, field: { ...original.field, kind: 'condition_variable' as const } } : original;
+    // A condition's token lists every comparable variable, whatever the
+    // other side holds now.
+    const consumer = original && token && original.field.kind === 'condition' ? { ...original, field: { ...original.field, kind: 'condition_variable' as const } }
+      : original && token && original.field.kind === 'break_condition' ? { ...original, field: { kind: 'break_condition_variable' as const } } : original;
     return consumer ? { consumer, reference: path.length ? [...path] : undefined, search, limit: 128 } : undefined;
   }, [document, field, path, search, token]);
   const result = useCandidateAnalysis(query, open && !!query), report = result?.report?.analysis;
@@ -57,12 +59,15 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
     group.push(choice); groups.set(key, group);
   }
   const close = () => { setOpen(false); trigger.current?.focus(); };
-  const resultScope = query?.consumer.field.kind === 'loop_until' || query?.consumer.field.kind === 'loop_carry';
-  // A token names the block inputs by their Start, as the canvas cards do.
-  const startTitle = () => { const owner = document && blockAt(document, address.block), start = owner && startOf(owner); return (start && document && nodePresentation(document, address.block, start)?.title) || tx(address.block.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title'); };
-  const producer = path[0], currentTitle = producer === 'args' ? token ? startTitle() : tx('workflows:value.block-inputs') : producer === 'result' && resultScope ? tx('workflows:value.result') : document ? nodePresentation(document, address.block, producer)?.title || producer : producer;
-  const currentBlock = document && blockAt(document, address.block);
-  const currentNode = currentBlock && producer ? nodeAt(currentBlock, producer) : undefined;
+  // The workflow input belongs to the root Start, also inside a body.
+  const startTitle = () => { const start = document && startOf(document.block); return (start && document && nodePresentation(document, [], start)?.title) || tx('workflows:canvas.start-title'); };
+  // A producer is in this block, a block around it, or the body this
+  // node's round fields read.
+  const owning = (id: string): BlockPath | undefined => document ? [...(address.node ? [[...address.block, { node: address.node }]] : []), ...address.block.map((_, depth) => address.block.slice(0, address.block.length - depth)), []]
+    .find(at => { const owner = blockAt(document, at); return owner && nodeAt(owner, id); }) : undefined;
+  const producer = path[0], producerBlock = producer ? owning(producer) : undefined;
+  const currentTitle = producer === 'args' ? token ? startTitle() : tx('workflows:value.block-inputs') : document && producerBlock ? nodePresentation(document, producerBlock, producer)?.title || producer : producer;
+  const currentNode = document && producerBlock ? nodeAt(blockAt(document, producerBlock)!, producer) : undefined;
   const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx('workflows:value.whole');
   const present = (content: import('react').ReactNode) => token ? createPortal(content, window.document.body) : content;
   return <div ref={root} className={css.referencePicker}>

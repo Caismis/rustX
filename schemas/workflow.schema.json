@@ -52,9 +52,41 @@
       ],
       "type": "object"
     },
+    "WorkflowAssignment": {
+      "additionalProperties": false,
+      "description": "One write of a Variable Assigner.",
+      "properties": {
+        "operation": {
+          "$ref": "#/$defs/WorkflowWriteMode"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The operand; `clear`, `remove_first` and `remove_last` take none."
+        },
+        "variable": {
+          "description": "The written Loop variable: `[loop, label]`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "variable",
+        "operation"
+      ],
+      "type": "object"
+    },
     "WorkflowBlock": {
       "additionalProperties": false,
-      "description": "A fixed lexical graph shared by the root and Loop bodies.",
+      "description": "A fixed graph: the root, or a Loop or Iteration body. A body declares no\ninput or output: as in Dify, it reads the variables of the nodes around\nit, its container's variables and its own nodes.",
       "properties": {
         "edges": {
           "default": [],
@@ -79,15 +111,13 @@
         }
       },
       "required": [
-        "input",
-        "output",
         "nodes"
       ],
       "type": "object"
     },
     "WorkflowBlockStep": {
       "additionalProperties": false,
-      "description": "Structured lexical address of a Loop body.",
+      "description": "Structured lexical address of a Loop or Iteration body.",
       "properties": {
         "node": {
           "type": "string"
@@ -178,7 +208,7 @@
             }
           ],
           "default": null,
-          "description": "Required Branch/Loop outcome port. Ordinary nodes must omit it."
+          "description": "The Branch case, Agent route or fail port. Ordinary nodes omit it."
         },
         "to": {
           "description": "Destination node id.",
@@ -244,6 +274,48 @@
       "required": [
         "target",
         "fields"
+      ],
+      "type": "object"
+    },
+    "WorkflowIterationErrorMode": {
+      "description": "How an Iteration treats a round that failed.",
+      "oneOf": [
+        {
+          "const": "terminated",
+          "description": "The Iteration fails.",
+          "type": "string"
+        },
+        {
+          "const": "continue_on_error",
+          "description": "The round contributes `null`.",
+          "type": "string"
+        },
+        {
+          "const": "remove_abnormal_output",
+          "description": "The round contributes nothing.",
+          "type": "string"
+        }
+      ]
+    },
+    "WorkflowLoopVariable": {
+      "additionalProperties": false,
+      "description": "A Loop variable: Dify's `label`, `var_type` and constant or variable value.",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/WorkflowValue",
+          "description": "A literal, or a reference read once before the first round."
+        },
+        "var_type": {
+          "$ref": "#/$defs/WorkflowVarType"
+        }
+      },
+      "required": [
+        "label",
+        "var_type",
+        "value"
       ],
       "type": "object"
     },
@@ -501,37 +573,123 @@
         },
         {
           "additionalProperties": false,
-          "description": "Repeat one fixed typed body until its committed result satisfies `until`.",
+          "description": "As Dify's Loop: run the body again and again, until its break\ncondition holds after a round, an Exit Loop node ran, or `loop_count`\nrounds are done. Its value is its loop variables.",
           "properties": {
             "body": {
               "$ref": "#/$defs/WorkflowBlock"
             },
-            "carry": {
-              "$ref": "#/$defs/WorkflowValue"
+            "break_condition": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowPredicate"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Checked before the first round and after every round."
             },
-            "input": {
-              "$ref": "#/$defs/WorkflowValue"
+            "loop_count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
             },
-            "max_iterations": {
+            "loop_variables": {
+              "description": "Variables the body reads and an Assigner node writes, under the\nLoop's own ID.",
+              "items": {
+                "$ref": "#/$defs/WorkflowLoopVariable"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "loop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "loop_count",
+            "body"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "As Dify's Iteration: run the body once for each item of an array,\nwhich the body reads as `item` and `index` under the Iteration's ID.\nIts value is `output`, the body's chosen value of every round.",
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/WorkflowBlock"
+            },
+            "error_handle_mode": {
+              "$ref": "#/$defs/WorkflowIterationErrorMode"
+            },
+            "flatten_output": {
+              "description": "Join the rounds' arrays into one array.",
+              "type": "boolean"
+            },
+            "is_parallel": {
+              "type": "boolean"
+            },
+            "iterator": {
+              "$ref": "#/$defs/WorkflowValue",
+              "description": "The array to iterate."
+            },
+            "output": {
+              "$ref": "#/$defs/WorkflowValue",
+              "description": "What each round contributes, read after the round."
+            },
+            "parallel_nums": {
+              "default": 10,
+              "description": "Rounds run at once in parallel mode.",
               "format": "uint32",
               "minimum": 0,
               "type": "integer"
             },
             "type": {
-              "const": "loop",
+              "const": "iteration",
               "type": "string"
-            },
-            "until": {
-              "$ref": "#/$defs/WorkflowPredicate"
             }
           },
           "required": [
             "type",
-            "input",
-            "body",
-            "until",
-            "carry",
-            "max_iterations"
+            "iterator",
+            "output",
+            "body"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "As Dify's Exit Loop: ends its Loop once this round settles.",
+          "properties": {
+            "type": {
+              "const": "loop_end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "As Dify's Variable Assigner: writes variables of the Loop it is in.",
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/WorkflowAssignment"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "assigner",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
           ],
           "type": "object"
         },
@@ -1443,6 +1601,37 @@
           "type": "object"
         }
       ]
+    },
+    "WorkflowVarType": {
+      "description": "The value types of a Loop variable, as Dify offers them.",
+      "enum": [
+        "string",
+        "number",
+        "boolean",
+        "object",
+        "array[string]",
+        "array[number]",
+        "array[boolean]",
+        "array[object]"
+      ],
+      "type": "string"
+    },
+    "WorkflowWriteMode": {
+      "description": "Dify's write modes. `overwrite` writes a variable's value and `set` a\nconstant; both assign.",
+      "enum": [
+        "overwrite",
+        "clear",
+        "set",
+        "append",
+        "extend",
+        "remove_first",
+        "remove_last",
+        "increment",
+        "decrement",
+        "multiply",
+        "divide"
+      ],
+      "type": "string"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

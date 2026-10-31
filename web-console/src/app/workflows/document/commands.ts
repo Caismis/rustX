@@ -1,10 +1,10 @@
 import { deleteNodePresentation, renameNodePresentation, requireVacantNodePresentation } from './presentation';
 import {
-  blockAt, edgesOf, nodeAt, sameBlockPath, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
+  blockAt, edgesOf, isContainer, nodeAt, sameBlockPath, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
   type WorkflowDocument,
 } from './model';
 import { authoredEdge, edgePort, outputPorts, portsOf, RESERVED_PORTS, type ControlPort } from './ports';
-import { renameProducer, rewriteBlockReferences } from './references';
+import { renameProducer, rewriteBlockReferences, rewriteRoundReferences } from './references';
 
 /** Why an editing command was refused. The document is unchanged. These are
  * canvas ergonomics only; the native compiler remains the graph authority. */
@@ -25,8 +25,6 @@ export function validNodeId(value: string): RejectionCode | undefined {
   return validLocalKey(value) ?? (value === 'args' ? 'reserved_identifier' : undefined);
 }
 
-const EMPTY_OBJECT = { type: 'object', properties: {}, additionalProperties: false } as const;
-
 /** Native aggregate bounds, enforced before accepting structural growth. */
 export function boundedDocument(document: WorkflowDocument): WorkflowDocument {
   let count = 0;
@@ -34,22 +32,22 @@ export function boundedDocument(document: WorkflowDocument): WorkflowDocument {
     if (depth > 8) throw new CommandRejected('limit_exceeded');
     for (const node of Object.values(block.nodes)) {
       if (++count > 256) throw new CommandRejected('limit_exceeded');
-      if (node.type === 'loop') visit(node.body, depth + 1);
+      if (isContainer(node)) visit(node.body, depth + 1);
     }
   };
   visit(document.block, 0);
   return document;
 }
 
-/** A private nested block that returns an empty object. */
-export function emptyBlock(): Block {
-  return { input: { ...EMPTY_OBJECT }, output: { ...EMPTY_OBJECT }, nodes: { start: { type: 'start' }, done: { type: 'return', output: { type: 'literal', value: {} } } }, edges: [{ from: 'start', to: 'done' }] };
+/** A new body: only its entry, as Dify's Loop Start and Iteration Start. */
+export function emptyBody(start: string): Block {
+  return { nodes: { [start]: { type: 'start' } }, edges: [] };
 }
 
 /** The editable starting definition of each native node kind. Incomplete
  * fields (an unchosen profile or Tool) are left for the author and reported
  * by the native check; nothing is invented to make a graph pass. */
-export function nodeTemplate(kind: NodeKind): NodeDefinition {
+export function nodeTemplate(kind: NodeKind, id: string = kind): NodeDefinition {
   switch (kind) {
     // As Dify's Agent: the final reply is its `text` until outputs are declared.
     case 'agent': return { type: 'agent', profile: '', task: [], output: { type: 'text' } };
@@ -58,7 +56,11 @@ export function nodeTemplate(kind: NodeKind): NodeDefinition {
     case 'tool': return { type: 'tool', selector: { origin: 'builtin', name: '' }, arguments: { type: 'object', fields: {} }, result: { type: 'text' } };
     case 'branch': return { type: 'branch', cases: [{ id: 'true', condition: { type: 'and', predicates: [] } }] };
     case 'review': return { type: 'review', subject: { type: 'plan', value: { type: 'reference', path: ['args'] } }, context: [] };
-    case 'loop': return { type: 'loop', input: { type: 'literal', value: {} }, body: emptyBlock(), until: { type: 'boolean', value: { type: 'literal', value: true } }, carry: { type: 'reference', path: ['result'] }, max_iterations: 3 };
+    // As Dify's defaults: ten rounds, sequential, terminate on error, flattened.
+    case 'loop': return { type: 'loop', loop_count: 10, body: emptyBody(`${id}_start`) };
+    case 'iteration': return { type: 'iteration', iterator: { type: 'reference', path: [] }, output: { type: 'reference', path: [] }, parallel_nums: 10, body: emptyBody(`${id}_start`) };
+    case 'loop_end': return { type: 'loop_end' };
+    case 'assigner': return { type: 'assigner', items: [] };
     case 'return': return { type: 'return', output: { type: 'literal', value: {} } };
   }
 }
@@ -67,6 +69,24 @@ export function nodeTemplate(kind: NodeKind): NodeDefinition {
 export function freshIdentifier(block: Block, base: string): string {
   if (!nodeAt(block, base)) return base;
   for (let index = 2; ; index++) if (!nodeAt(block, `${base}_${index}`)) return `${base}_${index}`;
+}
+
+/** The node IDs a new or renamed node at `path` must not take: as Dify's
+ * ids, it names no node of the block, of a block around it or of a body
+ * inside it, so a body never hides a variable it can read. */
+function takenIdentifiers(document: WorkflowDocument, path: BlockPath): Set<string> {
+  const taken = new Set<string>();
+  const inside = (block: Block) => { for (const [id, node] of Object.entries(block.nodes)) { taken.add(id); if (isContainer(node)) inside(node.body); } };
+  for (let depth = 0; depth < path.length; depth++) for (const id of Object.keys(blockAt(document, path.slice(0, depth))?.nodes ?? {})) taken.add(id);
+  const block = blockAt(document, path); if (block) inside(block);
+  return taken;
+}
+
+/** A free node id at `path`. */
+export function freshNodeId(document: WorkflowDocument, path: BlockPath, base: string): string {
+  const taken = takenIdentifiers(document, path);
+  if (!taken.has(base)) return base;
+  for (let index = 2; ; index++) if (!taken.has(`${base}_${index}`)) return `${base}_${index}`;
 }
 
 function require(block: Block | undefined): Block {
@@ -97,7 +117,7 @@ export function addNode(document: WorkflowDocument, path: BlockPath, kind: NodeK
   if (invalid) throw new CommandRejected(invalid);
   if (nodeAt(block, id)) throw new CommandRejected('duplicate_identifier');
   requireVacantNodePresentation(document, path, id);
-  const added = { ...block, nodes: { ...block.nodes, [id]: nodeTemplate(kind) } };
+  const added = { ...block, nodes: { ...block.nodes, [id]: nodeTemplate(kind, id) } };
   if (from) checkConnection(added, from.from, from.port, id);
   return boundedDocument(updateBlock(document, path, () => from ? withEdges(added, [...edgesOf(added), authoredEdge(from.from, from.port, id)]) : added));
 }
@@ -148,9 +168,12 @@ export function renameNode(document: WorkflowDocument, path: BlockPath, from: st
   if (from === to) return document;
   const invalid = validNodeId(to);
   if (invalid) throw new CommandRejected(invalid);
-  if (nodeAt(block, to)) throw new CommandRejected('duplicate_identifier');
+  if (takenIdentifiers(document, path).has(to)) throw new CommandRejected('duplicate_identifier');
   requireVacantNodePresentation(document, path, to);
-  const next = updateBlock(document, path, current => {
+  // A body's own nodes are also read by its container's round fields.
+  const parent = path.slice(0, -1), owner = path.at(-1)?.node;
+  const outer = owner ? updateBlock(document, parent, current => ({ ...current, nodes: { ...current.nodes, [owner]: rewriteRoundReferences(current.nodes[owner], renameProducer(from, to)) } })) : document;
+  const next = updateBlock(outer, path, current => {
     const renamed = rewriteBlockReferences(current, renameProducer(from, to));
     return {
       ...renamed,

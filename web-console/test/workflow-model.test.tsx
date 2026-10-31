@@ -111,33 +111,29 @@ describe('native candidate analysis presentation', () => {
     else expect(choice.textContent).toContain(kind === 'open' ? 'Compatibility unknown' : 'Compatible type');
   });
 
-  const equalities = (['branch', 'loop'] as const).flatMap(kind => (['equal', 'not_equal'] as const).flatMap(operator => (['left', 'right'] as const).map(side => ({ kind, operator, side }))));
-  it.each(equalities)('disables an incompatible $kind $operator $side operand while preserving a truly unknown type relation', async ({ kind, operator, side }) => {
+  const equalities = (['equal', 'not_equal'] as const).flatMap(operator => (['left', 'right'] as const).map(side => ({ operator, side })));
+  it.each(equalities)('disables an incompatible $operator $side operand while preserving a truly unknown type relation', async ({ operator, side }) => {
     const native = controlledAnalysis(), editor = await open(native.analyze);
-    const prefix = kind === 'loop' ? 'result' : 'args';
-    const count = { type: 'reference' as const, path: [prefix, 'count'] }, unfinished = { type: 'reference' as const, path: ['unfinished'] };
+    const count = { type: 'reference' as const, path: ['args', 'count'] }, unfinished = { type: 'reference' as const, path: ['unfinished'] };
     const predicate: Predicate = { type: operator, left: side === 'left' ? count : unfinished, right: side === 'right' ? count : unfinished };
     const schema = { type: 'object', properties: { count: { type: 'integer' }, text: { type: 'string' } }, required: ['count', 'text'], additionalProperties: false };
-    const node: NodeDefinition = kind === 'branch' ? { type: 'branch', cases: [{ id: 'true', condition: predicate }] }
-      : { type: 'loop', input: { type: 'reference', path: ['args'] }, body: { input: schema, output: schema,  nodes: {workflow_start:{type:'start'}, ...{ done: { type: 'return', output: { type: 'reference', path: ['args'] } } }}, edges: [{from:'workflow_start',to:'done'}, ...[]] }, until: predicate, carry: { type: 'reference', path: ['result'] }, max_iterations: 1 };
-    const ports = kind === 'branch' ? ['true', 'false'] : ['satisfied', 'exhausted'];
-    act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, block: { ...document.block, input: schema, nodes: { ...document.block.nodes, model: node }, edges: ports.map(port => ({ from: 'model', to: 'done', port: port as 'true' | 'false' | 'satisfied' | 'exhausted' })) } }) }));
-    if (kind === 'branch') fireEvent.click(inspector().getByRole('button', { name: 'Advanced conditions' }));
-    fireEvent.click(inspector().getAllByRole('button', { name: 'Choose a variable' })[(kind === 'loop' ? 1 : 0) + (side === 'left' ? 0 : 1)]);
-    expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'model' }, field: kind === 'branch' ? { kind: 'condition', case_id: 'true' } : { kind: 'loop_until' }, path: [{ kind: side }] });
+    const node: NodeDefinition = { type: 'branch', cases: [{ id: 'true', condition: predicate }] };
+    act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, block: { ...document.block, input: schema, nodes: { ...document.block.nodes, model: node }, edges: (['true', 'false'] as const).map(port => ({ from: 'model', to: 'done', port })) } }) }));
+    fireEvent.click(inspector().getByRole('button', { name: 'Advanced conditions' }));
+    fireEvent.click(inspector().getAllByRole('button', { name: 'Choose a variable' })[side === 'left' ? 0 : 1]);
+    expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'model' }, field: { kind: 'condition', case_id: 'true' }, path: [{ kind: side }] });
     await act(async () => native.complete({ references: [
-      { producer: null, path: [prefix, 'count'], schema: { type: 'integer' }, availability: 'available', compatibility: 'incompatible', diagnostic: 'equality requires matching boolean/string/null types' },
-      { producer: null, path: [prefix, 'text'], schema: { type: 'string' }, availability: 'available', compatibility: 'unknown', diagnostic: null },
+      { producer: null, path: ['args', 'count'], schema: { type: 'integer' }, availability: 'available', compatibility: 'incompatible', diagnostic: 'equality requires matching boolean/string/null types' },
+      { producer: null, path: ['args', 'text'], schema: { type: 'string' }, availability: 'available', compatibility: 'unknown', diagnostic: null },
     ] }));
-    const numeric = inspector().getByRole('button', { name: new RegExp(`^${prefix} / count ·`) }) as HTMLButtonElement;
+    const numeric = inspector().getByRole('button', { name: /^args \/ count ·/ }) as HTMLButtonElement;
     expect(numeric.disabled).toBe(true);
-    const text = inspector().getByRole('button', { name: new RegExp(`^${prefix} / text ·`) }) as HTMLButtonElement;
+    const text = inspector().getByRole('button', { name: /^args \/ text ·/ }) as HTMLButtonElement;
     expect(text.disabled).toBe(false); expect(text.textContent).toContain('Compatibility unknown');
     fireEvent.click(text);
     const current = editor.getSnapshot().context.document!.block.nodes.model;
-    if (current.type !== 'branch' && current.type !== 'loop') throw new Error('Predicate owner');
-    const changed = current.type === 'branch' ? current.cases[0].condition : current.until;
-    expect(changed).toMatchObject({ type: operator, [side]: { type: 'reference', path: [prefix, 'text'] } });
+    if (current.type !== 'branch') throw new Error('Predicate owner');
+    expect(current.cases[0].condition).toMatchObject({ type: operator, [side]: { type: 'reference', path: ['args', 'text'] } });
   });
 
   it('replaces output loading with a failure when the current request rejects', async () => {
@@ -384,6 +380,42 @@ describe('Model native editing document', () => {
     expect(read()).toMatchObject({ on_error: { type: 'fail_branch' } });
     const card = document.querySelector<HTMLElement>('.react-flow__node[aria-label="Tool node model"]')!;
     expect(card.querySelector('[data-handleid="fail"]')).toBeTruthy();
+  });
+
+  it('configures a Loop as Dify: loop variables, termination conditions and a maximum count', async () => {
+    const loop: NodeDefinition = { type: 'loop', loop_count: 10, body: { nodes: { model_start: { type: 'start' } }, edges: [] } };
+    const actor = await open(undefined, loop);
+    const read = () => actor.getSnapshot().context.document!.block.nodes.model;
+    fireEvent.click(inspector().getByRole('button', { name: 'Add loop variable' }));
+    expect(read()).toMatchObject({ loop_variables: [{ label: 'var_1', var_type: 'string', value: { type: 'literal', value: '' } }] });
+    fireEvent.change(inspector().getByRole('combobox', { name: 'Variable type' }), { target: { value: 'number' } });
+    expect(read()).toMatchObject({ loop_variables: [{ var_type: 'number', value: { type: 'literal', value: 0 } }] });
+    fireEvent.change(inspector().getByRole('combobox', { name: 'Input Mode' }), { target: { value: 'variable' } });
+    expect(read()).toMatchObject({ loop_variables: [{ value: { type: 'reference', path: [] } }] });
+    fireEvent.click(inspector().getByRole('button', { name: 'Add condition' }));
+    expect(read()).toMatchObject({ break_condition: { type: 'and', predicates: [{ type: 'equal' }] } });
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove condition 1' }));
+    expect(read()).not.toHaveProperty('break_condition');
+    fireEvent.change(inspector().getByRole('spinbutton', { name: 'Maximum Loop Count (times)' }), { target: { value: '30' } });
+    expect(read()).toMatchObject({ loop_count: 30 });
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove var_1' }));
+    expect(read()).not.toHaveProperty('loop_variables');
+  });
+
+  it('configures an Iteration as Dify: parallel mode, error response and flattening', async () => {
+    const iteration: NodeDefinition = { type: 'iteration', iterator: { type: 'reference', path: [] }, output: { type: 'reference', path: [] }, parallel_nums: 10, body: { nodes: { model_start: { type: 'start' } }, edges: [] } };
+    const actor = await open(undefined, iteration);
+    const read = () => actor.getSnapshot().context.document!.block.nodes.model;
+    expect(inspector().queryByRole('spinbutton', { name: 'Maximum parallelism' })).toBeNull();
+    fireEvent.click(inspector().getByRole('switch', { name: 'Parallel Mode' }));
+    expect(read()).toMatchObject({ is_parallel: true });
+    fireEvent.change(inspector().getByRole('spinbutton', { name: 'Maximum parallelism' }), { target: { value: '4' } });
+    expect(read()).toMatchObject({ parallel_nums: 4 });
+    await act(async () => fireEvent.click(inspector().getByRole('button', { name: 'Error response method' })));
+    await act(async () => fireEvent.click(await screen.findByRole('menuitem', { name: 'Continue on Error' })));
+    expect(read()).toMatchObject({ error_handle_mode: 'continue_on_error' });
+    fireEvent.click(inspector().getByRole('switch', { name: 'Flatten Output' }));
+    expect(read()).toMatchObject({ flatten_output: false });
   });
 
   it('names a source Tool by its source and tool, with its arguments as one value', async () => {

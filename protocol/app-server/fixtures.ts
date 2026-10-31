@@ -1402,12 +1402,12 @@ export const fixtures = [
             "file_name": "implement_and_review.yaml",
             "id": "implement_and_review",
             "relative_path": ".agents/workflows/implement_and_review.yaml",
-            "revision": "sha256:d0d40eb81bb0c4308e1e085f1dbe06a892c476043847004cf98430179524a256",
-            "byte_length": "14440",
+            "revision": "sha256:4122df9a44c425fb07912c16ba8ed24bc81e7951f6013134415c0d12c18d9562",
+            "byte_length": "13622",
             "modified_ms": 1790000000000,
             "description": "Plan greeting.py, gate implementation on human plan acceptance, then implement and run real checks in the shared Session workspace up to three times.",
             "display": null,
-            "nodes": 11,
+            "nodes": 12,
             "diagnostic": null,
             "shadows_global": false
           },
@@ -3446,7 +3446,7 @@ export const fixtures = [
         "id": "implement_and_review",
         "path": "/workspace/fixture/.agents/workflows/implement_and_review.yaml",
         "relative_path": ".agents/workflows/implement_and_review.yaml",
-        "revision": "sha256:d0d40eb81bb0c4308e1e085f1dbe06a892c476043847004cf98430179524a256",
+        "revision": "sha256:4122df9a44c425fb07912c16ba8ed24bc81e7951f6013134415c0d12c18d9562",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -3507,7 +3507,6 @@ export const fixtures = [
                       "type": "reference",
                       "path": [
                         "repair",
-                        "result",
                         "feedback"
                       ]
                     },
@@ -3527,7 +3526,6 @@ export const fixtures = [
                       "type": "reference",
                       "path": [
                         "repair",
-                        "result",
                         "feedback"
                       ]
                     },
@@ -3540,71 +3538,61 @@ export const fixtures = [
               },
               "intake_brief": {
                 "type": "loop",
-                "input": {
-                  "type": "object",
-                  "fields": {
-                    "requirement": {
+                "loop_variables": [
+                  {
+                    "label": "requirement",
+                    "var_type": "string",
+                    "value": {
                       "type": "reference",
                       "path": [
                         "args",
                         "requirement"
                       ]
                     }
+                  },
+                  {
+                    "label": "answers",
+                    "var_type": "array[object]",
+                    "value": {
+                      "type": "literal",
+                      "value": []
+                    }
                   }
-                },
+                ],
+                "loop_count": 1,
                 "body": {
-                  "input": {
-                    "type": "object",
-                    "properties": {
-                      "requirement": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "requirement"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "output": {
-                    "type": "object",
-                    "properties": {
-                      "requirement": {
-                        "type": "string"
-                      },
-                      "answers": {
-                        "type": "array",
-                        "items": {
-                          "type": "object"
-                        }
-                      }
-                    },
-                    "required": [
-                      "requirement",
-                      "answers"
-                    ],
-                    "additionalProperties": false
-                  },
                   "nodes": {
                     "answered": {
-                      "type": "return",
-                      "output": {
-                        "type": "object",
-                        "fields": {
-                          "answers": {
+                      "type": "assigner",
+                      "items": [
+                        {
+                          "variable": [
+                            "intake_brief",
+                            "requirement"
+                          ],
+                          "operation": "set",
+                          "value": {
+                            "type": "literal",
+                            "value": "Implement the fixed greeting contract using the selected priority."
+                          }
+                        },
+                        {
+                          "variable": [
+                            "intake_brief",
+                            "answers"
+                          ],
+                          "operation": "overwrite",
+                          "value": {
                             "type": "reference",
                             "path": [
                               "question",
                               "answers"
                             ]
-                          },
-                          "requirement": {
-                            "type": "literal",
-                            "value": "Implement the fixed greeting contract using the selected priority."
                           }
                         }
-                      }
+                      ]
                     },
-                    "declined": {
+                    "cancelled": {
                       "type": "branch",
                       "cases": [
                         {
@@ -3621,6 +3609,9 @@ export const fixtures = [
                           }
                         }
                       ]
+                    },
+                    "intake_start": {
+                      "type": "start"
                     },
                     "missing": {
                       "type": "branch",
@@ -3643,25 +3634,6 @@ export const fixtures = [
                           }
                         }
                       ]
-                    },
-                    "provided": {
-                      "type": "return",
-                      "output": {
-                        "type": "object",
-                        "fields": {
-                          "answers": {
-                            "type": "literal",
-                            "value": []
-                          },
-                          "requirement": {
-                            "type": "reference",
-                            "path": [
-                              "args",
-                              "requirement"
-                            ]
-                          }
-                        }
-                      }
                     },
                     "question": {
                       "type": "tool",
@@ -3713,29 +3685,22 @@ export const fixtures = [
                         }
                       }
                     },
-                    "start": {
-                      "type": "start"
-                    },
-                    "unanswered": {
-                      "type": "return",
-                      "output": {
-                        "type": "object",
-                        "fields": {
-                          "answers": {
-                            "type": "literal",
-                            "value": []
-                          },
-                          "requirement": {
-                            "type": "literal",
-                            "value": ""
-                          }
+                    "unanswered_brief": {
+                      "type": "assigner",
+                      "items": [
+                        {
+                          "variable": [
+                            "intake_brief",
+                            "requirement"
+                          ],
+                          "operation": "clear"
                         }
-                      }
+                      ]
                     }
                   },
                   "edges": [
                     {
-                      "from": "start",
+                      "from": "intake_start",
                       "to": "missing",
                       "port": null
                     },
@@ -3745,47 +3710,22 @@ export const fixtures = [
                       "port": "true"
                     },
                     {
-                      "from": "missing",
-                      "to": "provided",
-                      "port": "false"
-                    },
-                    {
                       "from": "question",
-                      "to": "declined",
+                      "to": "cancelled",
                       "port": null
                     },
                     {
-                      "from": "declined",
-                      "to": "unanswered",
+                      "from": "cancelled",
+                      "to": "unanswered_brief",
                       "port": "true"
                     },
                     {
-                      "from": "declined",
+                      "from": "cancelled",
                       "to": "answered",
                       "port": "false"
                     }
                   ]
-                },
-                "until": {
-                  "type": "boolean",
-                  "value": {
-                    "type": "literal",
-                    "value": true
-                  }
-                },
-                "carry": {
-                  "type": "object",
-                  "fields": {
-                    "requirement": {
-                      "type": "reference",
-                      "path": [
-                        "result",
-                        "requirement"
-                      ]
-                    }
-                  }
-                },
-                "max_iterations": 1
+                }
               },
               "plan": {
                 "type": "agent",
@@ -3802,8 +3742,7 @@ export const fixtures = [
                   {
                     "type": "reference",
                     "path": [
-                      "intake_brief",
-                      "result"
+                      "intake_brief"
                     ]
                   },
                   {
@@ -3873,119 +3812,54 @@ export const fixtures = [
               },
               "repair": {
                 "type": "loop",
-                "input": {
-                  "type": "object",
-                  "fields": {
-                    "feedback": {
-                      "type": "literal",
-                      "value": "Implement the accepted plan."
-                    },
-                    "plan": {
+                "loop_variables": [
+                  {
+                    "label": "plan",
+                    "var_type": "object",
+                    "value": {
                       "type": "reference",
                       "path": [
                         "plan"
                       ]
                     }
+                  },
+                  {
+                    "label": "feedback",
+                    "var_type": "string",
+                    "value": {
+                      "type": "literal",
+                      "value": "Implement the accepted plan."
+                    }
+                  },
+                  {
+                    "label": "passed",
+                    "var_type": "boolean",
+                    "value": {
+                      "type": "literal",
+                      "value": false
+                    }
+                  },
+                  {
+                    "label": "report",
+                    "var_type": "object",
+                    "value": {
+                      "type": "literal",
+                      "value": {}
+                    }
+                  }
+                ],
+                "break_condition": {
+                  "type": "boolean",
+                  "value": {
+                    "type": "reference",
+                    "path": [
+                      "repair",
+                      "passed"
+                    ]
                   }
                 },
+                "loop_count": 3,
                 "body": {
-                  "input": {
-                    "type": "object",
-                    "properties": {
-                      "plan": {
-                        "type": "object",
-                        "properties": {
-                          "summary": {
-                            "type": "string"
-                          },
-                          "steps": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          }
-                        },
-                        "required": [
-                          "summary",
-                          "steps"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "feedback": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "plan",
-                      "feedback"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "output": {
-                    "type": "object",
-                    "properties": {
-                      "plan": {
-                        "type": "object",
-                        "properties": {
-                          "summary": {
-                            "type": "string"
-                          },
-                          "steps": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          }
-                        },
-                        "required": [
-                          "summary",
-                          "steps"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "feedback": {
-                        "type": "string"
-                      },
-                      "passed": {
-                        "type": "boolean"
-                      },
-                      "report": {
-                        "type": "object",
-                        "properties": {
-                          "exit_code": {
-                            "type": "integer"
-                          },
-                          "stdout": {
-                            "type": "string",
-                            "enum": [
-                              "passed",
-                              "failed"
-                            ]
-                          },
-                          "stderr": {
-                            "type": "string"
-                          },
-                          "combined": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "exit_code",
-                          "stdout",
-                          "stderr",
-                          "combined"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "required": [
-                      "plan",
-                      "feedback",
-                      "passed",
-                      "report"
-                    ],
-                    "additionalProperties": false
-                  },
                   "nodes": {
                     "check": {
                       "type": "tool",
@@ -4031,13 +3905,56 @@ export const fixtures = [
                         }
                       }
                     },
+                    "failure": {
+                      "type": "assigner",
+                      "items": [
+                        {
+                          "variable": [
+                            "repair",
+                            "plan"
+                          ],
+                          "operation": "overwrite",
+                          "value": {
+                            "type": "reference",
+                            "path": [
+                              "implement",
+                              "plan"
+                            ]
+                          }
+                        },
+                        {
+                          "variable": [
+                            "repair",
+                            "report"
+                          ],
+                          "operation": "overwrite",
+                          "value": {
+                            "type": "reference",
+                            "path": [
+                              "check"
+                            ]
+                          }
+                        },
+                        {
+                          "variable": [
+                            "repair",
+                            "feedback"
+                          ],
+                          "operation": "set",
+                          "value": {
+                            "type": "literal",
+                            "value": "The checker ran successfully but greeting.py failed at least one fixed case. Repair greeting.py."
+                          }
+                        }
+                      ]
+                    },
                     "implement": {
                       "type": "agent",
                       "profile": "implementer",
                       "task": [
                         {
                           "type": "literal",
-                          "value": "Implement or repair greeting.py so greeting(name) returns Hello, NAME! and uses friend for an empty name. Use the supplied plan and feedback as data. Change only greeting.py. Never claim verification from prose; the next fixed Tool runs the checker. Return the implemented plan as the declared output for the next iteration."
+                          "value": "Implement or repair greeting.py so greeting(name) returns Hello, NAME! and uses friend for an empty name. Use the supplied plan and feedback as data. Change only greeting.py. Never claim verification from prose; the next fixed Tool runs the checker. Return the implemented plan as the declared output for the next round."
                         },
                         {
                           "type": "literal",
@@ -4046,7 +3963,7 @@ export const fixtures = [
                         {
                           "type": "reference",
                           "path": [
-                            "args",
+                            "repair",
                             "plan"
                           ]
                         },
@@ -4057,7 +3974,7 @@ export const fixtures = [
                         {
                           "type": "reference",
                           "path": [
-                            "args",
+                            "repair",
                             "feedback"
                           ]
                         }
@@ -4116,71 +4033,67 @@ export const fixtures = [
                         }
                       ]
                     },
-                    "repair": {
-                      "type": "return",
-                      "output": {
-                        "type": "object",
-                        "fields": {
-                          "feedback": {
-                            "type": "literal",
-                            "value": "The checker ran successfully but greeting.py failed at least one fixed case. Repair greeting.py."
-                          },
-                          "passed": {
-                            "type": "literal",
-                            "value": false
-                          },
-                          "plan": {
-                            "type": "reference",
-                            "path": [
-                              "implement",
-                              "plan"
-                            ]
-                          },
-                          "report": {
-                            "type": "reference",
-                            "path": [
-                              "check"
-                            ]
-                          }
-                        }
-                      }
-                    },
-                    "start": {
+                    "repair_start": {
                       "type": "start"
                     },
                     "success": {
-                      "type": "return",
-                      "output": {
-                        "type": "object",
-                        "fields": {
-                          "feedback": {
-                            "type": "literal",
-                            "value": "Both fixed greeting cases passed."
-                          },
-                          "passed": {
-                            "type": "literal",
-                            "value": true
-                          },
-                          "plan": {
+                      "type": "assigner",
+                      "items": [
+                        {
+                          "variable": [
+                            "repair",
+                            "plan"
+                          ],
+                          "operation": "overwrite",
+                          "value": {
                             "type": "reference",
                             "path": [
                               "implement",
                               "plan"
                             ]
-                          },
-                          "report": {
+                          }
+                        },
+                        {
+                          "variable": [
+                            "repair",
+                            "report"
+                          ],
+                          "operation": "overwrite",
+                          "value": {
                             "type": "reference",
                             "path": [
                               "check"
                             ]
                           }
+                        },
+                        {
+                          "variable": [
+                            "repair",
+                            "feedback"
+                          ],
+                          "operation": "set",
+                          "value": {
+                            "type": "literal",
+                            "value": "Both fixed greeting cases passed."
+                          }
+                        },
+                        {
+                          "variable": [
+                            "repair",
+                            "passed"
+                          ],
+                          "operation": "set",
+                          "value": {
+                            "type": "literal",
+                            "value": true
+                          }
                         }
-                      }
+                      ]
                     }
                   },
                   "edges": [
                     {
-                      "from": "start",
+                      "from": "repair_start",
                       "to": "implement",
                       "port": null
                     },
@@ -4201,41 +4114,11 @@ export const fixtures = [
                     },
                     {
                       "from": "passed",
-                      "to": "repair",
+                      "to": "failure",
                       "port": "false"
                     }
                   ]
-                },
-                "until": {
-                  "type": "boolean",
-                  "value": {
-                    "type": "reference",
-                    "path": [
-                      "result",
-                      "passed"
-                    ]
-                  }
-                },
-                "carry": {
-                  "type": "object",
-                  "fields": {
-                    "feedback": {
-                      "type": "reference",
-                      "path": [
-                        "result",
-                        "feedback"
-                      ]
-                    },
-                    "plan": {
-                      "type": "reference",
-                      "path": [
-                        "result",
-                        "plan"
-                      ]
-                    }
-                  }
-                },
-                "max_iterations": 3
+                }
               },
               "review_plan": {
                 "type": "review",
@@ -4264,13 +4147,30 @@ export const fixtures = [
                         "type": "reference",
                         "path": [
                           "intake_brief",
-                          "result",
                           "requirement"
                         ]
                       },
                       "right": {
                         "type": "literal",
                         "value": ""
+                      }
+                    }
+                  }
+                ]
+              },
+              "verified": {
+                "type": "branch",
+                "cases": [
+                  {
+                    "id": "true",
+                    "condition": {
+                      "type": "boolean",
+                      "value": {
+                        "type": "reference",
+                        "path": [
+                          "repair",
+                          "passed"
+                        ]
                       }
                     }
                   }
@@ -4309,32 +4209,32 @@ export const fixtures = [
                 "port": "false"
               },
               {
-                "from": "repair",
-                "to": "implemented",
-                "port": "satisfied"
-              },
-              {
-                "from": "repair",
-                "to": "exhausted",
-                "port": "exhausted"
-              },
-              {
                 "from": "start",
                 "to": "intake_brief",
                 "port": null
               },
               {
-                "from": "intake_brief",
-                "to": "unanswered",
-                "port": "satisfied"
-              },
-              {
-                "from": "intake_brief",
-                "to": "unanswered",
-                "port": "exhausted"
-              },
-              {
                 "from": "start",
+                "to": "unanswered",
+                "port": null
+              },
+              {
+                "from": "repair",
+                "to": "verified",
+                "port": null
+              },
+              {
+                "from": "verified",
+                "to": "implemented",
+                "port": "true"
+              },
+              {
+                "from": "verified",
+                "to": "exhausted",
+                "port": "false"
+              },
+              {
+                "from": "intake_brief",
                 "to": "unanswered",
                 "port": null
               }
@@ -6623,7 +6523,7 @@ export const fixtures = [
           "caps": {
             "agent_runs": 256,
             "block_depth": 8,
-            "loop_iterations": 256,
+            "loop_count": 100,
             "model_calls": 256,
             "model_message_bytes": 32768,
             "model_message_parts": 64,
@@ -6754,7 +6654,7 @@ export const fixtures = [
                   "selector": null,
                   "output_schema": null,
                   "result_kind": null,
-                  "max_iterations": null,
+                  "loop_count": null,
                   "review_subject": null
                 },
                 "ready": {
@@ -6794,7 +6694,7 @@ export const fixtures = [
                   "selector": null,
                   "output_schema": null,
                   "result_kind": null,
-                  "max_iterations": null,
+                  "loop_count": null,
                   "review_subject": null
                 },
                 "reviews_quality_refine": {
@@ -6833,7 +6733,7 @@ export const fixtures = [
                     "additionalProperties": false
                   },
                   "result_kind": null,
-                  "max_iterations": null,
+                  "loop_count": null,
                   "review_subject": null
                 },
                 "reviews_quality_review": {
@@ -6873,7 +6773,7 @@ export const fixtures = [
                     "additionalProperties": false
                   },
                   "result_kind": null,
-                  "max_iterations": null,
+                  "loop_count": null,
                   "review_subject": null
                 },
                 "reviews_security_review": {
@@ -6913,7 +6813,7 @@ export const fixtures = [
                     "additionalProperties": false
                   },
                   "result_kind": null,
-                  "max_iterations": null,
+                  "loop_count": null,
                   "review_subject": null
                 },
                 "revise": {
@@ -6953,7 +6853,7 @@ export const fixtures = [
                   "selector": null,
                   "output_schema": null,
                   "result_kind": null,
-                  "max_iterations": null,
+                  "loop_count": null,
                   "review_subject": null
                 },
                 "start": {
@@ -6974,7 +6874,7 @@ export const fixtures = [
                   "selector": null,
                   "output_schema": null,
                   "result_kind": null,
-                  "max_iterations": null,
+                  "loop_count": null,
                   "review_subject": null
                 }
               }

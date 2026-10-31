@@ -18,6 +18,9 @@ Reference paths below are relative to `web/app/components/workflow/`.
 | `nodes/_base/components/variable/var-reference-picker.tsx` | Searchable variables beside the exact consumer |
 | `nodes/if-else/node.tsx` | IF/ELSE exits |
 | `nodes/loop/node.tsx`, `nodes/iteration/use-interactions.ts` | Nested body frame, focus and sizing |
+| `nodes/loop/panel.tsx`, `nodes/loop/components/` | Loop variables, termination condition (the IF/ELSE condition list) and maximum loop count |
+| `nodes/iteration/panel.tsx` | Iteration input and output variable, parallel mode, error response method and flattening |
+| `nodes/assigner/`, `nodes/loop-end/` | Variable Assigner write rows by type, and Exit Loop |
 | `custom-edge.tsx`, `block-selector/blocks.tsx` | Searchable next-node picker and explicit edge insertion |
 | `block-selector/tabs.tsx`, `blocks.tsx`, `tool/action-item.tsx`, `preview-card.tsx` | Nodes and Tools tabs, classified rows, a node per Tool and a hover preview card |
 | `nodes/tool/panel.tsx`, `components/tool-form/`, `mixed-variable-text-input/` | Tool parameters as a form: text with inline variables, a variable/constant switch, folded output variables |
@@ -31,15 +34,16 @@ backend and DSL are not copied or vendored.
 Start is a real native node in every Block. Its input contract belongs to the
 Block, while its title and geometry use ordinary node metadata. There is no
 Parallel node or branch-lane container. Parallelism comes from multiple
-connections on any output port, including Start and either Branch/Loop exit.
-Only Loop introduces a private Block.
+connections on any output port, including Start and every Branch exit.
+Loop and Iteration own a body whose Start is Dify's Loop or Iteration Start: it
+has no input of its own, and its inspector says what the body reads.
 
 ## Next step and canvas gestures
 
 The inspector's **Next step** section shows the source icon, every existing
 successor and a dashed add row. An empty port says **Select the next node**;
-a connected port says **Add parallel node**. Branch and Loop list each output
-port separately. All node icons have a solid semantic background and a white
+a connected port says **Add parallel node**. Branch lists each output port
+separately. All node icons have a solid semantic background and a white
 glyph, consistently across cards, inspector headers, successor rows and pickers.
 
 The canvas **+** and the next-step popover share one chooser, as Dify's block
@@ -115,7 +119,10 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | Agent | Profile picked from the scope's profiles, task in the prompt editor with variables, structured output fields |
 | Tool | Exact selector, arguments and text/JSON result projection |
 | Branch | Compact IF/ELIF/ELSE card, ordered cases, searchable variable conditions, AND/OR and multiple successors per exit |
-| Loop | Initial input, private body contracts, `until`, `carry`, iteration limit and both exits |
+| Loop | Loop variables (name, type, variable or constant value), termination conditions as IF/ELSE builds them, and a 1–100 maximum loop count slider |
+| Iteration | Array input and output variable pickers, parallel mode with a 1–10 maximum parallelism slider, error response method and flatten output |
+| Exit Loop | No configuration; offered only inside a Loop body |
+| Variable Assigner | One row per write: a variable of the enclosing Loop, an operation its type offers, and a variable or constant operand; offered only inside a Loop body |
 | Review | Plan subject/context and native accepted/feedback outputs |
 | Return | Whole or constructed output and the owning Block's output contract |
 
@@ -133,16 +140,21 @@ removing them retains unfinished child text as a detached draft.
 References are structured arrays of literal field names. Native analysis proves
 that a producer is an ancestor and runs whenever the consumer runs. A join can
 read both concurrent producers; it cannot read an optional producer from a
-conditional path. Loop bodies see only their projected `args` and local values.
-Loop `until` and `carry` see only body `result`. Parent consumers see the Loop's
-structural result. The browser does not implement a second type checker.
+conditional path. As in Dify, a body sees the variables around its container,
+the container's own variables (Loop variables, or Iteration `item` and `index`)
+and its own nodes. A break condition and an Iteration output read the body's
+scope after a round. Later consumers see a Loop's variables and an Iteration's
+`output`. The browser does not implement a second type checker.
 
 Qualified identities encode the complete Block path and local node. Each path
-step names a Loop owner. Start, ordinary nodes, edges and notes have separate
+step names a Loop or Iteration owner. Start, ordinary nodes, edges and notes have separate
 view identity domains; actual Start IDs still remain native node IDs. Renaming
-a node updates references, edges, presentation and draft identity atomically.
-Copy/paste clones private Loop subtrees and their presentation, assigns fresh
-IDs, and preserves literal data. Start cannot be deleted or duplicated. Orphan
+a node updates references (including those in bodies that read it, and a body
+node's references in its container's break condition or output), edges,
+presentation and draft identity atomically. As Dify's IDs, a new or renamed node
+never takes an ID of its block, a block around it or a body inside it.
+Copy/paste clones Loop and Iteration subtrees and their presentation, assigns
+fresh IDs, and preserves literal data. Start cannot be deleted or duplicated. Orphan
 presentation is retained, and a rename/copy collision refuses the transaction.
 
 Field drafts remain attached to their exact document version and structured
@@ -162,4 +174,5 @@ schemas, nodes, references and edges unchanged.
 | Opposite completion orders, capacity one, failure aggregation and cancellation drain | Native Workflow runtime and template tests |
 | Sibling work continues during pending human Review | `src/runtime/workflow/tests/shared_workspace.rs` |
 | Nested Loop execution, output values and inert author notes | `editor_authored_nested_file_executes_keyed_results_and_both_loop_exits` |
+| Loop variables, break conditions, Exit Loop, Iteration order, parallelism and error modes | `src/runtime/workflow/tests/loops.rs` |
 | Native examples, canonical YAML, file size and revision boundaries | Native file and authoring tests |

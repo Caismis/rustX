@@ -116,8 +116,8 @@ export function RetrySettings({ retry, setRetry }: { retry?: Retry | null; setRe
     <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:failure.retry')}</span>
       <Switch checked={!!retry} label={tx('workflows:failure.retry')} onChange={on => setRetry(on ? { max_retries: 3, interval_ms: 1000 } : undefined)} /></h3>
     {retry && <div className={css.retryFields}>
-      <RetryField label={tx('workflows:failure.max-retries')} unit={tx('workflows:failure.times')} min={1} max={10} step={1} value={retry.max_retries} onChange={max_retries => setRetry({ ...retry, max_retries })} />
-      <RetryField label={tx('workflows:failure.interval')} unit={tx('workflows:failure.ms')} min={100} max={5000} step={100} value={retry.interval_ms} onChange={interval_ms => setRetry({ ...retry, interval_ms })} />
+      <SliderField label={tx('workflows:failure.max-retries')} unit={tx('workflows:failure.times')} min={1} max={10} step={1} value={retry.max_retries} onChange={max_retries => setRetry({ ...retry, max_retries })} />
+      <SliderField label={tx('workflows:failure.interval')} unit={tx('workflows:failure.ms')} min={100} max={5000} step={100} value={retry.interval_ms} onChange={interval_ms => setRetry({ ...retry, interval_ms })} />
     </div>}
   </section>;
 }
@@ -147,13 +147,13 @@ export function ErrorStrategy({ strategy, choose, note, children }: { strategy: 
   </section>;
 }
 
-/** As Dify's retry fields: a slider with its exact number beside it. */
-function RetryField({ label, unit, min, max, step, value, onChange }: { label: string; unit: string; min: number; max: number; step: number; value: number; onChange: (value: number) => void }) {
+/** As Dify's InputNumberWithSlider: a slider with its exact number beside it. */
+export function SliderField({ label, unit, min, max, step, value, onChange }: { label: string; unit?: string; min: number; max: number; step: number; value: number; onChange: (value: number) => void }) {
   const set = (text: string) => { const next = Number(text); if (Number.isInteger(next) && next >= min && next <= max) onChange(next); };
   return <label className={css.retryField}>
     <span>{label}</span>
     <input type="range" min={min} max={max} step={step} value={value} aria-label={label} onChange={event => set(event.target.value)} />
-    <span className={css.retryNumber}><input type="number" min={min} max={max} step={step} value={value} aria-label={`${label} (${unit})`} onChange={event => set(event.target.value)} /><small>{unit}</small></span>
+    <span className={css.retryNumber}><input type="number" min={min} max={max} step={step} value={value} aria-label={unit ? `${label} (${unit})` : label} onChange={event => set(event.target.value)} />{unit && <small>{unit}</small>}</span>
   </label>;
 }
 

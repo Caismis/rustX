@@ -1,498 +1,9 @@
-//! WF-05: fixed bodies, exact admission gates, native settlement and typed exits.
+//! Dify's Loop and Iteration: bodies that read the variables around them,
+//! Loop variables written by an Assigner, break conditions, Exit Loop, and
+//! Iteration rounds with parallelism and error modes.
 use super::*;
-use crate::durable::CanonicalStore;
 
-fn assert_native_path(run: &read_model::WorkflowRunView, events: &[RuntimeEvent]) {
-    let displayed: Vec<_> = run
-        .instances
-        .iter()
-        .filter_map(|row| {
-            row.node.as_ref().map(|node| WorkflowNodeInstance {
-                block: row.block.clone(),
-                node: node.clone(),
-                visit: row.visit.unwrap(),
-            })
-        })
-        .collect();
-    let started: Vec<_> = events
-        .iter()
-        .filter_map(|event| match event {
-            RuntimeEvent::WorkflowNodeStarted { instance } => Some(instance.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        displayed, started,
-        "nested execution retains native start order"
-    );
-}
-
-fn distinct_outcomes(mut definition: WorkflowDefinition) -> WorkflowDefinition {
-    let successor = definition.block.nodes.remove("done").unwrap();
-    definition
-        .block
-        .nodes
-        .insert("satisfied".into(), successor.clone());
-    definition.block.nodes.insert("exhausted".into(), successor);
-    definition.block.edges = vec![
-        edge("workflow_start", "feedback"),
-        branch_edge("feedback", "satisfied", WorkflowPort::Satisfied),
-        branch_edge("feedback", "exhausted", WorkflowPort::Exhausted),
-    ];
-    definition
-}
-
-fn assert_no_normal_exit(events: &[RuntimeEvent]) {
-    assert!(!events.iter().any(|event| match event {
-        RuntimeEvent::WorkflowLoopExited { .. } => true,
-        RuntimeEvent::WorkflowNodeStarted { instance } =>
-            instance.block.definition.blocks.is_empty()
-                && matches!(instance.node.as_str(), "satisfied" | "exhausted" | "done"),
-        _ => false,
-    }));
-}
-
-#[tokio::test]
-async fn native_observation_lag_does_not_change_loop_requests_or_outcome() {
-    let plane = workflow_test_plane(1);
-    let runtime = workflow_runtime(&plane);
-    let checker = Arc::new(Checker {
-        starts: AtomicUsize::new(0),
-        satisfied_at: usize::MAX,
-        received: std::sync::Mutex::new(Vec::new()),
-    });
-    let context = context_with_registration(
-        &plane,
-        ToolRegistration::plain(definition(), checker.clone()),
-        crate::agent::AttemptLifecycle::default(),
-    );
-    let (_, cancellation) = workflow_cancellation();
-    let history = plane.store.load_canonical().unwrap();
-    // The native cut consumer is deliberately absent for the entire run.
-    let output = runtime
-        .run_test_foreground(
-            Arc::new(compile_test(checker_definition(100)).unwrap()),
-            ToolCallId::new("lagged"),
-            context,
-            json!({"passed":false,"label":"initial"}),
-            cancellation,
-        )
-        .await
-        .unwrap();
-    let cuts = runtime
-        .read_model
-        .cuts_after(read_model::WorkflowRevision(0));
-    assert!(
-        cuts[0].revision.0 > 1,
-        "bounded native observations expired"
-    );
-    let snapshot = runtime.read_model.snapshot();
-    assert_eq!(
-        cuts.last(),
-        Some(&snapshot),
-        "repair is the current native authority"
-    );
-    assert_eq!(checker.starts.load(Ordering::SeqCst), 100);
-    assert_eq!(output["status"], "exhausted");
-    assert_eq!(output["iterations"], 100);
-    assert!(snapshot.runs[0].omitted_instances > 0);
-    assert!(matches!(
-        snapshot.runs[0].state,
-        read_model::WorkflowState::Settled {
-            outcome: WorkflowExecutionOutcome::Completed
-        }
-    ));
-    assert_eq!(plane.store.load_canonical().unwrap(), history);
-    assert!(plane.registry.all_snapshots().is_empty());
-    for _ in 0..10 {
-        assert_eq!(runtime.read_model.snapshot(), snapshot);
-    }
-    assert_eq!(checker.starts.load(Ordering::SeqCst), 100);
-}
-
-#[test]
-fn loop_requires_both_explicit_outcome_ports_even_when_body_result_is_projected() {
-    let shared = checker_definition(3);
-    assert!(compile_test(shared.clone()).is_ok());
-    assert!(compile_test(distinct_outcomes(shared.clone())).is_ok());
-    for ports in [
-        vec![Some(WorkflowPort::Satisfied)],
-        vec![Some(WorkflowPort::Exhausted)],
-        vec![None],
-        vec![Some(WorkflowPort::Next)],
-        vec![Some(WorkflowPort::True), Some(WorkflowPort::False)],
-        vec![Some(WorkflowPort::Satisfied), Some(WorkflowPort::Satisfied)],
-        vec![Some(WorkflowPort::Exhausted), Some(WorkflowPort::Exhausted)],
-        vec![
-            Some(WorkflowPort::Satisfied),
-            Some(WorkflowPort::Exhausted),
-            Some(WorkflowPort::Exhausted),
-        ],
-    ] {
-        let mut definition = shared.clone();
-        definition.block.edges = ports
-            .iter()
-            .map(|port| WorkflowEdgeDefinition {
-                from: "feedback".into(),
-                to: "done".into(),
-                port: port.clone(),
-            })
-            .collect();
-        definition
-            .block
-            .edges
-            .insert(0, edge("workflow_start", "feedback"));
-        // A valid body-only projection cannot bypass the control-flow contract.
-        let WorkflowNodeDefinition::Loop { body, .. } = &definition.block.nodes["feedback"] else {
-            unreachable!()
-        };
-        definition.block.output = body.output.clone();
-        definition.block.nodes.insert(
-            "done".into(),
-            WorkflowNodeDefinition::Return {
-                output: reference("feedback.result"),
-            },
-        );
-        assert!(
-            compile_test(definition).is_err(),
-            "accepted ports {ports:?}"
-        );
-    }
-    let mut unknown = serde_json::to_value(&shared).unwrap();
-    unknown["block"]["edges"][0]["port"] = json!("unexpected");
-    assert!(compile_test(serde_json::from_value::<WorkflowDefinition>(unknown).unwrap()).is_err());
-    let mut backedge = shared;
-    backedge.block.edges[1].to = "feedback".into();
-    assert!(compile_test(backedge).is_err());
-}
-
-#[tokio::test]
-async fn explicit_outcomes_select_only_the_matching_successor_with_the_full_value() {
-    for (satisfied_at, count, status) in [(1, 1, "satisfied"), (9, 3, "exhausted")] {
-        let plane = workflow_test_plane(1);
-        let runtime = workflow_runtime(&plane);
-        let observations = runtime.observations.subscribe();
-        let checker = Arc::new(Checker {
-            starts: AtomicUsize::new(0),
-            satisfied_at,
-            received: std::sync::Mutex::new(Vec::new()),
-        });
-        let context = context_with_registration(
-            &plane,
-            ToolRegistration::plain(definition(), checker.clone()),
-            crate::agent::AttemptLifecycle::default(),
-        );
-        let (_, cancellation) = workflow_cancellation();
-        let output = runtime
-            .run_test_foreground(
-                Arc::new(compile_test(distinct_outcomes(checker_definition(3))).unwrap()),
-                ToolCallId::new("explicit-outcomes"),
-                context,
-                json!({"passed":false,"label":"initial"}),
-                cancellation,
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            output,
-            json!({"status":status,"iterations":count,"result":{"passed":status == "satisfied","label":format!("committed-{count}")}})
-        );
-        assert_eq!(checker.starts.load(Ordering::SeqCst), count);
-        let native = runtime.read_model.snapshot();
-        assert_eq!(native.runs.len(), 1);
-        let run = &native.runs[0];
-        assert!(matches!(
-            run.state,
-            read_model::WorkflowState::Settled {
-                outcome: WorkflowExecutionOutcome::Completed
-            }
-        ));
-        let loop_node = run
-            .instances
-            .iter()
-            .find(|row| row.node.as_deref() == Some("feedback"))
-            .unwrap();
-        assert_eq!(loop_node.iteration, Some(u32::try_from(count).unwrap()));
-        assert_eq!(loop_node.iterations_max, Some(3));
-        assert_eq!(
-            loop_node.loop_exit,
-            Some(if status == "satisfied" {
-                WorkflowLoopExit::Satisfied
-            } else {
-                WorkflowLoopExit::Exhausted
-            })
-        );
-        let bodies: Vec<_> = run
-            .instances
-            .iter()
-            .filter(|row| row.node.is_none() && row.block.invocations.len() == 2)
-            .collect();
-        assert_eq!(bodies.len(), count);
-        for (index, body) in bodies.iter().enumerate() {
-            assert_eq!(
-                body.block.invocations,
-                [0, u32::try_from(index + 1).unwrap()]
-            );
-        }
-        assert_eq!(
-            runtime.read_model.snapshot(),
-            native,
-            "viewing has no native side effects"
-        );
-        assert_eq!(checker.starts.load(Ordering::SeqCst), count);
-        let events = observations.borrow();
-        assert_native_path(run, &events);
-        let selected: Vec<_> = events
-            .iter()
-            .filter_map(|event| match event {
-                RuntimeEvent::WorkflowNodeStarted { instance }
-                    if instance.block.definition.blocks.is_empty()
-                        && instance.node != "feedback" =>
-                {
-                    Some(instance.node.as_str())
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(selected, ["workflow_start", status]);
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, RuntimeEvent::WorkflowLoopExited { .. }))
-                .count(),
-            1
-        );
-        let exited = events
-            .iter()
-            .position(|event| matches!(event, RuntimeEvent::WorkflowLoopExited { .. }))
-            .unwrap();
-        assert!(events[..exited].iter().all(|event| !matches!(event, RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == status)));
-    }
-}
-
-fn agent_feedback_definition(max: u32) -> WorkflowDefinition {
-    let state = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
-    let definition = serde_json::from_value(json!({"description":"native child feedback","block":{
-        "input":state,"output":state,"nodes": {"workflow_start":{"type":"start"},
-            "work":{"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Check fixed input"}],"output":{"type":"json_schema","schema":state}},
-            "done":{"type":"return","output":{"type":"reference","path":["work"]}}
-        },"edges": [{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}],}})).unwrap();
-    wrap_definition(definition, max)
-}
-
-#[tokio::test]
-async fn interrupted_child_and_child_deadline_preserve_native_certainty_without_retry() {
-    use crate::runtime::subagent::ipc::ChildResultStatus;
-    for mode in [
-        "interrupted",
-        "deadline",
-        "deadline_then_parent_cancel",
-        "failed",
-    ] {
-        let plane = workflow_test_plane(1);
-        let mut child = stage_workflow_child(&plane);
-        let runtime = workflow_runtime(&plane);
-        let observations = runtime.observations.subscribe();
-        let context = context(
-            &plane,
-            Probe::new(ToolExecutionStatus::Success),
-            crate::agent::AttemptLifecycle::default(),
-        );
-        let (trigger, cancellation) = workflow_cancellation();
-        let task = tokio::spawn(run_outer(
-            runtime,
-            Arc::new(compile_test(agent_feedback_definition(3)).unwrap()),
-            context,
-            cancellation,
-        ));
-        child.expect_delegate().await;
-        if mode.starts_with("deadline") {
-            let id = plane.registry.all_snapshots()[0].subagent_id.clone();
-            plane
-                .registry
-                .cancel(&id, CancellationReason::SubagentExecutionDeadlineExceeded)
-                .unwrap();
-            if mode == "deadline_then_parent_cancel" {
-                trigger.cancel();
-            }
-            let frame = crate::runtime::subagent::ipc::read_parent_frame(&mut child.peer)
-                .await
-                .unwrap();
-            assert!(matches!(
-                frame,
-                Some(crate::runtime::subagent::ipc::ParentFrame::Cancel {
-                    reason: Some(CancellationReason::SubagentExecutionDeadlineExceeded)
-                })
-            ));
-            child.send_result(ChildResultStatus::Cancelled, None).await;
-        } else if mode == "failed" {
-            child.send_result(ChildResultStatus::Failed, None).await;
-        } else {
-            drop(child);
-        }
-        let (result, _) = task.await.unwrap();
-        match mode {
-            "deadline" | "deadline_then_parent_cancel" => {
-                assert_eq!(result.status, ToolExecutionStatus::TimedOut);
-            }
-            "failed" => assert!(matches!(result.status, ToolExecutionStatus::Failed { .. })),
-            _ => assert!(matches!(
-                result.status,
-                ToolExecutionStatus::OutcomeUnknown { .. }
-            )),
-        }
-        assert_eq!(plane.registry.all_snapshots().len(), 1);
-        assert!(plane.registry.unsettled_snapshot().is_empty());
-        assert!(
-            !observations
-                .borrow()
-                .iter()
-                .any(|e| matches!(e, RuntimeEvent::WorkflowLoopExited { .. }))
-        );
-    }
-}
-
-#[test]
-fn aggregate_agent_expansion_is_separate_from_static_nodes_and_steps() {
-    assert!(compile_test(agent_feedback_definition(256)).is_ok());
-    let mut definition = agent_feedback_definition(256);
-    let WorkflowNodeDefinition::Loop { body, .. } = &definition.block.nodes["feedback"] else {
-        unreachable!()
-    };
-    definition
-        .block
-        .nodes
-        .insert("before".into(), body.nodes["work"].clone());
-    definition
-        .block
-        .edges
-        .retain(|edge| edge.from != "workflow_start");
-    definition.block.edges.insert(
-        0,
-        crate::runtime::workflow::WorkflowEdgeDefinition {
-            from: "workflow_start".into(),
-            to: "before".into(),
-            port: None,
-        },
-    );
-    definition.block.edges.push(edge("before", "feedback"));
-    assert!(
-        matches!(compile_test(definition),Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidField(message) if message.contains("expanded execution")))
-    );
-}
-
-#[tokio::test]
-async fn oversized_carry_commits_no_partial_state_and_admits_no_next_body() {
-    let plane = workflow_test_plane(1);
-    let runtime = workflow_runtime(&plane);
-    let observations = runtime.observations.subscribe();
-    let context = workflow_test_context(&plane);
-    let state = schema(
-        json!({"passed":{"type":"boolean"},"a":{"type":"string"},"b":{"type":"string"}}),
-        &["passed", "a", "b"],
-    );
-    let definition = serde_json::from_value(json!({"description":"bounded carry","block":{
-        "input":state,"output":state,"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","output":{"type":"reference","path":["args"]}}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap();
-    let mut definition = wrap_definition(definition, 3);
-    let WorkflowNodeDefinition::Loop { carry, .. } =
-        definition.block.nodes.get_mut("feedback").unwrap()
-    else {
-        unreachable!()
-    };
-    *carry = WorkflowValue::Object {
-        fields: BTreeMap::from([
-            ("passed".into(), reference("result.passed")),
-            ("a".into(), reference("result.a")),
-            ("b".into(), reference("result.a")),
-        ]),
-    };
-    let (_, cancellation) = workflow_cancellation();
-    let error = runtime
-        .run_test_foreground(
-            Arc::new(compile_test(definition).unwrap()),
-            ToolCallId::new("oversized-carry"),
-            context,
-            json!({"passed":false,"a":"x".repeat(MAX_VALUE_BYTES/2),"b":""}),
-            cancellation,
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(error, WorkflowRunError::InvalidValue(_)));
-    assert_eq!(
-        observations
-            .borrow()
-            .iter()
-            .filter(|e| matches!(e, RuntimeEvent::WorkflowLoopIterationAdmitted { .. }))
-            .count(),
-        1
-    );
-    assert!(
-        !observations
-            .borrow()
-            .iter()
-            .any(|e| matches!(e, RuntimeEvent::WorkflowLoopExited { .. }))
-    );
-    assert!(plane.registry.all_snapshots().is_empty());
-}
-
-pub(super) fn wrap_definition(
-    mut definition: WorkflowDefinition,
-    max_iterations: u32,
-) -> WorkflowDefinition {
-    let body = definition.block;
-    let output = execution::loop_result_schema(&body.output);
-    definition.block = WorkflowBlock {
-        input: body.input.clone(),
-        output,
-        nodes: {
-            let mut nodes: std::collections::BTreeMap<
-                String,
-                crate::runtime::workflow::WorkflowNodeDefinition,
-            > = BTreeMap::from([
-                (
-                    "feedback".into(),
-                    WorkflowNodeDefinition::Loop {
-                        input: reference("args"),
-                        body: Box::new(body),
-                        until: Box::new(WorkflowPredicate::Boolean {
-                            value: reference("result.passed"),
-                        }),
-                        carry: reference("result"),
-                        max_iterations,
-                    },
-                ),
-                (
-                    "done".into(),
-                    WorkflowNodeDefinition::Return {
-                        output: reference("feedback"),
-                    },
-                ),
-            ]);
-            nodes.insert(
-                "workflow_start".into(),
-                crate::runtime::workflow::WorkflowNodeDefinition::Start {},
-            );
-            nodes
-        },
-        edges: {
-            let mut edges = vec![
-                branch_edge("feedback", "done", WorkflowPort::Satisfied),
-                branch_edge("feedback", "done", WorkflowPort::Exhausted),
-            ];
-            edges.insert(
-                0,
-                crate::runtime::workflow::WorkflowEdgeDefinition {
-                    from: "workflow_start".into(),
-                    to: "feedback".into(),
-                    port: None,
-                },
-            );
-            edges
-        },
-    };
-    definition
-}
-
+/// Records each call and answers `passed` from the call count.
 struct Checker {
     starts: AtomicUsize,
     satisfied_at: usize,
@@ -522,57 +33,184 @@ impl ToolExecutor for Checker {
     }
 }
 
-fn checker_definition(max: u32) -> WorkflowDefinition {
-    let state = schema(
+fn checker(satisfied_at: usize) -> Arc<Checker> {
+    Arc::new(Checker {
+        starts: AtomicUsize::new(0),
+        satisfied_at,
+        received: std::sync::Mutex::new(Vec::new()),
+    })
+}
+
+/// Echoes its label after a pause, fails on `bad`, and records how many
+/// calls ran at once.
+#[derive(Default)]
+struct Echo {
+    active: AtomicUsize,
+    peak: AtomicUsize,
+    starts: AtomicUsize,
+}
+impl ToolExecutor for Echo {
+    fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+        crate::tools::deadline::ToolProgressCapability::None
+    }
+    fn start<'a>(
+        &'a self,
+        invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                self.starts.fetch_add(1, Ordering::SeqCst);
+                let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+                self.peak.fetch_max(active, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                self.active.fetch_sub(1, Ordering::SeqCst);
+                let label = invocation.arguments["label"].clone();
+                if label == "bad" {
+                    return terminal(ToolExecutionStatus::Failed {
+                        error: "bad item".into(),
+                    });
+                }
+                let mut result = terminal(ToolExecutionStatus::Success);
+                result.content = vec![ToolResultContent::Json {
+                    value: json!({"passed":true, "label":label}),
+                }];
+                result
+            }),
+            context.cancellation,
+        )
+    }
+}
+
+fn state() -> Value {
+    schema(
         json!({"passed":{"type":"boolean"},"label":{"type":"string"}}),
         &["passed", "label"],
+    )
+}
+
+fn check_node(arguments: &Value) -> Value {
+    json!({"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":arguments,"result":{"type":"json","schema":state()}})
+}
+
+fn path(path: &[&str]) -> Value {
+    json!({"type":"reference","path":path})
+}
+
+/// Root `workflow_start -> <id> -> done`, returning the container's value.
+fn around(id: &str, input: &Value, output: &Value, container: &Value) -> WorkflowDefinition {
+    serde_json::from_value(
+        json!({"description":"container","timeout_ms":600_000,"block":{
+        "input":input,"output":output,"nodes":{"workflow_start":{"type":"start"},id:container,
+            "done":{"type":"return","output":path(&[id])}},
+        "edges":[{"from":"workflow_start","to":id},{"from":id,"to":"done"}]}}),
+    )
+    .unwrap()
+}
+
+/// A Loop that checks its variables and saves the check's answer in them,
+/// until `passed` holds.
+fn checker_loop(loop_count: u32) -> WorkflowDefinition {
+    around(
+        "feedback",
+        &state(),
+        &state(),
+        &json!({"type":"loop","loop_count":loop_count,
+            "loop_variables":[
+                {"label":"passed","var_type":"boolean","value":{"type":"literal","value":false}},
+                {"label":"label","var_type":"string","value":path(&["args","label"])}],
+            "break_condition":{"type":"boolean","value":path(&["feedback","passed"])},
+            "body":{"nodes":{"start":{"type":"start"},
+                "check":check_node(&json!({"type":"object","fields":{
+                    "passed":path(&["feedback","passed"]),"label":path(&["feedback","label"])}})),
+                "save":{"type":"assigner","items":[
+                    {"variable":["feedback","passed"],"operation":"overwrite","value":path(&["check","passed"])},
+                    {"variable":["feedback","label"],"operation":"overwrite","value":path(&["check","label"])}]}},
+                "edges":[{"from":"start","to":"check"},{"from":"check","to":"save"}]}}),
+    )
+}
+
+/// An Iteration over `args.items` whose rounds echo their item.
+fn echo_iteration(extra: &Value) -> WorkflowDefinition {
+    let mut iteration = json!({"type":"iteration","iterator":path(&["args","items"]),"output":path(&["check","label"]),
+        "body":{"nodes":{"start":{"type":"start"},
+            "check":check_node(&json!({"type":"object","fields":{
+                "passed":{"type":"literal","value":true},"label":path(&["each","item"])}}))},
+            "edges":[{"from":"start","to":"check"}]}});
+    iteration
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    around(
+        "each",
+        &schema(
+            json!({"items":{"type":"array","items":{"type":"string"}}}),
+            &["items"],
+        ),
+        &schema(json!({"output":{"type":"array"}}), &["output"]),
+        &iteration,
+    )
+}
+
+async fn run(
+    plane: &WorkflowTestPlane,
+    runtime: WorkflowRuntime,
+    executor: Arc<dyn ToolExecutor>,
+    workflow: WorkflowDefinition,
+    input: Value,
+) -> Result<Value, WorkflowRunError> {
+    // Parallel rounds may call the Tool at once.
+    let mut tool = definition();
+    tool.concurrency_policy = ToolConcurrencyPolicy::Parallel;
+    let context = context_with_registration(
+        plane,
+        ToolRegistration::plain(tool, executor),
+        crate::agent::AttemptLifecycle::default(),
     );
-    let body = serde_json::from_value(json!({"description":"feedback","block":{
-        "input":state,"output":state,"nodes": {"workflow_start":{"type":"start"},
-            "check":{"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":{"type":"reference","path":["args"]},"result":{"type":"json","schema":state}},
-            "done":{"type":"return","output":{"type":"reference","path":["check"]}}
-        },"edges": [{"from":"workflow_start","to":"check"},{"from":"check","to":"done"}],}})).unwrap();
-    wrap_definition(body, max)
+    let (_, cancellation) = workflow_cancellation();
+    runtime
+        .run_test_foreground(
+            Arc::new(compile_test(workflow).unwrap()),
+            ToolCallId::new("container"),
+            context,
+            input,
+            cancellation,
+        )
+        .await
+}
+
+fn count(events: &[RuntimeEvent], matches: impl Fn(&RuntimeEvent) -> bool) -> usize {
+    events.iter().filter(|event| matches(event)).count()
 }
 
 #[tokio::test]
-async fn exact_satisfaction_exhaustion_carry_and_concrete_tool_identity() {
-    for (satisfied_at, max, count, status) in [
-        (1, 4, 1, "satisfied"),
-        (3, 4, 3, "satisfied"),
-        (9, 4, 4, "exhausted"),
+async fn a_loop_carries_its_variables_until_the_break_condition_holds() {
+    for (satisfied_at, loop_count, rounds, reason) in [
+        (1, 4, 1, WorkflowLoopExit::LoopBreak),
+        (3, 4, 3, WorkflowLoopExit::LoopBreak),
+        (9, 4, 4, WorkflowLoopExit::LoopCompleted),
     ] {
         let plane = workflow_test_plane(1);
         let runtime = workflow_runtime(&plane);
         let observations = runtime.observations.subscribe();
-        let checker = Arc::new(Checker {
-            starts: AtomicUsize::new(0),
-            satisfied_at,
-            received: std::sync::Mutex::new(Vec::new()),
-        });
-        let context = context_with_registration(
+        let checker = checker(satisfied_at);
+        let output = run(
             &plane,
-            ToolRegistration::plain(definition(), checker.clone()),
-            crate::agent::AttemptLifecycle::default(),
-        );
-        let (_, cancellation) = workflow_cancellation();
-        let output = runtime
-            .run_test_foreground(
-                Arc::new(compile_test(checker_definition(max)).unwrap()),
-                ToolCallId::new("loop"),
-                context,
-                json!({"passed":false,"label":"initial"}),
-                cancellation,
-            )
-            .await
-            .unwrap();
+            runtime,
+            checker.clone(),
+            checker_loop(loop_count),
+            json!({"passed":false,"label":"initial"}),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             output,
-            json!({"status":status,"iterations":count,"result":{"passed":status == "satisfied","label":format!("committed-{count}")}})
+            json!({"passed":reason == WorkflowLoopExit::LoopBreak,"label":format!("committed-{rounds}")})
         );
-        assert_eq!(checker.starts.load(Ordering::SeqCst), count);
+        assert_eq!(checker.starts.load(Ordering::SeqCst), rounds);
         let received = checker.received.lock().unwrap();
         for (index, call) in received.iter().enumerate() {
+            // Each round reads the variables the previous round wrote.
             assert_eq!(
                 call.arguments["label"],
                 if index == 0 {
@@ -589,58 +227,98 @@ async fn exact_satisfaction_exhaustion_carry_and_concrete_tool_identity() {
                 node.block.invocations,
                 [0, u32::try_from(index + 1).unwrap()]
             );
-            if index > 0 {
-                assert_ne!(call.id, received[index - 1].id);
-            }
         }
         let events = observations.borrow();
-        assert_eq!(
-            events
-                .iter()
-                .filter(|e| matches!(e, RuntimeEvent::WorkflowLoopIterationAdmitted { .. }))
-                .count(),
-            count
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|e| matches!(
-                    e,
-                    RuntimeEvent::WorkflowLoopIterationSettled {
-                        outcome: WorkflowExecutionOutcome::Completed,
-                        ..
-                    }
-                ))
-                .count(),
-            count
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|e| matches!(e, RuntimeEvent::WorkflowLoopExited { .. }))
-                .count(),
-            1
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|e| matches!(e, RuntimeEvent::WorkflowCompleted { .. }))
-                .count(),
-            1
-        );
+        let admitted = count(&events, |event| {
+            matches!(event, RuntimeEvent::WorkflowLoopIterationAdmitted { .. })
+        });
+        assert_eq!(admitted, rounds);
+        let exits = events
+            .iter()
+            .filter_map(|event| match event {
+                RuntimeEvent::WorkflowLoopExited {
+                    iterations, status, ..
+                } => Some((*iterations, *status)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(exits, [(u32::try_from(rounds).unwrap(), reason)]);
         assert!(plane.registry.all_snapshots().is_empty());
     }
 }
 
 #[tokio::test]
-async fn cancellation_at_second_iteration_frontier_consumes_and_starts_nothing_new() {
+async fn a_break_condition_that_already_holds_runs_no_round() {
+    let mut definition = checker_loop(4);
+    let WorkflowNodeDefinition::Loop { loop_variables, .. } =
+        definition.block.nodes.get_mut("feedback").unwrap()
+    else {
+        unreachable!()
+    };
+    loop_variables[0].value = WorkflowValue::Literal { value: json!(true) };
+    let plane = workflow_test_plane(1);
+    let checker = checker(1);
+    let output = run(
+        &plane,
+        workflow_runtime(&plane),
+        checker.clone(),
+        definition,
+        json!({"passed":false,"label":"initial"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output, json!({"passed":true,"label":"initial"}));
+    assert_eq!(checker.starts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn exit_loop_ends_the_loop_once_its_round_settles() {
+    let definition = around(
+        "feedback",
+        &state(),
+        &schema(json!({}), &[]),
+        &json!({"type":"loop","loop_count":10,
+            "body":{"nodes":{"start":{"type":"start"},
+                "check":check_node(&path(&["args"])),
+                "passed":{"type":"branch","cases":[{"id":"true","condition":{"type":"boolean","value":path(&["check","passed"])}}]},
+                "stop":{"type":"loop_end"}},
+                "edges":[{"from":"start","to":"check"},{"from":"check","to":"passed"},
+                    {"from":"passed","to":"stop","port":"true"}]}}),
+    );
     let plane = workflow_test_plane(1);
     let runtime = workflow_runtime(&plane);
     let observations = runtime.observations.subscribe();
-    let probe = Probe::new(ToolExecutionStatus::Success);
-    let context = context(
+    let checker = checker(2);
+    let output = run(
         &plane,
-        probe.clone(),
+        runtime,
+        checker.clone(),
+        definition,
+        json!({"passed":false,"label":"initial"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output, json!({}));
+    assert_eq!(checker.starts.load(Ordering::SeqCst), 2);
+    assert!(observations.borrow().iter().any(|event| matches!(
+        event,
+        RuntimeEvent::WorkflowLoopExited {
+            iterations: 2,
+            status: WorkflowLoopExit::LoopBreak,
+            ..
+        }
+    )));
+}
+
+#[tokio::test]
+async fn cancellation_at_the_second_round_starts_nothing_new() {
+    let plane = workflow_test_plane(1);
+    let runtime = workflow_runtime(&plane);
+    let observations = runtime.observations.subscribe();
+    let checker = checker(usize::MAX);
+    let context = context_with_registration(
+        &plane,
+        ToolRegistration::plain(definition(), checker.clone()),
         crate::agent::AttemptLifecycle::default(),
     );
     let (entered, enter) = tokio::sync::oneshot::channel();
@@ -651,397 +329,215 @@ async fn cancellation_at_second_iteration_frontier_consumes_and_starts_nothing_n
         release: wait,
     });
     let (trigger, cancellation) = workflow_cancellation();
-    let program = Arc::new(compile_test(wrap_definition(program_definition(), 3)).unwrap());
+    let program = Arc::new(compile_test(checker_loop(3)).unwrap());
     let task = tokio::spawn(async move {
         runtime
             .run_test_foreground(
                 program,
                 ToolCallId::new("cancel-loop"),
                 context,
-                json!({"passed":false}),
+                json!({"passed":false,"label":"initial"}),
                 cancellation,
             )
             .await
     });
     enter.await.unwrap();
-    assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
     trigger.cancel();
     release.send(()).unwrap();
     assert!(task.await.unwrap().unwrap_err().is_cancelled());
-    assert_no_normal_exit(&observations.borrow());
-    assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(checker.starts.load(Ordering::SeqCst), 1);
+    let events = observations.borrow();
     assert_eq!(
-        observations
-            .borrow()
-            .iter()
-            .filter(|e| matches!(e, RuntimeEvent::WorkflowLoopIterationAdmitted { .. }))
-            .count(),
+        count(&events, |event| matches!(
+            event,
+            RuntimeEvent::WorkflowLoopIterationAdmitted { .. }
+        )),
         1
     );
     assert!(
-        !observations
-            .borrow()
+        !events
             .iter()
-            .any(|e| matches!(e, RuntimeEvent::WorkflowLoopExited { .. }))
+            .any(|event| matches!(event, RuntimeEvent::WorkflowLoopExited { .. }))
     );
 }
 
 #[tokio::test]
-async fn every_native_non_success_remains_outer_status_without_a_second_iteration() {
-    for status in [
-        ToolExecutionStatus::Failed {
-            error: "failed".into(),
-        },
-        ToolExecutionStatus::Denied {
-            reason: "denied".into(),
-        },
-        ToolExecutionStatus::TimedOut,
-        ToolExecutionStatus::Cancelled {
-            reason: CancellationReason::UserRequested,
-            phase: ToolCancellationPhase::DuringExecution,
-        },
-        ToolExecutionStatus::OutcomeUnknown {
-            detail: "unknown".into(),
-        },
+async fn an_iteration_runs_its_body_once_per_item_in_order() {
+    let plane = workflow_test_plane(1);
+    let echo = Arc::new(Echo::default());
+    let output = run(
+        &plane,
+        workflow_runtime(&plane),
+        echo.clone(),
+        echo_iteration(&json!({})),
+        json!({"items":["a","b","c"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output, json!({"output":["a","b","c"]}));
+    assert_eq!(echo.peak.load(Ordering::SeqCst), 1, "sequential by default");
+    let empty = run(
+        &plane,
+        workflow_runtime(&plane),
+        echo.clone(),
+        echo_iteration(&json!({})),
+        json!({"items":[]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(empty, json!({"output":[]}));
+}
+
+#[tokio::test]
+async fn parallel_mode_runs_up_to_parallel_nums_rounds_at_once() {
+    let plane = workflow_test_plane(1);
+    let echo = Arc::new(Echo::default());
+    let output = run(
+        &plane,
+        workflow_runtime(&plane),
+        echo.clone(),
+        echo_iteration(&json!({"is_parallel":true,"parallel_nums":2})),
+        json!({"items":["a","b","c","d","e"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output, json!({"output":["a","b","c","d","e"]}));
+    assert_eq!(echo.peak.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn error_modes_decide_what_a_failed_round_contributes() {
+    for (mode, expected) in [
+        ("continue_on_error", Some(json!(["a", null, "c"]))),
+        ("remove_abnormal_output", Some(json!(["a", "c"]))),
+        ("terminated", None),
     ] {
         let plane = workflow_test_plane(1);
-        let runtime = workflow_runtime(&plane);
-        let observations = runtime.observations.subscribe();
-        let probe = Probe::new(status.clone());
-        let context = context(
+        let echo = Arc::new(Echo::default());
+        let result = run(
             &plane,
-            probe.clone(),
-            crate::agent::AttemptLifecycle::default(),
-        );
-        let (_, cancellation) = workflow_cancellation();
-        let (result, _) = run_outer(
-            runtime,
-            Arc::new(compile_test(wrap_definition(program_definition(), 3)).unwrap()),
-            context,
-            cancellation,
+            workflow_runtime(&plane),
+            echo.clone(),
+            echo_iteration(&json!({"error_handle_mode":mode})),
+            json!({"items":["a","bad","c"]}),
         )
         .await;
-        assert_eq!(result.status, status);
-        assert!(result.content.is_empty());
-        assert_no_normal_exit(&observations.borrow());
-        assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            observations
-                .borrow()
-                .iter()
-                .filter(|e| matches!(e, RuntimeEvent::WorkflowLoopIterationAdmitted { .. }))
-                .count(),
-            1
-        );
-        assert!(
-            !observations
-                .borrow()
-                .iter()
-                .any(|e| matches!(e, RuntimeEvent::WorkflowLoopExited { .. }))
-        );
+        match expected {
+            Some(output) => assert_eq!(result.unwrap(), json!({"output":output}), "{mode}"),
+            None => assert!(!result.unwrap_err().is_cancelled(), "{mode}"),
+        }
+    }
+}
+
+fn body(definition: &mut WorkflowDefinition) -> &mut WorkflowBlock {
+    match definition.block.nodes.get_mut("feedback").unwrap() {
+        WorkflowNodeDefinition::Loop { body, .. } => body,
+        _ => unreachable!(),
     }
 }
 
 #[test]
-fn invalid_limits_carry_predicates_and_back_edges_are_rejected() {
-    for max in [0, MAX_LOOP_ITERATIONS + 1, u32::MAX] {
-        assert!(compile_test(checker_definition(max)).is_err());
-    }
-    for expression in [
-        reference("args"),
-        reference("check"),
-        WorkflowValue::Literal {
-            value: json!({"passed":"false"}),
-        },
-    ] {
-        let mut definition = checker_definition(2);
-        let WorkflowNodeDefinition::Loop { carry, .. } =
-            definition.block.nodes.get_mut("feedback").unwrap()
+fn bodies_follow_difys_rules_at_compile() {
+    assert!(compile_test(checker_loop(3)).is_ok());
+    assert!(compile_test(echo_iteration(&json!({}))).is_ok());
+    let rejected = |definition: WorkflowDefinition, why: &str| {
+        assert!(compile_test(definition).is_err(), "{why}");
+    };
+    for loop_count in [0, LOOP_NODE_MAX_COUNT + 1] {
+        let mut definition = checker_loop(3);
+        let WorkflowNodeDefinition::Loop {
+            loop_count: count, ..
+        } = definition.block.nodes.get_mut("feedback").unwrap()
         else {
             unreachable!()
         };
-        *carry = expression;
-        assert!(compile_test(definition).is_err());
+        *count = loop_count;
+        rejected(definition, "loop_count out of range");
     }
-    let mut definition = checker_definition(2);
-    let WorkflowNodeDefinition::Loop { body, .. } =
-        definition.block.nodes.get_mut("feedback").unwrap()
-    else {
-        unreachable!()
+    let save = |operation: &str, value: Option<Value>| {
+        let mut definition = checker_loop(3);
+        let mut item = json!({"variable":["feedback","label"],"operation":operation});
+        if let Some(value) = value {
+            item["value"] = value;
+        }
+        body(&mut definition).nodes.insert(
+            "save".into(),
+            serde_json::from_value(json!({"type":"assigner","items":[item]})).unwrap(),
+        );
+        definition
     };
-    body.edges.push(edge("done", "check"));
-    assert!(compile_test(definition).is_err());
+    assert!(compile_test(save("clear", None)).is_ok());
+    rejected(
+        save("increment", Some(json!({"type":"literal","value":1}))),
+        "+= on a string",
+    );
+    rejected(
+        save("append", Some(json!({"type":"literal","value":"x"}))),
+        "append to a string",
+    );
+    rejected(save("set", None), "set without a value");
+    rejected(
+        save("clear", Some(json!({"type":"literal","value":""}))),
+        "clear with a value",
+    );
+    let mut outside = checker_loop(3);
+    let save_node = body(&mut outside).nodes.remove("save").unwrap();
+    body(&mut outside).edges.pop();
+    outside.block.nodes.insert("save".into(), save_node);
+    outside.block.edges = vec![
+        edge("workflow_start", "save"),
+        edge("save", "feedback"),
+        edge("feedback", "done"),
+    ];
+    rejected(outside, "an Assigner outside its Loop");
+    let mut stop = checker_loop(3);
+    stop.block
+        .nodes
+        .insert("stop".into(), WorkflowNodeDefinition::LoopEnd {});
+    stop.block.edges.push(edge("done", "stop"));
+    rejected(stop, "Exit Loop at the root");
+    let mut returns = checker_loop(3);
+    body(&mut returns).nodes.insert(
+        "back".into(),
+        WorkflowNodeDefinition::Return {
+            output: reference("check"),
+        },
+    );
+    body(&mut returns).edges.push(edge("save", "back"));
+    rejected(returns, "Return in a body");
+    let mut shadowed = checker_loop(3);
+    let check = body(&mut shadowed).nodes["check"].clone();
+    body(&mut shadowed).nodes.insert("feedback".into(), check);
+    body(&mut shadowed).edges.push(edge("save", "feedback"));
+    rejected(shadowed, "a body ID hides a node around it");
+    let mut declared = checker_loop(3);
+    body(&mut declared).input = state();
+    rejected(declared, "a body declares input");
+    rejected(
+        echo_iteration(&json!({"iterator":{"type":"literal","value":["a"]}})),
+        "a literal iterator",
+    );
+    rejected(
+        echo_iteration(&json!({"is_parallel":true,"parallel_nums":MAX_PARALLEL_LIMIT + 1})),
+        "parallel_nums out of range",
+    );
 }
 
 #[test]
-fn nested_execution_expansion_is_checked_and_private_memory_is_not_multiplied() {
-    let once = compile_test(checker_definition(1)).unwrap();
-    let repeated = compile_test(checker_definition(MAX_LOOP_ITERATIONS)).unwrap();
-    assert_eq!(once.retained_bound, repeated.retained_bound);
-    assert!(repeated.execution_bound > once.execution_bound);
-    let mut definition = checker_definition(100);
-    let WorkflowNodeDefinition::Loop { body, .. } =
-        definition.block.nodes.get_mut("feedback").unwrap()
-    else {
-        unreachable!()
+fn an_iteration_output_follows_its_rounds_value() {
+    let output = |extra: Value| {
+        compile_test(echo_iteration(&extra))
+            .unwrap()
+            .node_outputs()
+            .remove("block.nodes.each")
+            .unwrap()
     };
-    **body = checker_definition(100).block;
-    // Fix the enclosing contracts to expose expanded execution, not a type error.
-    let result = body.output.clone();
-    let WorkflowNodeDefinition::Loop { until, carry, .. } =
-        definition.block.nodes.get_mut("feedback").unwrap()
-    else {
-        unreachable!()
-    };
-    **until = WorkflowPredicate::Boolean {
-        value: reference("result.result.passed"),
-    };
-    *carry = reference("result.result");
-    definition.block.output = execution::loop_result_schema(&result);
-    assert!(
-        matches!(compile_test(definition),Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidField(message) if message.contains("expanded execution")))
-    );
-}
-
-#[tokio::test]
-async fn global_step_limit_does_not_reset_at_iteration_entry() {
-    let plane = workflow_test_plane(1);
-    let runtime = workflow_runtime(&plane);
-    let observations = runtime.observations.subscribe();
-    let checker = Arc::new(Checker {
-        starts: AtomicUsize::new(0),
-        satisfied_at: 9,
-        received: std::sync::Mutex::new(Vec::new()),
-    });
-    let context = context_with_registration(
-        &plane,
-        ToolRegistration::plain(definition(), checker.clone()),
-        crate::agent::AttemptLifecycle::default(),
-    );
-    let mut program = compile_test(checker_definition(3)).unwrap();
-    program.execution_bound = 5; // Loop + iteration + Tool + Return + iteration; no second Tool.
-    let (_, cancellation) = workflow_cancellation();
-    let error = runtime
-        .run_test_foreground(
-            Arc::new(program),
-            ToolCallId::new("step-budget"),
-            context,
-            json!({"passed":false,"label":"initial"}),
-            cancellation,
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error, WorkflowRunError::LimitExceeded(WorkflowLimit::Steps));
-    assert_eq!(checker.starts.load(Ordering::SeqCst), 1);
-    assert_no_normal_exit(&observations.borrow());
-}
-
-#[tokio::test]
-async fn retained_limit_in_admitted_body_never_routes_a_normal_outcome() {
-    let plane = workflow_test_plane(1);
-    let runtime = workflow_runtime(&plane);
-    let observations = runtime.observations.subscribe();
-    let probe = Probe::new(ToolExecutionStatus::Success);
-    let context = context(
-        &plane,
-        probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
-    );
-    let mut program =
-        compile_test(distinct_outcomes(wrap_definition(program_definition(), 3))).unwrap();
-    // Root input and explicit carry fit; the body's private input cannot.
-    program.retained_bound = 2 * serde_json::to_vec(&json!({"passed":false})).unwrap().len();
-    let (_, cancellation) = workflow_cancellation();
-    let error = runtime
-        .run_test_foreground(
-            Arc::new(program),
-            ToolCallId::new("retained-limit"),
-            context,
-            json!({"passed":false}),
-            cancellation,
-        )
-        .await
-        .unwrap_err();
     assert_eq!(
-        error,
-        WorkflowRunError::LimitExceeded(WorkflowLimit::RetainedData)
+        output(json!({})),
+        json!({"type":"object","properties":{"output":{"type":"array","items":{"type":"string"}}},"required":["output"],"additionalProperties":false})
     );
-    assert_eq!(probe.starts.load(Ordering::SeqCst), 0);
-    let events = observations.borrow();
     assert_eq!(
-        events
-            .iter()
-            .filter(|event| matches!(event, RuntimeEvent::WorkflowLoopIterationAdmitted { .. }))
-            .count(),
-        1
-    );
-    assert_no_normal_exit(&events);
-}
-
-#[tokio::test]
-async fn outer_deadline_during_second_iteration_drains_and_never_resets() {
-    let plane = workflow_test_plane(1);
-    let runtime = workflow_runtime(&plane);
-    let observations = runtime.observations.subscribe();
-    let mut probe = Probe::new(ToolExecutionStatus::Success);
-    let release = Arc::new(tokio::sync::Notify::new());
-    let settle = Arc::new(tokio::sync::Notify::new());
-    Arc::get_mut(&mut probe).unwrap().release = Some(release.clone());
-    Arc::get_mut(&mut probe).unwrap().settled = Some(settle.clone());
-    let mut context = context(
-        &plane,
-        probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
-    );
-    let clock = Arc::new(crate::runtime::ManualMonotonicClock::new());
-    let services = Arc::make_mut(context.native.as_mut().unwrap());
-    services.clock = clock.clone();
-    services.leaf_policy = crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
-        std::time::Duration::from_secs(1),
-        None,
-    );
-    let mut started = probe.started.subscribe();
-    let mut cancelled = probe.cancelled.subscribe();
-    let (_, cancellation) = workflow_cancellation();
-    let task = tokio::spawn(run_outer(
-        runtime,
-        Arc::new(compile_test(wrap_definition(program_definition(), 3)).unwrap()),
-        context,
-        cancellation,
-    ));
-    started.wait_for(|n| *n == 1).await.unwrap();
-    clock.advance(60);
-    release.notify_one();
-    started.wait_for(|n| *n == 2).await.unwrap();
-    clock.advance(40);
-    cancelled.wait_for(|v| *v).await.unwrap();
-    assert!(!task.is_finished());
-    assert_eq!(
-        observations
-            .borrow()
-            .iter()
-            .filter(|e| matches!(e, RuntimeEvent::WorkflowLoopIterationSettled { .. }))
-            .count(),
-        1
-    );
-    settle.notify_one();
-    let (result, _) = task.await.unwrap();
-    assert_eq!(result.status, ToolExecutionStatus::TimedOut);
-    assert_no_normal_exit(&observations.borrow());
-    assert_eq!(probe.starts.load(Ordering::SeqCst), 2);
-    assert!(
-        !observations
-            .borrow()
-            .iter()
-            .any(|e| matches!(e, RuntimeEvent::WorkflowLoopExited { .. }))
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)] // Two completion orders share one explicit native gate sequence.
-async fn parallel_body_return_waits_for_siblings_and_fresh_children_in_definition_order() {
-    use crate::runtime::subagent::ipc::ChildResultStatus;
-    let mut outcomes = Vec::new();
-    for reverse in [false, true] {
-        let plane = workflow_test_plane(2);
-        let mut children = (0..4)
-            .map(|_| stage_workflow_child(&plane))
-            .collect::<Vec<_>>();
-        let state = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
-        let work = json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Check fixed input"}],"output":{"type":"json_schema","schema":state}});
-        let definition = serde_json::from_value(json!({"description":"parallel feedback","block":{
-        "input":state,"output":state,"nodes": {
-            "workflow_start":{"type":"start"},"a":work,"b":work,
-            "done":{"type":"return","output":{"type":"reference","path":["a"]}}
-        },"edges": [
-            {"from":"workflow_start","to":"a"},{"from":"workflow_start","to":"b"},
-            {"from":"a","to":"done"},{"from":"b","to":"done"}
-        ]}}))
-        .unwrap();
-        let runtime = workflow_runtime(&plane);
-        let mut observations = runtime.observations.subscribe();
-        let context = workflow_test_context(&plane);
-        let (_, cancellation) = workflow_cancellation();
-        let program = Arc::new(compile_test(wrap_definition(definition, 3)).unwrap());
-        let task = tokio::spawn(async move {
-            runtime
-                .run_test_foreground(
-                    program,
-                    ToolCallId::new("parallel-loop"),
-                    context,
-                    json!({"passed":false}),
-                    cancellation,
-                )
-                .await
-        });
-        for iteration in 1..=2 {
-            let mut a = children.remove(0);
-            let mut b = children.remove(0);
-            a.expect_delegate().await;
-            b.expect_delegate().await;
-            let (first, last, key) = if reverse {
-                (&mut b, &mut a, "b")
-            } else {
-                (&mut a, &mut b, "a")
-            };
-            let output = if iteration == 1 {
-                r#"{"passed":false}"#
-            } else {
-                r#"{"passed":true}"#
-            };
-            first
-                .send_result(ChildResultStatus::Succeeded, Some(output))
-                .await;
-            observations.wait_for(|events| events.iter().any(|e| matches!(e,RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node == key && instance.block.definition.blocks == ["feedback","body"] && instance.block.invocations == [0,iteration]))).await.unwrap();
-            assert_eq!(
-                observations
-                    .borrow()
-                    .iter()
-                    .filter(|e| matches!(e, RuntimeEvent::WorkflowLoopIterationSettled { .. }))
-                    .count(),
-                iteration as usize - 1
-            );
-            assert!(!task.is_finished());
-            last.send_result(ChildResultStatus::Succeeded, Some(output))
-                .await;
-        }
-        outcomes.push(task.await.unwrap().unwrap());
-        let events = observations.borrow();
-        let agents = events
-            .iter()
-            .filter_map(|e| {
-                if let RuntimeEvent::WorkflowAgentAdmitted {
-                    node_id,
-                    subagent_id,
-                    ..
-                } = e
-                {
-                    Some((node_id, subagent_id))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(agents.len(), 4);
-        let unique = agents
-            .iter()
-            .map(|(node, _)| (*node).clone())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(unique.len(), 4);
-        for (node, child) in agents {
-            assert!(
-                plane
-                    .registry
-                    .take_workflow_agent_output(child, node)
-                    .is_none(),
-                "committed output transfers exactly once"
-            );
-        }
-        assert!(plane.registry.unsettled_snapshot().is_empty());
-    }
-    assert_eq!(outcomes[0], outcomes[1]);
-    assert_eq!(
-        outcomes[0],
-        json!({"status":"satisfied","iterations":2,"result":{"passed":true}})
+        output(json!({"error_handle_mode":"continue_on_error"}))["properties"]["output"],
+        json!({"type":"array"})
     );
 }

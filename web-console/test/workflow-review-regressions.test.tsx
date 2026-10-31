@@ -2,11 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within as uiWithin } from '@testing-library/react';
 import { useSelector } from '@xstate/react';
 import { createActor, waitFor } from 'xstate';
-import { addNode, emptyBlock } from '../src/app/workflows/document/commands';
+import { addNode, replaceNode } from '../src/app/workflows/document/commands';
+import { rootBlock } from './workflow-root';
 import { copyFragment, duplicateFragment, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
 import { blockField, encodeField, fieldValue, nodeField, setField, within, type FieldAddress } from '../src/app/workflows/document/fields';
 import { putNote, setNodePresentation } from '../src/app/workflows/document/geometry';
-import { sameBlockPath, type BlockPath, type WorkflowDocument } from '../src/app/workflows/document/model';
+import { sameBlockPath, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../src/app/workflows/document/model';
 import { renameSchemaField, schemaPropertyAddress } from '../src/app/workflows/document/schema';
 import { workflowEditorMachine, type WorkflowEditorActor } from '../src/app/workflows/machines/editor';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
@@ -19,7 +20,7 @@ import renameCases from '../../tests/fixtures/workflow/schema-rename.json';
 import collisionCases from '../../tests/fixtures/workflow/schema-rename-collisions.json';
 
 afterEach(cleanup);
-const fixture = (): WorkflowDocument => ({ description: 'Review regressions', block: emptyBlock() });
+const fixture = (): WorkflowDocument => ({ description: 'Review regressions', block: rootBlock() });
 async function actorFor(document: WorkflowDocument, analyze: WorkflowScopePort['analyze'] = () => new Promise(() => {})) {
   const source = { ...exampleSource('typed_agent'), document };
   const port: WorkflowScopePort = { endpoint: 'ws://fixture/', scope: { kind: 'user' }, analyze, toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}), read: async () => source, check: () => new Promise(() => {}), write: () => new Promise(() => {}) };
@@ -55,16 +56,11 @@ describe('owned Object construction collisions', () => {
     expect(after.block.nodes.done).toEqual(document.block.nodes.done);
   });
 
-  it('renames explicit Object keys whose values are references, and refuses an opaque Loop carry', () => {
+  it('renames explicit Object keys whose values are references', () => {
     const document = fixture();
     document.block.output = { type: 'object', properties: { before: { type: 'object' } } };
     document.block.nodes.done = { type: 'return', output: { type: 'object', fields: { before: { type: 'reference', path: ['args'] } } } };
     expect(renameSchemaField(document, blockField([], ['output']), 'before', 'after').block.nodes.done).toMatchObject({ output: { fields: { after: { type: 'reference', path: ['args'] } } } });
-    let loop = addNode(fixture(), [], 'loop', 'repeat');
-    loop = setField(loop, blockField([{ node: 'repeat' }], ['input']), { type: 'object', properties: { before: { type: 'string' } } });
-    loop = setField(loop, nodeField([], 'repeat', ['input']), { type: 'object', fields: { before: { type: 'literal', value: 'wanted' } } });
-    expect(() => renameSchemaField(loop, blockField([{ node: 'repeat' }], ['input']), 'before', 'after')).toThrow('unsupported_schema_rename');
-    expect(loop.block.nodes.repeat).toMatchObject({ input: { fields: { before: { value: 'wanted' } } }, carry: { type: 'reference', path: ['result'] } });
   });
 });
 
@@ -193,27 +189,28 @@ it('sends the original search with every titled producer to the bounded native q
   expect(queries.at(-1)).toBe('Draft'); actor.stop();
 });
 
-it.each(['root Return', 'private Return', 'Loop input', 'Loop until', 'Loop carry'])('labels a selected result reference by its exact %s consumer scope', async kind => {
+it.each(['root Return', 'Loop variable', 'body Tool', 'break condition'])('titles a selected reference by its producer around or inside the %s', async kind => {
   let document = addNode(addNode(fixture(), [], 'model', 'result'), [], 'loop', 'repeat');
   document = setNodePresentation(document, [], 'result', { title: 'Actual result producer' });
   const body = [{ node: 'repeat' }];
-  document = addNode(document, body, 'model', 'result');
-  document = setNodePresentation(document, body, 'result', { title: 'Private result producer' });
-  let address = nodeField([], 'done', ['output']);
-  if (kind === 'private Return') address = nodeField(body, 'done', ['output']);
-  if (kind === 'Loop input') address = nodeField([], 'repeat', ['input']);
-  if (kind === 'Loop until') {
-    document = setField(document, nodeField([], 'repeat', ['until']), { type: 'equal', left: { type: 'reference', path: ['result'] }, right: { type: 'literal', value: {} } });
-    address = nodeField([], 'repeat', ['until', 'left']);
+  document = addNode(addNode(document, body, 'model', 'inner'), body, 'tool', 'use');
+  document = setNodePresentation(document, body, 'inner', { title: 'Private producer' });
+  let address = nodeField([], 'done', ['output']), path = ['result'];
+  if (kind === 'Loop variable') {
+    document = replaceNode(document, [], 'repeat', { ...document.block.nodes.repeat as Extract<NodeDefinition, { type: 'loop' }>, loop_variables: [{ label: 'text', var_type: 'string', value: { type: 'literal', value: '' } }] });
+    address = nodeField([], 'repeat', ['loop_variables', 0, 'value']);
   }
-  if (kind === 'Loop carry') {
-    document = setField(document, nodeField([], 'repeat', ['carry']), { type: 'object', fields: { echo: { type: 'reference', path: ['result'] } } });
-    address = nodeField([], 'repeat', ['carry', 'fields', { key: 'echo' }]);
+  // As in Dify, a body reads the nodes around it.
+  if (kind === 'body Tool') address = nodeField(body, 'use', ['arguments']);
+  if (kind === 'break condition') {
+    path = ['inner'];
+    document = replaceNode(document, [], 'repeat', { ...document.block.nodes.repeat as Extract<NodeDefinition, { type: 'loop' }>, break_condition: { type: 'equal', left: { type: 'reference', path }, right: { type: 'literal', value: '' } } });
+    address = nodeField([], 'repeat', ['break_condition', 'left']);
   }
-  document = setField(document, address, { type: 'reference', path: ['result'] });
+  document = setField(document, address, { type: 'reference', path });
   const actor = await actorFor(document);
-  render(<DraftOwner value={{ editor: actor, commits: new FieldCommits() }}><ReferencePicker address={address} path={['result']} edit={apply => actor.send({ type: 'EDIT', apply })} /></DraftOwner>);
-  expect(screen.getByRole('button', { name: 'Choose a variable' }).textContent).toBe(kind === 'Loop until' || kind === 'Loop carry' ? 'Committed body result' : kind === 'private Return' ? 'Private result producer' : 'Actual result producer');
+  render(<DraftOwner value={{ editor: actor, commits: new FieldCommits() }}><ReferencePicker address={address} path={path} edit={apply => actor.send({ type: 'EDIT', apply })} /></DraftOwner>);
+  expect(screen.getByRole('button', { name: 'Choose a variable' }).textContent).toBe(kind === 'break condition' ? 'Private producer' : 'Actual result producer');
   expect(actor.getSnapshot().context.document).toBe(document); expect(actor.getSnapshot().context.past).toHaveLength(0);
   actor.stop();
 });

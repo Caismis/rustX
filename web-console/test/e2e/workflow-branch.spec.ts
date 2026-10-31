@@ -6,7 +6,7 @@ import { startDogfood } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
-import { emptyBlock } from '../../src/app/workflows/document/commands';
+import { rootBlock } from '../workflow-root';
 import { setNodePresentation } from '../../src/app/workflows/document/geometry';
 import type { WorkflowDocument } from '../../src/app/workflows/document/model';
 
@@ -22,7 +22,7 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   try {
-    let document: WorkflowDocument = { description: 'Ordered cases', block: emptyBlock() };
+    let document: WorkflowDocument = { description: 'Ordered cases', block: rootBlock() };
     document.block.input = { type: 'object', properties: { status: { type: 'string' }, flag: { type: 'boolean' } }, required: ['status', 'flag'], additionalProperties: false };
     document.block.nodes.choose = { type: 'branch', cases: [{ id: 'true', condition: { type: 'and', predicates: [] } }] };
     document.block.edges = [{ from: 'start', to: 'choose' }, { from: 'choose', to: 'done', port: 'true' }, { from: 'choose', to: 'done', port: 'false' }];
@@ -120,7 +120,7 @@ test('branch variable picker shows upstream outputs and excludes parallel siblin
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   try {
-    const document: WorkflowDocument = { description: 'Parallel variable scope', block: emptyBlock() };
+    const document: WorkflowDocument = { description: 'Parallel variable scope', block: rootBlock() };
     document.block.input = { type: 'object', properties: { status: { type: 'string' } }, required: ['status'], additionalProperties: false };
     const model = { type: 'model' as const, model: { mode: 'session' as const }, messages: [{ role: 'system' as const, content: [{ type: 'literal' as const, value: 'Return text.' }] }, { role: 'user' as const, content: [{ type: 'literal' as const, value: 'Go.' }] }], output: { type: 'text' as const } };
     document.block.nodes.before = model;

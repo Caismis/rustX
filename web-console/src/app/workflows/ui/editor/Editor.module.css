@@ -800,3 +800,13 @@
 .chooserNested { padding-left: 22px; }
 .chooserNote { display: flex; align-items: center; gap: 8px; margin: 8px; color: var(--dsw-alias-label-tertiary); font-size: 11.5px; line-height: 17px; }
 .chooserRetry { margin-left: auto; padding: 2px 8px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 6px; background: none; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; cursor: pointer; }
+/* As Dify's loop variable and assigner rows: name or variable, then type,
+   mode or operation and remove on one line, the value below. */
+.loopVariable { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; padding: 8px; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); }
+.loopVariableHead { display: flex; align-items: center; gap: 6px; }
+.loopVariableHead > :first-child { flex: 1 1 auto; min-width: 0; }
+.loopVariableHead > select { flex: 0 0 96px; }
+.loopVariableHead > button { flex: none; }
+.loopVariableHead .input { min-height: 28px; padding: 3px 6px; font-size: 12px; }
+.inlineField { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.typeBadge { padding: 0 5px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 5px; color: var(--dsw-alias-label-tertiary); font-size: 10px; font-weight: 500; line-height: 16px; }

@@ -338,7 +338,8 @@ programs retain the native identity types. Saving still requires compilation.
 
 An optional query names one exact consumer: structured node address, typed field
 (Model/Agent named input, Tool arguments, Review subject/context, Branch
-condition addressed by `case_id`, Return output, Loop initial input/`until`/`carry`)
+condition addressed by `case_id`, Return output, a Loop variable's value, a Loop
+break condition, an Iteration's input or output, a Variable Assigner operand)
 and structured steps within a construction or predicate. It can search paths or all matching qualified producer titles,
 limit results and classify one existing/manual `reference`. It does not construct
 a Cartesian product of all fields and consumers.
@@ -394,7 +395,7 @@ Destination contracts are validated before projecting into constructed fields.
 An undeclared property of an object with `additionalProperties: false` is
 incompatible for every reference, even when its producer type is unknown. This
 prohibition persists through descendant fields and array items, with an explicit
-diagnostic. Return output and Loop input/carry use the
+diagnostic. Return output and a Loop variable's value use the
 same native rule. Undeclared fields of open objects and unknown external Tool
 contracts retain unknown compatibility; declared properties use their schemas.
 
@@ -429,10 +430,13 @@ failed request, an output omitted by response truncation, an incomplete output
 declaration and a ready declared/derived schema. It never renders a failed or
 truncated request as a reason to keep waiting for an incomplete declaration.
 
-Ordinary fields use node-entry scope. Loop initial input uses the parent
-environment. Private child nodes see only their projected
-`args` and their own producers. Loop `until`/`carry` see only committed body-output
-`result`; downstream parent nodes see only Loop aggregates. Concurrent ancestors
+Ordinary fields use node-entry scope; a Loop variable's value and an Iteration
+input use the scope at their container. As in Dify, a body node also sees the
+scope at its container, the container's own variables under its ID (Loop
+variables, or Iteration `item` and `index`) and the body's producers, with each
+choice's producer addressed in the block that declares it. A break condition and
+an Iteration output see the body after a round: that scope plus every body node.
+Downstream nodes see a Loop's variables and an Iteration's `output`. Concurrent ancestors
 are available at a join when its activation guarantees they run. Producers on
 optional conditional paths remain unavailable.
 
@@ -711,7 +715,7 @@ connection, Session, WorkflowRun, interaction waiter/request, runtime-state writ
 | Online schema unresolved versus disabled source | `cfg237_online_schema_unresolved_and_disabled_source_are_distinct`, same file |
 | Nested branch schema/scope failures, parser coordinates, compiler agreement | `cfg237_nested_paths_parser_locations_and_compiler_agreement`, same file |
 | Output bound and honest omission | `cfg237_workflow_projection_omission_preserves_validity_and_size_bound`, same file |
-| Loop body/carry scope, iteration bounds and broken control | `cfg237_loop_and_control_failures_keep_authored_paths`, `src/runtime/workflow/tests/templates.rs` |
+| Loop body scope, loop count bounds, break condition and broken control | `cfg237_loop_and_control_failures_keep_authored_paths`, `src/runtime/workflow/tests/templates.rs` |
 | Stable compiled explanation under map reordering | `cfg237_compiled_explanation_ignores_yaml_map_insertion_order`, same file |
 | Finite grammar and rejection of execution controls | `cfg237_workflow_grammar_is_finite_and_rejects_execution_controls`, `src/local_runtime/cli.rs` |
 | Real binary human/JSON framing, exits, invalid paths and no runtime writes | `cfg237_binary_workflow_commands_share_json_exit_and_read_only_contract`, `tests/process/configuration_commands.rs` |

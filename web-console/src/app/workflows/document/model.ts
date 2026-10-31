@@ -13,10 +13,25 @@ export type Value = WorkflowValue;
 export type Predicate = WorkflowPredicate;
 export type Edge = WorkflowEdgeDefinition;
 
-/** The seven creatable native node kinds, in palette order. */
-export const NODE_KINDS = ['agent', 'model', 'tool', 'branch', 'review', 'loop', 'return'] as const satisfies readonly NodeKind[];
+/** The creatable native node kinds, in palette order. */
+export const NODE_KINDS = ['agent', 'model', 'tool', 'branch', 'iteration', 'loop', 'loop_end', 'assigner', 'review', 'return'] as const satisfies readonly NodeKind[];
 
-/** One lexical step into a Loop body. */
+/** The kinds that own a body. */
+export type ContainerKind = 'loop' | 'iteration';
+export type Container = Extract<NodeDefinition, { type: ContainerKind }>;
+export const isContainer = (node: NodeDefinition | undefined): node is Container => node?.type === 'loop' || node?.type === 'iteration';
+
+/** Kinds a block cannot hold, as Dify's block selector hides them: Return
+ * ends the workflow, so only the root has one; Exit Loop and the Variable
+ * Assigner belong directly in a Loop body. */
+export function unavailableKinds(document: WorkflowDocument, path: BlockPath): NodeKind[] {
+  const step = path.at(-1), owner = step && blockAt(document, path.slice(0, -1));
+  const container = owner && step ? nodeAt(owner, step.node) : undefined;
+  if (!container) return ['loop_end', 'assigner'];
+  return container.type === 'loop' ? ['return'] : ['return', 'loop_end', 'assigner'];
+}
+
+/** One lexical step into a Loop or Iteration body. */
 export interface BlockStep { readonly node: string }
 /** The lexical block being edited; empty is the root block. */
 export type BlockPath = readonly BlockStep[];
@@ -50,7 +65,7 @@ export function startOf(block: Block): string | undefined {
 }
 function child(block: Block, step: BlockStep): Block | undefined {
   const node = nodeAt(block, step.node);
-  return node?.type === 'loop' ? node.body : undefined;
+  return isContainer(node) ? node.body : undefined;
 }
 
 /** The block at `path`, or `undefined` when an ancestor no longer owns it. */
@@ -80,8 +95,7 @@ export function updateBlock(document: WorkflowDocument, path: BlockPath, update:
     if (depth === path.length) return update(block);
     const step = path[depth];
     const node = nodeAt(block, step.node);
-    if (!node) throw new Error('The edited block no longer exists.');
-    if (node.type !== 'loop') throw new Error('The edited block no longer exists.');
+    if (!isContainer(node)) throw new Error('The edited block no longer exists.');
     const replaced = { ...node, body: rewrite(node.body, depth + 1) };
     return { ...block, nodes: { ...block.nodes, [step.node]: replaced } };
   };
@@ -94,7 +108,7 @@ export function edgesOf(block: Block): Edge[] {
 
 /** The nested blocks a node owns, as single steps from its block. */
 export function childSteps(id: string, node: NodeDefinition): BlockStep[] {
-  if (node.type === 'loop') return [{ node: id }];
+  if (isContainer(node)) return [{ node: id }];
   return [];
 }
 

@@ -66,7 +66,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
     <div className={clsx(css.nodeHead, container && css.containerHead)}>
       <span className={clsx(css.nodeIcon, node ? css[`kind_${node.type}`] : css.startIcon)}>{node ? <KindIcon kind={node.type} size={17} /> : <IconEntry size={17} />}</span>
       <span className={css.nodeText}><span className={css.nodeTitle}>{data.view === 'start' ? data.title || tx(data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : data.title}</span></span>
-      {node && node.type === 'loop' && <button type="button" className={clsx(css.iconButton, 'nodrag nopan')} aria-label={tx(data.expanded ? 'workflows:canvas.collapse' : 'workflows:canvas.expand', { p0: data.title })} onClick={event => { event.stopPropagation(); actions.collapse(id); }}>{data.expanded ? '−' : '+'}</button>}
+      {node && (node.type === 'loop' || node.type === 'iteration') && <button type="button" className={clsx(css.iconButton, 'nodrag nopan')} aria-label={tx(data.expanded ? 'workflows:canvas.collapse' : 'workflows:canvas.expand', { p0: data.title })} onClick={event => { event.stopPropagation(); actions.collapse(id); }}>{data.expanded ? '−' : '+'}</button>}
       <button type="button" className={clsx(css.iconButton, css.nodeMenu, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local || tx('workflows:canvas.start') })} onClick={event => { event.stopPropagation(); data.view === 'start' ? actions.addIn(id, event.currentTarget) : actions.menu(id, event.currentTarget); }}><IconEllipsisOutline16 /></button>
     </div>
     {!container && <>

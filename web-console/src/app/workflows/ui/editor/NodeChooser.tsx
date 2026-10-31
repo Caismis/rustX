@@ -22,9 +22,10 @@ type Row = { kind: 'heading'; key: string; label: string } | { kind: 'note'; key
   | { kind: 'provider'; key: string; source: WorkflowToolSource; open: boolean; count: number } | { kind: 'option'; index: number; item: Item; nested?: boolean };
 
 /** As Dify's block classifications: the default group has no heading. */
-const GROUPS: readonly { group?: 'logic'; kinds: readonly Exclude<NodeKind, 'tool'>[] }[] = [
+const GROUPS: readonly { group?: 'logic' | 'transform'; kinds: readonly Exclude<NodeKind, 'tool'>[] }[] = [
   { kinds: ['agent', 'model', 'return'] },
-  { group: 'logic', kinds: ['branch', 'review', 'loop'] },
+  { group: 'logic', kinds: ['branch', 'iteration', 'loop', 'loop_end', 'review'] },
+  { group: 'transform', kinds: ['assigner'] },
 ];
 
 /** A Tool's description up to its first sentence, as a node description. */

@@ -18,7 +18,7 @@ pub const MAX_ANALYSIS_BYTES: usize = 256 * 1024;
 pub const MAX_ANALYSIS_CHOICES: usize = 256;
 pub const MAX_ANALYSIS_VISITS: usize = 2048;
 
-/// Structured lexical address of a Loop body.
+/// Structured lexical address of a Loop or Iteration body.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -59,9 +59,21 @@ pub enum WorkflowConsumerField {
         case_id: String,
     },
     ReturnOutput,
-    LoopInput,
-    LoopUntil,
-    LoopCarry,
+    /// The value of one Loop variable.
+    LoopVariable {
+        index: u32,
+    },
+    /// The Loop's break condition, read in its body's scope.
+    BreakCondition,
+    /// Select a comparable variable of the break condition.
+    BreakConditionVariable,
+    IterationIterator,
+    /// The Iteration's output, read in its body's scope.
+    IterationOutput,
+    /// The operand of one Variable Assigner write.
+    AssignerValue {
+        index: u32,
+    },
 }
 
 /// Exact authored position within a value construction or predicate.
@@ -159,7 +171,8 @@ pub fn block_at<'a>(
     let mut block = root;
     for step in path {
         block = match block.nodes.get(&step.node)? {
-            WorkflowNodeDefinition::Loop { body, .. } => body,
+            WorkflowNodeDefinition::Loop { body, .. }
+            | WorkflowNodeDefinition::Iteration { body, .. } => body,
             _ => return None,
         };
     }
@@ -190,17 +203,43 @@ pub fn declared_output(
             schema
         }
         WorkflowNodeDefinition::Review { .. } => super::review::result_schema(),
-        WorkflowNodeDefinition::Loop { body, .. } => {
-            validate_root_schema(&body.output, "body.output")?;
-            super::execution::loop_result_schema(&body.output)
+        WorkflowNodeDefinition::Loop { loop_variables, .. } => {
+            super::loop_variables_schema(loop_variables)
         }
+        WorkflowNodeDefinition::Iteration {
+            output,
+            error_handle_mode,
+            flatten_output,
+            body,
+            ..
+        } => super::execution::iteration_result_schema(
+            produced(output, body).as_ref(),
+            *error_handle_mode,
+            *flatten_output,
+        ),
         WorkflowNodeDefinition::Start {}
         | WorkflowNodeDefinition::Branch { .. }
-        | WorkflowNodeDefinition::Return { .. } => {
+        | WorkflowNodeDefinition::Return { .. }
+        | WorkflowNodeDefinition::LoopEnd {}
+        | WorkflowNodeDefinition::Assigner { .. } => {
             return Ok(None);
         }
     };
     Ok(Some(schema))
+}
+
+/// What an Iteration's rounds produce, when its output names a field of a
+/// body node; the compiler also resolves other variables of the body scope.
+fn produced(output: &WorkflowValue, body: &WorkflowBlock) -> Option<Value> {
+    let WorkflowValue::Reference { path } = output else {
+        return None;
+    };
+    let (producer, fields) = path.split_first()?;
+    let mut schema = declared_output(body.nodes.get(producer)?).ok()??;
+    for field in fields {
+        schema = schema.get("properties")?.get(field)?.clone();
+    }
+    Some(schema)
 }
 
 fn valid_key(key: &str) -> bool {
@@ -247,9 +286,10 @@ pub fn validate_candidate(definition: &WorkflowDefinition) -> Result<(), &'stati
             return Err("candidate exceeds native block depth or node bound");
         }
         for node in block.nodes.values() {
-            match node {
-                WorkflowNodeDefinition::Loop { body, .. } => walk(body, depth + 1, count)?,
-                _ => {}
+            if let WorkflowNodeDefinition::Loop { body, .. }
+            | WorkflowNodeDefinition::Iteration { body, .. } = node
+            {
+                walk(body, depth + 1, count)?;
             }
         }
         Ok(())
@@ -263,6 +303,10 @@ pub fn validate_candidate(definition: &WorkflowDefinition) -> Result<(), &'stati
 
 /// The position of a Model message variable, whichever one is selected.
 static UNSET_REFERENCE: WorkflowValue = WorkflowValue::Reference { path: Vec::new() };
+/// A Loop's break condition before its first comparison.
+static NO_CONDITION: WorkflowPredicate = WorkflowPredicate::And {
+    predicates: Vec::new(),
+};
 
 #[derive(Clone, Copy)]
 enum Expression<'a> {
@@ -273,6 +317,7 @@ struct Consumer<'a> {
     expression: Expression<'a>,
     expected: Option<Cow<'a, Value>>,
     necessary: NecessaryCondition,
+    /// Read in the node's body after a round, not where the node is.
     result_scope: bool,
     arrays: Vec<ArrayContext<'a>>,
 }
@@ -348,17 +393,40 @@ fn consumer<'a>(
             Some(Cow::Borrowed(&block.output)),
             false,
         ),
-        (N::Loop { input, body, .. }, F::LoopInput) => (
-            Expression::Value(input),
-            Some(Cow::Borrowed(&body.input)),
-            false,
-        ),
-        (N::Loop { until, .. }, F::LoopUntil) => (Expression::Predicate(until), None, true),
-        (N::Loop { carry, body, .. }, F::LoopCarry) => (
-            Expression::Value(carry),
-            Some(Cow::Borrowed(&body.input)),
+        (N::Loop { loop_variables, .. }, F::LoopVariable { index }) => {
+            let variable = loop_variables.get(*index as usize)?;
+            (
+                Expression::Value(&variable.value),
+                Some(Cow::Owned(variable.var_type.schema())),
+                false,
+            )
+        }
+        (
+            N::Loop {
+                break_condition, ..
+            },
+            F::BreakCondition | F::BreakConditionVariable,
+        ) => (
+            Expression::Predicate(break_condition.as_ref().unwrap_or(&NO_CONDITION)),
+            None,
             true,
         ),
+        (N::Iteration { iterator, .. }, F::IterationIterator) => (
+            Expression::Value(iterator),
+            Some(Cow::Owned(serde_json::json!({"type": "array"}))),
+            false,
+        ),
+        (N::Iteration { output, .. }, F::IterationOutput) => {
+            (Expression::Value(output), None, true)
+        }
+        (N::Assigner { items }, F::AssignerValue { index }) => {
+            let item = items.get(*index as usize)?;
+            (
+                Expression::Value(item.value.as_ref().unwrap_or(&UNSET_REFERENCE)),
+                None,
+                false,
+            )
+        }
         _ => return None,
     };
     Some(Consumer {
@@ -486,6 +554,7 @@ fn position<'a>(
 fn entry_scopes(
     block: &WorkflowBlock,
     declarations: &SchemaMap,
+    base: &SchemaMap,
 ) -> Option<BTreeMap<String, SchemaMap>> {
     let flow = control_flow(block).ok()?;
     // A Return cannot be a predecessor even in an unfinished candidate.
@@ -497,7 +566,7 @@ fn entry_scopes(
     let mut after = BTreeMap::new();
     let mut before = BTreeMap::new();
     for id in flow.topological {
-        let scope = flow.scopes.scope(&id, &after, &Value::Null);
+        let scope = flow.scopes.scope(&id, &after, base);
         // Unknown args and producer contracts retain their independent
         // presence facts through the compiler's native intersection.
         let next = declarations
@@ -620,9 +689,8 @@ fn choice<'a>(
     path: Vec<String>,
     scope: Option<&SchemaMap>,
     contract: ConsumerContract<'a>,
-    address: &WorkflowNodeAddress,
+    owners: &BTreeMap<String, Vec<WorkflowBlockStep>>,
     invalid_consumer: bool,
-    result_scope: bool,
     inference: &mut ChoiceInference<'a>,
 ) -> WorkflowReferenceChoice {
     use WorkflowReferenceAvailability as A;
@@ -707,13 +775,12 @@ fn choice<'a>(
         A::Available => None,
     }
     };
-    let producer = path
-        .first()
-        .filter(|key| key.as_str() != "args" && !(result_scope && key.as_str() == "result"))
-        .map(|key| WorkflowNodeAddress {
-            block: address.block.clone(),
+    let producer = path.first().and_then(|key| {
+        Some(WorkflowNodeAddress {
+            block: owners.get(key)?.clone(),
             node: key.clone(),
-        });
+        })
+    });
     WorkflowReferenceChoice {
         producer,
         path,
@@ -769,9 +836,15 @@ fn analyze_with_schema_budget(
             schema_budget,
         );
     }
+    let input = if validate_root_schema(&definition.block.input, "input").is_ok() {
+        &definition.block.input
+    } else {
+        &Value::Null
+    };
     collect_outputs(
         &definition.block,
         &mut Vec::new(),
+        &mut SchemaMap::from_schema(input),
         &mut analysis,
         &mut budget,
     );
@@ -784,35 +857,180 @@ fn analyze_with_schema_budget(
 fn collect_outputs(
     block: &WorkflowBlock,
     path: &mut Vec<WorkflowBlockStep>,
+    declarations: &mut SchemaMap,
     analysis: &mut WorkflowCandidateAnalysis,
     budget: &mut Budget,
 ) {
+    let declared = declare(block, declarations);
     for (id, node) in &block.nodes {
-        let (schema, diagnostic) = match declared_output(node) {
-            Ok(Some(schema)) => (Some(schema), None),
-            Ok(None) => continue,
-            Err(_) => (None, Some("output declaration is incomplete or violates the closed Workflow schema contract".into())),
+        let Some(schema) = declared.get(id) else {
+            continue;
         };
         let declaration = WorkflowOutputDeclaration {
             producer: WorkflowNodeAddress {
                 block: path.clone(),
                 node: id.clone(),
             },
-            schema,
-            diagnostic,
+            schema: (!schema.is_null()).then(|| schema.clone()),
+            diagnostic: schema.is_null().then(|| "output declaration is incomplete or violates the closed Workflow schema contract".into()),
         };
         if budget.admit(&declaration) {
             analysis.outputs.push(declaration);
         }
-        match node {
-            WorkflowNodeDefinition::Loop { body, .. } => {
-                path.push(WorkflowBlockStep { node: id.clone() });
-                collect_outputs(body, path, analysis, budget);
-                path.pop();
-            }
-            _ => {}
+        if let Some((body, entry)) = container(node, declarations) {
+            let mut inside = declarations.with_prefix(id, &entry);
+            path.push(WorkflowBlockStep { node: id.clone() });
+            collect_outputs(body, path, &mut inside, analysis, budget);
+            path.pop();
         }
     }
+}
+
+/// Add the declarations of `block`'s nodes, returning each declared node's
+/// schema (`Null` when incomplete). An Iteration whose output is its own
+/// `item` or `index` is typed from its iterator, as the compiler types it.
+fn declare(block: &WorkflowBlock, declarations: &mut SchemaMap) -> BTreeMap<String, Value> {
+    let mut declared = BTreeMap::new();
+    for (id, node) in &block.nodes {
+        match declared_output(node) {
+            Ok(Some(schema)) => {
+                declared.insert(id.clone(), schema);
+            }
+            Err(_) => {
+                declared.insert(id.clone(), Value::Null);
+            }
+            Ok(None) => {}
+        }
+    }
+    declarations.0.extend(declared.clone());
+    for (id, node) in &block.nodes {
+        if let WorkflowNodeDefinition::Iteration {
+            output: WorkflowValue::Reference { path },
+            error_handle_mode,
+            flatten_output,
+            ..
+        } = node
+            && let Some((own, fields)) = path.split_first()
+            && own == id
+            && let Some((_, entry)) = container(node, declarations)
+            && let Some(produced) = fields
+                .iter()
+                .try_fold(&entry, |schema, field| schema.get("properties")?.get(field))
+        {
+            let schema = super::execution::iteration_result_schema(
+                Some(produced),
+                *error_handle_mode,
+                *flatten_output,
+            );
+            declarations.0.insert(id.clone(), schema.clone());
+            declared.insert(id.clone(), schema);
+        }
+    }
+    declared
+}
+
+/// A container's body and what its ID names inside it: a Loop's variables,
+/// or an Iteration's `item` and `index` (`Null` while its iterator's items
+/// are unknown).
+fn container<'a>(
+    node: &'a WorkflowNodeDefinition,
+    declarations: &SchemaMap,
+) -> Option<(&'a WorkflowBlock, Value)> {
+    match node {
+        WorkflowNodeDefinition::Loop {
+            loop_variables,
+            body,
+            ..
+        } => Some((body, super::loop_variables_schema(loop_variables))),
+        WorkflowNodeDefinition::Iteration { iterator, body, .. } => {
+            let item = match iterator {
+                WorkflowValue::Reference { path } => {
+                    path.split_first().and_then(|(producer, fields)| {
+                        fields
+                            .iter()
+                            .try_fold(declarations.0.get(producer)?, |schema, field| {
+                                schema.get("properties")?.get(field)
+                            })?
+                            .get("items")
+                            .cloned()
+                    })
+                }
+                _ => None,
+            };
+            Some((
+                body,
+                item.map_or(Value::Null, |item| {
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {"item": item, "index": {"type": "integer"}},
+                        "required": ["item", "index"],
+                        "additionalProperties": false,
+                    })
+                }),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// What one block sees: the declarations of every variable around it and
+/// of its own nodes, where each is declared, and each node's entry scope.
+struct BlockContext<'a> {
+    block: &'a WorkflowBlock,
+    declarations: SchemaMap,
+    /// The block of each producer; `args` has none.
+    owners: BTreeMap<String, Vec<WorkflowBlockStep>>,
+    scopes: Option<BTreeMap<String, SchemaMap>>,
+    /// What is in scope where the block starts.
+    base: Option<SchemaMap>,
+}
+
+/// As the compiler: a body starts from the scope at its container, where
+/// the container's ID names its own variables (a Loop's variables, an
+/// Iteration's `item` and `index`).
+fn block_context<'a>(
+    definition: &'a WorkflowDefinition,
+    path: &[WorkflowBlockStep],
+) -> Option<BlockContext<'a>> {
+    let root = &definition.block;
+    let input = if validate_root_schema(&root.input, "input").is_ok() {
+        &root.input
+    } else {
+        &Value::Null
+    };
+    let mut declarations = SchemaMap::from_schema(input);
+    let mut owners = BTreeMap::new();
+    let mut base = Some(SchemaMap::from_schema(&Value::Null));
+    let mut block = root;
+    let mut at = Vec::new();
+    for step in path.iter().chain(std::iter::once(&WorkflowBlockStep {
+        node: String::new(),
+    })) {
+        for id in block.nodes.keys() {
+            owners.insert(id.clone(), at.clone());
+        }
+        declare(block, &mut declarations);
+        let scopes = base
+            .as_ref()
+            .and_then(|base| entry_scopes(block, &declarations, base));
+        if at.len() == path.len() {
+            return Some(BlockContext {
+                block,
+                declarations,
+                owners,
+                scopes,
+                base,
+            });
+        }
+        let (body, entry) = container(block.nodes.get(&step.node)?, &declarations)?;
+        base = scopes
+            .and_then(|mut scopes| scopes.remove(&step.node))
+            .map(|scope| scope.with_prefix(&step.node, &Value::Null));
+        declarations.0.insert(step.node.clone(), entry);
+        at.push(step.clone());
+        block = body;
+    }
+    None
 }
 
 #[allow(clippy::too_many_lines)]
@@ -825,60 +1043,53 @@ fn analyze_query(
     schema_budget: SchemaBudget,
 ) {
     let address = &query.consumer.address;
-    let Some(block) = block_at(&definition.block, &address.block) else {
+    let Some(context) = block_context(definition, &address.block) else {
         analysis.diagnostic = Some("consumer Block does not exist".into());
         analysis.incomplete = true;
         return;
     };
-    let Some(consumer) = consumer(block, &query.consumer) else {
+    let Some(consumer) = consumer(context.block, &query.consumer) else {
         analysis.diagnostic =
             Some("consumer field does not exist or does not belong to this node kind".into());
         analysis.incomplete = true;
         return;
     };
-    let input_known = validate_root_schema(&block.input, "input").is_ok();
-    let unknown_input = Value::Null;
-    let input_schema = if input_known {
-        &block.input
-    } else {
-        &unknown_input
-    };
-    let mut declarations = SchemaMap::from_schema(input_schema);
-    for (id, node) in &block.nodes {
-        match declared_output(node) {
-            Ok(Some(schema)) => {
-                declarations.0.insert(id.clone(), schema);
-            }
-            Err(_) => {
-                declarations.0.insert(id.clone(), Value::Null);
-            }
-            Ok(None) => {}
+    let input_known = validate_root_schema(&definition.block.input, "input").is_ok();
+    // A break condition or an Iteration output reads the body after a round:
+    // everything around it, the container's own variables and every body node.
+    let inner = consumer.result_scope.then(|| {
+        let mut path = address.block.clone();
+        path.push(WorkflowBlockStep {
+            node: address.node.clone(),
+        });
+        block_context(definition, &path)
+    });
+    let BlockContext {
+        declarations,
+        owners,
+        scopes,
+        base,
+        block,
+    } = match inner {
+        Some(Some(inner)) => inner,
+        Some(None) => {
+            analysis.diagnostic = Some("consumer body does not exist".into());
+            analysis.incomplete = true;
+            return;
         }
-    }
-    let scopes = entry_scopes(block, &declarations);
-    let synthetic_result = consumer.result_scope;
-    let result_scope = if consumer.result_scope {
-        let WorkflowNodeDefinition::Loop { body, .. } = &block.nodes[&address.node] else {
-            unreachable!()
-        };
-        let valid = validate_root_schema(&body.output, "body.output").is_ok();
-        declarations = SchemaMap(BTreeMap::from([(
-            "result".into(),
-            if valid {
-                body.output.clone()
-            } else {
-                Value::Null
-            },
-        )]));
-        valid.then(|| SchemaMap(BTreeMap::from([("result".into(), Value::Null)])))
-    } else {
-        None
+        None => context,
     };
     let scope = if consumer.result_scope {
-        result_scope.as_ref()
+        base.map(|base| {
+            block
+                .nodes
+                .keys()
+                .fold(base, |scope, id| scope.with_prefix(id, &Value::Null))
+        })
     } else {
-        scopes.as_ref().and_then(|scopes| scopes.get(&address.node))
+        scopes.and_then(|mut scopes| scopes.remove(&address.node))
     };
+    let scope = scope.as_ref();
     let mut inference = ChoiceInference {
         schemas: SchemaInference::new(&declarations, &address.node, schema_budget),
         arrays: BTreeMap::new(),
@@ -931,9 +1142,8 @@ fn analyze_query(
             reference.clone(),
             scope,
             contract,
-            address,
+            &owners,
             invalid_consumer,
-            synthetic_result,
             &mut inference,
         );
         if budget.admit(&selected) {
@@ -956,12 +1166,12 @@ fn analyze_query(
         }
         // Presentation titles widen discovery before the same bounded catalog
         // admission. They never name synthetic inputs/results or prove scope.
-        let title_match = path[0] != "args"
-            && !(synthetic_result && path[0] == "result")
-            && title_matches.contains(&WorkflowNodeAddress {
-                block: address.block.clone(),
+        let title_match = owners.get(&path[0]).is_some_and(|block| {
+            title_matches.contains(&WorkflowNodeAddress {
+                block: block.clone(),
                 node: path[0].clone(),
-            });
+            })
+        });
         if title_match || path.join(".").to_lowercase().contains(&search) {
             if analysis.references.len() >= query.limit {
                 budget.truncated = true;
@@ -971,9 +1181,8 @@ fn analyze_query(
                 path.clone(),
                 scope,
                 contract,
-                address,
+                &owners,
                 invalid_consumer,
-                synthetic_result,
                 &mut inference,
             );
             // Optional declared fields still expose their contracts, while the

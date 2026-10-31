@@ -171,7 +171,8 @@ pub(super) fn freeze_models(
                     })?;
                 frozen.insert(key, invocation);
             }
-            super::WorkflowNodeProgram::Loop { body, .. } => {
+            super::WorkflowNodeProgram::Loop { body, .. }
+            | super::WorkflowNodeProgram::Iteration { body, .. } => {
                 frozen.extend(freeze_models(body, context)?);
             }
             _ => {}

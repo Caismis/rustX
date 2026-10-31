@@ -249,15 +249,17 @@ async fn bounded_loop_exhaustion_keeps_one_outer_result_and_no_internal_provider
         return;
     };
     let mut definition: serde_json::Value = serde_yaml::from_str(TOOL_WORKFLOW).unwrap();
-    let body = definition["block"].take();
-    let output = json!({"type":"object","properties":{
-        "status":{"type":"string","enum":["satisfied","exhausted"]},"iterations":{"type":"integer"},"result":body["output"]
-    },"required":["status","iterations","result"],"additionalProperties":false});
-    definition["block"] = json!({"input":body["input"],"output":output,"nodes": {"workflow_start":{"type":"start"},
-        "feedback":{"type":"loop","input":{"type":"reference","path":["args"]},"body":body,"max_iterations":3,
-            "until":{"type":"boolean","value":{"type":"literal","value":false}},"carry":{"type":"literal","value":{"task":"inspect again"}}},
+    let root = definition["block"].take();
+    let inspect = root["nodes"]["inspect"].clone();
+    // Three rounds without a break condition: the Loop completes its count.
+    definition["block"] = json!({"input":root["input"],"output":root["output"],"nodes": {"workflow_start":{"type":"start"},
+        "feedback":{"type":"loop","loop_count":3,
+            "loop_variables":[{"label":"files","var_type":"string","value":{"type":"literal","value":""}}],
+            "body":{"nodes":{"loop_start":{"type":"start"},"inspect":inspect,
+                "save":{"type":"assigner","items":[{"variable":["feedback","files"],"operation":"overwrite","value":{"type":"reference","path":["inspect","text"]}}]}},
+                "edges":[{"from":"loop_start","to":"inspect"},{"from":"inspect","to":"save"}]}},
         "done":{"type":"return","output":{"type":"reference","path":["feedback"]}}
-    },"edges": [{"from":"workflow_start","to":"feedback"},{"from":"feedback","port":"satisfied","to":"done"},{"from":"feedback","port":"exhausted","to":"done"}],});
+    },"edges": [{"from":"workflow_start","to":"feedback"},{"from":"feedback","to":"done"}],});
     let driver =
         Driver::start_with_workflow(&emulator, &serde_yaml::to_string(&definition).unwrap()).await;
     let handoff = driver.submit();
@@ -284,7 +286,6 @@ async fn bounded_loop_exhaustion_keeps_one_outer_result_and_no_internal_provider
         1
     );
     let history = serde_json::to_string(&canonical).unwrap();
-    assert!(history.contains("exhausted"));
     assert!(history.contains("review_pr.yaml"));
     assert!(!history.contains("tool-glob"));
     emulator.finish().await;

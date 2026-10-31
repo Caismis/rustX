@@ -33,26 +33,46 @@ function predicate(input: Predicate, rewrite: PathRewrite): Predicate {
   }
 }
 
-/** Rewrite every binding a node evaluates in its owning block's lexical
- * scope. Nested blocks are private scopes that only see their projected
- * `args`, and a Loop's `until`/`carry` see only its `result`; none of those
- * can name a sibling of the owning block, so none are rewritten. */
+/** Rewrite every binding a node evaluates, including those of its body. As
+ * in Dify, a body reads the variables around it and node IDs never hide one
+ * another, so one rewrite covers the whole subtree. An Assigner's written
+ * variable is a path too. */
 function node(input: NodeDefinition, rewrite: PathRewrite): NodeDefinition {
   switch (input.type) {
-    case 'start': return input;
+    case 'start': case 'loop_end': return input;
     case 'agent': return { ...input, task: input.task.map(part => value(part, rewrite)) };
     case 'model': return { ...input, messages: input.messages.map(message => ({ ...message, content: message.content?.map(part => value(part, rewrite)) })) };
     case 'tool': return { ...input, arguments: value(input.arguments, rewrite) };
     case 'branch': return { ...input, cases: input.cases.map(item => ({ ...item, condition: predicate(item.condition, rewrite) })) };
     case 'review': return { ...input, subject: { ...input.subject, value: value(input.subject.value, rewrite) }, context: input.context.map(item => value(item, rewrite)) };
-    case 'loop': return { ...input, input: value(input.input, rewrite) };
+    case 'loop': return { ...input, loop_variables: input.loop_variables?.map(item => ({ ...item, value: value(item.value, rewrite) })),
+      ...(input.break_condition ? { break_condition: predicate(input.break_condition, rewrite) } : {}), body: rewriteBlockReferences(input.body, rewrite) };
+    case 'iteration': return { ...input, iterator: value(input.iterator, rewrite), output: value(input.output, rewrite), body: rewriteBlockReferences(input.body, rewrite) };
+    case 'assigner': return { ...input, items: input.items.map(item => ({ ...item, variable: rewrite(item.variable) ?? item.variable, ...(item.value ? { value: value(item.value, rewrite) } : {}) })) };
     case 'return': return { ...input, output: value(input.output, rewrite) };
   }
 }
 
-/** Rewrite every reference evaluated in `block`'s own scope. */
+/** Rewrite every reference evaluated in `block` or a body inside it. */
 export function rewriteBlockReferences(block: Block, rewrite: PathRewrite): Block {
   return { ...block, nodes: Object.fromEntries(Object.entries(block.nodes).map(([id, definition]) => [id, node(definition, rewrite)])) };
+}
+
+/** A container's fields that read its body after a round: the Loop's break
+ * condition and the Iteration's output. */
+export function rewriteRoundReferences(container: NodeDefinition, rewrite: PathRewrite): NodeDefinition {
+  if (container.type === 'loop' && container.break_condition) return { ...container, break_condition: predicate(container.break_condition, rewrite) };
+  if (container.type === 'iteration') return { ...container, output: value(container.output, rewrite) };
+  return container;
+}
+
+/** Node IDs declared in the bodies inside `block`, at any depth. */
+function bodyIdentifiers(block: Block, found = new Set<string>()): Set<string> {
+  for (const definition of Object.values(block.nodes)) if (definition.type === 'loop' || definition.type === 'iteration') {
+    for (const id of Object.keys(definition.body.nodes)) found.add(id);
+    bodyIdentifiers(definition.body, found);
+  }
+  return found;
 }
 
 /** References to `id`'s value: its own output, or a field of it. */
@@ -61,9 +81,10 @@ export const renameProducer = (from: string, to: string): PathRewrite =>
 
 
 
-/** Every reference path a block evaluates in its own scope. */
+/** Every reference a block reads from outside it: references to its
+ * bodies' own nodes stay inside. */
 export function blockReferences(block: Block): string[][] {
-  const found: string[][] = [];
-  rewriteBlockReferences(block, path => { found.push([...path]); return undefined; });
+  const found: string[][] = [], inside = bodyIdentifiers(block);
+  rewriteBlockReferences(block, path => { if (!inside.has(path[0])) found.push([...path]); return undefined; });
   return found;
 }

@@ -48,6 +48,8 @@ export function copyFragment(document: WorkflowDocument, source: string, path: B
 }
 
 const fail = (): never => { throw new CommandRejected('invalid_fragment'); };
+const VAR_TYPES: readonly string[] = ['string', 'number', 'boolean', 'object', 'array[string]', 'array[number]', 'array[boolean]', 'array[object]'];
+const WRITE_MODES: readonly string[] = ['overwrite', 'clear', 'set', 'append', 'extend', 'remove_first', 'remove_last', 'increment', 'decrement', 'multiply', 'divide'];
 function object(value: unknown): Record<string, unknown> { return schemaObject(value) ?? fail(); }
 function keys(value: unknown, allowed: string[]): Record<string, unknown> { const record = object(value); if (Object.keys(record).some(key => !allowed.includes(key))) fail(); return record; }
 function text(value: unknown): asserts value is string { if (typeof value !== 'string') fail(); }
@@ -155,13 +157,35 @@ function node(input: unknown): void {
     case 'review': {
       keys(record, ['type', 'subject', 'context']); const subject = keys(record.subject, ['type', 'value']); if (subject.type !== 'plan') fail(); value(subject.value); array(record.context).forEach(value); return;
     }
-    case 'loop': keys(record, ['type', 'input', 'body', 'until', 'carry', 'max_iterations']); value(record.input); block(record.body); predicate(record.until); value(record.carry); unsigned(record.max_iterations); return;
+    case 'loop': {
+      keys(record, ['type', 'loop_variables', 'break_condition', 'loop_count', 'body']); unsigned(record.loop_count); block(record.body);
+      if (record.break_condition != null) predicate(record.break_condition);
+      for (const item of array(record.loop_variables ?? [])) { const variable = keys(item, ['label', 'var_type', 'value']); text(variable.label); if (!VAR_TYPES.includes(variable.var_type as string)) fail(); value(variable.value); }
+      return;
+    }
+    case 'iteration': {
+      keys(record, ['type', 'iterator', 'output', 'is_parallel', 'parallel_nums', 'error_handle_mode', 'flatten_output', 'body']); value(record.iterator); value(record.output); block(record.body);
+      if (record.is_parallel !== undefined && typeof record.is_parallel !== 'boolean') fail();
+      if (record.parallel_nums !== undefined) unsigned(record.parallel_nums);
+      if (record.error_handle_mode !== undefined && !['terminated', 'continue_on_error', 'remove_abnormal_output'].includes(record.error_handle_mode as string)) fail();
+      if (record.flatten_output !== undefined && typeof record.flatten_output !== 'boolean') fail();
+      return;
+    }
+    case 'loop_end': keys(record, ['type']); return;
+    case 'assigner':
+      keys(record, ['type', 'items']);
+      for (const item of array(record.items)) {
+        const write = keys(item, ['variable', 'operation', 'value']); array(write.variable).forEach(text);
+        if (!WRITE_MODES.includes(write.operation as string)) fail();
+        if (write.value !== undefined) value(write.value);
+      }
+      return;
     default: fail();
   }
 }
 function edges(input: unknown): void { for (const item of array(input ?? [])) { const edge = keys(item, ['from', 'to', 'port']); text(edge.from); text(edge.to); if (edge.port != null && typeof edge.port !== 'boolean' && (typeof edge.port !== 'string' || validLocalKey(edge.port))) fail(); } }
 function nodes(input: unknown): void { for (const [id, item] of Object.entries(object(input))) { if (validNodeId(id)) fail(); node(item); } }
-function block(input: unknown): void { const record = keys(input, ['input', 'output', 'nodes', 'edges']); object(record.input); object(record.output); nodes(record.nodes); edges(record.edges); }
+function block(input: unknown): void { const record = keys(input, ['input', 'output', 'nodes', 'edges']); if (record.input !== undefined) object(record.input); if (record.output !== undefined) object(record.output); nodes(record.nodes); edges(record.edges); }
 
 /** This is a bounded transport-shape decoder, not a reachability/type proof.
  * Native authoring remains the only authority for program validity. */

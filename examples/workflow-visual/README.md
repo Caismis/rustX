@@ -1,19 +1,20 @@
 # Visual nested Workflow example
 
 [`collect_and_repeat.yaml`](.agents/workflows/collect_and_repeat.yaml) is a native
-file with a real Start, two concurrent one-iteration Loops, a join, and a bounded
-Loop. Multiple outgoing edges express parallelism.
-All three child Blocks deliberately reuse `done`. Root input is `{message:
-"hello"}`; both branches return `{echo: "hello"}` and the Loop returns a
-`satisfied` aggregate after one iteration. The final result contains keyed
-`parallel.left`/`parallel.right` plus `loop.status`, `loop.iterations` and
-`loop.result`. No model, Agent or Tool leaf is needed.
+file with a real Start, two concurrent one-round Loops, a join, and a Loop
+that counts. Multiple outgoing edges express parallelism. As in Dify, a Loop's
+value is its loop variables, and a body reads the variables around it. Root
+input is `{message: "hello"}`; both one-round Loops return `{echo: "hello"}`,
+and the `repeat` Loop's Variable Assigner adds one to `count` in each of its
+three rounds. The final result is
+`{parallel: {left: {echo}, right: {echo}}, loop: {count: 3, echo: "hello"}}`.
+No model, Agent or Tool leaf is needed.
 
 The file includes an author display title, a position and a private Markdown note.
 Those change source revision only; they never become execution or Tool output.
 Open this directory as an authorized Workspace in the Web console, choose
 **Workflows**, and open `collect_and_repeat`. Expand the Loop frames;
-select a Start/Return to edit its own Block contract. Check and Save use the same
+select the root Start or Return to edit the workflow's contract. Check and Save use the same
 native authoring service as other Workflow files.
 
 From the repository root, inspect without execution:

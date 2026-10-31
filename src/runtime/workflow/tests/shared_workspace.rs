@@ -83,17 +83,22 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
     let passed = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
     let definition = serde_json::from_value(json!({"description":"shared implement/check","timeout_ms":600_000,"block":{
         "input":passed,"output":passed,"nodes": {"workflow_start":{"type":"start"},
-            "implement":implement_node(),
-            "check":check_node(),
-            "verdict":{"type":"branch","cases": [{"id":"true", "condition":{"type":"equal",
-                "left":{"type":"reference","path":["check","stdout"]},
-                "right":{"type":"literal","value":"passed"}}}]},
-            "pass":{"type":"return","output":{"type":"literal","value":{"passed":true}}},
-            "fail":{"type":"return","output":{"type":"literal","value":{"passed":false}}}
-        },"edges": [{"from":"workflow_start","to":"implement"},{"from":"implement","to":"check"},{"from":"check","to":"verdict"},
-            {"from":"verdict","to":"pass","port":"true"},{"from":"verdict","to":"fail","port":"false"}],}}))
+            "repair":{"type":"loop","loop_count":3,
+                "loop_variables":[{"label":"passed","var_type":"boolean","value":{"type":"literal","value":false}}],
+                "break_condition":{"type":"boolean","value":{"type":"reference","path":["repair","passed"]}},
+                "body":{"nodes":{"start":{"type":"start"},
+                    "implement":implement_node(),
+                    "check":check_node(),
+                    "verdict":{"type":"branch","cases": [{"id":"true", "condition":{"type":"equal",
+                        "left":{"type":"reference","path":["check","stdout"]},
+                        "right":{"type":"literal","value":"passed"}}}]},
+                    "pass":{"type":"assigner","items":[{"variable":["repair","passed"],"operation":"set","value":{"type":"literal","value":true}}]}},
+                    "edges":[{"from":"start","to":"implement"},{"from":"implement","to":"check"},{"from":"check","to":"verdict"},
+                        {"from":"verdict","to":"pass","port":"true"}]}},
+            "done":{"type":"return","output":{"type":"reference","path":["repair"]}}
+        },"edges": [{"from":"workflow_start","to":"repair"},{"from":"repair","to":"done"}],}}))
     .unwrap();
-    let program = Arc::new(compile_test(super::loops::wrap_definition(definition, 3)).unwrap());
+    let program = Arc::new(compile_test(definition).unwrap());
     let runtime = workflow_runtime(&plane);
     let observations = runtime.observations.subscribe();
     let (_, cancellation) = workflow_cancellation();
@@ -138,8 +143,8 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
     let output = task.await.unwrap().unwrap();
     assert_eq!(
         output,
-        json!({"status":"satisfied","iterations":2,"result":{"passed":true}}),
-        "the outer result is exactly the declared output, never wrapped"
+        json!({"passed":true}),
+        "the outer result is exactly the Loop's variables"
     );
     assert_eq!(
         std::fs::read_to_string(workspace.join(IMPLEMENT_FILE)).unwrap(),

@@ -293,7 +293,13 @@ impl WorkflowEditorMetadata {
             let target = node_at(definition, &node.address);
             if target.is_none()
                 || (node.dimensions.is_some()
-                    && !matches!(target, Some(WorkflowNodeDefinition::Loop { .. })))
+                    && !matches!(
+                        target,
+                        Some(
+                            WorkflowNodeDefinition::Loop { .. }
+                                | WorkflowNodeDefinition::Iteration { .. }
+                        )
+                    ))
             {
                 add(format!("editor.nodes.{index}"));
             }

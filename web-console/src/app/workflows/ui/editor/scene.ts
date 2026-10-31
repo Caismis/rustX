@@ -2,7 +2,7 @@ import { branchGeometry } from '../../document/branch';
 import type { Node, Edge } from '@xyflow/react';
 import type { WorkflowNote } from '../../../../../../protocol/app-server/v62';
 import { nodePresentation, START_POSITION } from '../../document/geometry';
-import { edgesOf, nodeAt, startOf, sameBlockPath, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../../document/model';
+import { edgesOf, isContainer, nodeAt, startOf, sameBlockPath, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../../document/model';
 import { edgePort } from '../../document/ports';
 import { schemaObject } from '../../document/schema';
 import { orderedKeys } from '../../document/presentation';
@@ -49,12 +49,14 @@ export function schemaFields(value: unknown, order = (keys: string[]) => keys.so
  * presentation only; every command still addresses the native Block path. */
 export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<string> = new Set(), measured: ReadonlyMap<string, Size> = new Map()): { nodes: SceneNode[]; edges: SceneEdge[] } {
   const nodes: SceneNode[] = [], edges: SceneEdge[] = [];
-  const visit = (block: Block, path: BlockPath, parentId?: string): Size => {
+  const visit = (block: Block, path: BlockPath, parentId?: string, around?: VariableSources): Size => {
     const local: SceneNode[] = [];
     const entryId = viewId(path, 'start'), startId = startOf(block);
     const start = startId ? nodePresentation(document, path, startId) : undefined;
-    const sources: VariableSources = { ...Object.fromEntries(Object.entries(block.nodes).map(([id, node]) => [id, { kind: node.type, title: nodePresentation(document, path, id)?.title || id }])),
-      args: { kind: 'start', title: start?.title ?? '', nested: path.length > 0 } };
+    // As Dify, a body also reads the variables around it, and `args` is
+    // always the workflow input of the root Start.
+    const sources: VariableSources = { ...around, ...Object.fromEntries(Object.entries(block.nodes).map(([id, node]) => [id, { kind: node.type, title: nodePresentation(document, path, id)?.title || id }])),
+      args: around?.args ?? { kind: 'start', title: start?.title ?? '' } };
     const fields = schemaFields(block.input, keys => orderedKeys(document, { kind: 'block_input', block: [...path], path: [] }, keys));
     // Start renders at its intrinsic height, as Dify's EntryNodeContainer does.
     // Before measurement, estimate its header/padding, field rows and at most
@@ -67,7 +69,7 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
     const ids = [...new Set([...edgesOf(block).flatMap(edge => [edge.from, edge.to]), ...Object.keys(block.nodes).sort()])].filter(id => nodeAt(block, id) && block.nodes[id].type !== 'start');
     for (const id of ids) {
       const node = block.nodes[id], qualified = viewId(path, 'node', id), metadata = nodePresentation(document, path, id);
-      const expanded = node.type === 'loop' && !collapsed.has(qualified);
+      const expanded = isContainer(node) && !collapsed.has(qualified);
       // A shown description (two clamped lines) extends a collapsed node.
       const described = !expanded && node.type !== 'branch' && !!metadata?.description?.trim();
       const preview = node.type === 'branch' ? 0 : previewRowCount(node);
@@ -82,8 +84,8 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
         data: { view: 'node', path, local: id, definition: node, title: metadata?.title || id, description: metadata?.description ?? undefined, expanded, sources, minSize: minimum } };
       // Parents precede children, as React Flow requires.
       nodes.push(projected);
-      if (expanded && node.type === 'loop') {
-        const body = visit(node.body, [...path, { node: id }], qualified);
+      if (expanded && isContainer(node)) {
+        const body = visit(node.body, [...path, { node: id }], qualified, sources);
         minimum.width = Math.max(480, body.width + 32); minimum.height = Math.max(260, body.height + 32);
       }
       const size = expanded ? metadata?.dimensions : measured.get(qualified);

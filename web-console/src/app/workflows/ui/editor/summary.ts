@@ -46,8 +46,10 @@ export function previewRowCount(node: NodeDefinition): number {
     case 'model': return 1;
     case 'tool': return 1 + (node.arguments.type === 'object' ? Math.min(Object.keys(node.arguments.fields).length, 2) : 1);
     case 'review': return node.context.length ? 2 : 1;
-    case 'loop': return 3;
+    case 'loop': return 1 + Math.min(node.loop_variables?.length ?? 0, 2);
+    case 'iteration': return 2;
+    case 'assigner': return Math.max(1, Math.min(node.items.length, 3));
     case 'return': return Math.max(1, Math.min(node.output.type === 'object' ? Object.keys(node.output.fields).length : node.output.type === 'literal' && node.output.value && typeof node.output.value === 'object' && !Array.isArray(node.output.value) ? Object.keys(node.output.value).length : 1, 3));
-    case 'start': case 'branch': return 0;
+    case 'start': case 'branch': case 'loop_end': return 0;
   }
 }

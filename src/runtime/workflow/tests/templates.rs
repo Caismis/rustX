@@ -74,12 +74,11 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
     .unwrap();
     let body: WorkflowDefinition = serde_yaml::from_str(&text).unwrap();
     let original = json!({"description":"Bounded review loop", "block":{
-        "input":body.block.input, "output":body.block.output,"nodes": {"workflow_start":{"type":"start"},
-            "revise":{"type":"loop", "input":{"type":"reference","path":["args"]}, "body":body.block,
-                "until":{"type":"boolean","value":{"type":"reference","path":["result","accepted"]}},
-                "carry":{"type":"literal","value":{"plan":{"summary":"Retry"}}}, "max_iterations":2},
-            "done":{"type":"return","output":{"type":"reference","path":["revise","result"]}}
-        },"edges": [{"from":"workflow_start","to":"revise"},{"from":"revise","to":"done","port":"satisfied"},{"from":"revise","to":"done","port":"exhausted"}],}});
+        "input":body.block.input, "output":{"type":"object","properties":{},"additionalProperties":false},"nodes": {"workflow_start":{"type":"start"},
+            "revise":{"type":"loop", "loop_count":2, "body":test_body(&serde_json::to_value(&body.block).unwrap()),
+                "break_condition":{"type":"boolean","value":{"type":"reference","path":["review_plan","accepted"]}}},
+            "done":{"type":"return","output":{"type":"literal","value":{}}}
+        },"edges": [{"from":"workflow_start","to":"revise"},{"from":"revise","to":"done"}],}});
     let compile = |value| {
         WorkflowProgram::compile(
             WorkflowId::parse("review_loop").unwrap(),
@@ -88,7 +87,7 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
     };
     let valid = compile(original.clone()).unwrap();
     assert_eq!(
-        valid.inspect().blocks["block"].nodes["revise"].max_iterations,
+        valid.inspect().blocks["block"].nodes["revise"].loop_count,
         Some(2)
     );
     assert!(
@@ -99,9 +98,9 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
     );
     for (pointer, value, expected) in [
         (
-            "/block/nodes/revise/max_iterations",
-            json!(257),
-            "block.nodes.revise.max_iterations",
+            "/block/nodes/revise/loop_count",
+            json!(LOOP_NODE_MAX_COUNT + 1),
+            "block.nodes.revise.loop_count",
         ),
         (
             "/block/nodes/revise/body/nodes/review_plan/subject/value/path",
@@ -109,14 +108,14 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
             "block.nodes.revise.body.nodes.review_plan.subject",
         ),
         (
-            "/block/nodes/revise/carry",
-            json!({"type":"literal","value":{"wrong":true}}),
-            "block.nodes.revise.carry",
+            "/block/nodes/revise/break_condition/value/path",
+            json!(["nowhere"]),
+            "block.nodes.revise.break_condition",
         ),
         (
             "/block/nodes/revise/body/edges",
             json!([]),
-            "block.nodes.revise.body.nodes.return_decision",
+            "block.nodes.revise.body.nodes.review_plan",
         ),
     ] {
         let mut broken = original.clone();

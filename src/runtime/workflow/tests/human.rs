@@ -121,31 +121,30 @@ fn human_context(
     )
 }
 
+/// A Loop asking again until the answer is accepted (Review) or answered
+/// (questionnaire), which an Assigner records in its `done` variable.
 fn feedback_definition(question: bool) -> WorkflowDefinition {
-    let mut definition = super::loops::wrap_definition(human_definition(question), 3);
-    let WorkflowNodeDefinition::Loop { until, carry, .. } =
-        definition.block.nodes.get_mut("feedback").unwrap()
-    else {
-        unreachable!()
-    };
-    let boolean = WorkflowPredicate::Boolean {
-        value: reference(if question {
-            "result.cancelled"
-        } else {
-            "result.accepted"
-        }),
-    };
-    **until = if question {
-        WorkflowPredicate::Not {
-            predicate: Box::new(boolean),
-        }
-    } else {
-        boolean
-    };
-    *carry = WorkflowValue::Literal {
-        value: json!({"passed":false}),
-    };
-    definition
+    let human = serde_json::to_value(&human_definition(question).block.nodes["human"]).unwrap();
+    let field = if question { "cancelled" } else { "accepted" };
+    let mut condition =
+        json!({"type":"boolean","value":{"type":"reference","path":["human",field]}});
+    if question {
+        condition = json!({"type":"not","predicate":condition});
+    }
+    serde_json::from_value(json!({"description":"Human feedback loop","timeout_ms":100,"block":{
+        "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
+        "output":schema(json!({"done":{"type":"boolean"}}), &["done"]),
+        "nodes":{"workflow_start":{"type":"start"},
+            "feedback":{"type":"loop","loop_count":3,
+                "loop_variables":[{"label":"done","var_type":"boolean","value":{"type":"literal","value":false}}],
+                "break_condition":{"type":"boolean","value":{"type":"reference","path":["feedback","done"]}},
+                "body":{"nodes":{"start":{"type":"start"},"human":human,
+                    "branch":{"type":"branch","cases":[{"id":"true","condition":condition}]},
+                    "save":{"type":"assigner","items":[{"variable":["feedback","done"],"operation":"set","value":{"type":"literal","value":true}}]}},
+                    "edges":[{"from":"start","to":"human"},{"from":"human","to":"branch"},{"from":"branch","to":"save","port":"true"}]}},
+            "done":{"type":"return","output":{"type":"reference","path":["feedback"]}}},
+        "edges":[{"from":"workflow_start","to":"feedback"},{"from":"feedback","to":"done"}]}}))
+    .unwrap()
 }
 
 #[tokio::test]
@@ -213,8 +212,7 @@ async fn loop_review_and_questionnaire_reject_old_responses_and_allocate_fresh_i
             .await
             .unwrap();
         let output = task.await.unwrap().unwrap();
-        assert_eq!(output["status"], "satisfied");
-        assert_eq!(output["iterations"], 2);
+        assert_eq!(output, json!({"done":true}));
         assert_eq!(audit.events().len(), 4);
         assert!(owner.pending_snapshot().is_empty());
         assert!(plane.registry.all_snapshots().is_empty());

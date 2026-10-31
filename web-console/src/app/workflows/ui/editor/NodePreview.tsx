@@ -40,10 +40,17 @@ function rows(tx: Translate, node: PreviewNode): Row[] {
       ...(node.context.length ? [{ label: tx('workflows:card.context'), value: String(node.context.length) }] : []),
     ];
     case 'loop': return [
-      valueRow(tx('workflows:card.input'), node.input),
-      { label: tx('workflows:card.until'), value: predicateText(tx, node.until) },
-      { label: tx('workflows:card.limit'), value: String(node.max_iterations) },
+      ...(node.loop_variables ?? []).slice(0, 2).map(variable => valueRow(variable.label, variable.value)),
+      { label: tx('workflows:loop.max-count'), value: String(node.loop_count),
+        ...(node.break_condition ? { badge: predicateText(tx, node.break_condition) } : {}) },
     ];
+    case 'iteration': return [
+      valueRow(tx('workflows:iteration.input'), node.iterator),
+      { ...valueRow(tx('workflows:iteration.output'), node.output), ...(node.is_parallel ? { badge: tx('workflows:iteration.parallel') } : {}) },
+    ];
+    case 'assigner': return node.items.length ? node.items.slice(0, 3).map(item => ({ label: item.variable.join('.'), value: tx(`workflows:assigner.op-${item.operation}`) }))
+      : [{ label: tx('workflows:assigner.variables'), value: tx('workflows:assigner.unset') }];
+    case 'loop_end': return [];
     case 'return': return objectRows(node.output, tx('workflows:card.output'));
   }
 }

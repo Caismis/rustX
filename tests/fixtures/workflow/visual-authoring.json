@@ -54,29 +54,16 @@
         "loop": {
           "type": "object",
           "properties": {
-            "status": {
+            "count": {
+              "type": "number"
+            },
+            "echo": {
               "type": "string"
-            },
-            "iterations": {
-              "type": "integer"
-            },
-            "result": {
-              "type": "object",
-              "properties": {
-                "echo": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "echo"
-              ],
-              "additionalProperties": false
             }
           },
           "required": [
-            "status",
-            "iterations",
-            "result"
+            "count",
+            "echo"
           ],
           "additionalProperties": false
         }
@@ -93,10 +80,11 @@
       },
       "left": {
         "type": "loop",
-        "input": {
-          "type": "object",
-          "fields": {
-            "message": {
+        "loop_variables": [
+          {
+            "label": "echo",
+            "var_type": "string",
+            "value": {
               "type": "reference",
               "path": [
                 "args",
@@ -104,87 +92,24 @@
               ]
             }
           }
-        },
-        "until": {
-          "type": "boolean",
-          "value": {
-            "type": "literal",
-            "value": true
-          }
-        },
-        "carry": {
-          "type": "object",
-          "fields": {
-            "message": {
-              "type": "reference",
-              "path": [
-                "result",
-                "echo"
-              ]
-            }
-          }
-        },
-        "max_iterations": 1,
+        ],
+        "loop_count": 1,
         "body": {
-          "input": {
-            "type": "object",
-            "properties": {
-              "message": {
-                "type": "string",
-                "description": "Text supplied by the caller."
-              }
-            },
-            "required": [
-              "message"
-            ],
-            "additionalProperties": false
-          },
-          "output": {
-            "type": "object",
-            "properties": {
-              "echo": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "echo"
-            ],
-            "additionalProperties": false
-          },
           "nodes": {
-            "start": {
+            "loop_start": {
               "type": "start"
-            },
-            "done": {
-              "type": "return",
-              "output": {
-                "type": "object",
-                "fields": {
-                  "echo": {
-                    "type": "reference",
-                    "path": [
-                      "args",
-                      "message"
-                    ]
-                  }
-                }
-              }
             }
           },
-          "edges": [
-            {
-              "from": "start",
-              "to": "done"
-            }
-          ]
+          "edges": []
         }
       },
       "right": {
         "type": "loop",
-        "input": {
-          "type": "object",
-          "fields": {
-            "message": {
+        "loop_variables": [
+          {
+            "label": "echo",
+            "var_type": "string",
+            "value": {
               "type": "reference",
               "path": [
                 "args",
@@ -192,87 +117,32 @@
               ]
             }
           }
-        },
-        "until": {
-          "type": "boolean",
-          "value": {
-            "type": "literal",
-            "value": true
-          }
-        },
-        "carry": {
-          "type": "object",
-          "fields": {
-            "message": {
-              "type": "reference",
-              "path": [
-                "result",
-                "echo"
-              ]
-            }
-          }
-        },
-        "max_iterations": 1,
+        ],
+        "loop_count": 1,
         "body": {
-          "input": {
-            "type": "object",
-            "properties": {
-              "message": {
-                "type": "string",
-                "description": "Text supplied by the caller."
-              }
-            },
-            "required": [
-              "message"
-            ],
-            "additionalProperties": false
-          },
-          "output": {
-            "type": "object",
-            "properties": {
-              "echo": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "echo"
-            ],
-            "additionalProperties": false
-          },
           "nodes": {
-            "start": {
+            "loop_start": {
               "type": "start"
-            },
-            "done": {
-              "type": "return",
-              "output": {
-                "type": "object",
-                "fields": {
-                  "echo": {
-                    "type": "reference",
-                    "path": [
-                      "args",
-                      "message"
-                    ]
-                  }
-                }
-              }
             }
           },
-          "edges": [
-            {
-              "from": "start",
-              "to": "done"
-            }
-          ]
+          "edges": []
         }
       },
       "repeat": {
         "type": "loop",
-        "input": {
-          "type": "object",
-          "fields": {
-            "message": {
+        "loop_variables": [
+          {
+            "label": "count",
+            "var_type": "number",
+            "value": {
+              "type": "literal",
+              "value": 0
+            }
+          },
+          {
+            "label": "echo",
+            "var_type": "string",
+            "value": {
               "type": "reference",
               "path": [
                 "args",
@@ -280,77 +150,34 @@
               ]
             }
           }
-        },
-        "until": {
-          "type": "boolean",
-          "value": {
-            "type": "literal",
-            "value": true
-          }
-        },
-        "carry": {
-          "type": "object",
-          "fields": {
-            "message": {
-              "type": "reference",
-              "path": [
-                "result",
-                "echo"
-              ]
-            }
-          }
-        },
-        "max_iterations": 3,
+        ],
+        "loop_count": 3,
         "body": {
-          "input": {
-            "type": "object",
-            "properties": {
-              "message": {
-                "type": "string",
-                "description": "Text supplied by the caller."
-              }
-            },
-            "required": [
-              "message"
-            ],
-            "additionalProperties": false
-          },
-          "output": {
-            "type": "object",
-            "properties": {
-              "echo": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "echo"
-            ],
-            "additionalProperties": false
-          },
           "nodes": {
-            "start": {
+            "loop_start": {
               "type": "start"
             },
-            "done": {
-              "type": "return",
-              "output": {
-                "type": "object",
-                "fields": {
-                  "echo": {
-                    "type": "reference",
-                    "path": [
-                      "args",
-                      "message"
-                    ]
+            "bump": {
+              "type": "assigner",
+              "items": [
+                {
+                  "variable": [
+                    "repeat",
+                    "count"
+                  ],
+                  "operation": "increment",
+                  "value": {
+                    "type": "literal",
+                    "value": 1
                   }
                 }
-              }
+              ]
             }
           },
           "edges": [
             {
-              "from": "start",
-              "to": "done"
+              "from": "loop_start",
+              "to": "bump"
             }
           ]
         }
@@ -366,15 +193,13 @@
                 "left": {
                   "type": "reference",
                   "path": [
-                    "left",
-                    "result"
+                    "left"
                   ]
                 },
                 "right": {
                   "type": "reference",
                   "path": [
-                    "right",
-                    "result"
+                    "right"
                   ]
                 }
               }
@@ -400,33 +225,15 @@
       },
       {
         "from": "left",
-        "to": "repeat",
-        "port": "satisfied"
-      },
-      {
-        "from": "left",
-        "to": "repeat",
-        "port": "exhausted"
+        "to": "repeat"
       },
       {
         "from": "right",
-        "to": "repeat",
-        "port": "satisfied"
-      },
-      {
-        "from": "right",
-        "to": "repeat",
-        "port": "exhausted"
+        "to": "repeat"
       },
       {
         "from": "repeat",
-        "to": "done",
-        "port": "satisfied"
-      },
-      {
-        "from": "repeat",
-        "to": "done",
-        "port": "exhausted"
+        "to": "done"
       }
     ]
   },
@@ -451,7 +258,7 @@
         "title": "Right echo",
         "position": {
           "x": 360,
-          "y": 320
+          "y": 400
         }
       }
     ],
@@ -463,7 +270,7 @@
             "node": "repeat"
           }
         ],
-        "text": "Author-only Markdown. A nested Return completes its own Block.",
+        "text": "Author-only Markdown. A body reads the variables around it.",
         "theme": "amber",
         "position": {
           "x": 32,

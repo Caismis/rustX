@@ -478,13 +478,16 @@ impl ScheduledWorkflowPreparation {
                     });
                     agents.push(PreparedScheduledAgent { path, spec });
                 }
-                WorkflowNodeProgram::Loop { body, .. } => {
+                WorkflowNodeProgram::Loop { body, .. }
+                | WorkflowNodeProgram::Iteration { body, .. } => {
                     self.dependencies(program, body, found, agents, models)?;
                 }
                 WorkflowNodeProgram::Start
                 | WorkflowNodeProgram::Review { .. }
                 | WorkflowNodeProgram::Branch { .. }
-                | WorkflowNodeProgram::Return { .. } => {}
+                | WorkflowNodeProgram::Return { .. }
+                | WorkflowNodeProgram::LoopEnd
+                | WorkflowNodeProgram::Assigner { .. } => {}
             }
         }
         Ok(())

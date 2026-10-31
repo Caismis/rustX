@@ -2336,7 +2336,7 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     let empty = json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
     let model = json!({"type":"model","messages":[{"role":"system","content":[{"type":"literal","value":"Draft"}]},{"role":"user","content":[{"type":"literal","value":"Go."}]}],"output":{"type":"text"}});
     let done = json!({"type":"return","output":{"type":"object","fields":{}}});
-    let private = json!({"input":empty,"output":empty,"nodes": {"workflow_start":{"type":"start"},"first":model,"second":model,"done":done},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"second"},{"from":"second","to":"done"}],});
+    let private = json!({"nodes": {"workflow_start":{"type":"start"},"inner":model},"edges": [{"from":"workflow_start","to":"inner"}],});
     let mut input = empty.clone();
     // More nonmatches than the UI's catalog bound must not hide later matches.
     for index in 0..150 {
@@ -2344,14 +2344,13 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     }
     input["properties"]["Draft"] = json!({"type":"string"});
     let document: crate::workflow_file::WorkflowFileDocument = serde_json::from_value(json!({
-        "description":"Qualified title discovery", "block":{"input":input,"output":empty,"nodes": {"workflow_start":{"type":"start"},"first":model,"second":model,"done":done,"loop":{"type":"loop","input":{"type":"object","fields":{}},
-                "body":private,"until":{"type":"boolean","value":{"type":"literal","value":true}},"carry":{"type":"object","fields":{}},"max_iterations":1}},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"second"},{"from":"second","to":"loop"},{"from":"loop","port":"satisfied","to":"done"},{"from":"loop","port":"exhausted","to":"done"}],},
+        "description":"Qualified title discovery", "block":{"input":input,"output":empty,"nodes": {"workflow_start":{"type":"start"},"first":model,"second":model,"done":done,"loop":{"type":"loop","loop_count":1,
+                "body":private}},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"second"},{"from":"second","to":"loop"},{"from":"loop","to":"done"}],},
         "editor":{"nodes":[
             {"address":{"block":[],"node":"first"},"title":"First Draft"},
             {"address":{"block":[],"node":"second"},"title":"Second DRAFT"},
-            {"address":{"block":[{"node":"loop"}],"node":"first"},"title":"Private"},
-            {"address":{"block":[],"node":"args"},"title":"TitleOnly"},
-            {"address":{"block":[],"node":"result"},"title":"TitleOnly"}]}
+            {"address":{"block":[{"node":"loop"}],"node":"inner"},"title":"Private"},
+            {"address":{"block":[],"node":"args"},"title":"TitleOnly"}]}
     })).unwrap();
     let query: WorkflowAnalysisQuery = serde_json::from_value(json!({"consumer":{"address":{"block":[],"node":"done"},"field":{"kind":"return_output"},"path":[]},"search":"dRaFt","limit":128})).unwrap();
     let analyze = |query: WorkflowAnalysisQuery| {
@@ -2405,23 +2404,20 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     let limited = analyze(limited);
     assert_eq!(limited.analysis.references.len(), 2);
     assert!(limited.analysis.truncated);
+    // As in Dify, a body sees the titled nodes around it; its own node's
+    // title does not match.
     let mut private = query.clone();
     private.consumer.address.block = serde_json::from_value(json!([{"node":"loop"}])).unwrap();
-    assert!(
-        analyze(private).analysis.references.is_empty(),
-        "same local IDs do not inherit parent titles"
-    );
+    private.consumer.address.node = "inner".into();
+    private.consumer.field =
+        crate::runtime::workflow::authoring::WorkflowConsumerField::Message { index: 0 };
+    let private = analyze(private).analysis.references;
+    assert_eq!(private.len(), report.analysis.references.len());
+    assert!(private.iter().all(|choice| choice.path[0] != "inner"));
     let mut synthetic = query;
     synthetic.search = "TitleOnly".into();
     assert!(
-        analyze(synthetic.clone()).analysis.references.is_empty(),
-        "args is not a real titled producer"
-    );
-    synthetic.consumer.address.node = "loop".into();
-    synthetic.consumer.field =
-        crate::runtime::workflow::authoring::WorkflowConsumerField::LoopCarry;
-    assert!(
         analyze(synthetic).analysis.references.is_empty(),
-        "result is not a real titled producer"
+        "args is not a real titled producer"
     );
 }

@@ -147,13 +147,15 @@ pub enum WorkflowExecutionOutcome {
     OutcomeUnknown,
 }
 
-/// Normal finite Loop completion; neither case claims business verification passed.
+/// Why a Loop finished, as Dify's `completed_reason`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowLoopExit {
-    Satisfied,
-    Exhausted,
+    /// The break condition held or an Exit Loop node ran.
+    LoopBreak,
+    /// It ran `loop_count` rounds.
+    LoopCompleted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +203,43 @@ pub(crate) fn test_instance(workflow: &str, node: &str) -> WorkflowNodeInstance 
     }
 }
 
+/// A root block as a Loop or Iteration body: no input or output, no Return,
+/// and its Start renamed `loop_start` so it hides no root node.
+#[cfg(test)]
+pub(crate) fn test_body(block: &Value) -> Value {
+    let rename = |id: &str, start: &str| {
+        if id == start {
+            "loop_start".to_owned()
+        } else {
+            id.to_owned()
+        }
+    };
+    let nodes = block["nodes"].as_object().expect("nodes");
+    let start = nodes
+        .iter()
+        .find(|(_, node)| node["type"] == "start")
+        .expect("Start")
+        .0
+        .clone();
+    let kept = nodes
+        .iter()
+        .filter(|(_, node)| node["type"] != "return")
+        .map(|(id, node)| (rename(id, &start), node.clone()))
+        .collect::<serde_json::Map<_, _>>();
+    let edges = block["edges"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|edge| kept.contains_key(&rename(edge["to"].as_str().unwrap_or_default(), &start)))
+        .map(|edge| {
+            let mut edge = edge.clone();
+            edge["from"] = rename(edge["from"].as_str().unwrap_or_default(), &start).into();
+            edge
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({"nodes": kept, "edges": edges})
+}
+
 /// The maximum serialized executable definition, excluding file presentation.
 pub const MAX_WORKFLOW_BYTES: usize = 512 * 1024;
 /// The maximum number of nodes in one workflow program.
@@ -217,8 +256,10 @@ pub const MAX_MODEL_MESSAGES: usize = 32;
 pub const MAX_MODEL_MESSAGE_BYTES: usize = 32 * 1024;
 /// Text and reference parts accepted in one Model prompt message.
 pub const MAX_MODEL_MESSAGE_PARTS: usize = 64;
-/// Trusted ceiling for a single Loop's finite allowance.
-pub const MAX_LOOP_ITERATIONS: u32 = 256;
+/// Dify's `LOOP_NODE_MAX_COUNT`: the most rounds one Loop may run.
+pub const LOOP_NODE_MAX_COUNT: u32 = 100;
+/// Dify's `MAX_PARALLEL_LIMIT`: the most Iteration rounds run at once.
+pub const MAX_PARALLEL_LIMIT: u32 = 10;
 /// The maximum number of discovered workflow definitions in one generation.
 pub const MAX_WORKFLOW_DEFINITIONS: usize = 64;
 /// The maximum number of path components in one explicit reference.
@@ -350,14 +391,24 @@ pub struct WorkflowDefinition {
     pub block: WorkflowBlock,
 }
 
-/// A fixed lexical graph shared by the root and Loop bodies.
+/// A fixed graph: the root, or a Loop or Iteration body. A body declares no
+/// input or output: as in Dify, it reads the variables of the nodes around
+/// it, its container's variables and its own nodes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct WorkflowBlock {
     /// The workflow input JSON Schema.
+    #[serde(
+        default = "empty_object_schema",
+        skip_serializing_if = "is_default_schema"
+    )]
     pub input: Value,
     /// The workflow output JSON Schema.
+    #[serde(
+        default = "empty_object_schema",
+        skip_serializing_if = "is_default_schema"
+    )]
     pub output: Value,
     /// Stable node definitions keyed by explicit node id.
     #[serde(deserialize_with = "deserialize_unique_map")]
@@ -388,14 +439,48 @@ pub enum WorkflowNodeDefinition {
         #[serde(default, skip_serializing_if = "WorkflowModelErrorStrategy::is_stop")]
         on_error: WorkflowModelErrorStrategy,
     },
-    /// Repeat one fixed typed body until its committed result satisfies `until`.
+    /// As Dify's Loop: run the body again and again, until its break
+    /// condition holds after a round, an Exit Loop node ran, or `loop_count`
+    /// rounds are done. Its value is its loop variables.
     Loop {
-        input: WorkflowValue,
+        /// Variables the body reads and an Assigner node writes, under the
+        /// Loop's own ID.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        loop_variables: Vec<WorkflowLoopVariable>,
+        /// Checked before the first round and after every round.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        break_condition: Option<WorkflowPredicate>,
+        loop_count: u32,
         body: Box<WorkflowBlock>,
-        until: Box<WorkflowPredicate>,
-        carry: WorkflowValue,
-        max_iterations: u32,
     },
+    /// As Dify's Iteration: run the body once for each item of an array,
+    /// which the body reads as `item` and `index` under the Iteration's ID.
+    /// Its value is `output`, the body's chosen value of every round.
+    Iteration {
+        /// The array to iterate.
+        iterator: WorkflowValue,
+        /// What each round contributes, read after the round.
+        output: WorkflowValue,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        is_parallel: bool,
+        /// Rounds run at once in parallel mode.
+        #[serde(default = "default_parallel_nums")]
+        parallel_nums: u32,
+        #[serde(
+            default,
+            skip_serializing_if = "WorkflowIterationErrorMode::is_terminated"
+        )]
+        error_handle_mode: WorkflowIterationErrorMode,
+        /// Join the rounds' arrays into one array.
+        #[serde(default = "flatten_by_default", skip_serializing_if = "is_flattened")]
+        flatten_output: bool,
+        body: Box<WorkflowBlock>,
+    },
+    /// As Dify's Exit Loop: ends its Loop once this round settles.
+    #[serde(rename = "loop_end")]
+    LoopEnd {},
+    /// As Dify's Variable Assigner: writes variables of the Loop it is in.
+    Assigner { items: Vec<WorkflowAssignment> },
     Review {
         subject: WorkflowReviewSubject,
         context: Vec<WorkflowValue>,
@@ -441,6 +526,203 @@ pub enum WorkflowNodeDefinition {
         /// The owning block's declared result.
         output: WorkflowValue,
     },
+}
+
+fn empty_object_schema() -> Value {
+    serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false})
+}
+
+/// Exactly what an omitted schema reads back as.
+fn is_default_schema(schema: &Value) -> bool {
+    *schema == empty_object_schema()
+}
+
+/// A closed object with no fields, however its empty `required` is spelled.
+fn is_empty_object_schema(schema: &Value) -> bool {
+    let mut schema = schema.clone();
+    if schema
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        schema
+            .as_object_mut()
+            .map(|object| object.remove("required"));
+    }
+    schema == empty_object_schema()
+}
+
+const fn default_parallel_nums() -> u32 {
+    10
+}
+
+const fn flatten_by_default() -> bool {
+    true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's `skip_serializing_if` passes a reference.
+const fn is_flattened(flatten: &bool) -> bool {
+    *flatten
+}
+
+/// A Loop variable: Dify's `label`, `var_type` and constant or variable value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowLoopVariable {
+    pub label: String,
+    pub var_type: WorkflowVarType,
+    /// A literal, or a reference read once before the first round.
+    pub value: WorkflowValue,
+}
+
+/// The value types of a Loop variable, as Dify offers them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub enum WorkflowVarType {
+    #[serde(rename = "string")]
+    String,
+    #[serde(rename = "number")]
+    Number,
+    #[serde(rename = "boolean")]
+    Boolean,
+    #[serde(rename = "object")]
+    Object,
+    #[serde(rename = "array[string]")]
+    ArrayString,
+    #[serde(rename = "array[number]")]
+    ArrayNumber,
+    #[serde(rename = "array[boolean]")]
+    ArrayBoolean,
+    #[serde(rename = "array[object]")]
+    ArrayObject,
+}
+
+impl WorkflowVarType {
+    #[must_use]
+    pub fn schema(self) -> Value {
+        let scalar = |kind: &str| serde_json::json!({"type": kind});
+        let array = |kind: &str| serde_json::json!({"type": "array", "items": {"type": kind}});
+        match self {
+            Self::String => scalar("string"),
+            Self::Number => scalar("number"),
+            Self::Boolean => scalar("boolean"),
+            Self::Object => scalar("object"),
+            Self::ArrayString => array("string"),
+            Self::ArrayNumber => array("number"),
+            Self::ArrayBoolean => array("boolean"),
+            Self::ArrayObject => array("object"),
+        }
+    }
+
+    /// What `clear` leaves.
+    #[must_use]
+    pub fn empty(self) -> Value {
+        match self {
+            Self::String => Value::String(String::new()),
+            Self::Number => serde_json::json!(0),
+            Self::Boolean => Value::Bool(false),
+            Self::Object => serde_json::json!({}),
+            _ => serde_json::json!([]),
+        }
+    }
+
+    const fn is_array(self) -> bool {
+        matches!(
+            self,
+            Self::ArrayString | Self::ArrayNumber | Self::ArrayBoolean | Self::ArrayObject
+        )
+    }
+}
+
+/// The value of a Loop: each of its variables by label.
+fn loop_variables_schema(variables: &[WorkflowLoopVariable]) -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": variables.iter().map(|variable| (variable.label.clone(), variable.var_type.schema())).collect::<serde_json::Map<_, _>>(),
+        "required": variables.iter().map(|variable| variable.label.clone()).collect::<Vec<_>>(),
+        "additionalProperties": false,
+    })
+}
+
+/// How an Iteration treats a round that failed.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowIterationErrorMode {
+    /// The Iteration fails.
+    #[default]
+    Terminated,
+    /// The round contributes `null`.
+    ContinueOnError,
+    /// The round contributes nothing.
+    RemoveAbnormalOutput,
+}
+
+impl WorkflowIterationErrorMode {
+    #[must_use]
+    pub const fn is_terminated(&self) -> bool {
+        matches!(self, Self::Terminated)
+    }
+}
+
+/// One write of a Variable Assigner.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowAssignment {
+    /// The written Loop variable: `[loop, label]`.
+    pub variable: Vec<String>,
+    pub operation: WorkflowWriteMode,
+    /// The operand; `clear`, `remove_first` and `remove_last` take none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<WorkflowValue>,
+}
+
+/// Dify's write modes. `overwrite` writes a variable's value and `set` a
+/// constant; both assign.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowWriteMode {
+    Overwrite,
+    Clear,
+    Set,
+    Append,
+    Extend,
+    RemoveFirst,
+    RemoveLast,
+    Increment,
+    Decrement,
+    Multiply,
+    Divide,
+}
+
+impl WorkflowWriteMode {
+    /// Whether a variable of `var_type` accepts this mode, as Dify lists them.
+    #[must_use]
+    pub const fn applies_to(self, var_type: WorkflowVarType) -> bool {
+        match self {
+            Self::Overwrite | Self::Clear => true,
+            Self::Set => !var_type.is_array(),
+            Self::Append | Self::Extend | Self::RemoveFirst | Self::RemoveLast => {
+                var_type.is_array()
+            }
+            Self::Increment | Self::Decrement | Self::Multiply | Self::Divide => {
+                matches!(var_type, WorkflowVarType::Number)
+            }
+        }
+    }
+
+    /// The operand's schema, or `None` when the mode takes none.
+    #[must_use]
+    pub fn operand(self, var_type: WorkflowVarType) -> Option<Value> {
+        match self {
+            Self::Clear | Self::RemoveFirst | Self::RemoveLast => None,
+            Self::Append => var_type.schema().get("items").cloned(),
+            Self::Increment | Self::Decrement | Self::Multiply | Self::Divide => {
+                Some(serde_json::json!({"type": "number"}))
+            }
+            Self::Overwrite | Self::Set | Self::Extend => Some(var_type.schema()),
+        }
+    }
 }
 
 /// A stable exit identity and its condition. The first matching case wins.
@@ -762,7 +1044,7 @@ pub struct WorkflowEdgeDefinition {
     pub from: String,
     /// Destination node id.
     pub to: String,
-    /// Required Branch/Loop outcome port. Ordinary nodes must omit it.
+    /// The Branch case, Agent route or fail port. Ordinary nodes omit it.
     #[serde(default)]
     pub port: Option<WorkflowPort>,
 }
@@ -774,10 +1056,6 @@ pub enum WorkflowPort {
     True,
     /// The false successor.
     False,
-    /// The Loop predicate was satisfied.
-    Satisfied,
-    /// The Loop consumed its finite allowance without satisfaction.
-    Exhausted,
     /// An additional named ELIF exit.
     Case(String),
     /// The ordinary outgoing port.
@@ -801,8 +1079,6 @@ impl Serialize for WorkflowPort {
         serializer.serialize_str(match self {
             Self::True => "true",
             Self::False => "false",
-            Self::Satisfied => "satisfied",
-            Self::Exhausted => "exhausted",
             Self::Next => "next",
             Self::Fail => "fail",
             Self::Case(id) => id,
@@ -835,8 +1111,6 @@ impl<'de> Deserialize<'de> for WorkflowPort {
             RawPort::Text(text) => match text.as_str() {
                 "true" => Ok(Self::True),
                 "false" => Ok(Self::False),
-                "satisfied" => Ok(Self::Satisfied),
-                "exhausted" => Ok(Self::Exhausted),
                 "next" => Ok(Self::Next),
                 "fail" => Ok(Self::Fail),
                 _ if valid_local_key(&text) => Ok(Self::Case(text)),
@@ -865,7 +1139,7 @@ pub struct WorkflowProgram {
     >,
 }
 
-/// Immutable compiled graph shared by the root and Loop bodies.
+/// Immutable compiled graph of the root or of a body; a body's path is not empty.
 #[derive(Debug, Clone)]
 pub struct WorkflowBlockProgram {
     path: Vec<String>,
@@ -945,7 +1219,8 @@ impl WorkflowProgram {
             for node in block.nodes.values() {
                 match node {
                     WorkflowNodeProgram::Agent(agent) => found.push(agent),
-                    WorkflowNodeProgram::Loop { body, .. } => walk(body, found),
+                    WorkflowNodeProgram::Loop { body, .. }
+                    | WorkflowNodeProgram::Iteration { body, .. } => walk(body, found),
                     _ => {}
                 }
             }
@@ -969,12 +1244,27 @@ pub enum WorkflowNodeProgram {
     /// One immutable, tool-free Auxiliary Call template.
     Model(WorkflowModelProgram),
     Loop {
-        input: WorkflowValue,
+        loop_variables: Vec<WorkflowLoopVariable>,
+        break_condition: Option<WorkflowPredicate>,
+        loop_count: u32,
         body: Box<WorkflowBlockProgram>,
-        until: Box<WorkflowPredicate>,
-        carry: WorkflowValue,
-        max_iterations: u32,
         output_schema: Value,
+    },
+    Iteration {
+        iterator: WorkflowValue,
+        output: WorkflowValue,
+        /// Rounds run at once; one when sequential.
+        parallel: u32,
+        error_handle_mode: WorkflowIterationErrorMode,
+        flatten_output: bool,
+        body: Box<WorkflowBlockProgram>,
+        output_schema: Value,
+    },
+    LoopEnd,
+    Assigner {
+        items: Vec<WorkflowAssignment>,
+        /// Each written variable's type.
+        types: Vec<WorkflowVarType>,
     },
     Review {
         subject: WorkflowReviewSubject,
@@ -1363,7 +1653,7 @@ fn compile_program(
         Sha256::digest(serde_json::to_vec(&definition).expect("validated definition"))
     );
     let mut total_nodes = 0;
-    let block = compile_block(definition.block, Vec::new(), &mut total_nodes)
+    let block = compile_block(definition.block, Vec::new(), &mut total_nodes, None)
         .map_err(|error| error.at("block"))?;
     let retained_bound = execution::static_retained_bound(&block);
     let (execution_bound, agent_bound, model_call_bound) =
@@ -1398,7 +1688,8 @@ fn collect_tool_selectors(
             WorkflowNodeProgram::Tool { selector, .. } => {
                 selectors.insert(selector.clone());
             }
-            WorkflowNodeProgram::Loop { body, .. } => {
+            WorkflowNodeProgram::Loop { body, .. }
+            | WorkflowNodeProgram::Iteration { body, .. } => {
                 selectors.extend(collect_tool_selectors(body));
             }
             _ => {}
@@ -1407,11 +1698,49 @@ fn collect_tool_selectors(
     selectors
 }
 
+/// What a Loop or Iteration body sees around it.
+struct Container {
+    /// The variables in scope at the container, plus its own.
+    base: SchemaMap,
+    owner: String,
+    /// A Loop's variables by label; `None` in an Iteration.
+    loop_variables: Option<BTreeMap<String, WorkflowVarType>>,
+}
+
+/// A body and the scope after it: every variable a round may have set,
+/// for the Loop's break condition and the Iteration's output.
+fn compile_body(
+    body: &WorkflowBlock,
+    path: &[String],
+    owner: &str,
+    total_nodes: &mut usize,
+    container: &Container,
+) -> Result<(WorkflowBlockProgram, SchemaMap), WorkflowCompileError> {
+    if !is_empty_object_schema(&body.input) || !is_empty_object_schema(&body.output) {
+        return Err(WorkflowCompileError::InvalidField(
+            "a body declares no input or output; it reads the variables around it".into(),
+        )
+        .at("body"));
+    }
+    let mut child_path = path.to_vec();
+    child_path.extend([owner.to_owned(), "body".into()]);
+    let program = compile_block(body.clone(), child_path, total_nodes, Some(container))
+        .map_err(|e| e.at("body"))?;
+    let mut end = container.base.clone();
+    for (id, node) in &body.nodes {
+        if let Ok(Some(schema)) = authoring::declared_output(node) {
+            end.0.insert(id.clone(), schema);
+        }
+    }
+    Ok((program, end))
+}
+
 #[allow(clippy::too_many_lines)]
 fn compile_block(
     definition: WorkflowBlock,
     path: Vec<String>,
     total_nodes: &mut usize,
+    container: Option<&Container>,
 ) -> Result<WorkflowBlockProgram, WorkflowCompileError> {
     *total_nodes += definition.nodes.len();
     if path.len() / 2 > MAX_BLOCK_DEPTH || *total_nodes > MAX_WORKFLOW_NODES {
@@ -1421,6 +1750,17 @@ fn compile_block(
     }
     validate_root_schema(&definition.input, "input").map_err(|e| e.at("input"))?;
     validate_root_schema(&definition.output, "output").map_err(|e| e.at("output"))?;
+    let base = container.map_or_else(
+        || SchemaMap::from_schema(&definition.input),
+        |container| container.base.clone(),
+    );
+    // As Dify's node IDs, a body's IDs never hide a variable around it.
+    if let Some(shadowed) = definition.nodes.keys().find(|id| base.0.contains_key(*id)) {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "node id {shadowed:?} is already used around this body"
+        ))
+        .at(format!("nodes.{shadowed}")));
+    }
     let ControlFlow {
         outgoing,
         topological,
@@ -1435,7 +1775,7 @@ fn compile_block(
             .nodes
             .get(&node_id)
             .expect("topological node exists");
-        let available_before = scopes.scope(&node_id, &available_after, &definition.input);
+        let available_before = scopes.scope(&node_id, &available_after, &base);
         let compiled = (|| { Ok(match node {
             WorkflowNodeDefinition::Start {} => {
                 available_after.insert(node_id.clone(), available_before.clone());
@@ -1458,66 +1798,170 @@ fn compile_block(
                 })
             }
             WorkflowNodeDefinition::Loop {
-                input,
+                loop_variables,
+                break_condition,
+                loop_count,
                 body,
-                until,
-                carry,
-                max_iterations,
             } => {
-                let edges = &outgoing[&node_id];
-                if edges.is_empty()
-                    || !edges
-                        .iter()
-                        .any(|edge| edge.port == WorkflowPort::Satisfied)
-                    || !edges
-                        .iter()
-                        .any(|edge| edge.port == WorkflowPort::Exhausted)
-                {
+                if *loop_count == 0 || *loop_count > LOOP_NODE_MAX_COUNT {
                     return Err(WorkflowCompileError::InvalidField(format!(
-                        "Loop {node_id:?} must have at least one successor on each satisfied and exhausted port"
-                    )));
+                        "Loop {node_id:?} loop_count must be 1..={LOOP_NODE_MAX_COUNT}"
+                    )).at("loop_count"));
                 }
-                if *max_iterations == 0 || *max_iterations > MAX_LOOP_ITERATIONS {
-                    return Err(WorkflowCompileError::InvalidField(format!(
-                        "Loop {node_id:?} max_iterations must be 1..={MAX_LOOP_ITERATIONS}"
-                    )).at("max_iterations"));
+                let mut labels = BTreeSet::new();
+                for (index, variable) in loop_variables.iter().enumerate() {
+                    if !valid_local_key(&variable.label) || !labels.insert(&variable.label) {
+                        return Err(WorkflowCompileError::InvalidField(format!(
+                            "Loop {node_id:?} variable labels must be unique valid keys"
+                        )).at(format!("loop_variables.{index}.label")));
+                    }
+                    let actual = value_schema(&variable.value, &available_before, &node_id, 0)
+                        .map_err(|e| e.at(format!("loop_variables.{index}.value")))?;
+                    if !schemas_compatible(&actual, &variable.var_type.schema()) {
+                        return Err(WorkflowCompileError::IncompatibleReference(format!(
+                            "Loop variable {:?} value is not a {:?}", variable.label, variable.var_type
+                        )).at(format!("loop_variables.{index}.value")));
+                    }
                 }
-                let initial = value_schema(input, &available_before, &node_id, 0).map_err(|e| e.at("input"))?;
-                if !schemas_compatible(&initial, &body.input) {
-                    return Err(WorkflowCompileError::IncompatibleReference(
-                        "Loop input contract mismatch".into(),
-                    ).at("input"));
+                let output_schema = loop_variables_schema(loop_variables);
+                let container = Container {
+                    base: available_before.with_prefix(&node_id, &output_schema),
+                    owner: node_id.clone(),
+                    loop_variables: Some(loop_variables.iter().map(|variable| (variable.label.clone(), variable.var_type)).collect()),
+                };
+                let (body, end) = compile_body(body, &path, &node_id, total_nodes, &container)?;
+                if let Some(condition) = break_condition {
+                    validate_predicate(condition, &end, &node_id, 0).map_err(|e| e.at("break_condition"))?;
                 }
-                // A separate lexical projection scope exposes only committed body output.
-                let result_scope =
-                    SchemaMap(BTreeMap::from([("result".into(), body.output.clone())]));
-                validate_predicate(until, &result_scope, &node_id, 0).map_err(|e| e.at("until"))?;
-                let next = value_schema(carry, &result_scope, &node_id, 0).map_err(|e| e.at("carry"))?;
-                if !schemas_compatible(&next, &body.input) {
-                    return Err(WorkflowCompileError::IncompatibleReference(
-                        "Loop carry contract mismatch".into(),
-                    ).at("carry"));
-                }
-                let mut child_path = path.clone();
-                child_path.extend([node_id.clone(), "body".into()]);
-                let body = compile_block(
-                    *body.clone(),
-                                child_path,
-                    total_nodes,
-                ).map_err(|e| e.at("body"))?;
-                let output_schema = execution::loop_result_schema(&body.output_schema);
                 available_after.insert(
                     node_id.clone(),
                     available_before.with_prefix(&node_id, &output_schema),
                 );
                 WorkflowNodeProgram::Loop {
-                    input: input.clone(),
+                    loop_variables: loop_variables.clone(),
+                    break_condition: break_condition.clone(),
+                    loop_count: *loop_count,
                     body: Box::new(body),
-                    until: until.clone(),
-                    carry: carry.clone(),
-                    max_iterations: *max_iterations,
                     output_schema,
                 }
+            }
+            WorkflowNodeDefinition::Iteration {
+                iterator,
+                output,
+                is_parallel,
+                parallel_nums,
+                error_handle_mode,
+                flatten_output,
+                body,
+            } => {
+                if !matches!(iterator, WorkflowValue::Reference { .. }) {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "Iteration input must reference an array".into(),
+                    ).at("iterator"));
+                }
+                let array = value_schema(iterator, &available_before, &node_id, 0).map_err(|e| e.at("iterator"))?;
+                let Some(item) = array.get("items").filter(|_| schema_type(&array) == Some("array")) else {
+                    return Err(WorkflowCompileError::IncompatibleReference(
+                        "Iteration input must be an array with declared items".into(),
+                    ).at("iterator"));
+                };
+                if *is_parallel && (*parallel_nums == 0 || *parallel_nums > MAX_PARALLEL_LIMIT) {
+                    return Err(WorkflowCompileError::InvalidField(format!(
+                        "Iteration {node_id:?} parallel_nums must be 1..={MAX_PARALLEL_LIMIT}"
+                    )).at("parallel_nums"));
+                }
+                if !matches!(output, WorkflowValue::Reference { .. }) {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "Iteration output must reference a variable of its body".into(),
+                    ).at("output"));
+                }
+                let entry = serde_json::json!({
+                    "type": "object",
+                    "properties": {"item": item, "index": {"type": "integer"}},
+                    "required": ["item", "index"],
+                    "additionalProperties": false,
+                });
+                let container = Container {
+                    base: available_before.with_prefix(&node_id, &entry),
+                    owner: node_id.clone(),
+                    loop_variables: None,
+                };
+                let (body, end) = compile_body(body, &path, &node_id, total_nodes, &container)?;
+                let produced = value_schema(output, &end, &node_id, 0).map_err(|e| e.at("output"))?;
+                let output_schema = execution::iteration_result_schema(Some(&produced), *error_handle_mode, *flatten_output);
+                available_after.insert(
+                    node_id.clone(),
+                    available_before.with_prefix(&node_id, &output_schema),
+                );
+                WorkflowNodeProgram::Iteration {
+                    iterator: iterator.clone(),
+                    output: output.clone(),
+                    parallel: if *is_parallel { *parallel_nums } else { 1 },
+                    error_handle_mode: *error_handle_mode,
+                    flatten_output: *flatten_output,
+                    body: Box::new(body),
+                    output_schema,
+                }
+            }
+            WorkflowNodeDefinition::LoopEnd {} => {
+                if container.is_none_or(|container| container.loop_variables.is_none()) {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "Exit Loop belongs directly in a Loop body".into(),
+                    ));
+                }
+                if !outgoing[&node_id].is_empty() {
+                    return Err(WorkflowCompileError::Unterminated(format!(
+                        "Exit Loop {node_id:?} cannot have outgoing edges"
+                    )));
+                }
+                available_after.insert(node_id.clone(), available_before.clone());
+                WorkflowNodeProgram::LoopEnd
+            }
+            WorkflowNodeDefinition::Assigner { items } => {
+                let Some((owner, variables)) = container.and_then(|container| Some((&container.owner, container.loop_variables.as_ref()?))) else {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "a Variable Assigner writes Loop variables, so it belongs directly in a Loop body".into(),
+                    ));
+                };
+                if items.is_empty() || items.len() > 32 {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "a Variable Assigner makes 1..=32 writes".into(),
+                    ).at("items"));
+                }
+                let mut types = Vec::new();
+                for (index, item) in items.iter().enumerate() {
+                    let var_type = match item.variable.as_slice() {
+                        [loop_id, label] if loop_id == owner => variables.get(label).copied(),
+                        _ => None,
+                    }.ok_or_else(|| WorkflowCompileError::DanglingReference(
+                        "an assigned variable must be a variable of the Loop the Assigner is in".into(),
+                    ).at(format!("items.{index}.variable")))?;
+                    if !item.operation.applies_to(var_type) {
+                        return Err(WorkflowCompileError::InvalidField(format!(
+                            "{:?} cannot write a {var_type:?} variable", item.operation
+                        )).at(format!("items.{index}.operation")));
+                    }
+                    match (item.operation.operand(var_type), &item.value) {
+                        (None, None) => {}
+                        (Some(expected), Some(value)) => {
+                            let actual = value_schema(value, &available_before, &node_id, 0).map_err(|e| e.at(format!("items.{index}.value")))?;
+                            if !schemas_compatible(&actual, &expected) {
+                                return Err(WorkflowCompileError::IncompatibleReference(format!(
+                                    "{:?} needs a value of {expected}", item.operation
+                                )).at(format!("items.{index}.value")));
+                            }
+                        }
+                        (Some(_), None) => return Err(WorkflowCompileError::InvalidField(
+                            "this write needs a value".into(),
+                        ).at(format!("items.{index}.value"))),
+                        (None, Some(_)) => return Err(WorkflowCompileError::InvalidField(
+                            "this write takes no value".into(),
+                        ).at(format!("items.{index}.value"))),
+                    }
+                    types.push(var_type);
+                }
+                available_after.insert(node_id.clone(), available_before.clone());
+                WorkflowNodeProgram::Assigner { items: items.clone(), types }
             }
             WorkflowNodeDefinition::Review { subject, context } => {
                 if !matches!(subject.value(), WorkflowValue::Reference { .. }) {
@@ -1601,7 +2045,7 @@ fn compile_block(
                 validate_agent(task, output, routes, on_error, &available_before, &node_id)?;
                 let exits = routes.iter().map(|route| WorkflowPort::case(&route.id))
                     .chain(on_error.eq(&WorkflowValueErrorStrategy::FailBranch).then_some(WorkflowPort::Fail));
-                if exits.into_iter().any(|port| !outgoing[&node_id].iter().any(|edge| edge.port == port)) {
+                if container.is_none() && exits.into_iter().any(|port| !outgoing[&node_id].iter().any(|edge| edge.port == port)) {
                     return Err(WorkflowCompileError::InvalidBranch(format!(
                         "Agent {node_id:?} requires a successor for every route and its fail branch"
                     )));
@@ -1627,7 +2071,8 @@ fn compile_block(
                 }
                 let ports = cases.iter().map(|case| WorkflowPort::case(&case.id))
                     .chain(std::iter::once(WorkflowPort::False));
-                if ports.into_iter().any(|port| !outgoing[&node_id].iter().any(|edge| edge.port == port)) {
+                // A body's path may end at any port, as Dify's.
+                if container.is_none() && ports.into_iter().any(|port| !outgoing[&node_id].iter().any(|edge| edge.port == port)) {
                     return Err(WorkflowCompileError::InvalidBranch(format!(
                         "Branch {node_id:?} requires a successor for every case and ELSE"
                     )));
@@ -1636,6 +2081,11 @@ fn compile_block(
                 WorkflowNodeProgram::Branch { cases: cases.clone() }
             }
             WorkflowNodeDefinition::Return { output } => {
+                if container.is_some() {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "Return ends the workflow; a body ends where its nodes do".into(),
+                    ));
+                }
                 if !outgoing[&node_id].is_empty() {
                     return Err(WorkflowCompileError::Unterminated(format!(
                         "Return node {node_id:?} cannot have outgoing edges"
@@ -1655,11 +2105,10 @@ fn compile_block(
         }) })().map_err(|e: WorkflowCompileError| e.at(format!("nodes.{node_id}")))?;
         let edges = &outgoing[&node_id];
         match &compiled {
-            // Return, Branch and both Loop ports were validated above.
-            WorkflowNodeProgram::Return { .. }
-            | WorkflowNodeProgram::Loop { .. }
-            | WorkflowNodeProgram::Branch { .. } => {}
-            _ if edges.is_empty() => {
+            // Return and Branch ports were validated above. A body's path
+            // may end at any node.
+            WorkflowNodeProgram::Return { .. } | WorkflowNodeProgram::Branch { .. } => {}
+            _ if edges.is_empty() && container.is_none() => {
                 return Err(WorkflowCompileError::Unterminated(format!(
                     "node {node_id:?} must have at least one successor"
                 ))
@@ -1669,9 +2118,10 @@ fn compile_block(
         }
         nodes.insert(node_id, compiled);
     }
-    if !nodes
-        .values()
-        .any(|node| matches!(node, WorkflowNodeProgram::Return { .. }))
+    if container.is_none()
+        && !nodes
+            .values()
+            .any(|node| matches!(node, WorkflowNodeProgram::Return { .. }))
     {
         return Err(WorkflowCompileError::Unterminated(
             "every workflow must contain a reachable Return node".to_owned(),
@@ -1784,17 +2234,6 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
             (WorkflowNodeDefinition::Branch { .. }, _) => {
                 return Err(WorkflowCompileError::InvalidBranch(format!(
                     "Branch node {:?} must use an authored case ID or false (ELSE)",
-                    edge.from
-                ))
-                .at(format!("edges.{edge_index}.port")));
-            }
-            (
-                WorkflowNodeDefinition::Loop { .. },
-                Some(port @ (WorkflowPort::Satisfied | WorkflowPort::Exhausted)),
-            ) => port,
-            (WorkflowNodeDefinition::Loop { .. }, _) => {
-                return Err(WorkflowCompileError::InvalidField(format!(
-                    "Loop node {:?} must use satisfied and exhausted ports",
                     edge.from
                 ))
                 .at(format!("edges.{edge_index}.port")));
@@ -2285,7 +2724,7 @@ fn validate_agent(
 
 /// Ports a Branch case or an Agent route cannot be named after.
 fn is_reserved_port(id: &str) -> bool {
-    matches!(id, "false" | "next" | "satisfied" | "exhausted" | "fail")
+    matches!(id, "false" | "next" | "fail")
 }
 
 /// Check one prompt's parts, fixed text or references, against its bounds and
@@ -5125,21 +5564,22 @@ chat_reasoning_replay = "omit"
         let document: crate::workflow_file::WorkflowFileDocument =
             serde_json::from_str(source).expect("editor file document");
         document.canonical_bytes().expect("bounded native metadata");
-        for satisfied in [true, false] {
+        for broken in [true, false] {
             let plane = workflow_test_plane(1);
             let runtime = workflow_runtime(&plane);
             let native = runtime.read_model.clone();
             let mut definition = document.definition.clone();
-            let WorkflowNodeDefinition::Loop { until, .. } =
-                definition.block.nodes.get_mut("repeat").expect("Loop")
+            let WorkflowNodeDefinition::Loop {
+                break_condition, ..
+            } = definition.block.nodes.get_mut("repeat").expect("Loop")
             else {
                 panic!("editor fixture owns a Loop");
             };
-            **until = WorkflowPredicate::Boolean {
+            *break_condition = Some(WorkflowPredicate::Boolean {
                 value: WorkflowValue::Literal {
-                    value: json!(satisfied),
+                    value: json!(broken),
                 },
-            };
+            });
             let program = Arc::new(compile_test(definition).expect("editor-authored program"));
             let (_, cancellation) = workflow_cancellation();
             let result = runtime
@@ -5156,8 +5596,7 @@ chat_reasoning_replay = "omit"
                 result,
                 json!({
                     "parallel": {"left": {"echo": "verified"}, "right": {"echo": "verified"}},
-                    "loop": {"status": if satisfied {"satisfied"} else {"exhausted"},
-                        "iterations": if satisfied {1} else {3}, "result": {"echo": "verified"}}
+                    "loop": {"count": if broken {0} else {3}, "echo": "verified"}
                 })
             );
             assert!(plane.registry.all_snapshots().is_empty());
@@ -5353,91 +5792,6 @@ chat_reasoning_replay = "omit"
                 .unwrap(),
             json!({"tone": "formal"})
         );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn editor_construction_collision_fixture_keeps_data_in_loop_scopes() {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/workflow/schema-construction-collision.json"
-        ))
-        .unwrap();
-        for form in ["object", "literal", "reference"] {
-            for local in ["collect", "nested"] {
-                for rebound in [false, true] {
-                    let mut file = fixture.clone();
-                    let mut owned = file["block"]["nodes"]
-                        .as_object_mut()
-                        .unwrap()
-                        .remove("collect")
-                        .unwrap();
-                    if form == "literal" {
-                        owned["body"]["nodes"]["done"]["output"] = json!({"type":"literal","value":{"before":"wanted","after":"unrelated"}});
-                    } else if form == "reference" {
-                        owned["input"] = owned["body"]["nodes"]["done"]["output"].clone();
-                        owned["body"]["input"] = json!({"type":"object","properties":{"before":{"type":"string"},"after":{"type":"string"}},"required":["before","after"],"additionalProperties":false});
-                        owned["carry"] = json!({"type":"literal","value":{"before":"wanted","after":"unrelated"}});
-                        owned["body"]["nodes"]["done"]["output"] =
-                            json!({"type":"reference","path":["args"]});
-                    }
-                    if rebound {
-                        let contract = &mut owned["body"]["output"];
-                        let properties = contract["properties"].as_object_mut().unwrap();
-                        let schema = properties.remove("before").unwrap();
-                        properties.insert("after".into(), schema);
-                        contract["required"] = json!(["after"]);
-                    }
-                    file["block"]["nodes"][local] = owned;
-                    for edge in file["block"]["edges"].as_array_mut().unwrap() {
-                        for field in ["from", "to"] {
-                            if edge[field] == "collect" {
-                                edge[field] = json!(local);
-                            }
-                        }
-                    }
-                    file["block"]["nodes"]["done"]["output"]["fields"]["value"]["path"] =
-                        json!([local, "result", if rebound { "after" } else { "before" }]);
-                    // Presentation addresses retain orphan local keys, including
-                    // args; only actual executable node IDs reserve that word.
-                    let private_block = json!([{"node":local}]);
-                    let orphan_block = json!([{"node":local},{"node":"args"}]);
-                    file["editor"] = json!({
-                        "nodes":[{"address":{"block":private_block,"node":"args"},"title":"Retained orphan"}],
-                        "notes":[{"id":"orphan","block":orphan_block,"text":"Retained","theme":"blue","position":{"x":24,"y":80},"dimensions":{"width":200,"height":100}}],
-                        "orders":[{"target":{"kind":"block_output","block":orphan_block,"path":[]},"fields":["keep"]}]
-                    });
-                    let document: crate::workflow_file::WorkflowFileDocument =
-                        serde_json::from_value(file).unwrap();
-                    document
-                        .canonical_bytes()
-                        .expect("legal Loop scope and orphan metadata");
-                    // Both programs pass native Check: open output contracts
-                    // cannot detect rebinding to unrelated extra data. The UI
-                    // must preserve the wanted program by rejecting that edit.
-                    let program = Arc::new(
-                        compile_test(document.definition).expect("valid open object contract"),
-                    );
-                    let plane = workflow_test_plane(1);
-                    let runtime = workflow_runtime(&plane);
-                    let (_, cancellation) = workflow_cancellation();
-                    assert_eq!(
-                        runtime
-                            .run_test_foreground(
-                                program,
-                                ToolCallId::new("construction-collision"),
-                                workflow_test_context(&plane),
-                                json!({}),
-                                cancellation,
-                            )
-                            .await
-                            .unwrap(),
-                        json!({"value": if rebound {"unrelated"} else {"wanted"}}),
-                        "form {form}, Loop {local}, rebound {rebound}"
-                    );
-                    assert!(plane.registry.all_snapshots().is_empty());
-                }
-            }
-        }
     }
 
     #[cfg(unix)]

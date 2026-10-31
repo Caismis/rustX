@@ -29,10 +29,10 @@ it('shows the admitted path while waiting, labels the budget correctly, and coll
 it('keeps abnormal and loop outcomes visible and does not create Agent controls for finite activations', () => {
   const run = workflowRun(); run.state = { type: 'settled', outcome: 'failed' };
   run.instances[4].state = { type: 'settled', outcome: 'denied' };
-  run.instances.push({ ...run.instances[4], node: 'loop', kind: 'loop', iteration: 3, iterations_max: 3, loop_exit: 'exhausted', checks_passed: false });
+  run.instances.push({ ...run.instances[4], node: 'loop', kind: 'loop', iteration: 3, iterations_max: 3, loop_exit: 'loop_completed', checks_passed: false });
   run.instances[1].child = 'finite-activation';
   const ui = render(<WorkflowRunPanel run={run}/>);
-  expect(ui.getByText(/Iteration limit reached/)).toBeTruthy();
+  expect(ui.getByText(/Maximum loop count reached/)).toBeTruthy();
   expect(ui.getByText(/Checks failed/)).toBeTruthy();
   expect(ui.container.querySelector('[data-workflow-activation-id="finite-activation"] button')).toBeNull();
 });

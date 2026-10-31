@@ -1,7 +1,7 @@
 import type { WorkflowOrderTarget, WorkflowSchemaStep } from '../../../../../protocol/app-server/v62';
 import { CommandRejected } from './commands';
 import { fieldValue, nodeField, setField, type FieldAddress, type FieldStep } from './fields';
-import { blockAt, nodeAt, sameBlockPath, sameDocument, updateBlock, type BlockPath, type Predicate, type Value, type WorkflowDocument } from './model';
+import { blockAt, nodeAt, sameBlockPath, sameDocument, updateBlock, type BlockPath, type Value, type WorkflowDocument } from './model';
 import { setOrder } from './geometry';
 import { orderedKeys } from './presentation';
 import { rewriteBlockReferences, type PathRewrite } from './references';
@@ -54,20 +54,6 @@ export function patchSchema(document: WorkflowDocument, address: FieldAddress, p
   return setField(document, address, { ...value, ...patch });
 }
 
-function mapValue(value: Value, rewrite: PathRewrite): Value {
-  if (value.type === 'reference') return { ...value, path: rewrite(value.path) ?? value.path };
-  if (value.type === 'object') return { ...value, fields: Object.fromEntries(Object.entries(value.fields).map(([key, field]) => [key, mapValue(field, rewrite)])) };
-  if (value.type === 'array') return { ...value, items: value.items.map(field => mapValue(field, rewrite)) };
-  return value;
-}
-function mapPredicate(value: Predicate, rewrite: PathRewrite): Predicate {
-  if (value.type === 'boolean' || value.type === 'empty' || value.type === 'not_empty') return { ...value, value: mapValue(value.value, rewrite) };
-  if (value.type === 'equal' || value.type === 'not_equal' || value.type === 'contains' || value.type === 'not_contains'
-    || value.type === 'starts_with' || value.type === 'ends_with')
-    return { ...value, left: mapValue(value.left, rewrite), right: mapValue(value.right, rewrite) };
-  if (value.type === 'not') return { ...value, predicate: mapPredicate(value.predicate, rewrite) };
-  return { ...value, predicates: value.predicates.map(field => mapPredicate(field, rewrite)) };
-}
 function mappingKey(value: Value, path: readonly string[], from: string, to: string): Value {
   // A whole-value reference may contain unrelated extra properties at runtime.
   // Only an explicit Object construction gives this command movable keys.
@@ -204,16 +190,6 @@ export function renameSchemaField(document: WorkflowDocument, address: FieldAddr
   if (target.kind === 'block_input') {
     rewriteAt(address.block, ['args', ...path]);
   }
-  if (target.kind === 'block_output') {
-    if (address.block.length) {
-      const parent = address.block.slice(0, -1), step = address.block.at(-1)!;
-      rewriteAt(parent, [step.node, 'result', ...path]);
-      next = updateBlock(next, parent, block => {
-        const owner = nodeAt(block, step.node)!;
-        return owner.type === 'loop' ? { ...block, nodes: { ...block.nodes, [step.node]: { ...owner, until: mapPredicate(owner.until, rewrite(['result', ...path])), carry: mapValue(owner.carry, rewrite(['result', ...path])) } } } : block;
-      });
-    }
-  }
   return next;
 }
 
@@ -239,16 +215,6 @@ export function schemaConsumers(document: WorkflowDocument, address: FieldAddres
   if (target.kind === 'block_output') {
     const block = blockAt(document, address.block);
     for (const [id, node] of Object.entries(block?.nodes ?? {})) if (node.type === 'return') add(address.block, id);
-    const step = address.block.at(-1);
-    if (step) {
-      const parent = address.block.slice(0, -1);
-      scan(parent, [step.node, 'result', ...property]);
-      const node = blockAt(document, parent)?.nodes[step.node];
-      if (node?.type === 'loop') {
-        const inspect: PathRewrite = path => { if (matches(['result', ...property], path)) add(parent, step.node); return undefined; };
-        mapValue(node.carry, inspect); mapPredicate(node.until, inspect);
-      }
-    }
   }
   return [...found.values()];
 }
