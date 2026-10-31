@@ -75,7 +75,7 @@ fn selected_and_catalog(analysis: &WorkflowCandidateAnalysis) -> [&WorkflowRefer
         catalog(analysis, &selected.path).unwrap_or(selected),
     ]
 }
-/// The catalog lists the workflow input's fields, never the whole input.
+/// The catalog lists an object output's fields, never the whole object.
 fn catalog<'a>(
     analysis: &'a WorkflowCandidateAnalysis,
     path: &[String],
@@ -84,7 +84,7 @@ fn catalog<'a>(
         .references
         .iter()
         .find(|choice| choice.path == path);
-    assert_eq!(found.is_none(), path == ["args"]);
+    assert!(found.is_some() || path.len() == 1);
     found
 }
 fn selected_and_unknown_root(
@@ -609,14 +609,7 @@ fn tool_argument_roots_enforce_necessary_object_type_without_claiming_full_compa
                 "done":done()},"edges": [{"from":"workflow_start","to":"source"},{"from":"source","to":"sink"},{"from":"sink","to":"done"}],}));
         let root = query("sink", WorkflowConsumerField::Arguments, &["source"]);
         let report = analyze(&candidate, Some(&root)).unwrap();
-        for choice in [
-            report.selected.as_ref().unwrap(),
-            report
-                .references
-                .iter()
-                .find(|choice| choice.path == ["source"])
-                .unwrap(),
-        ] {
+        for choice in selected_and_catalog(&report) {
             assert_eq!(choice.availability, Available);
             assert_eq!(choice.compatibility, compatibility, "root {schema}");
             assert_eq!(choice.schema.as_ref(), Some(&schema));
@@ -649,14 +642,7 @@ fn tool_argument_roots_enforce_necessary_object_type_without_claiming_full_compa
             key: "value".into(),
         });
         let report = analyze(&candidate, Some(&nested)).unwrap();
-        for choice in [
-            report.selected.as_ref().unwrap(),
-            report
-                .references
-                .iter()
-                .find(|choice| choice.path == ["source"])
-                .unwrap(),
-        ] {
+        for choice in selected_and_catalog(&report) {
             assert_eq!(choice.availability, Available);
             assert_eq!(choice.compatibility, Unknown, "nested {schema}");
         }

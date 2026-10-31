@@ -1156,9 +1156,9 @@ fn analyze_query(
                 node: path[0].clone(),
             })
         });
-        // As Dify, the workflow input lists its fields, never itself whole.
-        let whole_input = path.len() == 1 && path[0] == "args";
-        if !whole_input && (title_match || path.join(".").to_lowercase().contains(&search)) {
+        // As Dify, an object output lists its fields, never itself whole.
+        let whole_object = path.len() == 1 && schema.get("properties").is_some();
+        if !whole_object && (title_match || path.join(".").to_lowercase().contains(&search)) {
             if analysis.references.len() >= query.limit {
                 budget.truncated = true;
                 break;

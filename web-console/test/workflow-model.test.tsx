@@ -275,7 +275,7 @@ describe('Model native editing document', () => {
     const actor = await open(undefined, agent);
     const task = inspector().getByRole('textbox', { name: 'Task' });
     expect(task.textContent).toContain('Review ');
-    expect(within(task).getByRole('button', { name: 'Choose a variable' }).textContent).toContain('Whole value');
+    expect(within(task).getByRole('button', { name: 'Choose a variable' }).textContent).toContain('Output');
     const trigger = inspector().getByRole('button', { name: 'Agent profile' });
     expect(trigger.getAttribute('aria-invalid')).toBe('true');
     expect(trigger.textContent).toContain('Choose an Agent profile');

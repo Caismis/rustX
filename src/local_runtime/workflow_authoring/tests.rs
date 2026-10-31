@@ -2367,7 +2367,6 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
         std::iter::once(vec!["args", "Draft"])
             .chain(["first", "second"].into_iter().flat_map(|node| {
                 [
-                    vec![node],
                     vec![node, "text"],
                     vec![node, "reasoning_content"],
                     vec![node, "usage"],
