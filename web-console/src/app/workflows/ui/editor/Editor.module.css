@@ -783,6 +783,8 @@
 .retryNumber { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 7px; background: var(--dsw-alias-bg-layer-1); }
 .retryNumber input { width: 100%; min-width: 0; border: 0; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; outline: none; }
 .retryNumber small { flex: none; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
+.sliderRow { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 12px; font-size: 12px; }
+.sliderRow input[type='range'] { width: 100%; accent-color: var(--dsw-alias-state-business-primary); }
 .strategyTrigger { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 7px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
 .strategyTrigger svg { width: 12px; height: 12px; color: var(--dsw-alias-label-tertiary); }
 .strategyPopup { width: 260px; padding: 4px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 10px 28px rgba(0,0,0,.14); }

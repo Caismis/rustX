@@ -8,6 +8,7 @@ import { encodeField } from '../../../document/fields';
 import { blockAt, nodeAt, type Value } from '../../../document/model';
 import { schemaObject } from '../../../document/schema';
 import { ReferencePicker } from '../forms/ReferencePicker';
+import { JsonCodeEditor } from '../../../../../presentation/primitives/JsonCodeEditor';
 import { TemplateInput, templateParts, templateValue } from '../forms/TemplateInput';
 import { ValueEditor } from '../forms/ValueEditor';
 import { JsonField, Section, SelectField, TextField } from '../forms/fields';
@@ -155,11 +156,17 @@ function ToolArgument({ name, schema, required, value, set, tool, edit }: PanelP
   </div>;
 }
 
-/** A number or JSON constant as text, committed once it parses. */
+/** The text still reads as this value, so keep how it is written. */
+function sameJson(text: string, value: unknown) {
+  try { return JSON.stringify(JSON.parse(text)) === JSON.stringify(value); } catch { return false; }
+}
+
+/** A number or JSON constant as text, committed once it parses. As Dify, a
+ * JSON constant is written in a code editor. */
 function ConstantInput({ kind, name, value, invalid, set }: { kind: 'integer' | 'number' | 'json'; name: string; value: unknown; invalid: boolean; set: (value: unknown) => void }) {
   const tx = useTranslation(), shown = value === undefined ? '' : kind === 'json' ? JSON.stringify(value, null, 2) : String(value);
   const [text, setText] = useState(shown), [error, setError] = useState(false);
-  useEffect(() => { setText(shown); setError(false); }, [shown]);
+  useEffect(() => { setText(next => sameJson(next, value) ? next : shown); setError(false); }, [shown]);
   const commit = (next: string) => {
     if (!next.trim()) { setError(false); set(undefined); return; }
     let parsed: unknown;
@@ -169,8 +176,7 @@ function ConstantInput({ kind, name, value, invalid, set }: { kind: 'integer' | 
     if (valid) set(parsed);
   };
   return kind === 'json'
-    ? <textarea className={clsx(css.input, css.textarea, css.mono)} aria-label={name} aria-invalid={error || invalid || undefined} placeholder={tx('workflows:tool.json-placeholder')} value={text} spellCheck={false}
-      onChange={event => setText(event.target.value)} onBlur={() => commit(text)} />
+    ? <JsonCodeEditor label={tx('workflows:tool.json')} value={text} minHeight={96} onChange={next => { setText(next); commit(next); }} />
     : <input className={css.input} inputMode={kind === 'integer' ? 'numeric' : 'decimal'} aria-label={name} aria-invalid={error || invalid || undefined} value={text}
       onChange={event => { setText(event.target.value); commit(event.target.value); }} />;
 }

@@ -148,13 +148,13 @@ export function ErrorStrategy({ strategy, choose, note, children }: { strategy: 
 }
 
 /** As Dify's InputNumberWithSlider: a slider with its exact number beside it. */
-export function SliderField({ label, unit, min, max, step, value, onChange }: { label: string; unit?: string; min: number; max: number; step: number; value: number; onChange: (value: number) => void }) {
+export function SliderField({ label, unit, min, max, step, value, onChange, numberFirst = false }: { label: string; unit?: string; min: number; max: number; step: number; value: number; onChange: (value: number) => void; numberFirst?: boolean }) {
   const set = (text: string) => { const next = Number(text); if (Number.isInteger(next) && next >= min && next <= max) onChange(next); };
-  return <label className={css.retryField}>
-    <span>{label}</span>
-    <input type="range" min={min} max={max} step={step} value={value} aria-label={label} onChange={event => set(event.target.value)} />
-    <span className={css.retryNumber}><input type="number" min={min} max={max} step={step} value={value} aria-label={unit ? `${label} (${unit})` : label} onChange={event => set(event.target.value)} />{unit && <small>{unit}</small>}</span>
-  </label>;
+  const range = <input type="range" min={min} max={max} step={step} value={value} aria-label={label} onChange={event => set(event.target.value)} />;
+  const number = <span className={css.retryNumber}><input type="number" min={min} max={max} step={step} value={value} aria-label={unit ? `${label} (${unit})` : label} onChange={event => set(event.target.value)} />{unit && <small>{unit}</small>}</span>;
+  // As Dify's Loop count: the number, then the slider, under the heading.
+  return numberFirst ? <div className={css.sliderRow}>{number}{range}</div>
+    : <label className={css.retryField}><span>{label}</span>{range}{number}</label>;
 }
 
 /** The declared fields of a structured output, as Dify lists them. */

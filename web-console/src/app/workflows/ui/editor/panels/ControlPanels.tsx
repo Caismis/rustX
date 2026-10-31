@@ -7,11 +7,12 @@ import { setField, within, type FieldAddress } from '../../../document/fields';
 import { blockAt, nodeAt, type Value } from '../../../document/model';
 import { IconPlus } from '../../icons';
 import { ReferencePicker } from '../forms/ReferencePicker';
-import { DraftTextField, JsonField, Section } from '../forms/fields';
+import { DraftTextField, HelpTip, JsonField, Section } from '../forms/fields';
 import { ConditionList } from './Conditions';
 import { SliderField } from './InferencePanels';
-import { OutputDeclaration, useNode, type PanelProps } from './shared';
+import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
+import fieldCss from '../forms/InputFields.module.css';
 
 /** Dify's `LOOP_NODE_MAX_COUNT` and `MAX_PARALLEL_LIMIT`. */
 const LOOP_MAX_COUNT = 100, PARALLEL_LIMIT = 10;
@@ -71,18 +72,16 @@ export function LoopPanel(props: PanelProps) {
             ? <ReferencePicker address={within(base, ['value'])} path={variable.value.path} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />
             : <ConstantField label={tx('workflows:loop.value')} type={variable.var_type} value={variable.value} address={within(base, ['value'])} edit={props.edit} />}
         </div>;
-      }) : <p className={css.note}>{tx('workflows:loop.no-variables')}</p>}
+      }) : <button type="button" className={fieldCss.empty} onClick={add}>{tx('workflows:loop.no-variables')}</button>}
     </Section>
-    <Section title={tx('workflows:loop.break-condition')}>
-      <p className={css.note}>{tx('workflows:loop.break-condition-tip')}</p>
+    <Section title={tx('workflows:loop.break-condition')} help={tx('workflows:loop.break-condition-tip')}>
       <ConditionList {...props} base={at('break_condition')} condition={node.break_condition ?? undefined}
         set={(condition, array) => update(({ break_condition: _, ...current }) => condition ? { ...current, break_condition: condition } : current, at('break_condition'), array)} />
     </Section>
     <Section title={tx('workflows:loop.max-count')}>
-      <SliderField label={tx('workflows:loop.max-count')} unit={tx('workflows:loop.times')} min={1} max={LOOP_MAX_COUNT} step={1} value={node.loop_count}
+      <SliderField label={tx('workflows:loop.max-count')} numberFirst min={1} max={LOOP_MAX_COUNT} step={1} value={node.loop_count}
         onChange={loop_count => update(current => ({ ...current, loop_count }), at('loop_count'))} />
     </Section>
-    <OutputDeclaration {...props} />
   </>;
 }
 
@@ -100,9 +99,8 @@ export function IterationPanel(props: PanelProps) {
       <ReferencePicker address={at('output')} path={node.output.type === 'reference' ? node.output.path : []} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />
     </Section>
     <section className={css.group} aria-label={tx('workflows:iteration.parallel')}>
-      <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:iteration.parallel')}</span>
+      <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:iteration.parallel')}<HelpTip text={tx('workflows:iteration.parallel-desc')} /></span>
         <Switch checked={!!node.is_parallel} label={tx('workflows:iteration.parallel')} onChange={on => update(({ is_parallel: _, ...current }) => on ? { ...current, is_parallel: true } : current, at('is_parallel'))} /></h3>
-      <p className={css.note}>{tx('workflows:iteration.parallel-desc')}</p>
       {node.is_parallel && <SliderField label={tx('workflows:iteration.max-parallelism')} min={1} max={PARALLEL_LIMIT} step={1} value={node.parallel_nums ?? 10}
         onChange={parallel_nums => update(current => ({ ...current, parallel_nums }), at('parallel_nums'))} />}
     </section>
@@ -121,11 +119,9 @@ export function IterationPanel(props: PanelProps) {
       </h3>
     </section>
     <section className={css.group} aria-label={tx('workflows:iteration.flatten')}>
-      <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:iteration.flatten')}</span>
+      <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:iteration.flatten')}<HelpTip text={tx('workflows:iteration.flatten-desc')} /></span>
         <Switch checked={flatten} label={tx('workflows:iteration.flatten')} onChange={on => update(({ flatten_output: _, ...current }) => on ? current : { ...current, flatten_output: false }, at('flatten_output'))} /></h3>
-      <p className={css.note}>{tx('workflows:iteration.flatten-desc')}</p>
     </section>
-    <OutputDeclaration {...props} />
   </>;
 }
 

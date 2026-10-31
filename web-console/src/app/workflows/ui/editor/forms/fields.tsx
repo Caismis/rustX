@@ -5,6 +5,8 @@ import { encodeField, fieldText, setField, type FieldAddress } from '../../../do
 import type { FieldCommand, FieldError } from '../../../machines/editor';
 import { useFieldDraft } from './drafts';
 import { readJson } from '../../../../../../shared/json-numbers';
+import { IconQuestionOutline14 } from '../../../../../presentation/primitives/icons';
+import { Tooltip } from '../../../../../presentation/primitives/Tooltip';
 import css from '../Editor.module.css';
 
 export function Field({ label, hint, children, error }: { label: string; hint?: ReactNode; children: (id: string, describedBy?: string) => ReactNode; error?: string }) {
@@ -163,9 +165,15 @@ export function SelectField<T extends string>({ label, value, options, onChange,
   </select>}</Field>;
 }
 
-export function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
+/** A panel group. As Dify, `help` explains it in a "?" tooltip. */
+export function Section({ title, help, aside, children }: { title: string; help?: string; aside?: ReactNode; children: ReactNode }) {
   return <section className={css.group}>
-    <h3 className={css.groupHeading}>{title}{aside !== undefined && <small>{aside}</small>}</h3>
+    <h3 className={css.groupHeading}>{help ? <span className={css.headingText}>{title}<HelpTip text={help} /></span> : title}{aside !== undefined && <small>{aside}</small>}</h3>
     {children}
   </section>;
+}
+
+/** Dify's "?" beside a heading. */
+export function HelpTip({ text }: { text: string }) {
+  return <Tooltip label={text} side="bottom" maxWidth={240}><span className={css.promptHint} tabIndex={0} aria-label={text}><IconQuestionOutline14 /></span></Tooltip>;
 }
