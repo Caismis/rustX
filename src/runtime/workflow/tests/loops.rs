@@ -1553,3 +1553,36 @@ async fn nested_iteration_types_keep_inherited_loop_variables() {
         json!({})
     );
 }
+
+#[tokio::test]
+async fn oversized_loop_initializers_fail_before_the_body_starts() {
+    let variables = (0..128).map(|index| json!({"label":format!("v{index}"),"var_type":"string","value":path(&["args","payload"])})).collect::<Vec<_>>();
+    let definition = around(
+        "repeat",
+        &schema(json!({"payload":{"type":"string"}}), &["payload"]),
+        &schema(json!({}), &[]),
+        &json!({"type":"loop","loop_count":1,"loop_variables":variables,"body":{"nodes":{"start":{"type":"start"}},"edges":[]}}),
+    );
+    let plane = workflow_test_plane(1);
+    let runtime = workflow_runtime(&plane);
+    let observations = runtime.observations.subscribe();
+    let executor = checker(1);
+    let result = run(
+        &plane,
+        runtime,
+        executor.clone(),
+        definition,
+        json!({"payload":"x".repeat(60_000)}),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(WorkflowRunError::InvalidValue(message)) if message == "constructed object byte bound exceeded")
+    );
+    assert_eq!(executor.starts.load(Ordering::SeqCst), 0);
+    assert!(
+        !observations
+            .borrow()
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::WorkflowLoopIterationAdmitted { .. }))
+    );
+}

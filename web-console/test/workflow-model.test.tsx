@@ -565,3 +565,32 @@ it.each([true, false])('keeps the empty string as an explicit catalog enum value
   act(() => actor.send({ type: 'UNDO' })); save();
   expect((writes[0] as { document: WorkflowFileDocument }).document.block.nodes.model).toMatchObject({ arguments: { fields: { mode: { type: 'literal', value: '' } } } });
 });
+
+
+it.each(['add', 'remove_other', 'remove_before'] as const)('keeps an unfinished Assigner number bound through %s, history and save', async operation => {
+  const loop: NodeDefinition = { type: 'loop', loop_count: 1, loop_variables: [{ label: 'n', var_type: 'number', value: { type: 'literal', value: 0 } }],
+    body: { nodes: { start: { type: 'start' }, assign: { type: 'assigner', items: [10, 20].map(value => ({ variable: ['model', 'n'], operation: 'overwrite', value: { type: 'literal', value } })) } }, edges: [{ from: 'start', to: 'assign' }] } };
+  const actor = await open(undefined, loop);
+  select('Variable Assigner node assign · model/body');
+  const numbers = () => inspector().getAllByRole('textbox', { name: 'Value' }) as HTMLInputElement[];
+  const initialIndex = operation === 'remove_before' ? 1 : 0;
+  fireEvent.change(numbers()[initialIndex], { target: { value: '1e' } }); fireEvent.blur(numbers()[initialIndex]);
+  fireEvent.click(inspector().getByRole('button', { name: operation === 'add' ? 'Add variable' : operation === 'remove_other' ? 'Remove write 2' : 'Remove write 1' }));
+  const check = (index: number) => {
+    expect(numbers()[index].value).toBe('1e');
+    const drafts = Object.values(actor.getSnapshot().context.drafts);
+    expect(drafts).toHaveLength(1); expect(drafts[0].address.path).toEqual(['items', index, 'value', 'value']); expect(drafts[0].conflict).toBeUndefined();
+  };
+  check(0);
+  act(() => actor.send({ type: 'UNDO' })); check(initialIndex);
+  act(() => actor.send({ type: 'REDO' })); check(0);
+  if (operation === 'add') fireEvent.click(inspector().getByRole('button', { name: 'Remove write 3' }));
+  save(); expect(writes).toHaveLength(0); check(0);
+  fireEvent.change(numbers()[0], { target: { value: '42' } }); fireEvent.blur(numbers()[0]);
+  expect(actor.getSnapshot().context.drafts).toEqual({}); save();
+  expect(writes).toHaveLength(1);
+  const written = (writes[0] as { document: WorkflowFileDocument }).document.block.nodes.model;
+  if (written.type !== 'loop' || written.body.nodes.assign.type !== 'assigner') throw new Error('fixture');
+  expect(written.body.nodes.assign.items).toHaveLength(operation === 'add' ? 2 : 1);
+  expect(written.body.nodes.assign.items[0]).toMatchObject({ variable: ['model', 'n'], value: { type: 'literal', value: 42 } });
+});

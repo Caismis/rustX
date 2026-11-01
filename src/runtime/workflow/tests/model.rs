@@ -1318,3 +1318,52 @@ async fn a_failed_call_retries_then_takes_its_fail_branch_or_default_value() {
         executor.drain().await;
     }
 }
+
+#[tokio::test]
+async fn business_retries_publish_each_admission_count_and_keep_it_after_stop() {
+    let plane = workflow_test_plane(1);
+    let program = failing_program(json!({"type":"stop"}));
+    let (context, executor, mut entries, _) = setup(
+        &plane,
+        &program,
+        completed("", ModelFinishReason::Stop),
+        false,
+    );
+    let runtime = workflow_runtime(&plane);
+    let run = start(&runtime, context, workflow_cancellation().1);
+    let mut calls = Vec::new();
+    for expected in 1..=3 {
+        let entered = entry(&mut entries).await;
+        let snapshot = runtime.read_model.snapshot();
+        assert_eq!(snapshot.runs[0].model_calls_consumed, expected);
+        let node = snapshot.runs[0]
+            .instances
+            .iter()
+            .find(|node| node.node.as_deref() == Some("generate"))
+            .unwrap();
+        calls.push(node.auxiliary_call_id.clone().unwrap());
+        assert!(!run.is_finished(), "provider entry is held until released");
+        entered.release.send(()).unwrap();
+    }
+    assert!(matches!(
+        run.await.unwrap(),
+        Err(WorkflowRunError::ModelFailed { .. })
+    ));
+    let snapshot = runtime.read_model.snapshot();
+    assert_eq!(snapshot.runs[0].model_calls_consumed, 3);
+    assert_eq!(
+        snapshot.runs[0].state,
+        read_model::WorkflowState::Settled {
+            outcome: WorkflowExecutionOutcome::Failed
+        }
+    );
+    assert!(
+        !snapshot.runs[0]
+            .instances
+            .iter()
+            .any(|node| node.node.as_deref() == Some("done"))
+    );
+    assert!(calls[0] != calls[1] && calls[1] != calls[2] && calls[0] != calls[2]);
+    assert!(entries.try_recv().is_err());
+    executor.drain().await;
+}

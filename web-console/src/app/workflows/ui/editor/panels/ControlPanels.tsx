@@ -153,11 +153,11 @@ export function AssignerPanel(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'assigner');
   const step = props.block.at(-1), owner = step && nodeAt(blockAt(props.document, props.block.slice(0, -1))!, step.node);
   const variables = owner?.type === 'loop' ? owner.loop_variables ?? [] : [];
-  const setItems = (items: WorkflowAssignment[]) => update(current => ({ ...current, items }), at('items'));
+  const setItems = (items: WorkflowAssignment[], array?: ArrayEdit) => update(current => ({ ...current, items }), at('items'), array);
   const typeOf = (item: WorkflowAssignment) => item.variable[0] === step?.node ? variables.find(variable => variable.label === item.variable[1])?.var_type : undefined;
   if (owner?.type !== 'loop') return <Section title={tx('workflows:assigner.variables')}><p className={css.note}>{tx('workflows:assigner.outside-loop')}</p></Section>;
   return <Section title={tx('workflows:assigner.variables')} aside={<button type="button" className={css.iconButton} aria-label={tx('workflows:assigner.add')} disabled={!variables.length}
-    onClick={() => { const first = variables[0]; setItems([...node.items, { variable: [step!.node, first.label], operation: 'overwrite', value: unset() }]); }}><IconPlus size={14} /></button>}>
+    onClick={() => { const first = variables[0]; setItems([...node.items, { variable: [step!.node, first.label], operation: 'overwrite', value: unset() }], { array: at('items'), inserted: node.items.length }); }}><IconPlus size={14} /></button>}>
     {!variables.length && <p className={css.note}>{tx('workflows:assigner.no-loop-variables')}</p>}
     {node.items.length ? node.items.map((item, index) => {
       const type = typeOf(item), base = at('items', index);
@@ -178,7 +178,7 @@ export function AssignerPanel(props: PanelProps) {
           }}>
             {(type ? operations(type) : [item.operation]).map(mode => <option key={mode} value={mode}>{tx(`workflows:assigner.op-${mode}`)}</option>)}
           </select>
-          <button type="button" className={css.iconButton} aria-label={tx('workflows:assigner.remove', { p0: String(index + 1) })} onClick={() => setItems(node.items.filter((_, i) => i !== index))}><IconTrashOutline16 /></button>
+          <button type="button" className={css.iconButton} aria-label={tx('workflows:assigner.remove', { p0: String(index + 1) })} onClick={() => setItems(node.items.filter((_, i) => i !== index), { array: at('items'), removed: index })}><IconTrashOutline16 /></button>
         </div>
         {item.value?.type === 'reference' ? <ReferencePicker address={within(base, ['value'])} path={item.value.path} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />
           : item.value && type ? <ConstantField label={tx('workflows:loop.value')} type={item.operation === 'set' ? type : 'number'} value={item.value} address={within(base, ['value'])} edit={props.edit} /> : null}

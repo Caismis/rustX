@@ -166,3 +166,42 @@ for (const kind of ['required', 'optional']) test(`catalog ${kind} enum saves an
     expect(errors).toEqual([]);
   } finally { await fixture.stop(false); }
 });
+
+for (const operation of ['add', 'remove_other', 'remove_before'] as const) test(`Assigner unfinished number keeps its field through ${operation}, history and native save`, async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood'), errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'assigner_fields.yaml');
+    const items = [{ variable: ['repeat', 'x'], operation: 'overwrite', value: { type: 'literal', value: 10 } }, { variable: ['repeat', 'y'], operation: 'overwrite', value: { type: 'literal', value: 20 } }];
+    writeFileSync(file, JSON.stringify({ description: 'Assigner field identities', block: { input: { type: 'object', properties: {}, additionalProperties: false }, nodes: {
+      start: { type: 'start' }, repeat: { type: 'loop', loop_count: 1, loop_variables: ['x', 'y'].map(label => ({ label, var_type: 'number', value: { type: 'literal', value: 0 } })),
+        body: { nodes: { start: { type: 'start' }, assign: { type: 'assigner', items } }, edges: [{ from: 'start', to: 'assign' }] } }, done: { type: 'return', outputs: [] } },
+      edges: [{ from: 'start', to: 'repeat' }, { from: 'repeat', to: 'done' }] } }));
+    await editor(page, fixture, 'assigner_fields');
+    const assign = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Variable Assigner node assign · repeat/body', { exact: true });
+    await assign.focus(); await assign.press('Enter');
+    const panel = page.getByRole('complementary', { name: 'Inspector' });
+    const fields = panel.getByRole('textbox', { name: 'Value', exact: true });
+    const initial = operation === 'remove_before' ? 1 : 0;
+    await fields.nth(initial).fill('1e'); await fields.nth(initial).blur();
+    await expect(fields.nth(initial)).toHaveAttribute('aria-invalid', 'true');
+    await panel.getByRole('button', { name: operation === 'add' ? 'Add variable' : operation === 'remove_other' ? 'Remove write 2' : 'Remove write 1', exact: true }).click();
+    await expect(panel.getByRole('combobox', { name: 'Assigned Variable', exact: true })).toHaveCount(operation === 'add' ? 3 : 1);
+    await expect(fields.nth(0)).toHaveValue('1e');
+    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(fields.nth(initial)).toHaveValue('1e');
+    await page.getByRole('button', { name: 'Redo', exact: true }).click(); await expect(fields.nth(0)).toHaveValue('1e');
+    if (operation === 'add') await panel.getByRole('button', { name: 'Remove write 3', exact: true }).click();
+    await fields.nth(0).press('ControlOrMeta+s');
+    expect(parse(readFileSync(file, 'utf8')).block.nodes.repeat.body.nodes.assign.items).toEqual(items);
+    await expect(fields.nth(0)).toHaveValue('1e');
+    await fields.nth(0).fill('42'); await fields.nth(0).press('ControlOrMeta+s');
+    const expected = operation === 'add' ? [{ ...items[0], value: { type: 'literal', value: 42 } }, items[1]] : [{ ...items[initial], value: { type: 'literal', value: 42 } }];
+    await expect.poll(() => parse(readFileSync(file, 'utf8')).block.nodes.repeat.body.nodes.assign.items).toEqual(expected);
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    await page.screenshot({ path: `/tmp/rustx-assigner-draft-${operation}.png` });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});

@@ -804,8 +804,9 @@ reads `item` and `index` under the Iteration's ID, and contributes the value of
 run at once; otherwise one at a time. A round whose node failed or timed out is
 handled by `error_handle_mode`: `terminated` (the default) fails the Iteration
 once running rounds settle, `continue_on_error` contributes `null`, and
-`remove_abnormal_output` contributes nothing. Cancellation, deadlines and run
-limits are never handled. `flatten_output` (default true) joins the rounds'
+`remove_abnormal_output` contributes nothing. Cancellation, deadlines, run
+limits, admission/interaction authority failures and unproven outcomes always
+propagate, including inside aggregated failures. `flatten_output` (default true) joins the rounds'
 values when every round that produced one produced an array. With
 `continue_on_error` the output's items are untyped, since `null` may appear.
 
@@ -989,17 +990,10 @@ or Workflow execution.
 
 ### Disclosure and limits
 
-Plans are complete inline structured objects, limited to 32768 serialized UTF-8
-bytes. Context has at most eight entries and 8192 total serialized bytes. Concrete
-instance serialization is bounded to 8192 bytes. Feedback is at most 2000 Unicode
-scalar values; Accept has no feedback channel. Review uses the existing Workflow
-value/depth and aggregate local-data bounds as well.
-
-The unified overlay starts on Reject. Accept requires explicit navigation. Ctrl+F
-edits bounded rejection feedback; Enter exits feedback editing without submitting.
-PgUp/PgDn scrolls complete plan/context rows and reports the visible range.
-Esc dismisses Review presentation; it does not answer it. Removing one pending
-item leaves unrelated drafts and interactions intact.
+Authored and rendered Human Input content share a limit of 4096 Unicode scalar
+values. Workflow value, depth and aggregate local-data bounds also apply.
+Questionnaire response controls submit the declared actions; a validated response
+or the configured timeout settles the wait.
 
 WF-04 introduced Review and required Questionnaire invocation correlation in
 Runtime Client 21 and child IPC 19. TUI carries those interactions through

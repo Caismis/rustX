@@ -651,3 +651,99 @@ async fn human_content_uses_the_questionnaire_unicode_limit_for_fixed_and_dynami
         }
     }
 }
+
+#[tokio::test]
+async fn iteration_error_modes_never_swallow_interaction_authority_failures() {
+    for mode in ["continue_on_error", "remove_abnormal_output"] {
+        for parallel in [false, true] {
+            let plane = workflow_test_plane(1);
+            let (owner, audit, mut published) = owner(&plane);
+            audit.fail_next_requested();
+            let mut executor = Probe::new(ToolExecutionStatus::Success);
+            let release_native = Arc::new(tokio::sync::Notify::new());
+            if parallel {
+                Arc::get_mut(&mut executor).unwrap().release = Some(release_native.clone());
+            }
+            let mut native_started = executor.started.subscribe();
+            let context = context(
+                &plane,
+                executor.clone(),
+                crate::agent::AttemptLifecycle::default()
+                    .with_pre_tool_policy(Arc::new(
+                        crate::agent::lifecycle::ConfiguredApprovalPolicy::new(
+                            ApprovalMode::FullAccess,
+                        ),
+                    ))
+                    .with_native_interaction(owner.clone()),
+            );
+            let tool = |label: &str| json!({"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":{"type":"literal","value":{"passed":true,"label":label}},"result":{"type":"text"}});
+            let mut nodes = json!({"start":{"type":"start"},"z_human":review_node(3_600_000)});
+            let mut edges = vec![json!({"from":"start","to":"z_human"})];
+            if parallel {
+                nodes["a_inflight"] = tool("drain");
+                edges.push(json!({"from":"start","to":"a_inflight"}));
+            }
+            let definition = serde_json::from_value(json!({"description":"Never ignore interaction authority failure","block":{
+                "input":schema(json!({"items":{"type":"array","items":{"type":"boolean"}}}), &["items"]),"nodes":{"workflow_start":{"type":"start"},
+                    "each":{"type":"iteration","iterator":{"type":"reference","path":["args","items"]},"output":{"type":"reference","path":["each","item"]},"error_handle_mode":mode,
+                        "body":{"nodes":nodes,"edges":edges}},"z_effect":tool("effect"),"done":{"type":"return","outputs":[]}},
+                "edges":[{"from":"workflow_start","to":"each"},{"from":"each","to":"z_effect"},{"from":"z_effect","to":"done"}]}})).unwrap();
+            let program = Arc::new(compile_test(definition).unwrap());
+            let runtime = workflow_runtime(&plane);
+            let mut observations = runtime.observations.subscribe();
+            let (entered, held) = tokio::sync::oneshot::channel();
+            let (release, gate) = tokio::sync::oneshot::channel();
+            if parallel {
+                *runtime.node_frontier.lock().unwrap() = Some(execution::NodeFrontierHook {
+                    node: "z_human".into(),
+                    entered,
+                    release: gate,
+                });
+            }
+            let (_, cancellation) = workflow_cancellation();
+            let task = tokio::spawn(async move {
+                runtime
+                    .run_test_foreground(
+                        program,
+                        ToolCallId::new("authority"),
+                        context,
+                        json!({"items":[true]}),
+                        cancellation,
+                    )
+                    .await
+            });
+            if parallel {
+                held.await.unwrap();
+                while *native_started.borrow() == 0 {
+                    native_started.changed().await.unwrap();
+                }
+                release.send(()).unwrap();
+                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    while !observations.borrow().iter().any(|event| matches!(event,RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node=="z_human")) { observations.changed().await.unwrap(); }
+                }).await.unwrap();
+                assert!(
+                    !task.is_finished(),
+                    "admitted native work still owns settlement"
+                );
+                release_native.notify_one();
+            }
+            let error = tokio::time::timeout(std::time::Duration::from_secs(10), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert!(
+                matches!(error, WorkflowRunError::InvocationAuthority(_)),
+                "{mode}/{parallel}: {error:?}"
+            );
+            assert_eq!(
+                executor.starts.load(Ordering::SeqCst),
+                usize::from(parallel)
+            );
+            assert_eq!(owner.pending_count(), 0);
+            assert!(audit.events().is_empty());
+            assert!(published.try_recv().is_err());
+            assert!(!observations.borrow().iter().any(|event| matches!(event, RuntimeEvent::WorkflowCompleted { .. }) || matches!(event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node == "z_effect")));
+        }
+    }
+}

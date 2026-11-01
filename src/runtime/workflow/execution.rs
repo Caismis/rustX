@@ -841,11 +841,9 @@ impl WorkflowRuntime {
             match node {
                 WorkflowNodeProgram::Start => Ok(None),
                 WorkflowNodeProgram::Loop { loop_variables, break_condition, loop_count, body, output_schema } => {
-                    let mut variables = serde_json::Map::new();
-                    for variable in loop_variables {
-                        variables.insert(variable.label.clone(), evaluate_value(&variable.value, input, &values)?);
-                    }
-                    let mut current = Value::Object(variables);
+                    let mut current = super::expressions::evaluate_object(
+                        loop_variables.iter().map(|variable| (variable.label.as_str(), &variable.value)), input, &values,
+                    )?;
                     validate_commit(output_schema, &current)?;
                     let mut carried = LocalReservation::new(run);
                     carried.retain(&current)?;
@@ -1039,7 +1037,9 @@ impl WorkflowRuntime {
                                         () = cancellation.cancelled() => return Err(WorkflowRunError::from_cancellation(cancellation)),
                                         () = tokio::time::sleep(std::time::Duration::from_millis(retry.interval_ms.into())) => {}
                                     }
-                                    run.budgets.lock().expect("run budgets").admit_model_retry(cancellation)?;
+                                    let mut budgets = run.budgets.lock().expect("run budgets");
+                                    budgets.admit_model_retry(cancellation)?;
+                                    self.read_model.update(&run.run_id, |view| view.model_calls_consumed = budgets.model_calls);
                                     continue;
                                 }
                                 break Err(status);
@@ -1258,21 +1258,23 @@ fn round_key(index: usize) -> String {
     format!("iteration {:010}", index + 1)
 }
 
-/// Whether an Iteration's error mode may handle a round's failure: a node
-/// failed or timed out, never the run's cancellation, deadline or limits.
+/// Only business-value failures and confirmed native failures are tolerable.
+/// Admission, interaction authority, cancellation and settlement failures propagate.
 fn round_failed(error: &WorkflowRunError) -> bool {
+    use crate::tools::types::ToolExecutionStatus as Status;
     match error {
         WorkflowRunError::NodesFailed { failures } => {
             !failures.is_empty() && failures.values().all(round_failed)
         }
-        WorkflowRunError::LimitExceeded(_)
-        | WorkflowRunError::Deadline(_)
-        | WorkflowRunError::Cancelled(_) => false,
-        _ => matches!(
-            error.execution_status(),
-            crate::tools::types::ToolExecutionStatus::Failed { .. }
-                | crate::tools::types::ToolExecutionStatus::TimedOut
-        ),
+        WorkflowRunError::ToolFailed { status, .. }
+        | WorkflowRunError::ModelFailed { status, .. }
+        | WorkflowRunError::ChildOutcome { status, .. } => {
+            matches!(status, Status::Failed { .. } | Status::TimedOut)
+        }
+        WorkflowRunError::InvalidValue(_)
+        | WorkflowRunError::InvalidOutput(_)
+        | WorkflowRunError::ChildFailed { .. } => true,
+        _ => false,
     }
 }
 

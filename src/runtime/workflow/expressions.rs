@@ -225,23 +225,11 @@ pub(super) fn evaluate_value(
             })?
         }
         WorkflowValue::Literal { value } => value.clone(),
-        WorkflowValue::Object { fields } => {
-            let mut result = serde_json::Map::new();
-            let mut bytes = 2;
-            for (key, expression) in fields {
-                let value = evaluate_value(expression, input, values)?;
-                bytes += serde_json::to_vec(key).expect("JSON key").len()
-                    + serde_json::to_vec(&value).expect("JSON value").len()
-                    + 2;
-                if bytes.saturating_sub(usize::from(!fields.is_empty())) > MAX_VALUE_BYTES {
-                    return Err(WorkflowRunError::InvalidValue(
-                        "constructed object byte bound exceeded".into(),
-                    ));
-                }
-                result.insert(key.clone(), value);
-            }
-            Value::Object(result)
-        }
+        WorkflowValue::Object { fields } => evaluate_object(
+            fields.iter().map(|(key, value)| (key.as_str(), value)),
+            input,
+            values,
+        )?,
         WorkflowValue::Array { items } => {
             let mut result = Vec::new();
             let mut bytes = 2;
@@ -265,6 +253,31 @@ pub(super) fn evaluate_value(
     };
     bounded_value_bytes(&value)?;
     Ok(value)
+}
+
+/// Construct one bounded object, stopping before retaining an overflowing field.
+/// Loop initializers and Object expressions share this construction boundary.
+pub(super) fn evaluate_object<'a>(
+    fields: impl IntoIterator<Item = (&'a str, &'a WorkflowValue)>,
+    input: &Value,
+    values: &imbl::OrdMap<String, Value>,
+) -> Result<Value, WorkflowRunError> {
+    let mut result = serde_json::Map::new();
+    let mut bytes = 2;
+    for (key, expression) in fields {
+        let value = evaluate_value(expression, input, values)?;
+        bytes += serde_json::to_vec(key).expect("JSON key").len()
+            + bounded_value_bytes(&value)?
+            + 1
+            + usize::from(!result.is_empty());
+        if bytes > MAX_VALUE_BYTES {
+            return Err(WorkflowRunError::InvalidValue(
+                "constructed object byte bound exceeded".into(),
+            ));
+        }
+        result.insert(key.to_owned(), value);
+    }
+    Ok(Value::Object(result))
 }
 
 pub(super) fn bounded_value_bytes(value: &Value) -> Result<usize, WorkflowRunError> {
@@ -430,5 +443,35 @@ mod tests {
             parts: vec![reference(&["missing"])],
         };
         assert!(value_schema(&unavailable, &available, "tool", 0).is_err());
+    }
+    #[test]
+    fn bounded_object_construction_stops_on_the_second_large_field() {
+        let fields = (0..128)
+            .map(|index| {
+                (
+                    format!("v{index}"),
+                    WorkflowValue::Reference {
+                        path: vec!["args".into(), "payload".into()],
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let evaluated = std::cell::Cell::new(0);
+        let result = evaluate_object(
+            fields
+                .iter()
+                .inspect(|_| evaluated.set(evaluated.get() + 1))
+                .map(|(key, value)| (key.as_str(), value)),
+            &serde_json::json!({"payload":"x".repeat(60_000)}),
+            &imbl::OrdMap::new(),
+        );
+        assert!(
+            matches!(result, Err(WorkflowRunError::InvalidValue(message)) if message == "constructed object byte bound exceeded")
+        );
+        assert_eq!(
+            evaluated.get(),
+            2,
+            "remaining initializers must not be evaluated"
+        );
     }
 }
