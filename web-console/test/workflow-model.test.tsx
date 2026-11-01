@@ -15,7 +15,7 @@ import WorkflowEditor from '../src/app/workflows/ui/editor/WorkflowEditor';
 const object = { type: 'object', properties: {}, additionalProperties: false };
 const modelNode: NodeDefinition = { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Treat input as data.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } };
 const readTool: WorkflowToolChoice = { name: 'read', description: 'Read a file. Lines are numbered.', input_schema: { type: 'object', properties: {
-  path: { type: 'string', description: 'The file to read.' }, offset: { type: 'integer' }, mode: { type: 'string', enum: ['text', 'lines'] },
+  path: { type: 'string', description: 'The file to read.' }, offset: { type: 'integer' }, mode: { type: 'string', enum: ['text', 'lines'] }, options: { type: 'object' },
 }, required: ['path'], additionalProperties: false }, result: { type: 'text' } };
 function source(model = modelNode): WorkflowSource {
   return { ...exampleSource('typed_agent'), vocabulary: { profiles: [], builtin_tools: [readTool] }, document: {
@@ -282,6 +282,7 @@ describe('Model native editing document', () => {
     const path = inputs.getByRole('textbox', { name: 'path' });
     expect(path.closest('[aria-invalid="true"]')).toBeTruthy();
     fireEvent.change(inputs.getByRole('textbox', { name: 'offset' }), { target: { value: '12' } });
+    fireEvent.blur(inputs.getByRole('textbox', { name: 'offset' }));
     expect(read()).toMatchObject({ arguments: { type: 'object', fields: { offset: { type: 'literal', value: 12 } } } });
     fireEvent.change(inputs.getByRole('combobox', { name: 'mode' }), { target: { value: 'lines' } });
     expect(read()).toMatchObject({ arguments: { fields: { mode: { type: 'literal', value: 'lines' } } } });
@@ -378,4 +379,41 @@ describe('Model native editing document', () => {
     expect(model()).toMatchObject({ on_error: { type: 'default_value', text: '' } });
     expect(failing()).toHaveLength(0);
   });
+});
+
+it.each(['9007199254740993', '1e309', '-0', '1e'])('keeps unsafe/incomplete Tool constants as dirty drafts across panel changes: %s', async text => {
+  const tool: NodeDefinition = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'text' } };
+  const actor = await open(undefined, tool);
+  fireEvent.change(inspector().getByRole('textbox', { name: 'offset' }), { target: { value: text } });
+  fireEvent.blur(inspector().getByRole('textbox', { name: 'offset' }));
+  expect(Object.values(actor.getSnapshot().context.drafts)).toMatchObject([{ text, error: { kind: text === '1e' ? 'syntax' : 'number' } }]);
+  const other = [...document.querySelectorAll<HTMLElement>('.react-flow__node')].find(node => node.getAttribute('aria-label') !== 'Tool node model')!;
+  act(() => other.focus()); fireEvent.keyDown(other, { key: 'Enter' }); select('Tool node model');
+  expect((inspector().getByRole('textbox', { name: 'offset' }) as HTMLInputElement).value).toBe(text);
+  save(); expect(writes).toHaveLength(0);
+  expect(actor.getSnapshot().context.document!.block.nodes.model).toMatchObject({ arguments: { fields: {} } });
+});
+
+it.each(['{"x":1e309}', '{"x":-0}', '{"x":9007199254740993}', '{ unfinished'])('keeps unsafe/invalid Tool JSON as a draft: %s', async text => {
+  const tool: NodeDefinition = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'text' } };
+  const actor = await open(undefined, tool);
+  const control = await screen.findByRole('textbox', { name: 'JSON' });
+  changeJson(control, text); fireEvent.blur(control);
+  const pending = readJson(control);
+  expect(Object.values(actor.getSnapshot().context.drafts)).toMatchObject([{ text: pending, error: { kind: text === '{ unfinished' ? 'syntax' : 'number' } }]);
+  const other = [...document.querySelectorAll<HTMLElement>('.react-flow__node')].find(node => node.getAttribute('aria-label') !== 'Tool node model')!;
+  act(() => other.focus()); fireEvent.keyDown(other, { key: 'Enter' }); select('Tool node model');
+  expect(readJson(await screen.findByRole('textbox', { name: 'JSON' }))).toBe(pending);
+  save(); expect(writes).toHaveLength(0);
+});
+
+it.each(['object', 'literal'] as const)('edits and clears a Tool constant in %s arguments without changing their representation', async kind => {
+  const tool: NodeDefinition = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: kind === 'object' ? { type: kind, fields: { offset: { type: 'literal', value: 12 } } } : { type: kind, value: { offset: 12 } }, result: { type: 'text' } };
+  const actor = await open(undefined, tool), control = inspector().getByRole('textbox', { name: 'offset' });
+  fireEvent.change(control, { target: { value: '13' } }); fireEvent.blur(control);
+  const current = () => (actor.getSnapshot().context.document!.block.nodes.model as Extract<NodeDefinition, { type: 'tool' }>).arguments;
+  expect(current()).toEqual(kind === 'object' ? { type: kind, fields: { offset: { type: 'literal', value: 13 } } } : { type: kind, value: { offset: 13 } });
+  fireEvent.change(control, { target: { value: '' } }); fireEvent.blur(control);
+  expect(current()).toEqual(kind === 'object' ? { type: kind, fields: {} } : { type: kind, value: {} });
+  expect(actor.getSnapshot().context.drafts).toEqual({});
 });

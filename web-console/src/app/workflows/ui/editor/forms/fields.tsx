@@ -55,7 +55,7 @@ export function useFieldError() {
 
 /** Resolution of a draft whose field changed under it: keep the text over
  * the current value, or take the current value. */
-function ConflictActions({ field }: { field: { conflict?: 'changed' | 'missing'; keep: () => void; reset: () => void } }) {
+export function ConflictActions({ field }: { field: { conflict?: 'changed' | 'missing'; keep: () => void; reset: () => void } }) {
   const tx = useTranslation();
   if (!field.conflict) return null;
   return <div className={css.inline}>

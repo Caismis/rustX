@@ -32,6 +32,7 @@ export type WorkflowHostOperation =
   | { kind: 'read'; id: string }
   | { kind: 'model_choices'; query: WorkflowModelChoicesQuery; expected_revision?: string | null }
   | { kind: 'tool_catalog'; source?: string | null }
+  | { kind: 'enable'; id: string; expected_revision: string; enabled: boolean }
   | { kind: 'analyze'; id: string; document: WorkflowFileDocument; generation: string; query?: WorkflowAnalysisQuery }
   | { kind: 'check'; id: string; document: WorkflowFileDocument }
   | { kind: 'write'; id: string; expected_revision: string; edit: WorkflowEdit };
@@ -47,6 +48,7 @@ export type WorkflowHostResult =
   | { kind: 'read'; source: WorkflowSource }
   | { kind: 'model_choices'; choices: WorkflowModelChoices }
   | { kind: 'tool_catalog'; catalog: WorkflowToolCatalog }
+  | { kind: 'enable' }
   | { kind: 'analyze'; report: WorkflowAnalysisReport }
   | { kind: 'check'; report: WorkflowCheckReport }
   | { kind: 'write'; commit: WorkflowCommit };

@@ -4,7 +4,7 @@ import { fieldValue, nodeField, setField, type FieldAddress, type FieldStep } fr
 import { blockAt, nodeAt, sameBlockPath, sameDocument, updateBlock, type BlockPath, type Value, type WorkflowDocument } from './model';
 import { setOrder } from './geometry';
 import { orderedKeys } from './presentation';
-import { rewriteBlockReferences, type PathRewrite } from './references';
+import { rewriteBlockReferences, rewriteRoundReferences, type PathRewrite } from './references';
 
 export type Schema = Record<string, unknown>;
 export const schemaObject = (value: unknown): Schema | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Schema : undefined;
@@ -184,7 +184,12 @@ export function renameSchemaField(document: WorkflowDocument, address: FieldAddr
   for (const construction of schemaConstructions(next, target)) next = setField(next, construction, mappingKey(fieldValue(next, construction)!.value as Value, path, from, to));
   const rewrite = (prefix: string[]): PathRewrite => reference => reference.length > prefix.length && prefix.every((part, index) => reference[index] === part) && reference[prefix.length] === from ? [...prefix, to, ...reference.slice(prefix.length + 1)] : undefined;
   const rewriteAt = (block: BlockPath, prefix: string[]) => { next = updateBlock(next, block, value => rewriteBlockReferences(value, rewrite(prefix))); };
-  if (target.kind === 'node_output') rewriteAt(address.block, [address.node!, ...path]);
+  if (target.kind === 'node_output') {
+    const prefix = [address.node!, ...path];
+    rewriteAt(address.block, prefix);
+    const parent = address.block.slice(0, -1), owner = address.block.at(-1)?.node;
+    if (owner) next = updateBlock(next, parent, block => ({ ...block, nodes: { ...block.nodes, [owner]: rewriteRoundReferences(block.nodes[owner], rewrite(prefix)) } }));
+  }
   if (target.kind === 'block_input') {
     rewriteAt(address.block, ['args', ...path]);
   }
@@ -208,7 +213,13 @@ export function schemaConsumers(document: WorkflowDocument, address: FieldAddres
     const block = blockAt(document, path); if (!block) return;
     for (const [id, node] of Object.entries(block.nodes)) rewriteBlockReferences({ ...block, nodes: { [id]: node } }, reference => { if (matches(prefix, reference)) add(path, id); return undefined; });
   };
-  if (target.kind === 'node_output') scan(address.block, [address.node!, ...property]);
+  if (target.kind === 'node_output') {
+    const prefix = [address.node!, ...property];
+    scan(address.block, prefix);
+    const parent = address.block.slice(0, -1), owner = address.block.at(-1)?.node;
+    const container = owner && blockAt(document, parent)?.nodes[owner];
+    if (container) rewriteRoundReferences(container, reference => { if (matches(prefix, reference)) add(parent, owner!); return undefined; });
+  }
   if (target.kind === 'block_input') scan(address.block, ['args', ...property]);
   return [...found.values()];
 }

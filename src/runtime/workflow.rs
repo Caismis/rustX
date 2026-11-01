@@ -1726,9 +1726,12 @@ fn compile_body(
     child_path.extend([owner.to_owned(), "body".into()]);
     let program = compile_block(body.clone(), child_path, total_nodes, Some(container))
         .map_err(|e| e.at("body"))?;
+    let scopes = control_flow(body)?.scopes;
     let mut end = container.base.clone();
     for (id, node) in &body.nodes {
-        if let Ok(Some(schema)) = authoring::declared_output(node) {
+        if scopes.available_at_completion(id)
+            && let Ok(Some(schema)) = authoring::declared_output(node)
+        {
             end.0.insert(id.clone(), schema);
         }
     }
@@ -3209,7 +3212,9 @@ pub(crate) fn apply_schema_defaults(schema: &Value, value: &mut Value) {
                     Some(field) => apply_schema_defaults(property, field),
                     None => {
                         if let Some(default) = property.get("default") {
-                            fields.insert(name.clone(), default.clone());
+                            let mut field = default.clone();
+                            apply_schema_defaults(property, &mut field);
+                            fields.insert(name.clone(), field);
                         }
                     }
                 }
@@ -5889,6 +5894,18 @@ chat_reasoning_replay = "omit"
             value,
             json!({"tone": "formal", "rows": [{"n": 1}, {"n": 2}], "kept": "given"})
         );
+    }
+
+    #[test]
+    fn inserted_default_containers_are_normalized_recursively() {
+        let schema = json!({"type":"object","properties": {
+            "opts":{"type":"object","properties":{"n":{"type":"integer","default":1}},"additionalProperties":false,"default":{}},
+            "rows":{"type":"array","items":{"type":"object","properties":{"n":{"type":"integer","default":2}}},"default":[{}]}
+        }});
+        for mut input in [json!({}), json!({"opts":{},"rows":[{}]})] {
+            apply_schema_defaults(&schema, &mut input);
+            assert_eq!(input, json!({"opts":{"n":1},"rows":[{"n":2}]}));
+        }
     }
 
     #[cfg(unix)]

@@ -4,14 +4,16 @@ import type { WorkflowToolChoice } from '../../../../../../../protocol/app-serve
 import { useTranslation } from '../../../../../locale/react';
 import { IconChevronDownOutline14 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';
-import { encodeField } from '../../../document/fields';
+import { encodeField, fieldValue, setField, type FieldAddress } from '../../../document/fields';
+import { useFieldDraft } from '../forms/drafts';
+import { readJson } from '../../../../../../shared/json-numbers';
 import { blockAt, nodeAt, type Value } from '../../../document/model';
 import { schemaObject } from '../../../document/schema';
 import { ReferencePicker } from '../forms/ReferencePicker';
 import { JsonCodeEditor } from '../../../../../presentation/primitives/JsonCodeEditor';
 import { TemplateInput, templateParts, templateValue } from '../forms/TemplateInput';
 import { ValueEditor } from '../forms/ValueEditor';
-import { JsonField, Section, SelectField, TextField } from '../forms/fields';
+import { ConflictActions, JsonField, Section, SelectField, TextField, useFieldError } from '../forms/fields';
 import { CommandRejected, replaceNodeExits } from '../../../document/commands';
 import { ErrorStrategy, RetrySettings, type Retry } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
@@ -151,34 +153,42 @@ function ToolArgument({ name, schema, required, value, set, tool, edit }: PanelP
               <option value="">{tx('workflows:tool.unset')}</option>
               {(schema.enum as string[]).map(item => <option key={item} value={item}>{item}</option>)}
             </select>
-              : <ConstantInput kind={kind} name={name} value={constant} invalid={required && !value} set={next => set(name, next === undefined ? undefined : { type: 'literal', value: next })} />}
+              : <ConstantInput kind={kind} name={name} value={constant} invalid={required && !value}
+                wrapped={tool.node.arguments.type !== 'literal'} address={tool.node.arguments.type === 'literal' ? tool.at('arguments', 'value', { key: name }) : address} />}
       </div>}
   </div>;
 }
 
-/** The text still reads as this value, so keep how it is written. */
-function sameJson(text: string, value: unknown) {
-  try { return JSON.stringify(JSON.parse(text)) === JSON.stringify(value); } catch { return false; }
-}
-
-/** A number or JSON constant as text, committed once it parses. As Dify, a
- * JSON constant is written in a code editor. */
-function ConstantInput({ kind, name, value, invalid, set }: { kind: 'integer' | 'number' | 'json'; name: string; value: unknown; invalid: boolean; set: (value: unknown) => void }) {
-  const tx = useTranslation(), shown = value === undefined ? '' : kind === 'json' ? JSON.stringify(value, null, 2) : String(value);
-  const [text, setText] = useState(shown), [error, setError] = useState(false);
-  useEffect(() => { setText(next => sameJson(next, value) ? next : shown); setError(false); }, [shown]);
-  const commit = (next: string) => {
-    if (!next.trim()) { setError(false); set(undefined); return; }
-    let parsed: unknown;
-    try { parsed = kind === 'json' ? JSON.parse(next) : Number(next); } catch { setError(true); return; }
-    const valid = kind === 'json' || (typeof parsed === 'number' && Number.isFinite(parsed) && (kind === 'number' || Number.isInteger(parsed)));
-    setError(!valid);
-    if (valid) set(parsed);
-  };
-  return kind === 'json'
-    ? <JsonCodeEditor label={tx('workflows:tool.json')} value={text} minHeight={96} onChange={next => { setText(next); commit(next); }} />
-    : <input className={css.input} inputMode={kind === 'integer' ? 'numeric' : 'decimal'} aria-label={name} aria-invalid={error || invalid || undefined} value={text}
-      onChange={event => { setText(event.target.value); commit(event.target.value); }} />;
+/** Constants share the editor's versioned draft and numeric contract. */
+function ConstantInput({ kind, name, value, invalid, address, wrapped }: {
+  kind: 'integer' | 'number' | 'json'; name: string; value: unknown; invalid: boolean; address: FieldAddress; wrapped: boolean;
+}) {
+  const tx = useTranslation(), describe = useFieldError();
+  const location = { ...address, role: 'optional' as const };
+  const field = useFieldDraft({ address: location, canonical: value === undefined ? '' : JSON.stringify(value, null, 2), command: (document, text) => {
+    if (!fieldValue(document, location)) return { status: 'rejected', error: { kind: 'missing' } };
+    if (!text.trim()) {
+      const parent = { ...location, role: 'value' as const, path: location.path.slice(0, -1) };
+      const { [name]: _removed, ...fields } = schemaObject(fieldValue(document, parent)?.value)!;
+      return { status: 'applied', document: setField(document, parent, fields) };
+    }
+    const reading = readJson(text);
+    if (!reading.ok) return { status: 'rejected', error: { kind: reading.reason } };
+    if (kind !== 'json' && (typeof reading.value !== 'number' || kind === 'integer' && !Number.isInteger(reading.value)))
+      return { status: 'rejected', error: { kind: 'syntax' } };
+    return { status: 'applied', document: setField(document, location, wrapped ? { type: 'literal', value: reading.value } : reading.value) };
+  } });
+  const error = describe(field.error);
+  return <div onBlur={kind === 'json' ? field.apply : undefined} onKeyDown={event => {
+    if (kind === 'json' && event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) field.apply();
+  }}>
+    {kind === 'json'
+      ? <JsonCodeEditor label={tx('workflows:tool.json')} value={field.text} minHeight={96} onChange={field.change} error={error} />
+      : <input className={css.input} data-workflow-field={encodeField(location)} inputMode={kind === 'integer' ? 'numeric' : 'decimal'} aria-label={name} aria-invalid={!!field.error || invalid || undefined} value={field.text}
+        onChange={event => field.change(event.target.value)} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) field.apply(); }} />}
+    {error && <small className={css.hintError} role="alert">{error}</small>}
+    <ConflictActions field={field} />
+  </div>;
 }
 
 /** Dify's collapsible "Output variables": fixed by the Tool, its declared

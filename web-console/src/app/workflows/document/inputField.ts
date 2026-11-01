@@ -35,7 +35,7 @@ export class FieldFormError extends Error {
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 const omit = (schema: Schema, keys: readonly string[]) => Object.fromEntries(Object.entries(schema).filter(([key]) => !keys.includes(key)));
 /** Keywords the dialog owns; any other keyword of the same type survives an edit. */
-const OWNED = ['description', 'default', 'enum', 'maxLength', 'items'];
+const OWNED = ['description', 'default', 'maxLength', 'items'];
 
 export function fieldForm(name: string, schema: Schema | undefined, required: boolean): FieldForm {
   const type = !schema ? 'string' : FIELD_TYPES.find(type => type === schema.type) ?? 'raw';
@@ -77,9 +77,9 @@ export function buildField(form: FieldForm, previous?: Schema): Schema {
       if (!Number.isInteger(max) || max < 1 || max > MAX_LENGTH_LIMIT) throw new FieldFormError('max-length-range');
       next.maxLength = max;
     }
-    const options = [...new Set(form.options.map(option => option.trim()).filter(Boolean))];
-    if (form.options.length && !options.length) throw new FieldFormError('options-empty');
+    const options = [...new Set(form.options)];
     if (options.length) next.enum = options;
+    else delete next.enum;
   }
   if (type === 'array' && form.itemType) {
     const items = schemaObject(previous?.items);

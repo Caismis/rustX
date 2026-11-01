@@ -52,46 +52,72 @@ pub(super) fn iteration_result_schema(
 pub(super) fn static_execution_bound(
     block: &WorkflowBlockProgram,
 ) -> Result<(usize, usize, usize), super::WorkflowCompileError> {
-    let mut steps = block.nodes.len();
-    let mut agents = 0;
-    let mut model_calls = 0;
+    let bounds = execution_counts(block)?;
+    Ok((
+        bounds[0].maximum(MAX_WORKFLOW_STEPS),
+        bounds[1].maximum(MAX_WORKFLOW_AGENTS),
+        bounds[2].maximum(MAX_WORKFLOW_MODEL_CALLS),
+    ))
+}
+
+/// Fixed expansion and runtime-bounded repetition are separate facts. Adding
+/// or multiplying a dynamic bound must never add to a numeric sentinel.
+#[derive(Clone, Copy, Default)]
+struct ExecutionCount {
+    fixed: usize,
+    dynamic: bool,
+}
+impl ExecutionCount {
+    fn maximum(self, limit: usize) -> usize {
+        if self.dynamic { limit } else { self.fixed }
+    }
+}
+
+fn execution_counts(
+    block: &WorkflowBlockProgram,
+) -> Result<[ExecutionCount; 3], super::WorkflowCompileError> {
+    let mut counts = [ExecutionCount::default(); 3];
+    counts[0].fixed = block.nodes.len();
     for node in block.nodes.values() {
         match node {
-            WorkflowNodeProgram::Agent(_) => agents += 1,
-            // Every retry is one more call.
+            WorkflowNodeProgram::Agent(_) => counts[1].fixed += 1,
             WorkflowNodeProgram::Model(model) => {
-                model_calls += 1 + model.retry.map_or(0, |retry| retry.max_retries as usize);
+                counts[2].fixed += 1 + model.retry.map_or(0, |retry| retry.max_retries as usize);
             }
             WorkflowNodeProgram::Loop {
                 body, loop_count, ..
             } => {
-                let (child_steps, child_agents, child_models) = static_execution_bound(body)?;
-                steps += (child_steps + 1) * *loop_count as usize;
-                agents += child_agents * *loop_count as usize;
-                model_calls += child_models * *loop_count as usize;
+                let mut child = execution_counts(body)?;
+                child[0].fixed += 1; // round admission
+                for (total, child) in counts.iter_mut().zip(child) {
+                    total.fixed += child.fixed * *loop_count as usize;
+                    total.dynamic |= child.dynamic;
+                }
             }
             WorkflowNodeProgram::Iteration { body, .. } => {
-                let (_, child_agents, child_models) = static_execution_bound(body)?;
-                steps = MAX_WORKFLOW_STEPS;
-                if child_agents > 0 {
-                    agents = MAX_WORKFLOW_AGENTS;
-                }
-                if child_models > 0 {
-                    model_calls = MAX_WORKFLOW_MODEL_CALLS;
+                let child = execution_counts(body)?;
+                counts[0].dynamic = true;
+                for (total, child) in counts.iter_mut().zip(child) {
+                    total.dynamic |= child.dynamic || child.fixed > 0;
                 }
             }
             _ => {}
         }
-        if steps > MAX_WORKFLOW_STEPS
-            || agents > MAX_WORKFLOW_AGENTS
-            || model_calls > MAX_WORKFLOW_MODEL_CALLS
-        {
-            return Err(super::WorkflowCompileError::InvalidField(
-                "aggregate expanded execution bound exceeded".into(),
-            ));
-        }
     }
-    Ok((steps, agents, model_calls))
+    if counts
+        .iter()
+        .zip([
+            MAX_WORKFLOW_STEPS,
+            MAX_WORKFLOW_AGENTS,
+            MAX_WORKFLOW_MODEL_CALLS,
+        ])
+        .any(|(count, limit)| count.fixed > limit)
+    {
+        return Err(super::WorkflowCompileError::InvalidField(
+            "aggregate expanded execution bound exceeded".into(),
+        ));
+    }
+    Ok(counts)
 }
 
 #[derive(Debug, Default)]
@@ -104,6 +130,15 @@ pub(super) struct RunBudgets {
 }
 
 impl RunBudgets {
+    #[cfg(test)]
+    pub(super) fn exhaust(&mut self, limit: super::WorkflowLimit) {
+        match limit {
+            super::WorkflowLimit::ModelCalls => self.model_calls = MAX_WORKFLOW_MODEL_CALLS,
+            super::WorkflowLimit::Agents => self.agents = MAX_WORKFLOW_AGENTS,
+            _ => panic!("test exhausts native call admission"),
+        }
+    }
+
     pub(super) fn reserved(bytes: usize) -> Self {
         Self {
             reserved_bytes: bytes,
@@ -524,11 +559,8 @@ impl WorkflowRuntime {
         }
         // FuturesUnordered is drained before propagating failure/cancellation;
         // every admitted native child keeps its physical settlement owner.
-        if failures.len() == 1 {
-            return Err(failures.into_values().next().expect("one failure"));
-        }
-        if !failures.is_empty() {
-            return Err(WorkflowRunError::NodesFailed { failures });
+        if let Some(error) = merged_failures(failures) {
+            return Err(error);
         }
         if cancellation.is_cancelled() {
             return Err(WorkflowRunError::from_cancellation(cancellation));
@@ -749,10 +781,11 @@ impl WorkflowRuntime {
                     };
                     let mut rounds = FuturesUnordered::new();
                     let mut produced = BTreeMap::new();
-                    let mut failure = None;
+                    let mut failures = BTreeMap::new();
+                    let mut produced_reservation = LocalReservation::new(run);
                     let mut next = 0;
                     loop {
-                        while failure.is_none() && rounds.len() < *parallel as usize && next < items.len() {
+                        while failures.is_empty() && rounds.len() < *parallel as usize && next < items.len() {
                             let index = next;
                             next += 1;
                             let round = u32::try_from(index + 1).map_err(|_| WorkflowRunError::LimitExceeded(super::WorkflowLimit::Steps))?;
@@ -760,14 +793,21 @@ impl WorkflowRuntime {
                             self.round_frontier(round).await;
                             let (body_instance, invocations) = match self.admit_round(run, instance, &node_instance, body, round, cancellation) {
                                 Ok(admitted) => admitted,
-                                Err(error) => { failure = Some(error); break; }
+                                Err(error) => { failures.insert(round_key(index), error); break; }
                             };
                             let mut scope = values.clone();
                             scope.insert(node_id.to_owned(), serde_json::json!({"item": items[index], "index": index}));
                             rounds.push(async move {
                                 let settled = self.execute_graph(run, body, context, input, scope, invocations, cancellation).await;
                                 let outcome = outcome(&settled);
-                                (index, body_instance, outcome, settled.and_then(|graph| evaluate_value(output, input, &graph.values)))
+                                let result = settled.and_then(|graph| {
+                                    let value = evaluate_value(output, input, &graph.values)?;
+                                    // Retain the export before retiring the body's locals.
+                                    let mut retained = LocalReservation::new(run);
+                                    retained.retain(&value)?;
+                                    Ok((value, retained))
+                                });
+                                (index, body_instance, outcome, result)
                             });
                         }
                         let Some((index, body_instance, settled, result)) = rounds.next().await else { break };
@@ -775,20 +815,29 @@ impl WorkflowRuntime {
                             node: node_instance.clone(), body: body_instance, iteration: u32::try_from(index + 1).unwrap_or(u32::MAX), outcome: settled,
                         });
                         match result {
-                            Ok(value) => { produced.insert(index, value); }
+                            Ok((value, retained)) => {
+                                produced_reservation.absorb(retained);
+                                produced.insert(index, value);
+                            }
                             Err(error) if round_failed(&error) && !cancellation.is_cancelled() => match error_handle_mode {
-                                super::WorkflowIterationErrorMode::Terminated => { failure.get_or_insert(error); }
-                                super::WorkflowIterationErrorMode::ContinueOnError => { produced.insert(index, Value::Null); }
+                                super::WorkflowIterationErrorMode::Terminated => { failures.insert(round_key(index), error); }
+                                super::WorkflowIterationErrorMode::ContinueOnError => {
+                                    match produced_reservation.retain(&Value::Null) {
+                                        Ok(()) => { produced.insert(index, Value::Null); }
+                                        Err(error) => { failures.insert(round_key(index), error); }
+                                    }
+                                }
                                 super::WorkflowIterationErrorMode::RemoveAbnormalOutput => {}
                             },
-                            Err(error) => { failure.get_or_insert(error); }
+                            Err(error) => { failures.insert(round_key(index), error); }
                         }
                     }
-                    if let Some(error) = failure { return Err(error); }
+                    if let Some(error) = merged_failures(failures) { return Err(error); }
                     let outputs = flatten(produced.into_values().collect(), *flatten_output);
                     let value = serde_json::json!({"output": outputs});
                     validate_commit(output_schema, &value)?;
                     reservation.retain(&value)?;
+                    drop(produced_reservation);
                     if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
                     values.insert(node_id.to_owned(), value);
                     Ok(None)
@@ -1053,19 +1102,35 @@ struct NodeCompletion<'a> {
     reservation: LocalReservation<'a>,
 }
 
+/// Every admitted failure participates in deterministic certainty aggregation.
+fn merged_failures(failures: BTreeMap<String, WorkflowRunError>) -> Option<WorkflowRunError> {
+    match failures.len() {
+        0 => None,
+        1 => failures.into_values().next(),
+        _ => Some(WorkflowRunError::NodesFailed { failures }),
+    }
+}
+
+fn round_key(index: usize) -> String {
+    format!("iteration {:010}", index + 1)
+}
+
 /// Whether an Iteration's error mode may handle a round's failure: a node
 /// failed or timed out, never the run's cancellation, deadline or limits.
 fn round_failed(error: &WorkflowRunError) -> bool {
-    !matches!(
-        error,
+    match error {
+        WorkflowRunError::NodesFailed { failures } => {
+            !failures.is_empty() && failures.values().all(round_failed)
+        }
         WorkflowRunError::LimitExceeded(_)
-            | WorkflowRunError::Deadline(_)
-            | WorkflowRunError::Cancelled(_)
-    ) && matches!(
-        error.execution_status(),
-        crate::tools::types::ToolExecutionStatus::Failed { .. }
-            | crate::tools::types::ToolExecutionStatus::TimedOut
-    )
+        | WorkflowRunError::Deadline(_)
+        | WorkflowRunError::Cancelled(_) => false,
+        _ => matches!(
+            error.execution_status(),
+            crate::tools::types::ToolExecutionStatus::Failed { .. }
+                | crate::tools::types::ToolExecutionStatus::TimedOut
+        ),
+    }
 }
 
 /// As Dify: when every round that produced a value produced an array,

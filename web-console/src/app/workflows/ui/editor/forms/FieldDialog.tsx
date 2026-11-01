@@ -150,7 +150,7 @@ function DefaultValue({ id, form, change, problem }: { id: string; form: FieldFo
   if (form.type === 'array' || form.type === 'object') return <div className={css.code}>
     <JsonCodeEditor label={label} value={form.defaultJson} allowEmpty={false} minHeight={96} error={problem} onChange={defaultJson => change({ defaultJson })} />
   </div>;
-  const options = form.options.map(option => option.trim()).filter(Boolean);
+  const options = form.options;
   return <div className={editorCss.field}>
     <label htmlFor={control} className={editorCss.fieldLabel}>{label}</label>
     {form.type === 'boolean'
@@ -159,7 +159,7 @@ function DefaultValue({ id, form, change, problem }: { id: string; form: FieldFo
       </select>
       : form.type === 'string' && options.length
         ? <select id={control} className={editorCss.input} value={options.includes(form.defaultText) ? form.defaultText : ''} {...described} onChange={event => change({ defaultText: event.target.value })}>
-          <option value="" disabled>{tx('workflows:fields.default-choose')}</option>
+          {!options.includes('') && <option value="" disabled>{tx('workflows:fields.default-choose')}</option>}
           {[...new Set(options)].map(option => <option key={option} value={option}>{option}</option>)}
         </select>
         : <input id={control} className={clsx(editorCss.input, form.type !== 'string' && editorCss.mono)} value={form.defaultText} {...described}

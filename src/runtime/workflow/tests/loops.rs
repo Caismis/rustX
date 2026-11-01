@@ -542,3 +542,268 @@ fn an_iteration_output_follows_its_rounds_value() {
         json!({"type":"array"})
     );
 }
+
+/// Each admitted Tool reports entry and waits on its own gate. Neither
+/// completion order nor the Workflow's terminal boundary depends on sleeps.
+struct RoundGates {
+    entered: tokio::sync::mpsc::UnboundedSender<usize>,
+    gates: [tokio::sync::Semaphore; 2],
+    finished: AtomicUsize,
+}
+impl ToolExecutor for RoundGates {
+    fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+        crate::tools::deadline::ToolProgressCapability::None
+    }
+    fn start<'a>(
+        &'a self,
+        invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                let index = usize::from(invocation.arguments["label"] == "unknown");
+                self.entered.send(index).unwrap();
+                self.gates[index].acquire().await.unwrap().forget();
+                self.finished.fetch_add(1, Ordering::SeqCst);
+                terminal(if index == 0 {
+                    ToolExecutionStatus::Failed {
+                        error: "known failure".into(),
+                    }
+                } else {
+                    ToolExecutionStatus::OutcomeUnknown {
+                        detail: "uncertain effect".into(),
+                    }
+                })
+            }),
+            context.cancellation,
+        )
+    }
+}
+
+#[tokio::test]
+async fn parallel_round_failures_preserve_uncertainty_in_both_completion_orders() {
+    for first in [0, 1] {
+        let plane = workflow_test_plane(1);
+        let runtime = workflow_runtime(&plane);
+        let read_model = runtime.read_model.clone();
+        let mut changes = read_model.subscribe();
+        let (entered, mut entries) = tokio::sync::mpsc::unbounded_channel();
+        let gates = Arc::new(RoundGates {
+            entered,
+            gates: std::array::from_fn(|_| tokio::sync::Semaphore::new(0)),
+            finished: AtomicUsize::new(0),
+        });
+        let task = run(
+            &plane,
+            runtime,
+            gates.clone(),
+            echo_iteration(&json!({"is_parallel":true,"parallel_nums":2})),
+            json!({"items":["failed","unknown"]}),
+        );
+        tokio::pin!(task);
+        for _ in 0..2 {
+            tokio::select! { entry = entries.recv() => { entry.unwrap(); }, _ = &mut task => panic!("both Tools must enter") }
+        }
+        gates.gates[first].add_permits(1);
+        loop {
+            tokio::select! {
+                _ = &mut task => panic!("terminal before the other admitted Tool settled"),
+                update = changes.changed() => { update.unwrap(); }
+            }
+            if gates.finished.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+        }
+        assert_eq!(gates.finished.load(Ordering::SeqCst), 1);
+        gates.gates[1 - first].add_permits(1);
+        let error = task.await.unwrap_err();
+        assert_eq!(gates.finished.load(Ordering::SeqCst), 2);
+        assert!(matches!(
+            error.execution_status(),
+            ToolExecutionStatus::OutcomeUnknown { .. }
+        ));
+        assert!(matches!(
+            read_model.snapshot().runs[0].state,
+            crate::runtime::workflow::read_model::WorkflowState::Settled {
+                outcome: WorkflowExecutionOutcome::OutcomeUnknown
+            }
+        ));
+    }
+}
+
+#[test]
+fn iteration_exports_require_activation_on_every_round_completion() {
+    let mut definition = echo_iteration(&json!({}));
+    let WorkflowNodeDefinition::Iteration { body, .. } =
+        definition.block.nodes.get_mut("each").unwrap()
+    else {
+        unreachable!()
+    };
+    body.nodes.insert("choose".into(), serde_json::from_value(json!({"type":"branch","cases":[{"id":"yes","condition":{"type":"boolean","value":{"type":"literal","value":true}}}]})).unwrap());
+    body.edges = vec![
+        edge("start", "choose"),
+        WorkflowEdgeDefinition {
+            from: "choose".into(),
+            to: "check".into(),
+            port: Some(WorkflowPort::case("yes")),
+        },
+    ];
+    assert!(
+        compile_test(definition).is_err(),
+        "the unconnected ELSE still completes a round"
+    );
+    assert!(compile_test(echo_iteration(&json!({}))).is_ok());
+}
+
+#[test]
+fn dynamic_execution_bounds_are_invariant_under_node_order_and_nesting() {
+    for id in ["aloop", "zloop"] {
+        let mut definition = echo_iteration(&json!({}));
+        definition.block.nodes.insert(id.into(), serde_json::from_value(json!({"type":"loop","loop_count":2,"loop_variables":[],"body":{"nodes":{"inner_start":{"type":"start"}},"edges":[]}})).unwrap());
+        definition.block.edges = vec![
+            edge("workflow_start", "each"),
+            edge("each", id),
+            edge(id, "done"),
+        ];
+        let program = compile_test(definition).unwrap();
+        assert_eq!(program.execution_bound, MAX_WORKFLOW_STEPS);
+    }
+    let mut each = echo_iteration(&json!({}))
+        .block
+        .nodes
+        .remove("each")
+        .unwrap();
+    let WorkflowNodeDefinition::Iteration {
+        body: inner,
+        output,
+        ..
+    } = &mut each
+    else {
+        unreachable!()
+    };
+    let check = inner.nodes.remove("check").unwrap();
+    inner.nodes.insert("inner_check".into(), check);
+    inner.edges = vec![edge("start", "inner_check")];
+    *output = serde_json::from_value(path(&["inner_check", "label"])).unwrap();
+    let mut definition = checker_loop(2);
+    body(&mut definition).nodes.insert("each".into(), each);
+    body(&mut definition).edges.push(edge("save", "each"));
+    definition
+        .block
+        .input
+        .as_object_mut()
+        .unwrap()
+        .get_mut("properties")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "items".into(),
+            json!({"type":"array","items":{"type":"string"},"default":[]}),
+        );
+    assert_eq!(
+        compile_test(definition).unwrap().execution_bound,
+        MAX_WORKFLOW_STEPS
+    );
+}
+
+#[tokio::test]
+async fn accumulated_iteration_exports_remain_reserved_and_stop_new_rounds() {
+    let mut definition = echo_iteration(&json!({}));
+    definition.block.input = schema(
+        json!({"items":{"type":"array","items":{"type":"boolean"}},"text":{"type":"string"}}),
+        &["items", "text"],
+    );
+    let WorkflowNodeDefinition::Iteration { body, output, .. } =
+        definition.block.nodes.get_mut("each").unwrap()
+    else {
+        unreachable!()
+    };
+    body.nodes.retain(|id, _| id == "start");
+    body.edges.clear();
+    *output = serde_json::from_value(path(&["args", "text"])).unwrap();
+    let plane = workflow_test_plane(1);
+    let runtime = workflow_runtime(&plane);
+    let observations = runtime.observations.subscribe();
+    let error = run(
+        &plane,
+        runtime,
+        Arc::new(Echo::default()),
+        definition,
+        json!({"items":vec![true; 1000],"text":"x".repeat(50_000)}),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        WorkflowRunError::LimitExceeded(WorkflowLimit::RetainedData)
+    ));
+    let rounds = count(&observations.borrow(), |event| {
+        matches!(event, RuntimeEvent::WorkflowLoopIterationSettled { .. })
+    });
+    assert!(
+        rounds < 1000,
+        "retention fails during accumulation, not at final export"
+    );
+}
+
+#[tokio::test]
+async fn continued_rounds_never_swallow_aggregated_native_call_limits() {
+    for mode in ["continue_on_error", "remove_abnormal_output"] {
+        for (kind, limit) in [
+            ("model", WorkflowLimit::ModelCalls),
+            ("agent", WorkflowLimit::Agents),
+        ] {
+            let leaf = if kind == "model" {
+                json!({"type":"model","model":{"mode":"session"},"messages":[{"role":"system","content":[{"type":"literal","value":"Follow the task."}]},{"role":"user","content":[{"type":"literal","value":"go"}]}],"output":{"type":"text"}})
+            } else {
+                json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"go"}],"output":{"type":"json_schema","schema":state()}})
+            };
+            let mut definition = echo_iteration(&json!({"error_handle_mode":mode}));
+            let WorkflowNodeDefinition::Iteration { body, output, .. } =
+                definition.block.nodes.get_mut("each").unwrap()
+            else {
+                unreachable!()
+            };
+            body.nodes.retain(|id, _| id == "start");
+            for id in ["a", "b"] {
+                body.nodes
+                    .insert(id.into(), serde_json::from_value(leaf.clone()).unwrap());
+            }
+            body.edges = vec![edge("start", "a"), edge("start", "b")];
+            *output = serde_json::from_value(path(&["each", "item"])).unwrap();
+            let program = Arc::new(compile_test(definition).unwrap());
+            let run = WorkflowRun::new(
+                program.clone(),
+                test_instance("test_workflow", "each").block.run,
+            );
+            run.budgets.lock().unwrap().exhaust(limit);
+            let plane = workflow_test_plane(1);
+            let runtime = workflow_runtime(&plane);
+            let context = workflow_test_context(&plane);
+            let (_, cancellation) = workflow_cancellation();
+            let result = runtime
+                .execute_block(
+                    &run,
+                    &program.block,
+                    &context,
+                    json!({"items":["x"]}),
+                    vec![0],
+                    &cancellation,
+                )
+                .await;
+            let Err(error) = result else {
+                panic!("{mode} swallowed {limit:?}")
+            };
+            let WorkflowRunError::NodesFailed { failures } = error else {
+                panic!("both siblings must be retained: {error:?}")
+            };
+            assert_eq!(failures.len(), 2);
+            assert!(
+                failures
+                    .values()
+                    .all(|error| *error == WorkflowRunError::LimitExceeded(limit))
+            );
+        }
+    }
+}

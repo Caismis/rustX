@@ -1,6 +1,6 @@
 import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v62';
 import { readJson } from '../../../../shared/json-numbers';
-import { boundedDocument, CommandRejected, freshIdentifier, validLocalKey, validNodeId } from './commands';
+import { boundedDocument, CommandRejected, freshNodeId, validLocalKey, validNodeId } from './commands';
 import { blockAt, deepNodeCount, edgesOf, sameBlockPath, sameDocument, updateBlock, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from './model';
 import type { FieldAddress } from './fields';
 import { MAX_COORDINATE, dimensions, freshNote, position, presentationEdit, utf8Length } from './geometry';
@@ -252,14 +252,29 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
   const ids = Object.keys(fragment.nodes).sort(), original = new Set(ids);
   const block: Block = { input: {}, nodes: fragment.nodes, edges: fragment.edges };
   if ((source !== fragment.source || !sameBlockPath(path, fragment.block)) && blockReferences(block).some(reference => !original.has(reference[0]))) throw new CommandRejected('cross_scope');
-  const names = new Map<string, string>(); let reserved = destination;
-  for (const id of ids) {
-    let name = freshIdentifier(reserved, `${id.slice(0, 48)}_copy`);
-    for (let suffix = 2; ; suffix++) {
-      try { requireVacantNodePresentation(document, path, name); break; }
-      catch (error) { if (!(error instanceof CommandRejected) || error.code !== 'duplicate_identifier') throw error; name = freshIdentifier(reserved, `${id.slice(0, 48)}_copy_${suffix}`); }
+  // Include ancestors, destination descendants and the copied subtree in
+  // allocation, even when the fragment arrived from another document.
+  const names = new Map<string, string>();
+  let reserved = document;
+  const copiedIds = new Set<string>();
+  const collect = (nodes: Record<string, NodeDefinition>) => {
+    for (const [id, node] of Object.entries(nodes)) {
+      copiedIds.add(id);
+      if (node.type === 'iteration' || node.type === 'loop') collect(node.body.nodes);
     }
-    names.set(id, name); reserved = { ...reserved, nodes: { ...reserved.nodes, [name]: fragment.nodes[id] } };
+  };
+  collect(fragment.nodes);
+  for (const id of ids) {
+    let name = freshNodeId(reserved, path, `${id.slice(0, 48)}_copy`);
+    for (let suffix = 2; ; suffix++) {
+      try {
+        if (copiedIds.has(name)) throw new CommandRejected('duplicate_identifier');
+        requireVacantNodePresentation(document, path, name); break;
+      }
+      catch (error) { if (!(error instanceof CommandRejected) || error.code !== 'duplicate_identifier') throw error; name = freshNodeId(reserved, path, `${id.slice(0, 48)}_copy_${suffix}`); }
+    }
+    names.set(id, name);
+    reserved = updateBlock(reserved, path, current => ({ ...current, nodes: { ...current.nodes, [name]: fragment.nodes[id] } }));
   }
   const rewritten = rewriteBlockReferences(block, reference => names.has(reference[0]) ? [names.get(reference[0])!, ...reference.slice(1)] : undefined);
   let next = updateBlock(document, path, current => ({ ...current, nodes: { ...current.nodes, ...Object.fromEntries(ids.map(id => [names.get(id)!, structuredClone(rewritten.nodes[id])])) },

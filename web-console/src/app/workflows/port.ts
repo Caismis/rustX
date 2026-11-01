@@ -173,9 +173,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
       check: (id, document) => read(async () => (await viaHost(workspaceId, { kind: 'check', id, document })).report),
       write: (id, expected_revision, edit) => write(async () => (await viaHost(workspaceId, { kind: 'write', id, expected_revision, edit })).commit),
       enable: (id, expected_revision, enabled) => attempt(true, async () => {
-        const configure = host()?.configureWorkspace;
-        if (!configure) throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_unavailable' });
-        await configure(workspaceId, endpoint, { kind: 'write', expected_revision, mutation: enabling(id, enabled) });
+        await viaHost(workspaceId, { kind: 'enable', id, expected_revision, enabled });
       }),
     };
   }

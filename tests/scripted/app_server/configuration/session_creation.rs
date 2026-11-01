@@ -693,3 +693,49 @@ async fn issue422_creation_previsibility_failure_removes_provisional_binding() {
     assert_eq!(log.next_after(frontier), None);
     f.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn disabled_workflow_missing_agent_does_not_block_session_creation() {
+    let fixture = Fixture::with_session_count(None, 0).await;
+    let directory = fixture.workspaces[0].clone();
+    let workflow = directory.join(".agents/workflows/review.yaml");
+    std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+    let schema = serde_json::json!({"type":"object","properties":{},"additionalProperties":false});
+    std::fs::write(&workflow, serde_json::to_string(&serde_json::json!({
+        "description":"Unavailable reviewer", "block":{"input":schema,"nodes":{
+            "start":{"type":"start"},
+            "review":{"type":"agent","profile":"missing","task":[{"type":"literal","value":"Review"}],"output":{"type":"json_schema","schema":schema}},
+            "done":{"type":"return","outputs":[]}},"edges":[{"from":"start","to":"review"},{"from":"review","to":"done"}]}
+    })).unwrap()).unwrap();
+    std::fs::write(
+        directory.join("rustx.toml"),
+        "[agent]\nworkflows=['review']\n",
+    )
+    .unwrap();
+    let session = fixture
+        .manager
+        .create_session(SessionPersistentState {
+            cwd: directory.clone(),
+            model: None,
+        })
+        .await
+        .unwrap();
+    let loaded = fixture
+        .manager
+        .load(&session.session.id, None)
+        .await
+        .unwrap();
+    let resources = loaded.inspect_runtime().unwrap().runtime_resources();
+    assert!(resources.workflows().enabled_ids().is_empty());
+    let id = crate::runtime::workflow::WorkflowId::parse("review").unwrap();
+    assert!(matches!(&resources.workflows().entries()[&id].admission,
+        crate::runtime::workflow::WorkflowAdmission::Disabled(diagnostics)
+        if diagnostics.iter().any(|diagnostic| matches!(&diagnostic.reason,
+            crate::runtime::workflow::WorkflowDependencyFailure::Agent(
+                crate::runtime::agent_profile::AgentProfileDiagnostic::AgentUnavailable { .. })) )));
+    assert_eq!(
+        std::fs::read_to_string(directory.join("rustx.toml")).unwrap(),
+        "[agent]\nworkflows=['review']\n"
+    );
+    fixture.close().await;
+}

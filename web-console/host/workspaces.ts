@@ -455,20 +455,23 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
    * The registration is resolved before connecting and again immediately
    * before submission; `current` re-resolves it after native work. */
   private nativeLane<T>(id: string, resolve: () => Promise<string>, run: (client: AppServerClient, cwd: string, current: () => Promise<boolean>) => Promise<T>, native?: string): Promise<T> {
-    return this.lane(id, async () => {
-      const cwd = await resolve();
-      if (!this.config.transportToken) throw new Error('Workspace Host has no native configuration connection');
-      const transport = await WebSocketTransport.connect({ endpoint: this.config.endpoint, token: this.config.transportToken });
-      const client = await AppServerClient.initialize({ transport, identity: { name: 'rustx-product-host', version: '0.1.0' } }).catch(error => { transport.close(); throw error; });
-      try {
-        // The connection just opened may reach another App Server process at
-        // the same endpoint; a transaction bound to one never runs on another.
-        if (native !== undefined && client.authorityId !== native) throw new WorkspaceHostError('App Server authority replaced', 'native_replaced');
-        // Resolve again after asynchronous admission, immediately before submission.
-        if (await resolve() !== cwd) throw new Error('Workspace authority changed');
-        return await run(client, cwd, async () => await resolve() === cwd);
-      } finally { await client.close(); }
-    });
+    return this.lane(id, () => this.nativeConnection(resolve, run, native));
+  }
+  /** Read-only native work owns its connection and frozen target, without
+   * holding the Workspace mutation lane during external source preparation. */
+  private async nativeConnection<T>(resolve: () => Promise<string>, run: (client: AppServerClient, cwd: string, current: () => Promise<boolean>) => Promise<T>, native?: string): Promise<T> {
+    const cwd = await resolve();
+    if (!this.config.transportToken) throw new Error('Workspace Host has no native configuration connection');
+    const transport = await WebSocketTransport.connect({ endpoint: this.config.endpoint, token: this.config.transportToken });
+    const client = await AppServerClient.initialize({ transport, identity: { name: 'rustx-product-host', version: '0.1.0' } }).catch(error => { transport.close(); throw error; });
+    try {
+      // The connection just opened may reach another App Server process at
+      // the same endpoint; a transaction bound to one never runs on another.
+      if (native !== undefined && client.authorityId !== native) throw new WorkspaceHostError('App Server authority replaced', 'native_replaced');
+      // Resolve again after asynchronous admission, immediately before submission.
+      if (await resolve() !== cwd) throw new Error('Workspace authority changed');
+      return await run(client, cwd, async () => await resolve() === cwd);
+    } finally { await client.close(); }
   }
   async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {
     return this.nativeLane(id, async () => (await this.resolveWorkspace(id, endpoint)).cwd, async (client, cwd, current) => {
@@ -518,7 +521,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       try { return (await this.resolveWorkspace(id, scope.endpoint)).cwd; }
       catch (cause) { throw new WorkspaceHostError(cause instanceof Error ? cause.message : String(cause), 'workspace_unavailable'); }
     };
-    return this.nativeLane(id, resolve, async (client, cwd, current) => {
+    const run = async (client: AppServerClient, cwd: string, current: () => Promise<boolean>): Promise<WorkflowHostResult> => {
       const target = { kind: 'workspace' as const, directory: cwd };
       const unchanged = async () => {
         if (!await current()) throw new WorkspaceHostError('Workspace authority changed', 'workspace_unavailable');
@@ -538,6 +541,11 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           const { choices } = await client.call('workflow/modelChoices', { target, query: operation.query, expected_revision: operation.expected_revision }, 'workflow_model_choices');
           await unchanged();
           return { kind: 'model_choices', choices };
+        }
+        case 'enable': {
+          await client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision,
+            mutation: { kind: 'config', mutation: { unit: 'workflow_enabled', id: operation.id, enabled: operation.enabled } } }, 'sources_written');
+          return { kind: 'enable' };
         }
         case 'tool_catalog': {
           const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source }, 'workflow_tool_catalog');
@@ -567,7 +575,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'write', commit: { acknowledgement: { revision: acknowledgement.revision, configuration_revision: acknowledgement.configuration_revision ?? null }, reread } };
         }
       }
-    }, native);
+    };
+    return operation.kind === 'tool_catalog'
+      ? this.nativeConnection(resolve, run, native)
+      : this.nativeLane(id, resolve, run, native);
   }
   async classifyLocations(cwds: readonly string[], endpoint: string, authorityId?: string): Promise<SessionLocation[]> {
     this.route(endpoint);
@@ -604,6 +615,7 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
   };
   const valid = object(value) && (
     value!.kind === 'list' ? fields(['kind'])
+      : value!.kind === 'enable' ? fields(['kind', 'id', 'expected_revision', 'enabled']) && id() && typeof value!.expected_revision === 'string' && typeof value!.enabled === 'boolean'
       : value!.kind === 'read' ? fields(['kind', 'id']) && id()
         : value!.kind === 'tool_catalog' ? fields(['kind', 'source']) && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256)
         : value!.kind === 'model_choices' ? fields(['kind', 'query', 'expected_revision']) && choicesQuery(value!.query) && (value!.expected_revision == null || typeof value!.expected_revision === 'string')

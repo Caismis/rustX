@@ -7,7 +7,7 @@ import { copyFragment, duplicateFragment, parseFragment, pasteFragment } from '.
 import { blockField, encodeField, nodeField, setField, type FieldAddress } from '../src/app/workflows/document/fields';
 import { putNote, setNodePresentation } from '../src/app/workflows/document/geometry';
 import { sameBlockPath, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../src/app/workflows/document/model';
-import { renameSchemaField, schemaPropertyAddress } from '../src/app/workflows/document/schema';
+import { renameSchemaField, schemaConsumers, schemaPropertyAddress } from '../src/app/workflows/document/schema';
 import { workflowEditorMachine, type WorkflowEditorActor } from '../src/app/workflows/machines/editor';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { projectScene } from '../src/app/workflows/ui/editor/scene';
@@ -153,4 +153,47 @@ it.each(['root Return', 'Loop variable', 'body Tool', 'break condition'])('title
   expect(screen.getByRole('button', { name: 'Choose a variable' }).textContent).toBe(kind === 'break condition' ? 'Private producer' : 'Actual result producer');
   expect(actor.getSnapshot().context.document).toBe(document); expect(actor.getSnapshot().context.past).toHaveLength(0);
   actor.stop();
+});
+
+describe('body contract boundaries', () => {
+  it.each(['iteration', 'loop'] as const)('renames a body output and its %s round consumer in one undo step', async kind => {
+    const before = fixture();
+    const body = { input: {}, nodes: { start: { type: 'start' as const }, produce: { type: 'model' as const, model: { mode: 'session' as const }, messages: [], output: { type: 'json_schema' as const, schema: { type: 'object', properties: { old: { type: 'boolean' } }, required: ['old'], additionalProperties: false } } } }, edges: [{ from: 'start', to: 'produce' }] };
+    const reference = { type: 'reference' as const, path: ['produce', 'structured_output', 'old'] };
+    before.block.nodes.repeat = kind === 'iteration' ? { type: kind, iterator: { type: 'reference', path: ['args', 'items'] }, output: reference, body }
+      : { type: kind, loop_count: 2, loop_variables: [], break_condition: { type: 'boolean', value: reference }, body };
+    const address = nodeField([{ node: 'repeat' }], 'produce', ['output', 'schema']);
+    expect(schemaConsumers(before, { ...address, path: [...address.path, 'properties', { key: 'old' }] })).toContainEqual({ block: [], node: 'repeat' });
+    const actor = await actorFor(before);
+    actor.send({ type: 'EDIT', apply: document => renameSchemaField(document, address, 'old', 'new') });
+    const after = actor.getSnapshot().context.document!;
+    const container = after.block.nodes.repeat;
+    expect(container).toMatchObject(kind === 'iteration' ? { output: { path: ['produce', 'structured_output', 'new'] } } : { break_condition: { value: { path: ['produce', 'structured_output', 'new'] } } });
+    oneTransaction(actor, before, after); actor.stop();
+  });
+
+  it('allocates a copied container away from its copied descendants and destination ancestors', () => {
+    const before = fixture();
+    before.block.nodes.repeat = { type: 'iteration', iterator: { type: 'reference', path: ['args', 'items'] }, output: { type: 'reference', path: ['repeat_copy', 'text'] },
+      body: { input: {}, nodes: { start: { type: 'start' }, repeat_copy: { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'text' } } }, edges: [{ from: 'start', to: 'repeat_copy' }] } };
+    const fragment = parseFragment(copyFragment(before, 'same', [], ['repeat'], []));
+    const pasted = pasteFragment(before, 'same', [], fragment);
+    expect(pasted.nodes).toEqual(['repeat_copy_2']);
+    expect(pasted.document.block.nodes.repeat_copy_2).toMatchObject({ output: { path: ['repeat_copy', 'text'] } });
+
+  });
+  it('reserves copied subtree IDs across documents and ancestor IDs inside a destination body', () => {
+    const source = fixture();
+    source.block.nodes.source = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'json', schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'string' } } } } } };
+    source.block.nodes.repeat = { type: 'iteration', iterator: { type: 'reference', path: ['source', 'items'] }, output: { type: 'reference', path: ['repeat_copy', 'text'] }, body: { input: {}, nodes: { start: { type: 'start' }, repeat_copy: { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'text' } } }, edges: [{ from: 'start', to: 'repeat_copy' }] } };
+    const fragment = parseFragment(copyFragment(source, 'source', [], ['source', 'repeat'], []));
+    const pasted = pasteFragment(fixture(), 'destination', [], fragment);
+    expect(pasted.nodes).toContain('repeat_copy_2');
+    expect(pasted.document.block.nodes.repeat_copy_2).toMatchObject({ iterator: { path: ['source_copy', 'items'] }, output: { path: ['repeat_copy', 'text'] } });
+    const destination = fixture();
+    destination.block.nodes.source_copy = { type: 'loop', loop_count: 2, loop_variables: [], body: { input: {}, nodes: { start: { type: 'start' } }, edges: [] } };
+    const leaf = parseFragment(copyFragment(source, 'source', [], ['source'], []));
+    expect(pasteFragment(destination, 'destination', [{ node: 'source_copy' }], leaf).nodes).toEqual(['source_copy_2']);
+  });
+
 });

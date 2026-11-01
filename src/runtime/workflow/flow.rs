@@ -199,6 +199,13 @@ impl ActivationScopes {
             succeeded,
         })
     }
+    /// A round completes after all selected paths settle, including an
+    /// unconnected branch port. Its exports must exist on every activation.
+    pub(super) fn available_at_completion(&self, producer: &str) -> bool {
+        self.active.get(producer).is_some_and(Bdd::is_true)
+            && self.succeeded.get(producer).is_none_or(Bdd::is_true)
+    }
+
     pub(super) fn scope(
         &self,
         node: &str,

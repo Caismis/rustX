@@ -6,7 +6,7 @@ const problem = (value: FieldForm) => { try { buildField(value); } catch (error)
 
 describe('input field form', () => {
   it('builds a string with max length, options and an optional default', () => {
-    expect(buildField(form({ maxLength: '8', options: ['formal', ' casual ', 'formal'], required: false, defaultText: 'casual', description: ' Voice ' })))
+    expect(buildField(form({ maxLength: '8', options: ['formal', 'casual', 'formal'], required: false, defaultText: 'casual', description: ' Voice ' })))
       .toEqual({ type: 'string', maxLength: 8, enum: ['formal', 'casual'], description: 'Voice', default: 'casual' });
   });
 
@@ -17,7 +17,6 @@ describe('input field form', () => {
   it('refuses limits and defaults the native schema would reject', () => {
     expect(problem(form({ maxLength: '0' }))).toBe('max-length-range');
     expect(problem(form({ maxLength: '65537' }))).toBe('max-length-range');
-    expect(problem(form({ options: [' '] }))).toBe('options-empty');
     expect(problem(form({ required: false, maxLength: '3', defaultText: 'four' }))).toBe('default-too-long');
     expect(problem(form({ required: false, options: ['a'], defaultText: 'b' }))).toBe('default-option');
     expect(problem(form({ type: 'number', required: false, defaultText: '' }))).toBe('default-number');
@@ -33,4 +32,14 @@ describe('input field form', () => {
     expect(buildField(read, previous)).toEqual(previous);
     expect(fieldForm('n', { type: 'null' }, true).type).toBe('raw');
   });
+});
+
+it.each([
+  { type: 'boolean', enum: [true] },
+  { type: 'array', items: { type: 'string' }, enum: [['a']] },
+  { type: 'string', enum: [' padded ', 'normal', ''] },
+])('preserves enum values during a field round trip and description edit: %j', previous => {
+  const form = fieldForm('x', previous, true);
+  expect(buildField(form, previous)).toEqual(previous);
+  expect(buildField({ ...form, description: 'Edited' }, previous)).toEqual({ ...previous, description: 'Edited' });
 });
