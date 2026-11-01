@@ -346,6 +346,22 @@ fn issue459_reviewer_sources(fixture: &Fixture) {
     std::fs::write(&workflow, serde_json::to_string(&program).unwrap()).unwrap();
 }
 
+/// Make `review` a Global Workflow, so the User document that
+/// `issue459_admit_reviewer` edits enables it.
+fn issue459_global_review(fixture: &Fixture) {
+    let user = fixture
+        .manager
+        .configuration
+        .resource_root(&crate::local_runtime::configuration::settings::SourceTarget::User)
+        .join("workflows");
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::rename(
+        fixture.workspaces[0].join(".agents/workflows/review.yaml"),
+        user.join("review.yaml"),
+    )
+    .unwrap();
+}
+
 /// Author `reviewer` with `instructions`. Without `model` it names none and
 /// inherits the invoking Attempt's frozen model; with one it names its own.
 fn issue459_write_reviewer(fixture: &Fixture, instructions: &str, model: Option<&str>) {
@@ -360,7 +376,7 @@ fn issue459_write_reviewer(fixture: &Fixture, instructions: &str, model: Option<
 }
 
 /// Admit `reviewer` to Root: by name, and through the `review` Workflow that
-/// drives it.
+/// drives it, when `review` is Global (`issue459_global_review`).
 fn issue459_admit_reviewer(document: &mut toml::Value) {
     let agent = document["agent"].as_table_mut().unwrap();
     agent.insert("agents".into(), vec![toml::Value::from("reviewer")].into());

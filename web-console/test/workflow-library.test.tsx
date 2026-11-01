@@ -26,16 +26,18 @@ interface Authority {
   replaced: boolean;
   lists: ReturnType<typeof deferred<WorkflowLibrary>>[];
   writes: { id: string; expected: string; edit: WorkflowEdit; result: ReturnType<typeof deferred<WorkflowCommit>> }[];
+  enables: { id: string; expected: string; enabled: boolean; result: ReturnType<typeof deferred<void>> }[];
   /** What `read` returns; reads stay pending without it. */
   source?: Awaited<ReturnType<WorkflowScopePort['read']>>;
 }
 function authorityNamed(name: string): Authority {
-  return { name, replaced: false, lists: [], writes: [] };
+  return { name, replaced: false, lists: [], writes: [], enables: [] };
 }
 function portOf(authority: Authority, scope: WorkflowScope): WorkflowScopePort {
   const refuse = () => Promise.reject(new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_replaced' }));
   return {
     endpoint: `ws://${authority.name}/`, scope,
+    enable: (id, expected, enabled) => { const result = deferred<void>(); authority.enables.push({ id, expected, enabled, result }); return result.promise; },
     analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => { if (authority.replaced) return refuse(); const result = deferred<WorkflowLibrary>(); authority.lists.push(result); return result.promise; },
     read: () => authority.source ? Promise.resolve(authority.source) : new Promise(() => {}),
     check: () => new Promise(() => {}),
@@ -49,7 +51,7 @@ function portOf(authority: Authority, scope: WorkflowScope): WorkflowScopePort {
 }
 const listing = (authority: Authority): WorkflowLibrary => ({
   target: { kind: 'user' }, directory: `/home/${authority.name}/.agents/workflows`, absent_revision: `missing-${authority.name}`, diagnostic: null,
-  files: [{ file_name: 'flow.yaml', id: 'flow', relative_path: '.agents/workflows/flow.yaml', revision: `sha256:${authority.name}`, byte_length: '1', modified_ms: null, description: `${authority.name} flow`, nodes: 1, diagnostic: null, shadows_global: false }],
+  files: [{ file_name: 'flow.yaml', id: 'flow', relative_path: '.agents/workflows/flow.yaml', revision: `sha256:${authority.name}`, byte_length: '1', modified_ms: null, description: `${authority.name} flow`, nodes: 1, diagnostic: null, shadows_global: false, enabled: false }],
 });
 const host = { subscribe: () => () => {}, getCatalog: () => undefined, observe: () => new Promise(() => {}) } as unknown as WorkspaceAuthority;
 
@@ -69,6 +71,42 @@ it('keeps retained presentation warnings distinct from invalid executables and p
   fireEvent.change(within(dialog).getByLabelText(/^Workflow ID/), { target: { value: 'copied' } });
   fireEvent.click(within(dialog).getByRole('button', { name: /^Copy$/ }));
   expect(a.writes[0]).toMatchObject({ id: 'copied', edit: { operation: 'copy', source: 'flow', source_revision: 'sha256:a' } });
+});
+
+describe('enabling in Sessions', () => {
+  const sessions = () => screen.getByRole('switch', { name: 'Enable flow in Sessions' }) as HTMLButtonElement;
+  it('switches a file on against its scope configuration revision, then lists again', async () => {
+    const { a, show } = mount(); show();
+    a.lists[0].resolve({ ...listing(a), configuration_revision: 'cfg-1' }); await flush();
+    expect(sessions().getAttribute('aria-checked')).toBe('false');
+    expect(sessions().title).toBe('Enabled in the Sessions of every Workspace');
+    fireEvent.click(sessions());
+    expect(a.enables.map(({ id, expected, enabled }) => ({ id, expected, enabled }))).toEqual([{ id: 'flow', expected: 'cfg-1', enabled: true }]);
+    expect(sessions().disabled).toBe(true);
+    a.enables[0].result.resolve(); await flush();
+    const after = listing(a);
+    after.files[0].enabled = true;
+    a.lists[1].resolve({ ...after, configuration_revision: 'cfg-2' }); await flush();
+    expect(sessions().getAttribute('aria-checked')).toBe('true');
+    expect(sessions().disabled).toBe(false);
+  });
+
+  it('forces a file that fails its check off and gray, even when its scope enables it', async () => {
+    const { a, show } = mount(); show();
+    const observed = listing(a);
+    observed.files[0] = { ...observed.files[0], enabled: true, diagnostic: { path: 'block.edges.0.to', category: 'compile', reason: 'unknown node', correction: null, detail: null, line: null, column: null } };
+    a.lists[0].resolve({ ...observed, configuration_revision: 'cfg-1' }); await flush();
+    expect(sessions().getAttribute('aria-checked')).toBe('false');
+    expect(sessions().disabled).toBe(true);
+    expect(sessions().title).toMatch(/fails its check/);
+  });
+
+  it('cannot switch while the scope configuration does not parse', async () => {
+    const { a, show } = mount(); show();
+    a.lists[0].resolve({ ...listing(a), configuration_revision: null }); await flush();
+    expect(sessions().disabled).toBe(true);
+    expect(sessions().title).toMatch(/rustx\.toml cannot be read/);
+  });
 });
 
 function mount() {

@@ -159,6 +159,9 @@ pub struct WorkflowFileSummary {
     /// Informational: a Workspace file whose id also names a User (Global)
     /// file, which it shadows in this Workspace. Edits never redirect.
     pub shadows_global: bool,
+    /// Enabled for this scope's Sessions: named by the scope's own
+    /// `agent.workflows`. A file that fails its check is never admitted.
+    pub enabled: bool,
 }
 
 /// The Workflow files physically owned by one source scope.
@@ -175,6 +178,9 @@ pub struct WorkflowLibrary {
     pub files: Vec<WorkflowFileSummary>,
     /// A directory-level failure; `files` is then empty, never partial.
     pub diagnostic: Option<WorkflowDiagnostic>,
+    /// The revision of the scope's `rustx.toml`, the CAS token of enabling
+    /// or disabling a file; absent while that document does not parse.
+    pub configuration_revision: Option<String>,
 }
 
 /// The native names an author can choose from in this scope: discovered
@@ -404,6 +410,7 @@ fn summarize(
         nodes: None,
         diagnostic: None,
         shadows_global,
+        enabled: false,
     };
     let bytes = match directory.read(name) {
         Ok(Some(bytes)) => bytes,
@@ -511,7 +518,28 @@ impl UserConfigManager {
             absent_revision: super::settings::revision(None),
             files: Vec::new(),
             diagnostic: None,
+            configuration_revision: None,
         };
+        let config = self.config_path(target);
+        let bytes = match std::fs::read(&config) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        };
+        let layer = bytes.as_ref().ok().and_then(|bytes| {
+            let layer = super::configuration::capture::parse_layer(
+                &config,
+                bytes.as_deref().unwrap_or_default(),
+                matches!(target, SourceTarget::Workspace { .. }),
+            )
+            .ok()?;
+            library.configuration_revision = Some(super::settings::revision(bytes.as_deref()));
+            Some(layer)
+        });
+        let enabled = layer
+            .and_then(|layer| layer.agent)
+            .and_then(|agent| agent.workflows)
+            .unwrap_or_default();
         let paths =
             match super::resource_directory::files(&scope.boundary, &scope.directory, "yaml") {
                 Ok(paths) => paths,
@@ -551,7 +579,9 @@ impl UserConfigManager {
         };
         library.files.extend(paths.into_iter().filter_map(|path| {
             let shadows_global = path.file_name().is_some_and(|name| global.contains(name));
-            summarize(&scope, &directory, &path, shadows_global)
+            let mut summary = summarize(&scope, &directory, &path, shadows_global)?;
+            summary.enabled = summary.id.as_ref().is_some_and(|id| enabled.contains(id));
+            Some(summary)
         }));
         library
             .files

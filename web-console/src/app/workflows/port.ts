@@ -102,6 +102,9 @@ export interface WorkflowScopePort {
   analyze(id: string, document: WorkflowFileDocument, generation: string, query?: WorkflowAnalysisQuery): Promise<WorkflowAnalysisReport>;
   /** One whole-file write. Its acknowledgement and its reread are separate. */
   write(id: string, expectedRevision: string, edit: WorkflowEdit): Promise<WorkflowCommit>;
+  /** Enable or disable one file for this scope's Sessions, against the
+   * revision of the scope's `rustx.toml` its listing was read at. */
+  enable(id: string, expectedRevision: string, enabled: boolean): Promise<void>;
 }
 
 const replaced = (write: boolean) => new WorkflowOperationError(write ? { kind: 'uncertain', message: 'server_replaced' } : { kind: 'unavailable', message: 'server_replaced' });
@@ -169,6 +172,11 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
       analyze: (id, document, generation, query) => read(async () => (await viaHost(workspaceId, { kind: 'analyze', id, document, generation, query })).report),
       check: (id, document) => read(async () => (await viaHost(workspaceId, { kind: 'check', id, document })).report),
       write: (id, expected_revision, edit) => write(async () => (await viaHost(workspaceId, { kind: 'write', id, expected_revision, edit })).commit),
+      enable: (id, expected_revision, enabled) => attempt(true, async () => {
+        const configure = host()?.configureWorkspace;
+        if (!configure) throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_unavailable' });
+        await configure(workspaceId, endpoint, { kind: 'write', expected_revision, mutation: enabling(id, enabled) });
+      }),
     };
   }
   const target = { kind: 'user' as const };
@@ -192,5 +200,10 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
       catch (error) { reread = { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
       return { acknowledgement: { revision: acknowledgement.revision, configuration_revision: acknowledgement.configuration_revision ?? null }, reread };
     }),
+    enable: (id, expected_revision, enabled) => attempt(true, async () => {
+      await client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision, mutation: enabling(id, enabled) } }, 'sources_written');
+    }),
   };
 }
+
+const enabling = (id: string, enabled: boolean) => ({ kind: 'config' as const, mutation: { unit: 'workflow_enabled' as const, id, enabled } });

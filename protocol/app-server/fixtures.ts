@@ -1357,7 +1357,8 @@ export const fixtures = [
             "display": null,
             "nodes": 3,
             "diagnostic": null,
-            "shadows_global": false
+            "shadows_global": false,
+            "enabled": true
           },
           {
             "file_name": "parallel_checks.yaml",
@@ -1370,7 +1371,8 @@ export const fixtures = [
             "display": null,
             "nodes": 4,
             "diagnostic": null,
-            "shadows_global": false
+            "shadows_global": false,
+            "enabled": true
           },
           {
             "file_name": "human_plan.yaml",
@@ -1383,7 +1385,8 @@ export const fixtures = [
             "display": null,
             "nodes": 3,
             "diagnostic": null,
-            "shadows_global": false
+            "shadows_global": false,
+            "enabled": true
           },
           {
             "file_name": "parallel_review.yaml",
@@ -1396,7 +1399,8 @@ export const fixtures = [
             "display": null,
             "nodes": 7,
             "diagnostic": null,
-            "shadows_global": false
+            "shadows_global": false,
+            "enabled": true
           },
           {
             "file_name": "implement_and_review.yaml",
@@ -1409,7 +1413,8 @@ export const fixtures = [
             "display": null,
             "nodes": 11,
             "diagnostic": null,
-            "shadows_global": false
+            "shadows_global": false,
+            "enabled": true
           },
           {
             "file_name": "model_text.yaml",
@@ -1422,7 +1427,8 @@ export const fixtures = [
             "display": null,
             "nodes": 3,
             "diagnostic": null,
-            "shadows_global": false
+            "shadows_global": false,
+            "enabled": true
           },
           {
             "file_name": "model_json.yaml",
@@ -1435,10 +1441,12 @@ export const fixtures = [
             "display": null,
             "nodes": 3,
             "diagnostic": null,
-            "shadows_global": false
+            "shadows_global": false,
+            "enabled": true
           }
         ],
-        "diagnostic": null
+        "diagnostic": null,
+        "configuration_revision": "missing"
       }
     }
   },

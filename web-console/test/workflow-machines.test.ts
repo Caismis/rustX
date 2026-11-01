@@ -32,7 +32,7 @@ function source(id: string, revision = 'sha256:base'): WorkflowSource {
 const listing = (scope: WorkflowScope, files: string[]): WorkflowLibrary => ({
   target: scope.kind === 'user' ? { kind: 'user' } : { kind: 'workspace', directory: `/${scope.workspaceId}` },
   directory: '/fixture', absent_revision: 'missing', diagnostic: null,
-  files: files.map(id => ({ file_name: `${id}.yaml`, id, relative_path: `.agents/workflows/${id}.yaml`, revision: `sha256:${id}`, byte_length: '1', modified_ms: null, description: id, nodes: 1, diagnostic: null, shadows_global: false })),
+  files: files.map(id => ({ file_name: `${id}.yaml`, id, relative_path: `.agents/workflows/${id}.yaml`, revision: `sha256:${id}`, byte_length: '1', modified_ms: null, description: id, nodes: 1, diagnostic: null, shadows_global: false, enabled: false })),
 });
 const valid: WorkflowCheckReport = { revision: 'sha256:candidate', structure: { status: 'valid', outputs: {} }, dependencies: { status: 'not_checked' }, explanation: null };
 const commit = (revision: string, reread: WorkflowCommit['reread']): WorkflowCommit => ({ acknowledgement: { revision, configuration_revision: '7' }, reread });
@@ -49,7 +49,7 @@ function scripted(scope: WorkflowScope = USER_SCOPE): Scripted {
   return {
     ...state,
     port: {
-      endpoint: 'ws://127.0.0.1:1/', scope,
+      endpoint: 'ws://127.0.0.1:1/', scope, enable: () => new Promise(() => {}),
       analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => { const result = deferred<WorkflowLibrary>(); state.lists.push(result); return result.promise; },
       read: id => { const result = deferred<WorkflowSource>(); state.reads.push({ id, result }); return result.promise; },
       check: (id, document) => { const result = deferred<WorkflowCheckReport>(); state.checks.push({ id, document, result }); return result.promise; },

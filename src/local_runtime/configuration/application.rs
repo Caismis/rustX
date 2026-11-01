@@ -417,11 +417,6 @@ impl ApplicationState {
             .config
             .validate()
             .map_err(|error| error.to_string())?;
-        for name in &capture.config.agent.workflows {
-            if !capture.workflows.entries().contains_key(name) {
-                return Err(format!("unknown Workflow {name}"));
-            }
-        }
         for name in &capture.admitted_agent_dependencies() {
             if capture.subagents.get(name).is_none() {
                 return Err(format!("unknown Agent {name}"));

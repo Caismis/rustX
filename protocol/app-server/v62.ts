@@ -2499,8 +2499,9 @@ export type ConfigMutation =
       unit: 'agents';
     }
   | {
-      authored?: WorkflowId[] | null;
-      unit: 'workflows';
+      id: WorkflowId;
+      enabled: boolean;
+      unit: 'workflow_enabled';
     }
   | {
       authored?: AgentId | null;
@@ -18434,6 +18435,11 @@ export interface WorkflowLibrary {
    * A directory-level failure; `files` is then empty, never partial.
    */
   diagnostic?: WorkflowDiagnostic | null;
+  /**
+   * The revision of the scope's `rustx.toml`, the CAS token of enabling
+   * or disabling a file; absent while that document does not parse.
+   */
+  configuration_revision?: string | null;
 }
 /**
  * One file physically owned by the listed scope.
@@ -18485,6 +18491,11 @@ export interface WorkflowFileSummary {
    * file, which it shadows in this Workspace. Edits never redirect.
    */
   shadows_global: boolean;
+  /**
+   * Enabled for this scope's Sessions: named by the scope's own
+   * `agent.workflows`. A file that fails its check is never admitted.
+   */
+  enabled: boolean;
 }
 /**
  * One bounded native diagnostic of a Workflow file or candidate.

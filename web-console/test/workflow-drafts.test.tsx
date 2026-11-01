@@ -18,7 +18,7 @@ import { collidingFields } from './workflow-colliding-document';
 const writes: { expected: string; edit: WorkflowEdit }[] = [];
 function portFor(source: WorkflowSource): WorkflowScopePort {
   return {
-    endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' },
+    endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' }, enable: () => new Promise(() => {}),
     analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}),
     read: async id => ({ ...source, id, revision: 'sha256:base' }),
     check: () => new Promise(() => {}),

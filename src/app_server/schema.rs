@@ -935,9 +935,11 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
                         nodes: Some(definition.block.nodes.len()),
                         diagnostic: None,
                         shadows_global: false,
+                        enabled: true,
                     })
                     .collect(),
                 diagnostic: None,
+                configuration_revision: Some("missing".into()),
             },
         },
     ));

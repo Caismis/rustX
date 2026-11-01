@@ -142,7 +142,7 @@ it('S2-04 Agent holds identity and guidance; Tools & Permissions holds what the 
   await user(s, 'Agent');
   expect(forms()).toEqual(['Root identity', 'Root description', 'Root instructions', 'Project guidance']);
   await openSettingsPage('Tools & Permissions');
-  expect(forms()).toEqual(expect.arrayContaining(['Approval mode', 'Native Tools', 'Skill visibility', 'Agent allowlist', 'Workflow allowlist']));
+  expect(forms()).toEqual(expect.arrayContaining(['Approval mode', 'Native Tools', 'Skill visibility', 'Agent allowlist']));
   // Per-Tool policies are one task deeper, not scattered primary tabs.
   expect(screen.getByRole('button', { name: 'Advanced Tool policies' }).getAttribute('aria-expanded')).toBe('false');
   // The old native-unit tabs do not exist as navigation.
@@ -780,7 +780,6 @@ it('S2-07 a malformed Workspace-only named Agent is authored by the Workspace an
 // ── S2-08 No fictitious authoring ───────────────────────────────────────────
 
 it.each([
-  ['Workflows', 'nightly', 'Workflow allowlist'],
   ['Skills', 'docs', 'Skill visibility'],
   ['Python', 'analysis', 'Source python:analysis'],
 ] as const)('S2-08 %s offer inventory and root selection but no definition mutation', async (filter, name, selectionForm) => {
@@ -801,16 +800,15 @@ it.each([
   expect(writes(s)).toHaveLength(0);
 });
 
-it('S2-08 the supported Workflow selection of an unauthorable resource saves through its real unit', async () => {
+it('S2-08 a Workflow is enabled on its card in Workflows, not in Settings', async () => {
   const s = cfg3Client();
   s.source.prospective_resources = inventory();
   await user(s, 'Extensions');
   fireEvent.click(screen.getByRole('tab', { name: 'Workflows' }));
   await openResourceRow('nightly');
-  fireEvent.click(screen.getByLabelText('Include nightly'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save Workflow allowlist' }));
-  await waitFor(() => expect(writes(s)).toHaveLength(1));
-  expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'workflows', authored: ['nightly'] } });
+  expect(forms()).toEqual([]);
+  expect(screen.getByText(/enabled for Sessions with the switch on their cards in Workflows/)).toBeTruthy();
+  expect(writes(s)).toHaveLength(0);
 });
 
 // ── S2-09 Drafts survive navigation, revisions and native errors ────────────

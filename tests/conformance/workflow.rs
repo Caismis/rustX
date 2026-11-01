@@ -310,7 +310,6 @@ max_concurrent = 4
 
 [agent]
 agents = []
-workflows = ["review_pr"]
 
 [agent.model]
 model = "emulator/workflow-model"
@@ -319,6 +318,9 @@ model = "emulator/workflow-model"
 [agent.tools]
 builtin = ["read"]
 "#;
+
+/// A Workspace enables its own Workflow files.
+const ENABLE: &str = "[agent]\nworkflows = [\"review_pr\"]\n";
 
 const WORKFLOW: &str = r"description: Review the request with a native child agent.
 block:
@@ -947,6 +949,7 @@ impl Driver {
         .expect("reviewer instructions");
         std::fs::write(workspace.join(".agents/workflows/review_pr.yaml"), workflow)
             .expect("workflow YAML");
+        std::fs::write(workspace.join("rustx.toml"), ENABLE).expect("Workspace rustx.toml");
         // Noncanonical incidental files have no Workflow identity.
         std::fs::write(
             workspace.join(".agents/workflows/inactive.txt"),
@@ -1527,6 +1530,7 @@ async fn workflow_selection_rejects_an_identity_outside_the_canonical_root() {
     .expect("reviewer instructions");
     std::fs::write(workspace.join(".rustx/workflows/review_pr.yaml"), WORKFLOW)
         .expect("legacy workflow YAML");
+    std::fs::write(workspace.join("rustx.toml"), ENABLE).expect("Workspace rustx.toml");
 
     let paths = LaunchFixture {
         config: root.path().join("rustx.toml"),
@@ -1534,13 +1538,21 @@ async fn workflow_selection_rejects_an_identity_outside_the_canonical_root() {
         workspace,
         runtime_root: root.path().join("private"),
     };
-    let error =
+    // A file outside the canonical root is no Workflow: enabling it enables
+    // nothing, and the Session still starts.
+    let resources =
         LocalConversationCore::compose(&paths.resolve(), &LocalRuntimeDependencies::default())
             .await
-            .expect_err("a selected missing Workflow fails admission");
+            .expect("an enabled missing Workflow stays off")
+            .runtime()
+            .runtime_resources();
+    assert!(resources.root_profile().unwrap().workflows.is_empty());
     assert!(
-        format!("{error:?}").contains("WorkflowUnavailable"),
-        "{error:?}"
+        !resources
+            .capability()
+            .tool_registry()
+            .names()
+            .contains(&"review_pr")
     );
 }
 
@@ -1554,7 +1566,7 @@ async fn discovered_workflow_can_remain_out_of_main_model_admission() {
         root.path().join("rustx.toml"),
         format!(
             "{}\n{}",
-            CONFIG.replace("workflows = [\"review_pr\"]", "workflows = []"),
+            CONFIG,
             models_json_for_base_url("http://127.0.0.1:1/v1")
         ),
     )
@@ -1767,14 +1779,24 @@ impl Driver {
             .as_table_mut()
             .unwrap()
             .remove("profile");
+        // The Workspace enables its own Workflow files.
+        let enabled = config["agent"]
+            .as_table_mut()
+            .unwrap()
+            .remove("workflows")
+            .unwrap();
         std::fs::write(
             root.path().join("rustx.toml"),
             toml::to_string_pretty(&config).unwrap(),
         )
         .unwrap();
-        // The copied example's authored configuration is now the bound User fixture;
-        // leave Workspace resources intact and provide no duplicate authored override.
-        std::fs::remove_file(workspace.join("rustx.toml")).unwrap();
+        // The copied example's authored configuration is now the bound User
+        // fixture; the Workspace keeps only the Workflows it enables.
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            toml::to_string(&toml::toml! { [agent] workflows = enabled }).unwrap(),
+        )
+        .unwrap();
 
         let paths = LaunchFixture {
             config: root.path().join("rustx.toml"),

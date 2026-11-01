@@ -446,7 +446,7 @@ async fn t06_offside_preparation_allows_admission_and_t07_new_failure_supersedes
         // fence while old preparation is parked off-side.
         std::fs::write(
             fixture.workspaces[0].join("rustx.toml"),
-            "[agent]\nworkflows=['missing']\n",
+            "[agent]\nagents=['missing']\n",
         )
         .unwrap();
         fixture

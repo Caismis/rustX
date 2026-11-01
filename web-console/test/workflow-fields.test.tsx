@@ -16,7 +16,7 @@ const writes: { expected: string; edit: WorkflowEdit }[] = [];
 // An input schema the field list cannot show stays JSON text.
 let rawInput: Record<string, unknown> | undefined;
 const port: WorkflowScopePort = {
-  endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' },
+  endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' }, enable: () => new Promise(() => {}),
   analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}),
   read: async id => {
     const source = exampleSource('parallel_review');

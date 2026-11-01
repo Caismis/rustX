@@ -6,8 +6,10 @@ import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/
 import { useTranslation } from '../../../../locale/react';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Menu } from '../../../../presentation/primitives/Menu';
+import { Switch } from '../../../../presentation/primitives/Switch';
 import { IconChevronDownOutline14, IconCopyOutline16, IconEditOutline16, IconEllipsisOutline16, IconGlobeOutline14, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
 import type { WorkspaceAuthority } from '../../../../workspaces/authority';
+import type { LibraryOperation } from '../../machines/library';
 import type { WorkflowSurfaceActor } from '../../machines/surface';
 import { USER_SCOPE, type WorkflowScope } from '../../port';
 import { IconFile, IconFolder, IconGrid, IconList } from '../icons';
@@ -70,6 +72,8 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   const [view, setView] = useState(readView);
   const chooseView = (next: 'cards' | 'list') => { setView(next); try { localStorage.setItem(VIEW, next); } catch { /* view preference only */ } };
   const modified = useModified();
+  const operationName = (operation: LibraryOperation) => operation.kind === 'enable' ? tx(operation.enabled ? 'workflows:library.operation-enable' : 'workflows:library.operation-disable')
+    : tx(`workflows:library.${operation.kind === 'create' ? 'new' : operation.kind}`);
 
   const workspace = scope.kind === 'workspace' ? workspaces.find(row => row.id === scope.workspaceId) : undefined;
   const labelOf = (shown: WorkflowScope) => shown.kind === 'user' ? tx('workflows:scope.global-files') : workspaces.find(row => row.id === shown.workspaceId)?.displayName ?? shown.workspaceId;
@@ -93,6 +97,16 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
     { type: 'separator' as const, id: 'separator' },
     { id: 'delete', label: tx('workflows:library.delete'), icon: <IconTrashOutline16 />, danger: true, disabled: !settled || !file.id || !file.revision },
   ];
+  // Enabled for Sessions: a Global file in every Workspace, a Workspace file
+  // in its own. A file that fails its check is off and cannot be switched.
+  const toggle = (file: WorkflowFileSummary) => {
+    const name = file.display?.title ?? file.id ?? file.file_name, off = failing(file);
+    const unconfigurable = !listing?.configuration_revision;
+    return <Switch label={tx('workflows:library.enable', { p0: name })} checked={file.enabled && !off}
+      disabled={!settled || !file.id || off || unconfigurable} className={css.enable}
+      title={tx(off ? 'workflows:library.enable-failing' : unconfigurable ? 'workflows:library.enable-unconfigurable' : scope.kind === 'user' ? 'workflows:library.enable-global' : 'workflows:library.enable-workspace')}
+      onChange={enabled => library.send({ type: 'ENABLE', file: file.file_name, enabled })} />;
+  };
   const act = (file: WorkflowFileSummary, action: string) => {
     if (action === 'edit') confirm('edit', file);
     else if (action === 'copy') confirm('copy', file);
@@ -113,6 +127,7 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
           <span className={css.fileTile}>{unreadable(file) ? <IconFile size={18} /> : <WorkflowIcon icon={file.display?.icon} />}</span>
           <span className={css.cardName}><span className={css.cardTitle}>{file.display?.title ?? file.id ?? file.file_name}</span>{file.display && <span className={css.cardId}>{file.id}</span>}</span>
         </button>
+        {toggle(file)}
         <CardMenu label={tx('workflows:library.actions', { p0: file.file_name })} items={actions(file)} onSelect={action => act(file, action)} />
       </div>
       <FileFacts file={file} />
@@ -120,11 +135,11 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
     </li>)}
   </ul>;
   else body = <table className={css.table}>
-    <thead><tr><th>{tx('workflows:library.column-file')}</th><th>{tx('workflows:library.column-description')}</th><th>{tx('workflows:library.column-location')}</th><th>{tx('workflows:library.column-modified')}</th><th aria-label={tx('workflows:library.actions', { p0: '' })} /></tr></thead>
+    <thead><tr><th>{tx('workflows:library.column-file')}</th><th>{tx('workflows:library.column-description')}</th><th>{tx('workflows:library.column-location')}</th><th>{tx('workflows:library.column-modified')}</th><th>{tx('workflows:library.column-enabled')}</th><th aria-label={tx('workflows:library.actions', { p0: '' })} /></tr></thead>
     <tbody>{files.map(file => <tr key={file.file_name}>
       <td><button type="button" className={css.rowOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision}><WorkflowIcon icon={unreadable(file) ? undefined : file.display?.icon} size={15} />{file.display?.title ?? file.id ?? file.file_name}</button></td>
       <td><FileFacts file={file} compact /></td>
-      <td><code>{file.relative_path}</code></td><td>{modified(file.modified_ms)}</td>
+      <td><code>{file.relative_path}</code></td><td>{modified(file.modified_ms)}</td><td>{toggle(file)}</td>
       <td><CardMenu label={tx('workflows:library.actions', { p0: file.file_name })} items={actions(file)} onSelect={action => act(file, action)} /></td>
     </tr>)}</tbody>
   </table>;
@@ -157,8 +172,8 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
     {listing && !(showingWorkspace && !workspace) && <p className={css.context}>{scopeLabel}<span aria-hidden> · </span>{listing.files.length === 1 ? tx('workflows:library.count-one') : tx('workflows:library.count', { p0: listing.files.length })}</p>}
     {operationFailure && <div className={css.banner} role="alert">
       {operationFailure.failure.kind === 'uncertain'
-        ? tx('workflows:library.operation-uncertain', { p0: tx(`workflows:library.${operationFailure.operation.kind === 'create' ? 'new' : operationFailure.operation.kind}`) })
-        : <FailureText failure={operationFailure.failure} operation={tx(`workflows:library.${operationFailure.operation.kind === 'create' ? 'new' : operationFailure.operation.kind}`)} />}
+        ? tx('workflows:library.operation-uncertain', { p0: operationName(operationFailure.operation) })
+        : <FailureText failure={operationFailure.failure} operation={operationName(operationFailure.operation)} />}
       {!confirmation && <Button size="sm" onClick={() => library.send({ type: 'DISMISS' })}>{tx('workflows:notice.dismiss')}</Button>}
     </div>}
     {body}
@@ -169,6 +184,8 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
 /** A file the editor cannot open: unparseable, or not a Workflow at all.
  * A parsed file the check rejects is an unfinished workflow instead. */
 const unreadable = (file: WorkflowFileSummary) => !!file.diagnostic && file.nodes == null;
+/** A file the check rejects, unreadable or unfinished: never enabled. */
+const failing = (file: WorkflowFileSummary) => !!file.diagnostic && !presentationWarning(file.diagnostic);
 
 function FileFacts({ file, compact }: { file: WorkflowFileSummary; compact?: boolean }) {
   const tx = useTranslation();

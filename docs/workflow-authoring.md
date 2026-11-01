@@ -247,6 +247,16 @@ prove that this transaction committed. The author can close the confirmation,
 inspect the current file and explicitly start a new operation; the old operation
 is never replayed.
 
+Each card carries a switch that enables the file for Sessions. The listing
+reports `enabled` per file (named by the scope's own `agent.workflows`) and the
+scope's `rustx.toml` revision (`configuration_revision`); the switch sends one
+`workflow_enabled` configuration mutation against that revision, directly for
+Global and through the Product Host for a Workspace, then lists again. A Global
+file is enabled in every Workspace, a Workspace file in its own. A file that
+fails its check shows off and cannot be switched; the runtime never admits it,
+so a file that fails after it was enabled is off until it is fixed. While the
+scope's `rustx.toml` does not parse there is no revision and no switch works.
+
 IDs follow the native `WorkflowId` rule. Paths are resolved by native code
 relative to the scope's admitted directory handle: traversal, absolute paths,
 symlinked directories or files and a scope redirected after admission are

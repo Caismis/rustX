@@ -267,8 +267,11 @@ pub enum ConfigMutation {
     Agents {
         authored: Option<Vec<crate::runtime::subagent::SubagentName>>,
     },
-    Workflows {
-        authored: Option<Vec<crate::runtime::workflow::WorkflowId>>,
+    /// Enable or disable one Workflow for this scope's Sessions: its
+    /// membership in `agent.workflows`, every other identity untouched.
+    WorkflowEnabled {
+        id: crate::runtime::workflow::WorkflowId,
+        enabled: bool,
     },
     AgentIdentity {
         authored: Option<crate::runtime::identity::AgentId>,
@@ -674,7 +677,15 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
                 .agent_status = authored;
         }
         M::Agents { authored } => document.agent.get_or_insert_default().agents = authored,
-        M::Workflows { authored } => document.agent.get_or_insert_default().workflows = authored,
+        M::WorkflowEnabled { id, enabled } => {
+            let agent = document.agent.get_or_insert_default();
+            let mut ids = agent.workflows.take().unwrap_or_default();
+            ids.retain(|item| *item != id);
+            if enabled {
+                ids.push(id);
+            }
+            agent.workflows = (!ids.is_empty()).then_some(ids);
+        }
         M::AgentIdentity { authored } => document.agent_id = authored,
         M::Description { authored } => {
             document.agent.get_or_insert_default().description = authored;
@@ -921,7 +932,7 @@ impl UserConfigManager {
             SourceTarget::Workspace { directory } => directory.join(".agents"),
         }
     }
-    pub(super) fn config_path(&self, target: &SourceTarget) -> PathBuf {
+    pub(in crate::local_runtime) fn config_path(&self, target: &SourceTarget) -> PathBuf {
         match target {
             SourceTarget::User => self.sources.config_path.clone(),
             SourceTarget::Workspace { directory } => directory.join("rustx.toml"),

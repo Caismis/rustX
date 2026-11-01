@@ -14354,25 +14354,25 @@
           ]
         },
         {
+          "description": "Enable or disable one Workflow for this scope's Sessions: its\nmembership in `agent.workflows`, every other identity untouched.",
           "type": "object",
           "properties": {
-            "authored": {
-              "type": [
-                "array",
-                "null"
-              ],
-              "items": {
-                "$ref": "#/$defs/WorkflowId"
-              }
+            "id": {
+              "$ref": "#/$defs/WorkflowId"
+            },
+            "enabled": {
+              "type": "boolean"
             },
             "unit": {
               "type": "string",
-              "const": "workflows"
+              "const": "workflow_enabled"
             }
           },
           "additionalProperties": false,
           "required": [
-            "unit"
+            "unit",
+            "id",
+            "enabled"
           ]
         },
         {
@@ -33314,6 +33314,13 @@
               "type": "null"
             }
           ]
+        },
+        "configuration_revision": {
+          "description": "The revision of the scope's `rustx.toml`, the CAS token of enabling\nor disabling a file; absent while that document does not parse.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,
@@ -33407,6 +33414,10 @@
         "shadows_global": {
           "description": "Informational: a Workspace file whose id also names a User (Global)\nfile, which it shadows in this Workspace. Edits never redirect.",
           "type": "boolean"
+        },
+        "enabled": {
+          "description": "Enabled for this scope's Sessions: named by the scope's own\n`agent.workflows`. A file that fails its check is never admitted.",
+          "type": "boolean"
         }
       },
       "additionalProperties": false,
@@ -33415,7 +33426,8 @@
         "relative_path",
         "revision",
         "byte_length",
-        "shadows_global"
+        "shadows_global",
+        "enabled"
       ]
     },
     "WorkflowDiagnostic": {

@@ -1255,7 +1255,10 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
     assert_eq!(counts, [0; 11]);
-    assert_eq!(report.exit_code(), 2);
+    // An enabled Workflow that fails its check stays off: a warning, never
+    // a configuration error.
+    assert_eq!(report.exit_code(), 3);
+    assert_eq!(report.diagnostics[0].classification, "warning");
     assert_eq!(report.diagnostics[0].file, Some(workflow));
     assert!(
         !report
@@ -1280,11 +1283,8 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
     assert_eq!(counts, [0; 11]);
-    assert_eq!(
-        report.exit_code(),
-        2,
-        "native compiler rejects the missing successor node"
-    );
+    assert_eq!(report.exit_code(), 3, "the rejected Workflow stays off");
+    assert_eq!(report.diagnostics[0].classification, "warning");
     assert_eq!(report.diagnostics[0].path, "block.edges.0.to");
     f.project(json!({}));
     std::fs::write(&model_path, "").unwrap();

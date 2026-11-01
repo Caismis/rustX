@@ -34,7 +34,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
 async function open(analyze: WorkflowScopePort['analyze'] = () => new Promise(() => {}), node = modelNode) {
   const port: WorkflowScopePort = {
-    endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' }, list: () => new Promise(() => {}),
+    endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' }, enable: () => new Promise(() => {}), list: () => new Promise(() => {}),
     analyze, toolCatalog: async () => ({ sources: [] }), modelChoices: async query => query.type === 'models' ? { type: 'models', revision: 'catalog-1', models: ['fixture/model'], next_offset: null } : { type: 'profiles', revision: 'catalog-1', model: query.model, profiles: ['low'], next_offset: null },
     read: async id => ({ ...source(node), id, revision: 'sha256:base' }), check: () => new Promise(() => {}),
     write: (_id, _revision, edit) => { writes.push(edit); return new Promise<WorkflowCommit>(() => {}); },

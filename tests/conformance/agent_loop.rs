@@ -221,6 +221,11 @@ impl Driver {
                 serde_yaml::to_string(&workflow).unwrap(),
             )
             .unwrap();
+            std::fs::write(
+                workspace.join("rustx.toml"),
+                "[agent]\nworkflows = [\"image_review\"]\n",
+            )
+            .unwrap();
         }
         std::fs::write(
             root.path().join("rustx.toml"),
@@ -839,7 +844,7 @@ fn session_json(setup: &Setup) -> String {
     }
     let mut document = serde_json::json!({
         "agent_id": "agent-issue47",
-        "agent": {"model": model, "skills": "all", "workflows": if setup.images { vec!["image_review"] } else { vec![] }, "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
+        "agent": {"model": model, "skills": "all", "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
         "context": {
             "reserve_tokens": setup.reserve_tokens,
             "keep_recent_tokens": setup.keep_recent_tokens,

@@ -64,7 +64,7 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
     case 'goal': return document.agent?.plugins?.goal;
     case 'agent_status': return document.agent?.plugins?.agent_status;
     case 'agents': return document.agent?.agents;
-    case 'workflows': return document.agent?.workflows;
+    case 'workflow_enabled': return document.agent?.workflows?.includes(unit.id);
     case 'agent_identity': return document.agent_id;
     case 'description': return document.agent?.description;
     case 'instructions': return document.agent?.instructions;
@@ -111,7 +111,7 @@ export function unitProvenancePath(mutation: SourceMutation): string | undefined
     case 'goal': return 'agent.plugins.goal';
     case 'agent_status': return 'agent.plugins.agent_status';
     case 'agents': return 'agent.agents';
-    case 'workflows': return 'agent.workflows';
+    case 'workflow_enabled': return 'agent.workflows';
     case 'agent_identity': return 'agent_id';
     case 'description': return 'agent.description';
     case 'instructions': return 'agent.instructions';

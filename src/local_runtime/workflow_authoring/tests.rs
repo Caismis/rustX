@@ -647,6 +647,59 @@ fn create_writes_the_native_minimal_program_and_never_overwrites() {
 }
 
 #[test]
+fn each_scope_enables_its_own_files_in_its_own_configuration() {
+    let roots = Roots::new();
+    let a = workspace(&roots.a);
+    roots.create(&SourceTarget::User, "daily", "Daily");
+    roots.create(&a, "local", "Local");
+    let enable = |target: &SourceTarget, expected: &str, name: &str, enabled: bool| {
+        roots.manager.write_source_settings(
+            target,
+            expected,
+            SourceMutation::Config {
+                mutation: super::super::configuration::settings::ConfigMutation::WorkflowEnabled {
+                    id: id(name),
+                    enabled,
+                },
+            },
+        )
+    };
+    let enabled = |target: &SourceTarget| {
+        let library = roots.manager.workflow_library(target).unwrap();
+        let ids = library
+            .files
+            .iter()
+            .filter(|file| file.enabled)
+            .map(|file| file.file_name.clone())
+            .collect::<Vec<_>>();
+        (library.configuration_revision.unwrap(), ids)
+    };
+    let (user, none) = enabled(&SourceTarget::User);
+    assert!(none.is_empty());
+    let user = enable(&SourceTarget::User, &user, "daily", true).unwrap();
+    assert_eq!(
+        enabled(&SourceTarget::User),
+        (user.clone(), vec!["daily.yaml".into()])
+    );
+    // The Workspace has no configuration yet; enabling creates it, and its
+    // listing names only its own files.
+    let (missing, none) = enabled(&a);
+    assert_eq!((missing.as_str(), none.len()), ("missing", 0));
+    let local = enable(&a, "missing", "local", true).unwrap();
+    assert_eq!(enabled(&a), (local, vec!["local.yaml".into()]));
+    assert!(enabled(&workspace(&roots.b)).1.is_empty());
+    // A stale revision is a conflict; disabling keeps the rest of the file.
+    assert!(matches!(
+        enable(&SourceTarget::User, "missing", "daily", false),
+        Err(SettingsError::Conflict { .. })
+    ));
+    let user = enable(&SourceTarget::User, &user, "daily", false).unwrap();
+    assert_eq!(enabled(&SourceTarget::User), (user, vec![]));
+    let text = std::fs::read_to_string(roots.home.join("rustx/rustx.toml")).unwrap();
+    assert!(text.contains("[models.a]") && !text.contains("workflows"));
+}
+
+#[test]
 fn create_records_display_for_people_apart_from_the_model_description() {
     let roots = Roots::new();
     let target = workspace(&roots.a);
@@ -1256,6 +1309,7 @@ fn one_listing_entry_is_reduced_to_its_share_without_losing_its_identity() {
             )
         }),
         shadows_global: false,
+        enabled: false,
     };
     assert!(serde_json::to_vec(&summary).unwrap().len() > MAX_LISTED_ENTRY_BYTES);
     let fitted = fit_listing_share(summary);
