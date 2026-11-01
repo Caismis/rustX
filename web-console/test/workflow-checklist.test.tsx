@@ -40,6 +40,17 @@ it('adds the native check\'s problem only where no message names one already', (
   expect(checklist(document, invalid('description', 'description is empty')).at(-1)).toMatchObject({ node: undefined, messages: [{ text: { kind: 'native', reason: 'description is empty' }, field: 'description' }] });
 });
 
+it('words why the native admission blocks a node', () => {
+  const blocked: WorkflowCheckReport = { revision: 'sha256:x', structure: { status: 'valid', outputs: {} }, dependencies: { status: 'blocked', context: 'workspace', diagnostics: [
+    { path: 'block.nodes.start', reason: { kind: 'tool', detail: { kind: 'source_unavailable', selector: 'exa/web_fetch_exa', source: 'exa', reason: { kind: 'unprepared' } } } },
+  ] } };
+  const start = checklist(document, blocked).find(item => item.node === 'start')!;
+  expect(start.messages).toEqual([{ text: { kind: 'dependency', failure: blocked.dependencies.status === 'blocked' && blocked.dependencies.diagnostics[0].reason }, field: undefined }]);
+  render(<Checklist items={[start]} onGo={() => {}} />);
+  fireEvent.click(screen.getByRole('button', { name: /Checklist/ }));
+  expect(screen.getByText('Tool source exa is not connected yet')).toBeTruthy();
+});
+
 it('changes a node in place, keeping its incoming connection and its ordinary exit', () => {
   const branched: WorkflowDocument = { ...document, block: { ...document.block, edges: [...document.block.edges!, { from: 'llm', port: 'fail', to: 'stray' }] } };
   const changed = changeNode(branched, [], 'llm', 'branch');

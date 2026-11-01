@@ -82,7 +82,7 @@ export function ToolsPage({ source, document, scope, revision }: {
     <h4>{tx('settings:tools-page.delegation')}</h4>
     <UnitForm<string[]> title={tx('settings:extension-detail.agent-allowlist')} authored={agent?.agents ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'agents', authored } })}>
-      {(value, change) => <Names label="agents" value={value} change={change} />}
+      {(value, change) => <Names label={/* i18n-raw: the authored config key */ 'agents'} value={value} change={change} />}
     </UnitForm>
     <p className={css.hint}>{tx('settings:extension-detail.workflow-enabled-in-library')}</p>
     <AgentControls composed={source.prospective_resources?.main?.agent_controls.map(tool => tool.name)} />

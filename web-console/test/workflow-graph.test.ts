@@ -104,6 +104,22 @@ it('organizes sibling paths through ELK without changing execution', async () =>
 });
 
 
+it('lines up the handles an edge joins, not the cards\' centres, as Dify\'s organize', async () => {
+  const document: WorkflowDocument = { description: 'Chain', block: { nodes: {
+    start: { type: 'start' }, fetch: { type: 'tool', selector: { origin: 'builtin', name: 'bash' }, arguments: { type: 'literal', value: {} }, result: { type: 'text' } }, done: { type: 'return', outputs: [] },
+  }, edges: [{ from: 'start', to: 'fetch' }, { from: 'fetch', to: 'done' }] } };
+  const start = viewId([], 'start'), fetch = viewId([], 'node', 'fetch'), done = viewId([], 'node', 'done');
+  const measured = new Map([
+    [start, { width: 240, height: 90, handles: new Map([['next', 60]]) }],
+    [fetch, { width: 240, height: 200, handles: new Map([['in', 28], ['next', 28]]) }],
+    [done, { width: 240, height: 60, handles: new Map([['in', 28]]) }],
+  ]);
+  const scene = projectScene(await organizeDocument(document, measured));
+  const top = (id: string) => scene.nodes.find(node => node.id === id)!.position.y;
+  expect(top(start) + 60).toBe(top(fetch) + 28);
+  expect(top(fetch) + 28).toBe(top(done) + 28);
+});
+
 it('keeps surviving CASE exits stable when an earlier case is removed', () => {
   let document = addNode(graph(), [], 'branch', 'choose');
   document = addBranchCase(addBranchCase(document, [], 'choose'), [], 'choose');

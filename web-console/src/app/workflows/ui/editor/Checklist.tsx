@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import { useRef, useState } from 'react';
 import { useTranslation } from '../../../../locale/react';
 import { IconChecklistOutline14, IconCloseOutline16 } from '../../../../presentation/primitives/icons';
+import type { WorkflowDependencyFailure } from '../../../../../../protocol/app-server/v62';
 import type { ChecklistItem, ChecklistMessage } from '../../document/checklist';
 import { IconArrowLeft, IconWorkflow, KindIcon } from '../icons';
 import css from './Editor.module.css';
@@ -18,7 +19,7 @@ export function Checklist({ items, onGo }: { items: readonly ChecklistItem[]; on
   const label = tx('workflows:checklist.title');
   const text = ({ text }: ChecklistMessage) => text.kind === 'required'
     ? tx('workflows:checklist.required', { p0: tx(text.field === 'if' ? 'workflows:branch.if' : text.field === 'elif' ? 'workflows:branch.elif' : `workflows:checklist.field-${text.field}`) })
-    : text.kind === 'unconnected' ? tx('workflows:checklist.unconnected') : text.reason;
+    : text.kind === 'unconnected' ? tx('workflows:checklist.unconnected') : text.kind === 'dependency' ? dependency(tx, text.failure) : text.reason;
   const title = (item: ChecklistItem) => item.node === undefined ? tx('workflows:checklist.workflow')
     : item.type === 'start' ? item.title || tx(item.block.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : item.title || item.node;
   return <Popover.Root open={open} onOpenChange={next => { if (next) going.current = false; setOpen(next); }}>
@@ -47,4 +48,36 @@ export function Checklist({ items, onGo }: { items: readonly ChecklistItem[]; on
       </> : <p className={css.checklistResolved}><IconChecklistOutline14 />{tx('workflows:checklist.resolved')}</p>}
     </Popover.Popup></Popover.Positioner></Popover.Portal>
   </Popover.Root>;
+}
+
+/** Why the native admission blocks a node, in the author's words. */
+function dependency(tx: ReturnType<typeof useTranslation>, failure: WorkflowDependencyFailure): string {
+  const tool = (error: Extract<WorkflowDependencyFailure, { kind: 'tool' }>['detail']) => {
+    switch (error.kind) {
+      case 'source_unavailable': return tx(`workflows:checklist.dependency-source-${error.reason.kind}`, { p0: error.source });
+      case 'exact_tool_absent': return tx('workflows:checklist.dependency-tool-absent', { p0: error.source, p1: error.name });
+      case 'unknown_capability': return tx('workflows:checklist.dependency-unknown-tool', { p0: error.selector });
+    }
+  };
+  switch (failure.kind) {
+    case 'not_admitted': return tx('workflows:checklist.dependency-not-admitted');
+    case 'model': return tx('workflows:checklist.dependency-model', { p0: failure.detail.reason });
+    case 'materialization': return tx('workflows:checklist.dependency-materialization');
+    case 'tool': return tool(failure.detail);
+    case 'ineligible_tool': return tx('workflows:checklist.dependency-ineligible-tool', { p0: failure.detail.origin === 'source' ? `${failure.detail.source_id}/${failure.detail.name}` : failure.detail.name });
+    case 'agent': {
+      const agent = failure.detail;
+      switch (agent.kind) {
+        case 'host_tool_suppressed': return tx('workflows:checklist.dependency-host-tool', { p0: agent.detail.name });
+        case 'tool': return tool(agent.detail);
+        case 'skill_unavailable': return tx('workflows:checklist.dependency-skill', { p0: agent.detail.name });
+        case 'agent_unavailable': return tx('workflows:checklist.dependency-agent', { p0: agent.detail.name });
+        case 'workflow_unavailable': return tx('workflows:checklist.dependency-workflow', { p0: agent.detail.id });
+        case 'scope_unsupported': {
+          const capability = agent.detail.capability;
+          return tx('workflows:checklist.dependency-scope', { p0: capability.kind === 'goal' ? tx('workflows:checklist.dependency-goal') : capability.identity });
+        }
+      }
+    }
+  }
 }

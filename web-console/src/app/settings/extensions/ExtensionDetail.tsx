@@ -295,7 +295,7 @@ function RootAvailability({ source, scope, revision, family, name }: ExtensionDe
         mutation={authored => ({ kind: 'config', mutation: { unit: 'agents', authored } })}>
         {(value, change) => <>
           <MembershipToggle name={name} value={value} change={change} />
-          <Names label="agents" value={value} change={change} />
+          <Names label={/* i18n-raw: the authored config key */ 'agents'} value={value} change={change} />
         </>}
       </UnitForm>
     </section>;

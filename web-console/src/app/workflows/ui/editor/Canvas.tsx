@@ -304,7 +304,11 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     const owner = currentState(), document = owner.document; if (!document) return;
     setOrganizing(true); setMessage(undefined);
     try {
-      const sizes = new Map(flow.getNodes().map(node => [node.id, { width: node.measured?.width ?? node.width ?? 256, height: node.measured?.height ?? node.height ?? 128 }]));
+      const sizes = new Map(flow.getNodes().map(node => {
+        const bounds = flow.getInternalNode(node.id)?.internals.handleBounds;
+        const handles = new Map([...bounds?.source ?? [], ...bounds?.target ?? []].flatMap(handle => handle.id ? [[handle.id, handle.y + handle.height / 2] as const] : []));
+        return [node.id, { width: node.measured?.width ?? node.width ?? 256, height: node.measured?.height ?? node.height ?? 128, handles }];
+      }));
       const result = await session.current.run(owner, currentState, () => organizeDocument(document, sizes));
       if (result) edit(current => current === document && currentState().generation === owner.generation ? result : current);
     } catch { setMessage(tx('workflows:canvas.layout-failed')); }

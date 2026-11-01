@@ -1,4 +1,4 @@
-import type { WorkflowCheckReport } from '../../../../../protocol/app-server/v62';
+import type { WorkflowCheckReport, WorkflowDependencyFailure } from '../../../../../protocol/app-server/v62';
 import { locate } from './diagnostics';
 import { nodePresentation } from './geometry';
 import { blockAt, blockKey, childSteps, edgesOf, isContainer, nodeAt, startOf, type Block, type BlockPath, type NodeDefinition, type Value, type WorkflowDocument } from './model';
@@ -6,8 +6,9 @@ import { blockAt, blockKey, childSteps, edgesOf, isContainer, nodeAt, startOf, t
 /** One problem, as Dify's checklist shows it: what is wrong, and the field
  * a go-to-fix focuses. */
 export interface ChecklistMessage {
-  /** A required field, by its Dify label key, or a native reason as written. */
-  readonly text: { kind: 'required'; field: ChecklistField } | { kind: 'unconnected' } | { kind: 'native'; reason: string };
+  /** A required field, by its Dify label key, a native reason as written,
+   * or a typed dependency failure the editor words. */
+  readonly text: { kind: 'required'; field: ChecklistField } | { kind: 'unconnected' } | { kind: 'native'; reason: string } | { kind: 'dependency'; failure: WorkflowDependencyFailure };
   readonly field?: string;
 }
 export type ChecklistField = 'model' | 'prompt' | 'agent' | 'task' | 'tool' | 'input' | 'output' | 'assigned' | 'variable' | 'value' | 'if' | 'elif';
@@ -89,14 +90,14 @@ export function checklist(document: WorkflowDocument, report?: WorkflowCheckRepo
   walk(document.block, []);
   // The native check names its first problem. A node already listed keeps
   // its own messages: they name the same problem in the author's words.
-  const native = (path: string, reason: string) => {
+  const native = (path: string, text: ChecklistMessage['text']) => {
     const location = locate(path), key = keyOf(location.block, location.node);
     if (location.node && !lookup(document, location.block, location.node)) return;
     if (items.get(key)?.messages.length) return;
-    itemFor(location.block, location.node).messages.push({ text: { kind: 'native', reason }, field: location.field });
+    itemFor(location.block, location.node).messages.push({ text, field: location.field });
   };
-  if (report?.structure.status === 'invalid') native(report.structure.diagnostic.path, report.structure.diagnostic.reason);
-  if (report?.dependencies.status === 'blocked') for (const item of report.dependencies.diagnostics) native(item.path, item.reason.kind.replaceAll('_', ' '));
+  if (report?.structure.status === 'invalid') native(report.structure.diagnostic.path, { kind: 'native', reason: report.structure.diagnostic.reason });
+  if (report?.dependencies.status === 'blocked') for (const item of report.dependencies.diagnostics) native(item.path, { kind: 'dependency', failure: item.reason });
   return [...items.values()].filter(item => item.messages.length);
 }
 
