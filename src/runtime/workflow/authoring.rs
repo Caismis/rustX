@@ -190,9 +190,7 @@ pub fn declared_output(
             output.schema()
         }
         WorkflowNodeDefinition::Agent { output, routes, .. } => {
-            if let Some(schema) = output.structured() {
-                validate_root_schema(schema, "output.schema")?;
-            }
+            super::validate_agent_output(output, routes, "candidate")?;
             super::agent_value_schema(output, routes)
         }
         WorkflowNodeDefinition::Tool { result, .. } => {
@@ -887,27 +885,30 @@ fn declare(block: &WorkflowBlock, declarations: &mut SchemaMap) -> BTreeMap<Stri
         }
     }
     declarations.0.extend(declared.clone());
-    for (id, node) in &block.nodes {
+    let order = control_flow(block).map_or_else(
+        |_| block.nodes.keys().cloned().collect(),
+        |flow| flow.topological,
+    );
+    for id in order {
+        let node = &block.nodes[&id];
         if let WorkflowNodeDefinition::Iteration {
-            output: WorkflowValue::Reference { path },
+            output,
             error_handle_mode,
             flatten_output,
             ..
         } = node
-            && let Some((own, fields)) = path.split_first()
-            && own == id
-            && let Some((_, entry)) = container(node, declarations)
-            && let Some(produced) = fields
-                .iter()
-                .try_fold(&entry, |schema, field| schema.get("properties")?.get(field))
+            && let Some((body, entry)) = container(node, declarations)
         {
+            let mut inside = declarations.with_prefix(&id, &entry);
+            declare(body, &mut inside);
+            let produced = super::value_schema(output, &inside, &id, 0).ok();
             let schema = super::execution::iteration_result_schema(
-                Some(produced),
+                produced.as_ref(),
                 *error_handle_mode,
                 *flatten_output,
             );
             declarations.0.insert(id.clone(), schema.clone());
-            declared.insert(id.clone(), schema);
+            declared.insert(id, schema);
         }
     }
     declared

@@ -133,6 +133,8 @@ function ToolArgument({ name, schema, required, value, set, tool, edit }: PanelP
   const description = typeof schema.description === 'string' ? schema.description : undefined;
   const constant = value?.type === 'literal' ? value.value : undefined;
   const variable = value?.type === 'reference';
+  const options = kind === 'enum' ? schema.enum as string[] : [];
+  const selected = typeof constant === 'string' ? options.indexOf(constant) : -1;
   return <div className={css.toolArgument}>
     <div className={css.toolArgumentHead}><b>{name}</b>{required && <span className={css.required} aria-label={tx('workflows:tool.required')}>*</span>}</div>
     {description && <p className={css.toolArgumentAbout}>{description}</p>}
@@ -151,9 +153,9 @@ function ToolArgument({ name, schema, required, value, set, tool, edit }: PanelP
         </div>
         {variable ? <ReferencePicker address={address} path={value.path} edit={edit} placeholder={tx('workflows:branch.select-variable')} onChoose={choice => set(name, { type: 'reference', path: choice.path })} />
           : kind === 'boolean' ? <span className={css.toolBoolean}><Switch checked={constant === true} label={name} onChange={on => set(name, { type: 'literal', value: on })} /></span>
-            : kind === 'enum' ? <select className={css.input} aria-label={name} value={typeof constant === 'string' ? constant : ''} onChange={event => set(name, event.target.value ? { type: 'literal', value: event.target.value } : undefined)}>
+            : kind === 'enum' ? <select className={css.input} aria-label={name} value={selected < 0 ? '' : String(selected)} aria-invalid={required && !value || undefined} onChange={event => set(name, event.target.value === '' ? undefined : { type: 'literal', value: options[Number(event.target.value)] })}>
               <option value="">{tx('workflows:tool.unset')}</option>
-              {(schema.enum as string[]).map(item => <option key={item} value={item}>{item}</option>)}
+              {options.map((item, index) => <option key={item} value={index}>{item || '""'}</option>)}
             </select>
               : <ConstantInput kind={kind} name={name} value={constant} invalid={required && !value}
                 wrapped={tool.node.arguments.type !== 'literal'} address={tool.node.arguments.type === 'literal' ? tool.at('arguments', 'value', { key: name }) : address} />}

@@ -211,7 +211,11 @@ pub(super) fn evaluate_value(
             let mut value = if first == "args" {
                 Some(input)
             } else {
-                values.get(first)
+                Some(
+                    values
+                        .get(first)
+                        .ok_or_else(|| WorkflowRunError::UncommittedReference(path.clone()))?,
+                )
             };
             for key in &path[1..] {
                 value = value.and_then(|value| value.get(key));
@@ -380,7 +384,7 @@ mod tests {
         assert!(evaluate_predicate(&predicate, &Value::Null, &values).unwrap());
         assert!(matches!(
             evaluate_value(&reference(&["missing"]), &Value::Null, &values),
-            Err(WorkflowRunError::InvalidValue(detail)) if detail.contains("uncommitted reference")
+            Err(WorkflowRunError::UncommittedReference(path)) if path == ["missing"]
         ));
     }
 

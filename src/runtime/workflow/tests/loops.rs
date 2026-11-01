@@ -546,6 +546,7 @@ fn an_iteration_output_follows_its_rounds_value() {
 /// Each admitted Tool reports entry and waits on its own gate. Neither
 /// completion order nor the Workflow's terminal boundary depends on sleeps.
 struct RoundGates {
+    fail: bool,
     entered: tokio::sync::mpsc::UnboundedSender<usize>,
     gates: [tokio::sync::Semaphore; 2],
     finished: AtomicUsize,
@@ -565,6 +566,13 @@ impl ToolExecutor for RoundGates {
                 self.entered.send(index).unwrap();
                 self.gates[index].acquire().await.unwrap().forget();
                 self.finished.fetch_add(1, Ordering::SeqCst);
+                if !self.fail {
+                    let mut result = terminal(ToolExecutionStatus::Success);
+                    result.content = vec![ToolResultContent::Json {
+                        value: json!({"passed":true,"label":"gate"}),
+                    }];
+                    return result;
+                }
                 terminal(if index == 0 {
                     ToolExecutionStatus::Failed {
                         error: "known failure".into(),
@@ -589,6 +597,7 @@ async fn parallel_round_failures_preserve_uncertainty_in_both_completion_orders(
         let mut changes = read_model.subscribe();
         let (entered, mut entries) = tokio::sync::mpsc::unbounded_channel();
         let gates = Arc::new(RoundGates {
+            fail: true,
             entered,
             gates: std::array::from_fn(|_| tokio::sync::Semaphore::new(0)),
             finished: AtomicUsize::new(0),
@@ -1263,5 +1272,284 @@ async fn a_merge_budget_failure_drains_admitted_native_work_and_closes_queued_ad
         &read_model,
         "c_y",
         WorkflowExecutionOutcome::Failed,
+    );
+}
+
+#[tokio::test]
+async fn initial_loop_condition_errors_cannot_start_a_round_or_be_hidden_by_exit_loop() {
+    for tool in [false, true] {
+        let mut body = json!({"nodes":{"start":{"type":"start"},"exit":{"type":"loop_end"}},"edges":[{"from":"start","to":"exit"}]});
+        if tool {
+            body["nodes"]["effect"] = check_node(
+                &json!({"type":"literal","value":{"passed":true,"label":"must not start"}}),
+            );
+            body["edges"] = json!([{"from":"start","to":"effect"},{"from":"effect","to":"exit"}]);
+        }
+        let definition = around(
+            "repeat",
+            &schema(json!({"payload":{"type":"string"}}), &["payload"]),
+            &schema(json!({}), &[]),
+            &json!({"type":"loop","loop_count":1,"break_condition":{"type":"equal","left":{"type":"template","parts":[path(&["args","payload"]),path(&["args","payload"])]},"right":{"type":"literal","value":""}},"body":body}),
+        );
+        let plane = workflow_test_plane(1);
+        let runtime = workflow_runtime(&plane);
+        let observations = runtime.observations.subscribe();
+        let executor = checker(1);
+        let result = run(
+            &plane,
+            runtime,
+            executor.clone(),
+            definition,
+            json!({"payload":"x".repeat(40_000)}),
+        )
+        .await;
+        assert!(matches!(result, Err(WorkflowRunError::InvalidValue(_))));
+        assert_eq!(executor.starts.load(Ordering::SeqCst), 0);
+        assert!(
+            !observations
+                .borrow()
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::WorkflowLoopIterationAdmitted { .. }))
+        );
+    }
+}
+
+#[tokio::test]
+async fn nested_iterations_keep_compiled_item_types_at_round_completion() {
+    for (output, expected) in [
+        (path(&["inner", "item"]), json!(["a", "b", "a", "b"])),
+        (path(&["inner", "index"]), json!([0, 1, 0, 1])),
+        (
+            path(&["args", "items"]),
+            json!(["a", "b", "a", "b", "a", "b", "a", "b"]),
+        ),
+        (path(&["outer", "item"]), json!(["a", "a", "b", "b"])),
+        (
+            path(&["args", "payload"]),
+            json!(["fixed", "fixed", "fixed", "fixed"]),
+        ),
+    ] {
+        let mut definition = around(
+            "outer",
+            &schema(
+                json!({"items":{"type":"array","items":{"type":"string"}},"payload":{"type":"string"}}),
+                &["items", "payload"],
+            ),
+            &schema(json!({"output":{"type":"array"}}), &["output"]),
+            &json!({"type":"iteration","iterator":path(&["args","items"]),"output":path(&["inner","output"]),"body":{"nodes":{"start":{"type":"start"},"inner":{"type":"iteration","iterator":path(&["args","items"]),"output":output,"body":{"nodes":{"start":{"type":"start"}}}}},"edges":[{"from":"start","to":"inner"}]}}),
+        );
+        definition.block.nodes.insert("after".into(), serde_json::from_value(json!({"type":"iteration","iterator":path(&["outer","output"]),"output":path(&["after","item"]),"body":{"nodes":{"start":{"type":"start"}}}})).unwrap());
+        definition.block.nodes.insert("done".into(),serde_json::from_value(json!({"type":"return","outputs":[{"variable":"output","value_selector":["after","output"]}]})).unwrap());
+        definition.block.edges = vec![
+            edge("workflow_start", "outer"),
+            edge("outer", "after"),
+            edge("after", "done"),
+        ];
+        let program = compile_test(definition.clone()).unwrap();
+        assert!(
+            program.node_outputs()["block.nodes.outer"]["properties"]["output"]
+                .get("items")
+                .is_some()
+        );
+        let query: authoring::WorkflowAnalysisQuery = serde_json::from_value(json!({
+            "consumer":{"address":{"block":[],"node":"after"},"field":{"kind":"iteration_iterator"},"path":[]},
+            "search":"","reference":["outer","output"],"limit":128
+        })).unwrap();
+        let analysis = authoring::analyze(&definition, Some(&query), &BTreeSet::new()).unwrap();
+        let selected = analysis.selected.unwrap();
+        assert_eq!(
+            selected.availability,
+            authoring::WorkflowReferenceAvailability::Available
+        );
+        assert!(selected.schema.unwrap().get("items").is_some());
+        assert!(analysis.references.iter().any(|choice| {
+            choice.path == ["outer", "output"]
+                && choice
+                    .schema
+                    .as_ref()
+                    .is_some_and(|schema| schema.get("items").is_some())
+        }));
+        let plane = workflow_test_plane(1);
+        let result = run(
+            &plane,
+            workflow_runtime(&plane),
+            checker(1),
+            definition,
+            json!({"items":["a","b"],"payload":"fixed"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, json!({"output":expected}));
+    }
+}
+
+#[test]
+fn unordered_loop_reads_require_an_edge_or_exclusive_activation() {
+    let readers = [
+        check_node(
+            &json!({"type":"object","fields":{"passed":path(&["repeat","x"]),"label":{"type":"literal","value":"read"}}}),
+        ),
+        check_node(&path(&["repeat"])),
+        json!({"type":"branch","cases":[{"id":"yes","condition":{"type":"boolean","value":path(&["repeat","x"])}}]}),
+        json!({"type":"model","model":{"mode":"session"},"messages":[{"role":"system","content":[{"type":"literal","value":"Read input"}]},{"role":"user","content":[path(&["repeat","x"])]}],"output":{"type":"text"}}),
+        json!({"type":"loop","loop_count":1,"loop_variables":[{"label":"local","var_type":"boolean","value":path(&["repeat","x"])}],"body":{"nodes":{"start":{"type":"start"}}}}),
+        json!({"type":"iteration","iterator":path(&["args","items"]),"output":path(&["repeat","x"]),"body":{"nodes":{"start":{"type":"start"}}}}),
+    ];
+    for reader in readers {
+        let mut definition = around(
+            "repeat",
+            &schema(
+                json!({"items":{"type":"array","items":{"type":"string"}}}),
+                &["items"],
+            ),
+            &schema(json!({}), &[]),
+            &json!({"type":"loop","loop_count":1,"loop_variables":[{"label":"x","var_type":"boolean","value":{"type":"literal","value":false}}],"body":{"nodes":{"start":{"type":"start"},"write":{"type":"assigner","items":[{"variable":["repeat","x"],"operation":"set","value":{"type":"literal","value":true}}]},"read":reader},"edges":[{"from":"start","to":"write"},{"from":"start","to":"read"}]}}),
+        );
+        assert!(
+            compile_test(definition.clone())
+                .unwrap_err()
+                .to_string()
+                .contains("read and write")
+        );
+        let WorkflowNodeDefinition::Loop { body, .. } =
+            definition.block.nodes.get_mut("repeat").unwrap()
+        else {
+            unreachable!()
+        };
+        body.edges.push(edge("write", "read"));
+        assert!(compile_test(definition.clone()).is_ok(), "{reader}");
+        let WorkflowNodeDefinition::Loop { body, .. } =
+            definition.block.nodes.get_mut("repeat").unwrap()
+        else {
+            unreachable!()
+        };
+        body.nodes.insert("choose".into(),serde_json::from_value(json!({"type":"branch","cases":[{"id":"yes","condition":{"type":"boolean","value":{"type":"literal","value":true}}}]})).unwrap());
+        body.edges = vec![
+            edge("start", "choose"),
+            branch_edge("choose", "write", WorkflowPort::case("yes")),
+            branch_edge("choose", "read", WorkflowPort::False),
+        ];
+        assert!(compile_test(definition).is_ok());
+    }
+}
+
+#[tokio::test]
+async fn explicit_loop_read_dependencies_are_deterministic_in_both_tool_completion_orders() {
+    for first in [0, 1] {
+        let mut definition = around(
+            "repeat",
+            &schema(json!({}), &[]),
+            &schema(json!({"y":{"type":"boolean"}}), &["y"]),
+            &json!({"type":"loop","loop_count":1,"loop_variables":[
+                {"label":"x","var_type":"boolean","value":{"type":"literal","value":false}},
+                {"label":"y","var_type":"boolean","value":{"type":"literal","value":false}}],
+                "body":{"nodes":{"start":{"type":"start"},
+                    "a_tool":check_node(&json!({"type":"literal","value":{"passed":true,"label":"known"}})),
+                    "b_tool":check_node(&json!({"type":"literal","value":{"passed":true,"label":"unknown"}})),
+                    "a_write":{"type":"assigner","items":[{"variable":["repeat","x"],"operation":"set","value":{"type":"literal","value":true}}]},
+                    "b_copy":{"type":"assigner","items":[{"variable":["repeat","y"],"operation":"set","value":path(&["repeat","x"])}]}},
+                    "edges":[{"from":"start","to":"a_tool"},{"from":"start","to":"b_tool"},{"from":"a_tool","to":"a_write"},{"from":"b_tool","to":"b_copy"}]}}),
+        );
+        assert!(
+            compile_test(definition.clone())
+                .unwrap_err()
+                .to_string()
+                .contains("read and write")
+        );
+        let WorkflowNodeDefinition::Loop { body, .. } =
+            definition.block.nodes.get_mut("repeat").unwrap()
+        else {
+            unreachable!()
+        };
+        body.edges.push(edge("a_write", "b_copy"));
+        let (entered, mut arrivals) = tokio::sync::mpsc::unbounded_channel();
+        let gates = Arc::new(RoundGates {
+            fail: false,
+            entered,
+            gates: std::array::from_fn(|_| tokio::sync::Semaphore::new(0)),
+            finished: AtomicUsize::new(0),
+        });
+        let plane = workflow_test_plane(1);
+        let runtime = workflow_runtime(&plane);
+        let mut observations = runtime.observations.subscribe();
+        let task = tokio::spawn({
+            let gates = gates.clone();
+            async move { run(&plane, runtime, gates, definition, json!({})).await }
+        });
+        let mut admitted = [
+            arrivals.recv().await.unwrap(),
+            arrivals.recv().await.unwrap(),
+        ];
+        admitted.sort_unstable();
+        assert_eq!(admitted, [0, 1]);
+        gates.gates[first].add_permits(1);
+        let settled = if first == 0 { "a_write" } else { "b_tool" };
+        while !observations.borrow().iter().any(|event| matches!(event,RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node==settled)) {
+            observations.changed().await.unwrap();
+        }
+        assert!(!task.is_finished());
+        gates.gates[1 - first].add_permits(1);
+        assert_eq!(task.await.unwrap().unwrap(), json!({"y":true}));
+        assert_eq!(gates.finished.load(Ordering::SeqCst), 2);
+    }
+}
+
+#[tokio::test]
+async fn a_loop_condition_waits_only_for_its_uncommitted_body_producer() {
+    let definition = around(
+        "repeat",
+        &schema(json!({}), &[]),
+        &schema(json!({}), &[]),
+        &json!({"type":"loop","loop_count":2,"break_condition":{"type":"boolean","value":path(&["check","passed"])},
+            "body":{"nodes":{"start":{"type":"start"},"check":check_node(&json!({"type":"literal","value":{"passed":true,"label":"first"}}))},"edges":[{"from":"start","to":"check"}]}}),
+    );
+    let plane = workflow_test_plane(1);
+    let executor = checker(1);
+    let result = run(
+        &plane,
+        workflow_runtime(&plane),
+        executor.clone(),
+        definition,
+        json!({}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, json!({}));
+    assert_eq!(executor.starts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn nested_iteration_types_keep_inherited_loop_variables() {
+    let definition = around(
+        "repeat",
+        &schema(
+            json!({"items":{"type":"array","items":{"type":"string"}},"payload":{"type":"string"}}),
+            &["items", "payload"],
+        ),
+        &schema(json!({}), &[]),
+        &json!({"type":"loop","loop_count":1,"loop_variables":[{"label":"tag","var_type":"string","value":path(&["args","payload"])}],
+            "body":{"nodes":{"start":{"type":"start"},
+                "outer":{"type":"iteration","iterator":path(&["args","items"]),"output":path(&["inner","output"]),
+                    "body":{"nodes":{"start":{"type":"start"},"inner":{"type":"iteration","iterator":path(&["args","items"]),"output":path(&["repeat","tag"]),"body":{"nodes":{"start":{"type":"start"}}}}},"edges":[{"from":"start","to":"inner"}]}},
+                "after":{"type":"iteration","iterator":path(&["outer","output"]),"output":path(&["after","item"]),"body":{"nodes":{"start":{"type":"start"}}}}},
+                "edges":[{"from":"start","to":"outer"},{"from":"outer","to":"after"}]}}),
+    );
+    let program = compile_test(definition.clone()).unwrap();
+    assert_eq!(
+        program.node_outputs()["block.nodes.repeat.body.nodes.outer"]["properties"]["output"]["items"],
+        json!({"type":"string"})
+    );
+    let plane = workflow_test_plane(1);
+    assert_eq!(
+        run(
+            &plane,
+            workflow_runtime(&plane),
+            checker(1),
+            definition,
+            json!({"items":["a","b"],"payload":"fixed"})
+        )
+        .await
+        .unwrap(),
+        json!({})
     );
 }

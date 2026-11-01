@@ -37,7 +37,7 @@ function predicate(input: Predicate, rewrite: PathRewrite): Predicate {
  * in Dify, a body reads the variables around it and node IDs never hide one
  * another, so one rewrite covers the whole subtree. An Assigner's written
  * variable is a path too. */
-function node(input: NodeDefinition, rewrite: PathRewrite): NodeDefinition {
+function node(input: NodeDefinition, rewrite: PathRewrite, producer?: string): NodeDefinition {
   switch (input.type) {
     case 'start': case 'loop_end': return input;
     case 'agent': return { ...input, task: input.task.map(part => value(part, rewrite)) };
@@ -45,17 +45,26 @@ function node(input: NodeDefinition, rewrite: PathRewrite): NodeDefinition {
     case 'tool': return { ...input, arguments: value(input.arguments, rewrite) };
     case 'branch': return { ...input, cases: input.cases.map(item => ({ ...item, condition: predicate(item.condition, rewrite) })) };
     case 'review': return { ...input, content: input.content.map(part => value(part, rewrite)) };
-    case 'loop': return { ...input, loop_variables: input.loop_variables?.map(item => ({ ...item, value: value(item.value, rewrite) })),
-      ...(input.break_condition ? { break_condition: predicate(input.break_condition, rewrite) } : {}), body: rewriteBlockReferences(input.body, rewrite) };
-    case 'iteration': return { ...input, iterator: value(input.iterator, rewrite), output: value(input.output, rewrite), body: rewriteBlockReferences(input.body, rewrite) };
+    case 'loop': {
+      const local = !!producer && Object.hasOwn(input.body.nodes, producer);
+      return { ...input, loop_variables: input.loop_variables?.map(item => ({ ...item, value: value(item.value, rewrite) })),
+        ...(input.break_condition ? { break_condition: local ? input.break_condition : predicate(input.break_condition, rewrite) } : {}),
+        body: local ? input.body : rewriteBlockReferences(input.body, rewrite, producer) };
+    }
+    case 'iteration': {
+      const local = !!producer && Object.hasOwn(input.body.nodes, producer);
+      return { ...input, iterator: value(input.iterator, rewrite), output: local ? input.output : value(input.output, rewrite),
+        body: local ? input.body : rewriteBlockReferences(input.body, rewrite, producer) };
+    }
     case 'assigner': return { ...input, items: input.items.map(item => ({ ...item, variable: rewrite(item.variable) ?? item.variable, ...(item.value ? { value: value(item.value, rewrite) } : {}) })) };
     case 'return': return { ...input, outputs: input.outputs.map(item => ({ ...item, value_selector: rewrite(item.value_selector) ?? item.value_selector })) };
   }
 }
 
-/** Rewrite every reference evaluated in `block` or a body inside it. */
-export function rewriteBlockReferences(block: Block, rewrite: PathRewrite): Block {
-  return { ...block, nodes: Object.fromEntries(Object.entries(block.nodes).map(([id, definition]) => [id, node(definition, rewrite)])) };
+/** Rewrite structured bindings. A producer-bound rename stops at a body's
+ * separate local declaration of that name. */
+export function rewriteBlockReferences(block: Block, rewrite: PathRewrite, producer?: string): Block {
+  return { ...block, nodes: Object.fromEntries(Object.entries(block.nodes).map(([id, definition]) => [id, node(definition, rewrite, producer)])) };
 }
 
 /** A container's fields that read its body after a round: the Loop's break

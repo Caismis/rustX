@@ -2,7 +2,7 @@
 //! a real `ConversationRuntime` request and real loopback HTTP effects. Controlled
 //! delays are benchmark inputs, never synchronization proofs for correctness.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -208,7 +208,6 @@ async fn prepare_initial(
     let result = owner
         .prepare_startup_candidate(
             crate::skills::SkillDiscoveryOutcome::default(),
-            BTreeSet::new(),
             deadline,
             &crate::runtime::CancellationSignal::new(),
         )

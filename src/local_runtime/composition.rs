@@ -809,11 +809,6 @@ impl LocalConversationCore {
                     let mut candidate = capability
                         .prepare_startup_candidate(
                             paths.skill_discovery.clone(),
-                            resources::workflow_source_demand(
-                                &runtime_config,
-                                &paths.subagents,
-                                &workflows,
-                            ),
                             startup.deadline(),
                             cancellation,
                         )

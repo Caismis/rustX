@@ -721,8 +721,10 @@ needs a successor. The child's terminal schema gains a required `switch` whose
 enum is the route IDs and whose description lists them, so a text Agent with
 routes commits `{text, switch}` through `workflow_output`. The node leaves
 through the route its validated value names; a `switch` outside them fails the
-child. Each route is a selected path like a Branch case, and `switch` is an
-ordinary field of the node value.
+child. Routed structured outputs reject root-level `const` and `enum`: adding
+`switch` cannot preserve those exact business objects. Field-level finite
+constraints remain supported. Each route is a selected path like a Branch case,
+and `switch` is an ordinary field of the node value.
 
 As Dify's Agent error handling, `on_error` is `stop` (the default),
 `default_value` with a `value` satisfying the node's own value contract (a
@@ -789,7 +791,9 @@ body writes them. The optional `break_condition` is checked before the first
 round, where a reference no round has set yet does not break, and after every
 round, in the body's scope: the variables around the Loop, the Loop variables and
 every body node. The Loop also ends once a round in which an Exit Loop node ran
-settles, or after `loop_count` rounds. Its value is its variables
+settles, or after `loop_count` rounds. Before the first round, only a reference to
+an uncommitted body producer defers condition evaluation; other evaluation errors
+fail before a round is admitted. Its value is its variables
 (`{label: value}`), and it has one ordinary exit. `WorkflowLoopExited` reports
 `loop_break` or `loop_completed`, Dify's `completed_reason`.
 
@@ -813,10 +817,12 @@ leaves the type's empty value, `append`/`extend`/`remove_first`/`remove_last`
 change arrays, and `increment`/`decrement`/`multiply`/`divide` change numbers.
 The compiler checks each mode against the variable's type and its operand. Later
 nodes in the round read the written value. Two Assigners that can run in the
-same round may write one variable only when an authored edge orders them;
-mutually exclusive writers and parallel writers of different variables are
-allowed. Each intermediate assignment is bounded before a growing array is
-copied, working snapshots and pending writes retain byte reservations, and only
+same round may write one variable only when an authored edge orders them.
+An unordered node also cannot read a variable another node writes, including
+reads in inherited nested bodies, predicates and prompts. Reading a whole Loop
+object reads all its variables. Mutually exclusive accesses and independent
+parallel writes to different variables are allowed. Each intermediate assignment
+is bounded before a growing array is copied, working snapshots and pending writes retain byte reservations, and only
 the final write per variable is kept for the graph merge. The merge reserves
 and validates each complete variable object against the current graph state
 before publishing it or admitting any successor.

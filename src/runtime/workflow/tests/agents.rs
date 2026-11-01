@@ -325,3 +325,30 @@ async fn a_failed_child_takes_the_fail_branch_or_its_default() {
     .await;
     assert!(outcome.is_err());
 }
+
+#[test]
+fn routes_reject_root_finite_business_values_without_weakening_the_contract() {
+    for (keyword, value) in [
+        ("const", json!({"ok":true})),
+        ("enum", json!([{"ok":true},{"ok":false}])),
+    ] {
+        let mut schema = schema(json!({"ok":{"type":"boolean"}}), &["ok"]);
+        schema[keyword] = value;
+        let business = node(&json!({"output":{"type":"json_schema","schema":schema}}));
+        assert!(compile_test(agent(business.clone(), &[("done", None, "triage.ok")])).is_ok());
+        let mut routed = business;
+        routed["routes"] = routes();
+        assert!(
+            authoring::declared_output(&serde_json::from_value(routed.clone()).unwrap()).is_err()
+        );
+        let error = compile_test(agent(
+            routed,
+            &[
+                ("shipped", Some(WorkflowPort::case("approve")), "triage.ok"),
+                ("edited", Some(WorkflowPort::case("revise")), "triage.ok"),
+            ],
+        ))
+        .unwrap_err();
+        assert!(error.to_string().contains("root const or enum"));
+    }
+}

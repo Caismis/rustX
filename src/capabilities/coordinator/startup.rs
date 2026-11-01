@@ -3,12 +3,13 @@
 #[cfg(all(test, feature = "mcp-fixture"))]
 mod http_tests;
 
+#[cfg(test)]
+use super::ToolSourceId;
 use super::{
     CapabilityCoordinator, CapabilityPreparationError, ConversationLifecycle,
-    McpPreparationOutcome, PreparedCapabilityCandidate, ToolSourceId,
+    McpPreparationOutcome, PreparedCapabilityCandidate,
 };
 use crate::runtime::cancellation::CancellationSignal;
-use std::collections::BTreeSet;
 use std::future::Future;
 
 /// The initial MCP batch has no elapsed-time deadline during preparation.
@@ -62,7 +63,6 @@ impl McpStartupDeadline {
 }
 
 pub(super) struct InitialMcpPreparation {
-    pub(super) required: BTreeSet<ToolSourceId>,
     pub(super) deadline: McpStartupDeadline,
 }
 
@@ -122,7 +122,6 @@ impl CapabilityCoordinator {
     pub(crate) async fn prepare_startup_candidate(
         &self,
         discovered: crate::skills::SkillDiscoveryOutcome,
-        required: BTreeSet<ToolSourceId>,
         deadline: McpStartupDeadline,
         cancellation: &CancellationSignal,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
@@ -152,7 +151,7 @@ impl CapabilityCoordinator {
                         revision,
                         Some(discovered),
                         Some(&cancellation),
-                        Some(InitialMcpPreparation { required, deadline }),
+                        Some(InitialMcpPreparation { deadline }),
                     )
                     .await
             },
@@ -339,7 +338,6 @@ mod tests {
         let candidate = coordinator
             .prepare_startup_candidate(
                 discovery(&coordinator),
-                BTreeSet::new(),
                 deadline.clone(),
                 &CancellationSignal::new(),
             )
@@ -389,7 +387,6 @@ mod tests {
             worker
                 .prepare_startup_candidate(
                     discovery(&worker),
-                    BTreeSet::new(),
                     worker_deadline,
                     &CancellationSignal::new(),
                 )
@@ -447,7 +444,6 @@ mod tests {
             worker
                 .prepare_startup_candidate(
                     discovery(&worker),
-                    BTreeSet::new(),
                     McpStartupDeadline::default(),
                     &CancellationSignal::new(),
                 )
@@ -485,7 +481,6 @@ mod tests {
             worker
                 .prepare_startup_candidate(
                     discovery(&worker),
-                    BTreeSet::new(),
                     worker_deadline,
                     &CancellationSignal::new(),
                 )
@@ -551,7 +546,6 @@ mod tests {
             worker
                 .prepare_startup_candidate(
                     discovery(&worker),
-                    BTreeSet::new(),
                     McpStartupDeadline::default(),
                     &CancellationSignal::new(),
                 )
@@ -586,7 +580,6 @@ mod tests {
         let candidate = coordinator
             .prepare_startup_candidate(
                 discovery(&coordinator),
-                [ToolSourceId::Mcp(id.clone())].into(),
                 McpStartupDeadline::default(),
                 &CancellationSignal::new(),
             )
@@ -630,14 +623,14 @@ mod tests {
         coordinator.settle_ready_mcp_runtimes().await.unwrap();
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn optional_failure_is_isolated_but_required_failure_rejects_the_closure() {
+    async fn source_failure_is_isolated_including_workflow_demand() {
         if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
         let (coordinator, healthy) = fixture(
             &dir,
-            "capabilities::coordinator::startup::tests::optional_failure_is_isolated_but_required_failure_rejects_the_closure",
+            "capabilities::coordinator::startup::tests::source_failure_is_isolated_including_workflow_demand",
         );
         let failed = crate::runtime::identity::McpServerId::new("broken");
         let inert = crate::runtime::identity::McpServerId::new("unselected");
@@ -664,7 +657,6 @@ mod tests {
         let candidate = coordinator
             .prepare_startup_candidate(
                 discovery(&coordinator),
-                BTreeSet::new(),
                 McpStartupDeadline::default(),
                 &CancellationSignal::new(),
             )
@@ -693,17 +685,19 @@ mod tests {
             2
         );
         candidate.retire_uncommitted().await;
+        let retry = coordinator
+            .prepare_startup_candidate(
+                discovery(&coordinator),
+                McpStartupDeadline::default(),
+                &CancellationSignal::new(),
+            )
+            .await
+            .unwrap();
         assert!(matches!(
-            coordinator
-                .prepare_startup_candidate(
-                    discovery(&coordinator),
-                    [ToolSourceId::Mcp(failed)].into(),
-                    McpStartupDeadline::default(),
-                    &CancellationSignal::new(),
-                )
-                .await,
-            Err(CapabilityPreparationError::Mcp(_))
+            retry.availability().get(&ToolSourceId::Mcp(failed)),
+            Some(CapabilitySourceState::Unavailable { .. })
         ));
+        retry.retire_uncommitted().await;
         assert!(coordinator.current_snapshot().tool_registry().is_empty());
         assert_eq!(coordinator.pending_mcp_retirements(), 0);
     }
@@ -724,7 +718,6 @@ mod tests {
         let candidate = coordinator
             .prepare_startup_candidate(
                 discovery(&coordinator),
-                BTreeSet::new(),
                 deadline.clone(),
                 &CancellationSignal::new(),
             )
@@ -745,7 +738,6 @@ mod tests {
         let retry = coordinator
             .prepare_startup_candidate(
                 discovery(&coordinator),
-                BTreeSet::new(),
                 deadline.clone(),
                 &CancellationSignal::new(),
             )

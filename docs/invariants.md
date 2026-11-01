@@ -3505,7 +3505,7 @@ A package rewrite is observed only at the next quiescent re-discovery.
   Pending discovery is never evidence that an exact selected name is absent;
   live-confirmed absence and duplicate identities retain ordinary validation.
   Optional Root terminal failures preserve healthy siblings and native tools;
-  required Workflow and frozen child contracts remain strict.
+  affected Workflows are disabled with diagnostics; frozen child contracts remain strict.
 - **One initial batch has one submission-triggered budget.** Mere preparation,
   Session creation and client attachment do not start an owner-level elapsed-time timer.
   Native captures the first submission intent's monotonic receipt before any
@@ -8225,7 +8225,8 @@ Original admission scope, current controller and result reservation precede nati
 - Transfer carries physical connection/discovery ownership, invalidation epochs,
   lifecycle counts and retirement obligations. It grants no execution authority.
   Existing complete candidate validation and commit retain their exact meaning;
-  optional Root outcomes are isolated and required Workflow/child contracts strict.
+  optional Root outcomes are isolated, affected Workflows are disabled with diagnostics,
+  and frozen child contracts remain strict.
 - Dropping an RPC waiter is not settlement. Native creation/loading jobs and
   physical preparation tasks retain their owners. Source reservation release
   requires either a validated ownership transfer or proven physical settlement.

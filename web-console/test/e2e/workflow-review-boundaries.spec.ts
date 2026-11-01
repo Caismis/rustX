@@ -103,3 +103,66 @@ for (const operation of ['add', 'remove'] as const) test(`End name drafts surviv
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   } finally { await fixture.stop(false); }
 });
+
+for (const width of [1440, 390]) test(`Loop variable rename saves all references and follows Undo/Redo at ${width}px`, async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  const fixture = await startDogfood('web_console_dogfood');
+  try {
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'loop_rename.yaml');
+    writeFileSync(file, JSON.stringify({ description: 'Loop declaration identity', block: { input: { type: 'object', properties: {}, additionalProperties: false },
+      nodes: { start: { type: 'start' }, repeat: { type: 'loop', loop_count: 1, loop_variables: [{ label: 'ready', var_type: 'boolean', value: { type: 'literal', value: false } }],
+        break_condition: { type: 'boolean', value: { type: 'reference', path: ['repeat', 'ready'] } }, body: { nodes: { start: { type: 'start' }, assign: { type: 'assigner', items: [{ variable: ['repeat', 'ready'], operation: 'set', value: { type: 'literal', value: true } }] } }, edges: [{ from: 'start', to: 'assign' }] } },
+        done: { type: 'return', outputs: [{ variable: 'ready', value_selector: ['repeat', 'ready'] }] } }, edges: [{ from: 'start', to: 'repeat' }, { from: 'repeat', to: 'done' }] } }));
+    await editor(page, fixture, 'loop_rename'); await page.setViewportSize({ width, height: 1000 });
+    const loop = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Loop node repeat', { exact: true });
+    await loop.focus(); await loop.press('Enter');
+    const input = page.getByRole('complementary', { name: 'Inspector' }).getByRole('textbox', { name: 'Variable Name', exact: true });
+    await input.fill('finished'); await input.press('ControlOrMeta+s');
+    await expect.poll(() => parse(readFileSync(file, 'utf8')).block.nodes.repeat.loop_variables[0].label).toBe('finished');
+    await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();
+    const document = parse(readFileSync(file, 'utf8'));
+    expect(document.block.nodes.repeat.body.nodes.assign.items[0].variable).toEqual(['repeat', 'finished']);
+    expect(document.block.nodes.repeat.break_condition.value.path).toEqual(['repeat', 'finished']);
+    expect(document.block.nodes.done.outputs[0].value_selector).toEqual(['repeat', 'finished']);
+    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(input).toHaveValue('ready');
+    await page.getByRole('button', { name: 'Redo', exact: true }).click(); await expect(input).toHaveValue('finished');
+    await input.press('ControlOrMeta+s');
+    await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();
+    await page.screenshot({ path: `/tmp/rustx-loop-variable-rename-${width}.png` });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
+for (const kind of ['required', 'optional']) test(`catalog ${kind} enum saves an explicit empty string`, async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  const fixture = await startDogfood('web_console_dogfood');
+  try {
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const server = fileURLToPath(new URL('./workflow-json-mcp.py', import.meta.url));
+    writeFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), `[mcp_servers.enums]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(server)}, "--empty-enum"]\n`);
+    const file = join(directory, 'empty_enum.yaml');
+    writeFileSync(file, JSON.stringify({ description: 'Empty enum business value', block: { input: { type: 'object', properties: {}, additionalProperties: false },
+      nodes: { start: { type: 'start' }, call: { type: 'tool', selector: { origin: 'source', source_id: 'enums', name: `empty_${kind}` }, arguments: { type: 'object', fields: { mode: { type: 'literal', value: 'explicit' } } }, result: { type: 'text' } }, done: { type: 'return', outputs: [] } }, edges: [{ from: 'start', to: 'call' }, { from: 'call', to: 'done' }] } }));
+    await editor(page, fixture, 'empty_enum');
+    const tool = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Tool node call', { exact: true });
+    await tool.focus(); await tool.press('Enter');
+    const mode = page.getByRole('complementary', { name: 'Inspector' }).getByRole('combobox', { name: 'mode', exact: true });
+    await mode.selectOption({ label: '""' });
+    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(mode).toHaveValue('1');
+    await page.getByRole('button', { name: 'Redo', exact: true }).click(); await expect(mode).toHaveValue('0');
+    await mode.selectOption(''); await expect(mode).toHaveValue('');
+    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(mode).toHaveValue('0');
+    await mode.press('ControlOrMeta+s');
+    await expect.poll(() => parse(readFileSync(file, 'utf8')).block.nodes.call.arguments.fields.mode).toEqual({ type: 'literal', value: '' });
+    await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();
+    await page.screenshot({ path: `/tmp/rustx-empty-enum-${kind}.png` });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});

@@ -217,8 +217,9 @@ pub(in crate::local_runtime) fn admitted_source_demand(
     crate::capabilities::source::ToolSourceDemand::new(sources, python)
 }
 
-/// Enabled Workflow contracts require complete live definitions before admission.
-pub(super) fn workflow_source_demand(
+/// Requested Workflow sources receive live preparation; source failures are
+/// dependency-admission diagnostics, never fatal Session requirements.
+fn workflow_source_demand(
     config: &CurrentRuntimeConfig,
     agents: &crate::runtime::subagent::AgentCatalog,
     workflows: &WorkflowCatalog,

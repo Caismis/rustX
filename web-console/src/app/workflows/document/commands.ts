@@ -185,6 +185,23 @@ export function renameNode(document: WorkflowDocument, path: BlockPath, from: st
   return renameNodePresentation(next, path, from, to);
 }
 
+/** A Loop variable is a declaration: its targets and structured consumers move
+ * with its label in the same document transaction. */
+export function renameLoopVariable(document: WorkflowDocument, path: BlockPath, owner: string, from: string, to: string): WorkflowDocument {
+  const loop = nodeAt(require(blockAt(document, path)), owner);
+  if (loop?.type !== 'loop' || !loop.loop_variables?.some(variable => variable.label === from)) throw new CommandRejected('missing_field');
+  if (from === to) return document;
+  const invalid = validLocalKey(to); if (invalid) throw new CommandRejected(invalid);
+  if (loop.loop_variables.some(variable => variable.label === to)) throw new CommandRejected('duplicate_identifier');
+  const rewrite = (reference: readonly string[]) => reference[0] === owner && reference[1] === from ? [owner, to, ...reference.slice(2)] : undefined;
+  const parent = path.slice(0, -1), container = path.at(-1)?.node;
+  const outer = container ? updateBlock(document, parent, block => ({ ...block, nodes: { ...block.nodes, [container]: rewriteRoundReferences(block.nodes[container], rewrite) } })) : document;
+  return updateBlock(outer, path, block => {
+    const renamed = rewriteBlockReferences(block, rewrite, owner), node = renamed.nodes[owner] as typeof loop;
+    return { ...renamed, nodes: { ...renamed.nodes, [owner]: { ...node, loop_variables: node.loop_variables!.map(variable => variable.label === from ? { ...variable, label: to } : variable) } } };
+  });
+}
+
 export function connect(document: WorkflowDocument, path: BlockPath, from: string, port: ControlPort, to: string): WorkflowDocument {
   const block = require(blockAt(document, path));
   checkConnection(block, from, port, to);

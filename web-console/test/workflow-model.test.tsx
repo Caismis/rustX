@@ -284,7 +284,7 @@ describe('Model native editing document', () => {
     fireEvent.change(inputs.getByRole('textbox', { name: 'offset' }), { target: { value: '12' } });
     fireEvent.blur(inputs.getByRole('textbox', { name: 'offset' }));
     expect(read()).toMatchObject({ arguments: { type: 'object', fields: { offset: { type: 'literal', value: 12 } } } });
-    fireEvent.change(inputs.getByRole('combobox', { name: 'mode' }), { target: { value: 'lines' } });
+    fireEvent.change(inputs.getByRole('combobox', { name: 'mode' }), { target: { value: '1' } });
     expect(read()).toMatchObject({ arguments: { fields: { mode: { type: 'literal', value: 'lines' } } } });
     // The {x} side binds the whole parameter to a variable; ✎ clears it.
     const offset = inputs.getAllByRole('radiogroup', { name: 'Value kind' })[0];
@@ -527,4 +527,41 @@ it.each(['add', 'remove'] as const)('keeps an invalid End name draft through %s 
   save();
   expect(writes).toHaveLength(1);
   expect((writes[0] as { document: WorkflowFileDocument }).document.block.nodes.model).toMatchObject({ outputs: operation === 'add' ? [node.outputs[0], { variable: 'fixed', value_selector: ['args', 'second'] }] : [{ variable: 'fixed', value_selector: ['args', 'second'] }] });
+});
+
+it('renames a focused Loop variable and all bindings in one undoable transaction before Save', async () => {
+  const variable = { label: 'ready', var_type: 'boolean' as const, value: { type: 'literal' as const, value: false } };
+  const node: NodeDefinition = { type: 'loop', loop_count: 1, loop_variables: [variable], break_condition: { type: 'boolean', value: { type: 'reference', path: ['model', 'ready'] } },
+    body: { nodes: { start: { type: 'start' }, assign: { type: 'assigner', items: [{ variable: ['model', 'ready'], operation: 'set', value: { type: 'literal', value: true } }] } }, edges: [{ from: 'start', to: 'assign' }] } };
+  const initial = source(node);
+  initial.document!.block.nodes.done = { type: 'return', outputs: [{ variable: 'ready', value_selector: ['model', 'ready'] }] };
+  const actor = await open(undefined, node, initial);
+  const input = () => inspector().getByRole('textbox', { name: 'Variable Name' }) as HTMLInputElement;
+  fireEvent.change(input(), { target: { value: 'finished' } }); fireEvent.blur(input());
+  const after = actor.getSnapshot().context.document!;
+  expect(after.block.nodes.model).toMatchObject({ loop_variables: [{ label: 'finished' }], break_condition: { value: { path: ['model', 'finished'] } }, body: { nodes: { assign: { items: [{ variable: ['model', 'finished'] }] } } } });
+  expect(after.block.nodes.done).toMatchObject({ outputs: [{ value_selector: ['model', 'finished'] }] });
+  expect(actor.getSnapshot().context.past).toHaveLength(1);
+  act(() => actor.send({ type: 'UNDO' })); expect(input().value).toBe('ready'); expect(actor.getSnapshot().context.document).toEqual(initial.document);
+  act(() => actor.send({ type: 'REDO' })); expect(input().value).toBe('finished'); expect(actor.getSnapshot().context.document).toEqual(after);
+  fireEvent.change(input(), { target: { value: 'saved' } }); save();
+  expect(Object.keys(actor.getSnapshot().context.drafts)).toHaveLength(0);
+  expect((writes[0] as { document: WorkflowFileDocument }).document.block.nodes.done).toMatchObject({ outputs: [{ value_selector: ['model', 'saved'] }] });
+});
+
+it.each([true, false])('keeps the empty string as an explicit catalog enum value (required=%s)', async required => {
+  const node: NodeDefinition = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: { mode: { type: 'literal', value: 'explicit' } } }, result: { type: 'text' } };
+  const initial = source(node);
+  initial.vocabulary!.builtin_tools = [{ ...readTool, input_schema: { type: 'object', properties: { mode: { type: 'string', enum: ['', 'explicit'] } }, required: required ? ['mode'] : [], additionalProperties: false } }];
+  const actor = await open(undefined, node, initial);
+  const select = inspector().getByRole('combobox', { name: 'mode' }) as HTMLSelectElement;
+  fireEvent.change(select, { target: { value: '0' } });
+  expect(actor.getSnapshot().context.document!.block.nodes.model).toMatchObject({ arguments: { fields: { mode: { type: 'literal', value: '' } } } });
+  expect(select.value).toBe('0');
+  act(() => actor.send({ type: 'UNDO' })); expect(select.value).toBe('1');
+  act(() => actor.send({ type: 'REDO' })); expect(select.value).toBe('0');
+  fireEvent.change(select, { target: { value: '' } });
+  expect(actor.getSnapshot().context.document!.block.nodes.model).toMatchObject({ arguments: { fields: {} } });
+  act(() => actor.send({ type: 'UNDO' })); save();
+  expect((writes[0] as { document: WorkflowFileDocument }).document.block.nodes.model).toMatchObject({ arguments: { fields: { mode: { type: 'literal', value: '' } } } });
 });

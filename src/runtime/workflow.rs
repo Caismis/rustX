@@ -35,6 +35,7 @@ mod execution;
 mod flow;
 pub mod inspection;
 pub mod read_model;
+mod references;
 mod review;
 pub mod scheduled;
 pub use review::{MAX_REVIEW_ACTIONS, REVIEW_TIMEOUT_PORT, WorkflowReviewAction};
@@ -1655,7 +1656,7 @@ fn compile_program(
         Sha256::digest(serde_json::to_vec(&definition).expect("validated definition"))
     );
     let mut total_nodes = 0;
-    let block = compile_block(definition.block, Vec::new(), &mut total_nodes, None)
+    let (block, _) = compile_block(definition.block, Vec::new(), &mut total_nodes, None)
         .map_err(|error| error.at("block"))?;
     let retained_bound = execution::static_retained_bound(&block);
     let (execution_bound, agent_bound, model_call_bound) =
@@ -1726,18 +1727,7 @@ fn compile_body(
     }
     let mut child_path = path.to_vec();
     child_path.extend([owner.to_owned(), "body".into()]);
-    let program = compile_block(body.clone(), child_path, total_nodes, Some(container))
-        .map_err(|e| e.at("body"))?;
-    let mut declarations = container.base.clone();
-    for (id, node) in &body.nodes {
-        if let Ok(Some(schema)) = authoring::declared_output(node) {
-            declarations.0.insert(id.clone(), schema);
-        }
-    }
-    let end = control_flow(body)?
-        .scopes
-        .completion_scope(&declarations, &container.base);
-    Ok((program, end))
+    compile_block(body.clone(), child_path, total_nodes, Some(container)).map_err(|e| e.at("body"))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1746,7 +1736,7 @@ fn compile_block(
     path: Vec<String>,
     total_nodes: &mut usize,
     container: Option<&Container>,
-) -> Result<WorkflowBlockProgram, WorkflowCompileError> {
+) -> Result<(WorkflowBlockProgram, SchemaMap), WorkflowCompileError> {
     *total_nodes += definition.nodes.len();
     if path.len() / 2 > MAX_BLOCK_DEPTH || *total_nodes > MAX_WORKFLOW_NODES {
         return Err(WorkflowCompileError::InvalidField(
@@ -1790,6 +1780,29 @@ fn compile_block(
                 return Err(WorkflowCompileError::InvalidField(format!(
                     "Assigners {left:?} and {right:?} write the same variable without an execution order"
                 )).at(format!("nodes.{right}.items")));
+            }
+        }
+    }
+
+    let reads = definition
+        .nodes
+        .iter()
+        .map(|(id, node)| (id, references::node(node)))
+        .collect::<Vec<_>>();
+    for (writer, items) in &writers {
+        for (reader, paths) in &reads {
+            if writer != reader
+                && scopes.unordered_together(writer, reader)
+                && items.iter().any(|item| {
+                    paths.iter().any(|path| {
+                        path.first() == item.variable.first()
+                            && (path.len() == 1 || path.get(1) == item.variable.get(1))
+                    })
+                })
+            {
+                return Err(WorkflowCompileError::InvalidField(format!(
+                    "nodes {writer:?} and {reader:?} read and write the same Loop variable without an execution order"
+                )).at(format!("nodes.{reader}")));
             }
         }
     }
@@ -2143,14 +2156,24 @@ fn compile_block(
     }
     // A finite DAG whose only zero-outdegree nodes are Returns necessarily
     // terminates on every path. Do not enumerate exponentially many paths.
-    Ok(WorkflowBlockProgram {
-        path,
-        input_schema: definition.input,
-        output_schema: merge_return_schemas(&returned)?,
-        entry,
-        nodes,
-        outgoing,
-    })
+    let declarations = SchemaMap(
+        available_after
+            .iter()
+            .filter_map(|(id, scope)| scope.0.get(id).map(|schema| (id.clone(), schema.clone())))
+            .collect(),
+    );
+    let completed = scopes.completion_scope(&declarations, &base);
+    Ok((
+        WorkflowBlockProgram {
+            path,
+            input_schema: definition.input,
+            output_schema: merge_return_schemas(&returned)?,
+            entry,
+            nodes,
+            outgoing,
+        },
+        completed,
+    ))
 }
 
 struct ControlFlow {
@@ -2682,6 +2705,34 @@ fn validate_workflow_schema_at(
     Ok(())
 }
 
+fn validate_agent_output(
+    output: &WorkflowAgentOutput,
+    routes: &[WorkflowAgentRoute],
+    node: &str,
+) -> Result<(), WorkflowCompileError> {
+    if let Some(schema) = output.structured() {
+        if !routes.is_empty() && (schema.get("const").is_some() || schema.get("enum").is_some()) {
+            return Err(WorkflowCompileError::InvalidSchema(
+                "Agent routes cannot add switch to a root const or enum output contract".into(),
+            )
+            .at("output.schema"));
+        }
+        validate_root_schema(schema, &format!("Agent {node} output"))
+            .map_err(|e| e.at("output.schema"))?;
+        if !routes.is_empty()
+            && schema
+                .pointer(&format!("/properties/{AGENT_ROUTE_FIELD}"))
+                .is_some()
+        {
+            return Err(WorkflowCompileError::InvalidSchema(format!(
+                "Agent {node:?} routes reserve the {AGENT_ROUTE_FIELD:?} output field"
+            ))
+            .at("output.schema"));
+        }
+    }
+    Ok(())
+}
+
 fn validate_agent(
     task: &[WorkflowValue],
     output: &WorkflowAgentOutput,
@@ -2701,20 +2752,7 @@ fn validate_agent(
             WorkflowCompileError::InvalidField(format!("Agent {node:?} task is empty")).at("task"),
         );
     }
-    if let Some(schema) = output.structured() {
-        validate_root_schema(schema, &format!("Agent {node} output"))
-            .map_err(|e| e.at("output.schema"))?;
-        if !routes.is_empty()
-            && schema
-                .pointer(&format!("/properties/{AGENT_ROUTE_FIELD}"))
-                .is_some()
-        {
-            return Err(WorkflowCompileError::InvalidSchema(format!(
-                "Agent {node:?} routes reserve the {AGENT_ROUTE_FIELD:?} output field"
-            ))
-            .at("output.schema"));
-        }
-    }
+    validate_agent_output(output, routes, node)?;
     if routes.len() > MAX_AGENT_ROUTES {
         return Err(WorkflowCompileError::InvalidBranch(format!(
             "Agent {node:?} has at most {MAX_AGENT_ROUTES} routes"
@@ -4354,7 +4392,9 @@ pub enum WorkflowRunError {
     InvalidOutput(String),
     /// The immutable program was internally inconsistent.
     InvalidProgram(String),
-    /// A committed reference could not be resolved at runtime.
+    /// A producer has not committed a value in this scope.
+    UncommittedReference(Vec<String>),
+    /// A value could not be constructed or resolved at runtime.
     InvalidValue(String),
     /// A child could not be admitted.
     ChildStart {
@@ -4475,6 +4515,7 @@ impl fmt::Display for WorkflowRunError {
             Self::InvalidInput(detail) => write!(formatter, "invalid workflow input: {detail}"),
             Self::InvalidOutput(detail) => write!(formatter, "invalid workflow output: {detail}"),
             Self::InvalidProgram(detail) => write!(formatter, "invalid workflow program: {detail}"),
+            Self::UncommittedReference(path) => write!(formatter, "uncommitted reference {path:?}"),
             Self::InvalidValue(detail) => write!(formatter, "invalid workflow value: {detail}"),
             Self::ChildStart { node, detail } => {
                 write!(

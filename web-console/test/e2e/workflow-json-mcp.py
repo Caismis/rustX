@@ -3,6 +3,8 @@ import json
 import sys
 
 def catalog(request):
+    if "--empty-enum" in sys.argv:
+        return {"tools": [{"name": "empty_" + kind, "description": "Accept an explicit empty string", "inputSchema": {"type": "object", "properties": {"mode": {"type": "string", "enum": ["", "explicit"]}}, "required": ["mode"] if kind == "required" else [], "additionalProperties": False}} for kind in ["required", "optional"]]}
     if "--large-catalog" not in sys.argv:
         return {"tools": [{"name": "accept_payload", "description": "Accept a JSON object", "inputSchema": {"type": "object", "properties": {"metadata": {"type": "object"}}, "required": ["metadata"], "additionalProperties": False}}]}
     offset = int(request.get("params", {}).get("cursor", "0"))

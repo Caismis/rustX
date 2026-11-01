@@ -853,7 +853,13 @@ impl WorkflowRuntime {
                     // As Dify, a condition on what no round has set yet does
                     // not break before the first round.
                     let breaks = |values: &imbl::OrdMap<String, Value>| break_condition.as_ref().map_or(Ok(false), |condition| evaluate_predicate(condition, input, values));
-                    let mut status = breaks(&values).unwrap_or(false).then_some(super::WorkflowLoopExit::LoopBreak);
+                    let mut status = match breaks(&values) {
+                        Ok(true) => Some(super::WorkflowLoopExit::LoopBreak),
+                        Ok(false) => None,
+                        Err(WorkflowRunError::UncommittedReference(path))
+                            if path.first().is_some_and(|producer| body.nodes.contains_key(producer) && !values.contains_key(producer)) => None,
+                        Err(error) => return Err(error),
+                    };
                     let mut round = 0;
                     while status.is_none() {
                         round += 1;

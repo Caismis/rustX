@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createActor, waitFor } from 'xstate';
-import { addNode, replaceNode } from '../src/app/workflows/document/commands';
+import { addNode, renameLoopVariable, replaceNode } from '../src/app/workflows/document/commands';
 import { rootBlock } from './workflow-root';
 import { copyFragment, duplicateFragment, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
 import { blockField, encodeField, nodeField, setField, type FieldAddress } from '../src/app/workflows/document/fields';
@@ -247,4 +247,45 @@ it.each([false, true])('atomically rejects copied descendants that shadow target
   expect(() => pasteFragment(target, 'target', nested ? [{ node: 'target' }] : [], fragment)).toThrow('duplicate_identifier');
   expect(target).toEqual(before);
   expect(pasteFragment(fixture(), 'target', [], fragment).nodes).toEqual(['repeat_copy']);
+});
+
+
+describe('Loop variable declaration renames', () => {
+  const input = (): WorkflowDocument => ({ description: 'Loop fields', block: rootBlock() });
+  it('moves nested reads, targets and the parent completion expression without touching business literals', async () => {
+    const before = input();
+    before.block.nodes.outer = { type: 'iteration', iterator: { type: 'reference', path: ['args', 'items'] }, output: { type: 'reference', path: ['repeat', 'old'] }, body: { nodes: {
+      start: { type: 'start' }, repeat: { type: 'loop', loop_count: 1, loop_variables: [{ label: 'old', var_type: 'string', value: { type: 'literal', value: 'old' } }],
+        break_condition: { type: 'equal', left: { type: 'reference', path: ['repeat', 'old'] }, right: { type: 'literal', value: 'old' } },
+        body: { nodes: { start: { type: 'start' }, assign: { type: 'assigner', items: [{ variable: ['repeat', 'old'], operation: 'set', value: { type: 'literal', value: 'old' } }] }, nested: { type: 'iteration', iterator: { type: 'reference', path: ['args', 'items'] }, output: { type: 'reference', path: ['repeat', 'old'] }, body: { nodes: { start: { type: 'start' } } } } }, edges: [] } },
+    }, edges: [] } };
+    const actor = await actorFor(before);
+    actor.send({ type: 'EDIT', apply: document => renameLoopVariable(document, [{ node: 'outer' }], 'repeat', 'old', 'new') });
+    const after = actor.getSnapshot().context.document!;
+    const outer = after.block.nodes.outer; if (outer.type !== 'iteration') throw new Error('fixture');
+    expect(outer.output).toEqual({ type: 'reference', path: ['repeat', 'new'] });
+    expect(outer.body.nodes.repeat).toMatchObject({ loop_variables: [{ label: 'new', value: { value: 'old' } }], break_condition: { left: { path: ['repeat', 'new'] }, right: { value: 'old' } }, body: { nodes: { assign: { items: [{ variable: ['repeat', 'new'], value: { value: 'old' } }] }, nested: { output: { path: ['repeat', 'new'] } } } } });
+    oneTransaction(actor, before, after); actor.stop();
+  });
+  it.each(['occupied', '', 'illegal space'])('rejects %j atomically', async to => {
+    const before = input();
+    before.block.nodes.repeat = { type: 'loop', loop_count: 1, loop_variables: ['old', 'occupied'].map(label => ({ label, var_type: 'boolean', value: { type: 'literal', value: false } })), body: { nodes: { start: { type: 'start' } } } };
+    const actor = await actorFor(before);
+    actor.send({ type: 'EDIT', apply: document => renameLoopVariable(document, [], 'repeat', 'old', to) });
+    expect(actor.getSnapshot().context.document).toEqual(before); expect(actor.getSnapshot().context.past).toHaveLength(0);
+    expect(actor.getSnapshot().context.rejection).toBe(to === 'occupied' ? 'duplicate_identifier' : 'invalid_identifier'); actor.stop();
+  });
+});
+
+
+it('keeps an unrelated body-local producer with the same ID bound to its own variable declaration', () => {
+  const before = fixture();
+  const local: NodeDefinition = { type: 'loop', loop_count: 1, loop_variables: [{ label: 'old', var_type: 'boolean', value: { type: 'literal', value: false } }],
+    break_condition: { type: 'boolean', value: { type: 'reference', path: ['repeat', 'old'] } }, body: { nodes: { start: { type: 'start' }, assign: { type: 'assigner', items: [{ variable: ['repeat', 'old'], operation: 'set', value: { type: 'literal', value: true } }] } }, edges: [{ from: 'start', to: 'assign' }] } };
+  before.block.nodes.repeat = local;
+  before.block.nodes.sibling = { type: 'iteration', iterator: { type: 'reference', path: ['args', 'items'] }, output: { type: 'reference', path: ['repeat', 'old'] },
+    body: { nodes: { start: { type: 'start' }, repeat: local }, edges: [{ from: 'start', to: 'repeat' }] } };
+  const after = renameLoopVariable(before, [], 'repeat', 'old', 'new');
+  expect(after.block.nodes.repeat).toMatchObject({ loop_variables: [{ label: 'new' }], break_condition: { value: { path: ['repeat', 'new'] } } });
+  expect(after.block.nodes.sibling).toEqual(before.block.nodes.sibling);
 });

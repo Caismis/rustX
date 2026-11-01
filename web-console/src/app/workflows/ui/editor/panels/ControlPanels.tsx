@@ -3,13 +3,14 @@ import type { WorkflowAssignment, WorkflowLoopVariable, WorkflowVarType, Workflo
 import { useTranslation } from '../../../../../locale/react';
 import { IconChevronDownOutline14, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';
-import { setField, within, type FieldAddress } from '../../../document/fields';
+import { setField, within, type ArrayEdit, type FieldAddress } from '../../../document/fields';
+import { renameLoopVariable } from '../../../document/commands';
 import { blockAt, nodeAt, type Value } from '../../../document/model';
 import { IconPlus } from '../../icons';
 import { ReferencePicker } from '../forms/ReferencePicker';
 import { DraftTextField, HelpTip, JsonField, Section } from '../forms/fields';
 import { ConditionList } from './Conditions';
-import { SliderField } from './InferencePanels';
+import { RouteId, SliderField } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 import fieldCss from '../forms/InputFields.module.css';
@@ -45,12 +46,12 @@ export function LoopPanel(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'loop');
   const variables = node.loop_variables ?? [];
   // An empty list and an absent condition are omitted, as native writes them.
-  const setVariables = (next: WorkflowLoopVariable[]) => update(({ loop_variables: _, ...current }) => next.length ? { ...current, loop_variables: next } : current, at('loop_variables'));
+  const setVariables = (next: WorkflowLoopVariable[], array?: ArrayEdit) => update(({ loop_variables: _, ...current }) => next.length ? { ...current, loop_variables: next } : current, at('loop_variables'), array);
   const add = () => {
     // A variable's label is an identifier, never copy.
     const label = (index: number) => /* i18n-raw: native variable identifier */ `var_${index}`;
     let index = variables.length + 1; while (variables.some(item => item.label === label(index))) index++;
-    setVariables([...variables, { label: label(index), var_type: 'string', value: constant('string') }]);
+    setVariables([...variables, { label: label(index), var_type: 'string', value: constant('string') }], { array: at('loop_variables'), inserted: variables.length });
   };
   return <>
     <Section title={tx('workflows:loop.variables')} aside={<button type="button" className={css.iconButton} aria-label={tx('workflows:loop.add-variable')} onClick={add}><IconPlus size={14} /></button>}>
@@ -59,14 +60,14 @@ export function LoopPanel(props: PanelProps) {
         const set = (change: Partial<WorkflowLoopVariable>) => setVariables(variables.map((item, i) => i === index ? { ...item, ...change } : item));
         return <div key={index} className={css.loopVariable}>
           <div className={css.loopVariableHead}>
-            <DraftTextField label={tx('workflows:loop.variable-name')} value={variable.label} address={within(base, ['label'])} compact />
+            <RouteId label={tx('workflows:loop.variable-name')} value={variable.label} address={within(base, ['label'])} rename={(document, from, to) => renameLoopVariable(document, props.block, props.id, from, to)} />
             <select className={css.input} aria-label={tx('workflows:loop.variable-type')} value={variable.var_type} onChange={event => { const var_type = event.target.value as WorkflowVarType; set({ var_type, value: variableMode ? unset() : constant(var_type) }); }}>
               {VAR_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
             </select>
             <select className={css.input} aria-label={tx('workflows:loop.input-mode')} value={variableMode ? 'variable' : 'constant'} onChange={event => set({ value: event.target.value === 'variable' ? unset() : constant(variable.var_type) })}>
               <option value="variable">{tx('workflows:loop.mode-variable')}</option><option value="constant">{tx('workflows:loop.mode-constant')}</option>
             </select>
-            <button type="button" className={css.iconButton} aria-label={tx('workflows:loop.remove-variable', { p0: variable.label })} onClick={() => setVariables(variables.filter((_, i) => i !== index))}><IconTrashOutline16 /></button>
+            <button type="button" className={css.iconButton} aria-label={tx('workflows:loop.remove-variable', { p0: variable.label })} onClick={() => setVariables(variables.filter((_, i) => i !== index), { array: at('loop_variables'), removed: index })}><IconTrashOutline16 /></button>
           </div>
           {variableMode && variable.value.type === 'reference'
             ? <ReferencePicker address={within(base, ['value'])} path={variable.value.path} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />

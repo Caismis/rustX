@@ -1458,20 +1458,6 @@ impl CapabilityCoordinator {
                 .into_iter()
                 .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
         );
-        if let Some(startup) = startup
-            && let Some(source) = startup.required.iter().find(|source| {
-                !matches!(availability.get(source), Some(CapabilitySourceState::Ready))
-            })
-        {
-            retire_candidate_runtimes(mcp_runtimes).await;
-            let reason = match availability.get(source) {
-                Some(CapabilitySourceState::Unavailable { reason }) => reason.as_str(),
-                _ => "the required source was not prepared",
-            };
-            return Err(CapabilityPreparationError::Mcp(format!(
-                "required Workflow source {source} did not complete live preparation: {reason}"
-            )));
-        }
         let selection = select_tools(
             &discovered_tools,
             self.inner.extension_tools.registrations(),
