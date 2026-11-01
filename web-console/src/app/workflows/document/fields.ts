@@ -13,8 +13,9 @@ export type FieldStep = string | number | { readonly key: string };
 /** What a field's text edits at its location: the JSON `value` there, the
  * authored `key` the path ends in (the node id itself when the path is
  * empty), one component to `append` to the collection there, or an explicitly
- * `optional` field that may be absent. */
-export type FieldRole = 'value' | 'key' | 'append' | 'optional';
+ * `optional` field that may be absent, or a `literal` payload of an optional
+ * WorkflowValue. The latter is missing if the outer value changes kind. */
+export type FieldRole = 'value' | 'key' | 'append' | 'optional' | 'literal';
 
 /** The editor-internal identity of one editable field: its lexical block,
  * its owning node (none for a block's own contract) and its path. It owns
@@ -86,7 +87,7 @@ function shape(document: WorkflowDocument, address: FieldAddress): number[] | un
     if (at === MISSING) return undefined;
     if (typeof component === 'number' && Array.isArray(at)) lengths.push(at.length);
     const next = step(at, component);
-    if (next === MISSING && index === address.path.length - 1 && address.role === 'optional') return lengths;
+    if (next === MISSING && index === address.path.length - 1 && (address.role === 'optional' || address.role === 'literal')) return lengths;
     at = next;
   }
   return at === MISSING ? undefined : lengths;
@@ -98,9 +99,14 @@ export function fieldValue(document: WorkflowDocument, address: FieldAddress): {
   for (const [index, component] of address.path.entries()) {
     if (at === MISSING) return undefined;
     at = step(at, component);
-    if (at === MISSING && index === address.path.length - 1 && address.role === 'optional') return { value: undefined };
+    if (at === MISSING && index === address.path.length - 1 && (address.role === 'optional' || address.role === 'literal')) return { value: undefined };
   }
-  return at === MISSING ? undefined : { value: at };
+  if (at === MISSING) return undefined;
+  if (address.role === 'literal') {
+    const wrapper = at as { type?: unknown; value?: unknown } | null;
+    return wrapper?.type === 'literal' && Object.hasOwn(wrapper, 'value') ? { value: wrapper.value } : undefined;
+  }
+  return { value: at };
 }
 
 /** The text a field shows when it holds no unapplied text; `undefined`
@@ -109,6 +115,7 @@ export function fieldText(document: WorkflowDocument, address: FieldAddress): st
   const found = fieldValue(document, address);
   if (!found) return undefined;
   switch (address.role) {
+    case 'literal':
     case 'optional': return found.value === undefined ? '' : JSON.stringify(found.value, null, 2) ?? 'null';
     case 'value': return JSON.stringify(found.value, null, 2) ?? 'null';
     case 'key': {
@@ -142,12 +149,16 @@ function setIn(at: unknown, path: readonly FieldStep[], value: unknown, optional
 export function setField(document: WorkflowDocument, address: FieldAddress, value: unknown): WorkflowDocument {
   const block = blockAt(document, address.block);
   if (!block) throw new CommandRejected('missing_node');
+  if (address.role === 'literal') {
+    if (!fieldValue(document, address)) throw new CommandRejected('missing_field');
+    value = { type: 'literal', value };
+  }
   if (address.domain?.kind === 'node_presentation' && address.node) return setNodePresentation(document, address.block, address.node, setIn(root(document, address), address.path, value) as WorkflowNodePresentation);
   if (address.domain?.kind === 'note') return putNote(document, setIn(root(document, address), address.path, value) as WorkflowNote);
-  if (address.node === undefined) return updateBlock(document, address.block, current => setIn(current, address.path, value, address.role === 'optional') as typeof current);
+  if (address.node === undefined) return updateBlock(document, address.block, current => setIn(current, address.path, value, (address.role === 'optional' || address.role === 'literal')) as typeof current);
   const node = nodeAt(block, address.node);
   if (!node) throw new CommandRejected('missing_node');
-  return replaceNode(document, address.block, address.node, setIn(node, address.path, value, address.role === 'optional') as typeof node);
+  return replaceNode(document, address.block, address.node, setIn(node, address.path, value, (address.role === 'optional' || address.role === 'literal')) as typeof node);
 }
 
 /** Replace the value at an address from its current value. */

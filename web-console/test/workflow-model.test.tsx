@@ -417,3 +417,23 @@ it.each(['object', 'literal'] as const)('edits and clears a Tool constant in %s 
   expect(current()).toEqual(kind === 'object' ? { type: kind, fields: {} } : { type: kind, value: {} });
   expect(actor.getSnapshot().context.drafts).toEqual({});
 });
+
+it.each(['object', 'literal'] as const)('uses the displayed payload as the draft base in %s Tool arguments', async kind => {
+  const original = { x: 1 }, wrapper = { type: 'literal', value: original };
+  const tool: NodeDefinition = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: kind === 'object'
+    ? { type: kind, fields: { options: { type: 'literal', value: original } } }
+    : { type: kind, value: { options: original } }, result: { type: 'text' } };
+  const actor = await open(undefined, tool), control = await screen.findByRole('textbox', { name: 'JSON' });
+  changeJson(control, JSON.stringify(wrapper, null, 2));
+  expect(Object.values(actor.getSnapshot().context.drafts)).toMatchObject([{ base: JSON.stringify(original, null, 2), text: JSON.stringify(wrapper, null, 2) }]);
+  expect(screen.getAllByText('Unsaved changes', { exact: true }).length).toBeGreaterThan(0);
+  changeJson(control, JSON.stringify(original, null, 2));
+  expect(actor.getSnapshot().context.drafts).toEqual({});
+  expect(screen.getAllByText('No unsaved changes', { exact: true }).length).toBeGreaterThan(0);
+  changeJson(control, JSON.stringify(wrapper, null, 2)); fireEvent.blur(control);
+  const argument = () => (actor.getSnapshot().context.document!.block.nodes.model as Extract<NodeDefinition, { type: 'tool' }>).arguments;
+  const expected = kind === 'object' ? { type: kind, fields: { options: { type: 'literal', value: wrapper } } } : { type: kind, value: { options: wrapper } };
+  expect(argument()).toEqual(expected);
+  act(() => actor.send({ type: 'UNDO' })); expect(argument()).toEqual(tool.arguments);
+  act(() => actor.send({ type: 'REDO' })); expect(argument()).toEqual(expected);
+});

@@ -164,7 +164,7 @@ function ConstantInput({ kind, name, value, invalid, address, wrapped }: {
   kind: 'integer' | 'number' | 'json'; name: string; value: unknown; invalid: boolean; address: FieldAddress; wrapped: boolean;
 }) {
   const tx = useTranslation(), describe = useFieldError();
-  const location = { ...address, role: 'optional' as const };
+  const location = { ...address, role: wrapped ? 'literal' as const : 'optional' as const };
   const field = useFieldDraft({ address: location, canonical: value === undefined ? '' : JSON.stringify(value, null, 2), command: (document, text) => {
     if (!fieldValue(document, location)) return { status: 'rejected', error: { kind: 'missing' } };
     if (!text.trim()) {
@@ -176,7 +176,7 @@ function ConstantInput({ kind, name, value, invalid, address, wrapped }: {
     if (!reading.ok) return { status: 'rejected', error: { kind: reading.reason } };
     if (kind !== 'json' && (typeof reading.value !== 'number' || kind === 'integer' && !Number.isInteger(reading.value)))
       return { status: 'rejected', error: { kind: 'syntax' } };
-    return { status: 'applied', document: setField(document, location, wrapped ? { type: 'literal', value: reading.value } : reading.value) };
+    return { status: 'applied', document: setField(document, location, reading.value) };
   } });
   const error = describe(field.error);
   return <div onBlur={kind === 'json' ? field.apply : undefined} onKeyDown={event => {

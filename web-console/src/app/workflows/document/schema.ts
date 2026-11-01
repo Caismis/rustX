@@ -44,8 +44,8 @@ export function schemaTarget(address: FieldAddress, document?: WorkflowDocument)
 
 /** Model output metadata addresses the derived result envelope; schema edits
  * address the declaration inside output.schema. */
-function declaredSchemaPath(address: FieldAddress, target: NonNullable<ReturnType<typeof schemaTarget>>): WorkflowSchemaStep[] {
-  return target.path.slice(address.node && address.path[0] === 'output' && address.path[1] === 'schema' ? 1 : 0);
+function declaredSchemaPath(document: WorkflowDocument, address: FieldAddress, target: NonNullable<ReturnType<typeof schemaTarget>>): WorkflowSchemaStep[] {
+  return target.path.slice(address.node && address.path[0] === 'output' && address.path[1] === 'schema' && blockAt(document, address.block)?.nodes[address.node]?.type === 'model' ? 1 : 0);
 }
 
 export function patchSchema(document: WorkflowDocument, address: FieldAddress, patch: Schema): WorkflowDocument {
@@ -165,7 +165,7 @@ export function renameSchemaField(document: WorkflowDocument, address: FieldAddr
     const step = candidate.path[target.path.length];
     return candidate.path.length === target.path.length ? order.fields.includes(to) : step.kind === 'property' && step.name === to;
   })) throw new CommandRejected('duplicate_identifier');
-  const steps = target ? declaredSchemaPath(address, target) : [], suffix = steps.reduce((length, step) => length + (step.kind === 'items' ? 1 : 2), 0);
+  const steps = target ? declaredSchemaPath(document, address, target) : [], suffix = steps.reduce((length, step) => length + (step.kind === 'items' ? 1 : 2), 0);
   const root = { ...address, path: address.path.slice(0, address.path.length - suffix) };
   let next = setField(document, root, renameContract(schemaObject(fieldValue(document, root)?.value)!, steps, from, to));
   if (!target) return next;

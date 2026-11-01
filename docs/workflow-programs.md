@@ -456,7 +456,11 @@ assertions outside the closed vocabulary and coercion remain rejected.
 A property's `default` must satisfy that property's own schema and is bounded
 like any finite value. At every block entry, before the input is validated,
 each absent property that declares a `default` is filled in, recursively through
-present objects and array items. The block's `args` reference type therefore
+present objects, inserted defaults and array items. Normalization shares one
+64 KiB output budget and a 65,536-visit work budget (values and schema properties)
+across the entire input. It checks bytes before copying keys or scalar values,
+and stops construction immediately when either budget or value depth is exceeded;
+no graph node starts with an oversized default expansion. The block's `args` reference type therefore
 treats defaulted properties as required: an optional field with a default can be
 referenced, one without cannot.
 The [visual editor](workflow-visual-editor.md) authors these same native schemas

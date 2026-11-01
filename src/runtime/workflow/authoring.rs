@@ -1040,7 +1040,7 @@ fn analyze_query(
     };
     let input_known = validate_root_schema(&definition.block.input, "input").is_ok();
     // A break condition or an Iteration output reads the body after a round:
-    // everything around it, the container's own variables and every body node.
+    // the variables around it and body exports proven at every completion.
     let inner = consumer.result_scope.then(|| {
         let mut path = address.block.clone();
         path.push(WorkflowBlockStep {
@@ -1064,11 +1064,10 @@ fn analyze_query(
         None => context,
     };
     let scope = if consumer.result_scope {
-        base.map(|base| {
-            block
-                .nodes
-                .keys()
-                .fold(base, |scope, id| scope.with_prefix(id, &Value::Null))
+        base.and_then(|base| {
+            control_flow(block)
+                .ok()
+                .map(|flow| flow.scopes.completion_scope(&declarations, &base))
         })
     } else {
         scopes.and_then(|mut scopes| scopes.remove(&address.node))

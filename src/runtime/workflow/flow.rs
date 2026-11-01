@@ -201,9 +201,22 @@ impl ActivationScopes {
     }
     /// A round completes after all selected paths settle, including an
     /// unconnected branch port. Its exports must exist on every activation.
-    pub(super) fn available_at_completion(&self, producer: &str) -> bool {
+    fn available_at_completion(&self, producer: &str) -> bool {
         self.active.get(producer).is_some_and(Bdd::is_true)
             && self.succeeded.get(producer).is_none_or(Bdd::is_true)
+    }
+
+    /// The virtual completion point is shared by compilation and authoring.
+    pub(super) fn completion_scope(&self, declarations: &SchemaMap, base: &SchemaMap) -> SchemaMap {
+        let mut scope = base.clone();
+        for producer in self.active.keys() {
+            if self.available_at_completion(producer)
+                && let Some(schema) = declarations.0.get(producer)
+            {
+                scope.0.insert(producer.clone(), schema.clone());
+            }
+        }
+        scope
     }
 
     pub(super) fn scope(

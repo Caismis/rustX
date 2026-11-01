@@ -197,3 +197,28 @@ describe('body contract boundaries', () => {
   });
 
 });
+
+describe('Agent and Model declaration paths', () => {
+  for (const kind of ['agent', 'model'] as const) it.each([false, true])(`${kind} nested array=%s keeps ancestor finite constraints and references in one transaction`, async array => {
+    const contract = (key: string) => {
+      const finite = { [key]: 'value' };
+      const leaf = { type: 'object', properties: { [key]: { type: 'string' } }, required: [key], additionalProperties: false, const: finite, enum: [finite] };
+      const parentValue = array ? { rows: [finite] } : finite;
+      const parent = array ? { type: 'object', properties: { rows: { type: 'array', items: leaf, const: [finite], enum: [[finite]] } }, required: ['rows'], additionalProperties: false, const: parentValue, enum: [parentValue] } : leaf;
+      return { type: 'object', properties: { parent }, required: ['parent'], additionalProperties: false, const: { parent: parentValue }, enum: [{ parent: parentValue }] };
+    };
+    const before = fixture();
+    before.block.nodes.produce = kind === 'agent' ? { type: 'agent', profile: 'reviewer', task: [], output: { type: 'json_schema', schema: contract('old') } }
+      : { type: 'model', model: { mode: 'session' }, messages: [], output: { type: 'json_schema', schema: contract('old') } };
+    const prefix = kind === 'model' ? ['produce', 'structured_output'] : ['produce'];
+    const reference = [...prefix, 'parent', ...array ? ['rows'] : ['old']];
+    before.block.nodes.done = { type: 'return', outputs: [{ variable: 'result', value_selector: reference }] };
+    const address = nodeField([], 'produce', ['output', 'schema', 'properties', { key: 'parent' }, ...array ? ['properties', { key: 'rows' }, 'items'] : []]);
+    const actor = await actorFor(before);
+    actor.send({ type: 'EDIT', apply: document => renameSchemaField(document, address, 'old', 'new') });
+    const after = actor.getSnapshot().context.document!;
+    expect(after.block.nodes.produce).toMatchObject({ output: { schema: contract('new') } });
+    expect(after.block.nodes.done).toMatchObject({ outputs: [{ value_selector: array ? reference : [...prefix, 'parent', 'new'] }] });
+    oneTransaction(actor, before, after); actor.stop();
+  });
+});

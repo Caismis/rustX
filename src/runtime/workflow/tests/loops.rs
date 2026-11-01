@@ -807,3 +807,34 @@ async fn continued_rounds_never_swallow_aggregated_native_call_limits() {
         }
     }
 }
+
+#[tokio::test]
+async fn recursive_default_expansion_stops_before_any_graph_or_native_child_starts() {
+    let input = (0..10).fold(schema(json!({}), &[]), |child, _| {
+        schema(
+            json!({"rows":{"type":"array","items":child,"default":vec![json!({});8]}}),
+            &[],
+        )
+    });
+    let definition = serde_json::from_value(json!({"description":"Bound default expansion","block":{
+        "input":input,"nodes":{"start":{"type":"start"},
+        "check":check_node(&json!({"type":"literal","value":{"passed":true,"label":"unused"}})),
+        "done":{"type":"return","outputs":[]}},"edges":[{"from":"start","to":"check"},{"from":"check","to":"done"}]}})).unwrap();
+    let plane = workflow_test_plane(1);
+    let runtime = workflow_runtime(&plane);
+    let observations = runtime.observations.subscribe();
+    let executor = Arc::new(Echo::default());
+    let result = run(&plane, runtime, executor.clone(), definition, json!({})).await;
+    assert!(matches!(
+        result,
+        Err(WorkflowRunError::LimitExceeded(WorkflowLimit::RetainedData))
+    ));
+    assert_eq!(executor.starts.load(Ordering::SeqCst), 0);
+    assert!(
+        !observations
+            .borrow()
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::WorkflowNodeStarted { .. })),
+        "no graph node, hence no Tool, Model or Agent can start"
+    );
+}

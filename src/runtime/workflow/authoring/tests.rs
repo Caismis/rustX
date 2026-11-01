@@ -1431,3 +1431,51 @@ fn replace_array_reference(candidate: &mut WorkflowDefinition, query: &WorkflowA
         path: query.reference.clone().unwrap(),
     };
 }
+
+#[test]
+fn round_completion_analysis_and_compilation_share_the_same_proof() {
+    let cases: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/workflow/round-completion.json"
+    ))
+    .unwrap();
+    for case in cases {
+        let mut candidate: WorkflowDefinition =
+            serde_json::from_value(case["definition"].clone()).unwrap();
+        let query: WorkflowAnalysisQuery = serde_json::from_value(case["query"].clone()).unwrap();
+        let expected = if case["available"] == true {
+            Available
+        } else {
+            Unavailable
+        };
+        let analysis = analyze(&candidate, Some(&query)).unwrap();
+        for choice in selected_and_catalog(&analysis) {
+            assert_eq!(choice.availability, expected, "{}", case["name"]);
+        }
+        assert_eq!(
+            super::super::WorkflowProgram::compile(
+                super::super::WorkflowId::parse("scope").unwrap(),
+                candidate.clone()
+            )
+            .is_ok(),
+            expected == Available,
+            "{}",
+            case["name"]
+        );
+        let node = candidate
+            .block
+            .nodes
+            .get_mut(&query.consumer.address.node)
+            .unwrap();
+        let (WorkflowNodeDefinition::Iteration { body, .. }
+        | WorkflowNodeDefinition::Loop { body, .. }) = node
+        else {
+            unreachable!()
+        };
+        body.nodes.remove("start");
+        assert_eq!(
+            selected(&candidate, &query).availability,
+            Pending,
+            "unfinished body has no proof"
+        );
+    }
+}

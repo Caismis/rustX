@@ -341,7 +341,7 @@ impl WorkflowRuntime {
         invocations: Vec<u32>,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<BlockOutput<'a>, WorkflowRunError> {
-        super::apply_schema_defaults(&block.input_schema, &mut input);
+        super::apply_schema_defaults(&block.input_schema, &mut input)?;
         validate_commit(&block.input_schema, &input)?;
         let mut reservation = LocalReservation::new(run);
         reservation.retain(&input)?;

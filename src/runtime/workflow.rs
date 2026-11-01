@@ -29,6 +29,8 @@ use super::subagent::SubagentName;
 mod admission;
 pub mod authoring;
 pub use authoring::{WorkflowModelPolicy, WorkflowToolSelector};
+mod defaults;
+pub(crate) use defaults::apply_schema_defaults;
 mod execution;
 mod flow;
 pub mod inspection;
@@ -1707,7 +1709,7 @@ struct Container {
     loop_variables: Option<BTreeMap<String, WorkflowVarType>>,
 }
 
-/// A body and the scope after it: every variable a round may have set,
+/// A body and the variables available whenever a round completes,
 /// for the Loop's break condition and the Iteration's output.
 fn compile_body(
     body: &WorkflowBlock,
@@ -1726,15 +1728,15 @@ fn compile_body(
     child_path.extend([owner.to_owned(), "body".into()]);
     let program = compile_block(body.clone(), child_path, total_nodes, Some(container))
         .map_err(|e| e.at("body"))?;
-    let scopes = control_flow(body)?.scopes;
-    let mut end = container.base.clone();
+    let mut declarations = container.base.clone();
     for (id, node) in &body.nodes {
-        if scopes.available_at_completion(id)
-            && let Ok(Some(schema)) = authoring::declared_output(node)
-        {
-            end.0.insert(id.clone(), schema);
+        if let Ok(Some(schema)) = authoring::declared_output(node) {
+            declarations.0.insert(id.clone(), schema);
         }
     }
+    let end = control_flow(body)?
+        .scopes
+        .completion_scope(&declarations, &container.base);
     Ok((program, end))
 }
 
@@ -3197,38 +3199,6 @@ fn schema_with_defaults_required(schema: &Value) -> Value {
         *items = schema_with_defaults_required(items);
     }
     Value::Object(result)
-}
-
-/// Fill every absent property that declares a `default`, recursively through
-/// present objects and array items.
-pub(crate) fn apply_schema_defaults(schema: &Value, value: &mut Value) {
-    match value {
-        Value::Object(fields) => {
-            let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
-                return;
-            };
-            for (name, property) in properties {
-                match fields.get_mut(name) {
-                    Some(field) => apply_schema_defaults(property, field),
-                    None => {
-                        if let Some(default) = property.get("default") {
-                            let mut field = default.clone();
-                            apply_schema_defaults(property, &mut field);
-                            fields.insert(name.clone(), field);
-                        }
-                    }
-                }
-            }
-        }
-        Value::Array(items) => {
-            if let Some(item_schema) = schema.get("items") {
-                for item in items {
-                    apply_schema_defaults(item_schema, item);
-                }
-            }
-        }
-        _ => {}
-    }
 }
 
 fn finite_schema_values(schema: &Value) -> Option<&[Value]> {
@@ -5889,7 +5859,7 @@ chat_reasoning_replay = "omit"
             "kept": {"type": "string", "default": "unused"}
         }});
         let mut value = json!({"rows": [{}, {"n": 2}], "kept": "given"});
-        apply_schema_defaults(&schema, &mut value);
+        apply_schema_defaults(&schema, &mut value).unwrap();
         assert_eq!(
             value,
             json!({"tone": "formal", "rows": [{"n": 1}, {"n": 2}], "kept": "given"})
@@ -5903,7 +5873,7 @@ chat_reasoning_replay = "omit"
             "rows":{"type":"array","items":{"type":"object","properties":{"n":{"type":"integer","default":2}}},"default":[{}]}
         }});
         for mut input in [json!({}), json!({"opts":{},"rows":[{}]})] {
-            apply_schema_defaults(&schema, &mut input);
+            apply_schema_defaults(&schema, &mut input).unwrap();
             assert_eq!(input, json!({"opts":{"n":1},"rows":[{"n":2}]}));
         }
     }
