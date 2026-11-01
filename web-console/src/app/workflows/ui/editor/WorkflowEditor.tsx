@@ -12,6 +12,7 @@ import { Button } from '../../../../presentation/primitives/Button';
 import { writeClipboard } from '../../../../presentation/primitives/clipboard';
 import { Menu } from '../../../../presentation/primitives/Menu';
 import { Modal } from '../../../../presentation/primitives/Modal';
+import { Toast } from '../../../../presentation/primitives/Toast';
 import { IconEllipsisOutline16 } from '../../../../presentation/primitives/icons';
 import { checklist, type ChecklistItem, type ChecklistMessage } from '../../document/checklist';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
@@ -50,6 +51,8 @@ export default function WorkflowEditor({ surface, editor, scopeLabel }: {
   const snapshot = useSelector(editor, value => value);
   const context = snapshot.context;
   const { target, document, base, block, check, generation, notice } = context;
+  // As Dify's save toast: each save announces itself once, then leaves.
+  const [toasted, setToasted] = useState<typeof context.receipt>();
   const [selection, choose] = useState<Selection>();
   const [fieldFocus, setFieldFocus] = useState<{ address?: FieldAddress; field?: string; epoch: number }>();
   // Another selection ends the current edit session (one undo step each).
@@ -246,7 +249,8 @@ export default function WorkflowEditor({ surface, editor, scopeLabel }: {
         ]} anchor={<button type="button" className={css.moreButton} aria-label={tx('workflows:editor.more')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(value => !value)}><IconEllipsisOutline16 /></button>} />
       </div>
     </header>
-    <EditorNotices notice={notice} uncertain={!!context.uncertain} receipt={!!context.receipt && !notice} reconcile={() => editor.send({ type: 'RECONCILE' })} dismiss={() => editor.send({ type: 'DISMISS' })} discard={() => editor.send({ type: 'DISCARD_DRAFTS' })}
+    {context.receipt && !notice && context.receipt !== toasted && <Toast key={`${context.receipt.revision}:${context.receipt.generation}`} tone="success" text={tx('workflows:notice.saved')} onDone={() => setToasted(context.receipt)} />}
+    <EditorNotices notice={notice} uncertain={!!context.uncertain} reconcile={() => editor.send({ type: 'RECONCILE' })} dismiss={() => editor.send({ type: 'DISMISS' })} discard={() => editor.send({ type: 'DISCARD_DRAFTS' })}
       drafts={context.drafts} show={show} discardField={field => editor.send({ type: 'DISCARD_DRAFT', field })} />
     {content}
     <Modal open={reloading} onClose={() => setReloading(false)} title={tx('workflows:editor.reload-title')} closeLabel={tx('workflows:dialog.close')} description={tx('workflows:editor.reload-body')}
@@ -254,12 +258,12 @@ export default function WorkflowEditor({ surface, editor, scopeLabel }: {
   </section>;
 }
 
-function EditorNotices({ notice, uncertain, receipt, reconcile, dismiss, discard, drafts, show, discardField }: {
-  notice?: EditorNotice; uncertain: boolean; receipt: boolean; reconcile: () => void; dismiss: () => void; discard: () => void;
+function EditorNotices({ notice, uncertain, reconcile, dismiss, discard, drafts, show, discardField }: {
+  notice?: EditorNotice; uncertain: boolean; reconcile: () => void; dismiss: () => void; discard: () => void;
   drafts: Readonly<Record<string, FieldDraft>>; show: (address: FieldAddress) => void; discardField: (field: string) => void;
 }) {
   const tx = useTranslation();
-  if (!notice && !uncertain) return receipt ? <p className={css.noticeQuiet} role="status">{tx('workflows:notice.saved')}</p> : null;
+  if (!notice && !uncertain) return null;
   let text: ReactNode = null;
   if (notice?.kind === 'failure') text = <FailureText failure={notice.failure} operation={tx(`workflows:notice.operation-${notice.operation}`)} />;
   else if (notice?.kind === 'committed_unconfirmed') text = tx('workflows:notice.committed-unconfirmed');
