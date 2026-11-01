@@ -36,7 +36,7 @@ function predicate(input: Predicate, rewrite: PathRewrite): Predicate {
 /** Entry expressions read the enclosing block; round expressions read the
  * body. A separate body declaration binds references of that name locally.
  * An Assigner's written variable is a path too. */
-function node(input: NodeDefinition, rewrite: PathRewrite, producer?: string): NodeDefinition {
+function node(input: NodeDefinition, rewrite: PathRewrite): NodeDefinition {
   switch (input.type) {
     case 'start': case 'loop_end': return input;
     case 'agent': return { ...input, task: input.task.map(part => value(part, rewrite)) };
@@ -44,26 +44,26 @@ function node(input: NodeDefinition, rewrite: PathRewrite, producer?: string): N
     case 'tool': return { ...input, arguments: value(input.arguments, rewrite) };
     case 'branch': return { ...input, cases: input.cases.map(item => ({ ...item, condition: predicate(item.condition, rewrite) })) };
     case 'review': return { ...input, content: input.content.map(part => value(part, rewrite)) };
-    case 'loop': {
-      const local = !!producer && Object.hasOwn(input.body.nodes, producer);
-      return { ...input, loop_variables: input.loop_variables?.map(item => ({ ...item, value: value(item.value, rewrite) })),
-        ...(input.break_condition ? { break_condition: local ? input.break_condition : predicate(input.break_condition, rewrite) } : {}),
-        body: local ? input.body : rewriteBlockReferences(input.body, rewrite, producer) };
-    }
+    case 'loop':
     case 'iteration': {
-      const local = !!producer && Object.hasOwn(input.body.nodes, producer);
-      return { ...input, iterator: value(input.iterator, rewrite), output: local ? input.output : value(input.output, rewrite),
-        body: local ? input.body : rewriteBlockReferences(input.body, rewrite, producer) };
+      // Entry fields read the enclosing scope. Body declarations bind only
+      // body reads and the container's round-completion expressions.
+      const round: PathRewrite = path => path.length > 0 && Object.hasOwn(input.body.nodes, path[0]) ? undefined : rewrite(path);
+      const body = rewriteBlockReferences(input.body, round);
+      return input.type === 'loop'
+        ? { ...input, loop_variables: input.loop_variables?.map(item => ({ ...item, value: value(item.value, rewrite) })),
+          ...(input.break_condition ? { break_condition: predicate(input.break_condition, round) } : {}), body }
+        : { ...input, iterator: value(input.iterator, rewrite), output: value(input.output, round), body };
     }
     case 'assigner': return { ...input, items: input.items.map(item => ({ ...item, variable: rewrite(item.variable) ?? item.variable, ...(item.value ? { value: value(item.value, rewrite) } : {}) })) };
     case 'return': return { ...input, outputs: input.outputs.map(item => ({ ...item, value_selector: rewrite(item.value_selector) ?? item.value_selector })) };
   }
 }
 
-/** Rewrite structured bindings. A producer-bound rename stops at a body's
- * separate local declaration of that name. */
-export function rewriteBlockReferences(block: Block, rewrite: PathRewrite, producer?: string): Block {
-  return { ...block, nodes: Object.fromEntries(Object.entries(block.nodes).map(([id, definition]) => [id, node(definition, rewrite, producer)])) };
+/** Rewrite bindings in this scope and inherited by its bodies. Each body's
+ * own declarations remain bound locally, including its completion expressions. */
+export function rewriteBlockReferences(block: Block, rewrite: PathRewrite): Block {
+  return { ...block, nodes: Object.fromEntries(Object.entries(block.nodes).map(([id, definition]) => [id, node(definition, rewrite)])) };
 }
 
 /** A container's fields that read its body after a round: the Loop's break
@@ -74,25 +74,13 @@ export function rewriteRoundReferences(container: NodeDefinition, rewrite: PathR
   return container;
 }
 
-/** Node IDs declared in the bodies inside `block`, at any depth. */
-function bodyIdentifiers(block: Block, found = new Set<string>()): Set<string> {
-  for (const definition of Object.values(block.nodes)) if (definition.type === 'loop' || definition.type === 'iteration') {
-    for (const id of Object.keys(definition.body.nodes)) found.add(id);
-    bodyIdentifiers(definition.body, found);
-  }
-  return found;
-}
-
 /** References to `id`'s value: its own output, or a field of it. */
 export const renameProducer = (from: string, to: string): PathRewrite =>
   path => path[0] === from ? [to, ...path.slice(1)] : undefined;
 
-
-
-/** Every reference a block reads from outside it: references to its
- * bodies' own nodes stay inside. */
+/** References whose producer is outside this block and its lexical bodies. */
 export function blockReferences(block: Block): string[][] {
-  const found: string[][] = [], inside = bodyIdentifiers(block);
-  rewriteBlockReferences(block, path => { if (!inside.has(path[0])) found.push([...path]); return undefined; });
+  const found: string[][] = [];
+  rewriteBlockReferences(block, path => { if (!path.length || !Object.hasOwn(block.nodes, path[0])) found.push([...path]); return undefined; });
   return found;
 }

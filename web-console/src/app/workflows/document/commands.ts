@@ -175,7 +175,7 @@ export function renameNode(document: WorkflowDocument, path: BlockPath, from: st
   const parent = path.slice(0, -1), owner = path.at(-1)?.node;
   const outer = owner ? updateBlock(document, parent, current => ({ ...current, nodes: { ...current.nodes, [owner]: rewriteRoundReferences(current.nodes[owner], renameProducer(from, to)) } })) : document;
   const next = updateBlock(outer, path, current => {
-    const renamed = rewriteBlockReferences(current, renameProducer(from, to), from);
+    const renamed = rewriteBlockReferences(current, renameProducer(from, to));
     return {
       ...renamed,
       nodes: Object.fromEntries(Object.entries(renamed.nodes).map(([id, node]) => [id === from ? to : id, node])),
@@ -197,7 +197,7 @@ export function renameLoopVariable(document: WorkflowDocument, path: BlockPath, 
   const parent = path.slice(0, -1), container = path.at(-1)?.node;
   const outer = container ? updateBlock(document, parent, block => ({ ...block, nodes: { ...block.nodes, [container]: rewriteRoundReferences(block.nodes[container], rewrite) } })) : document;
   return updateBlock(outer, path, block => {
-    const renamed = rewriteBlockReferences(block, rewrite, owner), node = renamed.nodes[owner] as typeof loop;
+    const renamed = rewriteBlockReferences(block, rewrite), node = renamed.nodes[owner] as typeof loop;
     return { ...renamed, nodes: { ...renamed.nodes, [owner]: { ...node, loop_variables: node.loop_variables!.map(variable => variable.label === from ? { ...variable, label: to } : variable) } } };
   });
 }

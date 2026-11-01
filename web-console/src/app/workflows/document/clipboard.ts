@@ -4,7 +4,7 @@ import { boundedDocument, CommandRejected, freshNodeId, validLocalKey, validNode
 import { blockAt, deepNodeCount, edgesOf, sameBlockPath, sameDocument, updateBlock, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from './model';
 import type { FieldAddress } from './fields';
 import { MAX_COORDINATE, dimensions, freshNote, position, presentationEdit, utf8Length } from './geometry';
-import { blockReferences, renameProducer, rewriteBlockReferences } from './references';
+import { blockReferences, rewriteBlockReferences } from './references';
 import { schemaObject } from './schema';
 import { requireVacantNodePresentation } from './presentation';
 import { RESERVED_PORTS, TIMEOUT_PORT } from './ports';
@@ -249,9 +249,9 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
   for (const at of [...fragment.editor.orders?.flatMap(order => 'block' in order.target ? [order.target.block] : []) ?? []]) {
     if (!within(at, fragment.block) || at.length <= fragment.block.length) fail();
   }
-  const ids = Object.keys(fragment.nodes).sort(), original = new Set(ids);
+  const ids = Object.keys(fragment.nodes).sort();
   const block: Block = { input: {}, nodes: fragment.nodes, edges: fragment.edges };
-  if ((source !== fragment.source || !sameBlockPath(path, fragment.block)) && blockReferences(block).some(reference => !original.has(reference[0]))) throw new CommandRejected('cross_scope');
+  if ((source !== fragment.source || !sameBlockPath(path, fragment.block)) && blockReferences(block).length) throw new CommandRejected('cross_scope');
   // Include ancestors, destination descendants and the copied subtree in
   // allocation, even when the fragment arrived from another document.
   const names = new Map<string, string>();
@@ -290,9 +290,7 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
     }
   };
   checkBodies(fragment.nodes, outer);
-  // Allocated names avoid every copied ID, so these bound rewrites cannot
-  // cascade into another rename or capture an independent body declaration.
-  const rewritten = [...names].reduce((current, [from, to]) => rewriteBlockReferences(current, renameProducer(from, to), from), block);
+  const rewritten = rewriteBlockReferences(block, reference => names.has(reference[0]) ? [names.get(reference[0])!, ...reference.slice(1)] : undefined);
   let next = updateBlock(document, path, current => ({ ...current, nodes: { ...current.nodes, ...Object.fromEntries(ids.map(id => [names.get(id)!, structuredClone(rewritten.nodes[id])])) },
     edges: [...edgesOf(current), ...edgesOf(block).map(edge => ({ ...edge, from: names.get(edge.from) ?? fail(), to: names.get(edge.to) ?? fail() }))] }));
   if (deepNodeCount(next.block) > 256) throw new CommandRejected('limit_exceeded');

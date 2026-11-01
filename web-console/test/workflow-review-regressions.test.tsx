@@ -6,9 +6,10 @@ import { rootBlock } from './workflow-root';
 import { copyFragment, duplicateFragment, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
 import { blockField, encodeField, nodeField, setField, type FieldAddress } from '../src/app/workflows/document/fields';
 import { putNote, setNodePresentation } from '../src/app/workflows/document/geometry';
-import { sameBlockPath, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../src/app/workflows/document/model';
+import { sameBlockPath, type Block, type BlockPath, type NodeDefinition, type Value, type WorkflowDocument } from '../src/app/workflows/document/model';
 import { renameSchemaField, schemaConsumers, schemaPropertyAddress } from '../src/app/workflows/document/schema';
-import { workflowEditorMachine, type WorkflowEditorActor } from '../src/app/workflows/machines/editor';
+import { blockReferences } from '../src/app/workflows/document/references';
+import { isDirty, workflowEditorMachine, type WorkflowEditorActor } from '../src/app/workflows/machines/editor';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { projectScene } from '../src/app/workflows/ui/editor/scene';
 import { DraftOwner, FieldCommits } from '../src/app/workflows/ui/editor/forms/drafts';
@@ -338,4 +339,51 @@ it.each(clipboardCases)('pastes complete $kind groups across documents without r
   expect(core).toEqual(example.pasted);
   expect(source).toEqual(original);
   actor.stop();
+});
+
+
+it.each(clipboardCases)('rejects an incomplete $kind group regardless of an unrelated same-name body', async example => {
+  const source = example.source as WorkflowDocument;
+  for (const localBody of [true, false]) {
+    const selection = example.selection.filter(id => id !== 'generate' && (localBody || id !== 'sibling'));
+    const fragment = parseFragment(copyFragment(source, 'source', [], selection));
+    const dependencies = blockReferences({ nodes: fragment.nodes, edges: fragment.edges });
+    const selector = ['generate', ...(example.kind === 'model' ? ['structured_output'] : []), 'foo'];
+    expect(dependencies.filter(reference => reference[0] === 'generate')).toEqual([selector, selector, selector]);
+    const target = example.target as WorkflowDocument, original = structuredClone(target);
+    const fragmentBefore = structuredClone(fragment);
+    expect(() => pasteFragment(target, 'target', [], fragment)).toThrow('cross_scope');
+    expect(target).toEqual(original); expect(fragment).toEqual(fragmentBefore);
+    const actor = await actorFor(target);
+    actor.send({ type: 'EDIT', apply: document => pasteFragment(document, 'target', [], fragment).document });
+    expect(actor.getSnapshot().context).toMatchObject({ document: original, past: [], future: [], rejection: 'cross_scope' });
+    expect(isDirty(actor.getSnapshot().context)).toBe(false);
+    actor.stop();
+  }
+});
+
+
+it('collects external reads in entry fields without leaking body-local bindings across scopes', () => {
+  const reference = (...path: string[]): Value => ({ type: 'reference', path });
+  const tool = (fields: Record<string, Value> = {}): NodeDefinition => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' },
+    arguments: { type: 'object', fields }, result: { type: 'text' } });
+  const block: Block = { nodes: {
+    repeat: { type: 'loop', loop_count: 1,
+      loop_variables: [{ label: 'flag', var_type: 'boolean', value: reference('same', 'initial') }],
+      break_condition: { type: 'boolean', value: reference('same', 'done') },
+      body: { nodes: { same: tool(), own: { type: 'assigner', items: [{ variable: ['repeat', 'flag'], operation: 'clear' }] },
+        nested: { type: 'iteration', iterator: reference('same', 'items'), output: reference('deep', 'text'), body: { nodes: {
+          deep: tool(), read: tool({ parent: reference('same', 'text'), local: reference('deep', 'text'), outside: reference('missing', 'deep'),
+            literal: { type: 'literal', value: { type: 'reference', path: ['business_data'] } } }),
+        } } },
+      } } },
+    elsewhere: { type: 'iteration', iterator: reference('same', 'items'), output: reference('local', 'text'),
+      body: { nodes: { local: tool({ outside: reference('same', 'text') }) } } },
+    done: { type: 'return', outputs: [{ variable: 'value', value_selector: ['same', 'result'] }] },
+  } };
+  const references = blockReferences(block);
+  expect(references).toHaveLength(5);
+  expect(references).toEqual(expect.arrayContaining([
+    ['same', 'initial'], ['missing', 'deep'], ['same', 'items'], ['same', 'text'], ['same', 'result'],
+  ]));
 });

@@ -171,7 +171,7 @@ test('structured output rename preserves a preceding Iteration with an independe
 });
 
 
-test('cross-workflow paste preserves local and inherited producer bindings through native save', async ({ page }) => {
+test('cross-workflow paste rejects incomplete groups and preserves local and inherited bindings through native save', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood'), errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -185,16 +185,28 @@ test('cross-workflow paste preserves local and inherited producer bindings throu
     await page.getByRole('button', { name: 'scope_paste', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     const canvas = page.getByRole('region', { name: 'Workflow canvas' });
-    await canvas.focus();
-    await canvas.evaluate((element, text) => {
-      const clipboardData = new DataTransfer(); clipboardData.setData('text/plain', text);
-      element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData }));
-    }, copyFragment(example.source as WorkflowDocument, 'another-workflow', [], example.selection));
+    const start = canvas.getByLabel('Workflow Start', { exact: true }); await start.focus(); await start.press('Enter');
+    const paste = async (selection: string[]) => {
+      await canvas.focus();
+      await canvas.evaluate((element, text) => {
+        const clipboardData = new DataTransfer(); clipboardData.setData('text/plain', text);
+        element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData }));
+      }, copyFragment(example.source as WorkflowDocument, 'another-workflow', [], selection));
+    };
     const seed = canvas.getByLabel('Loop node seed_copy', { exact: true });
+    for (const localBody of [true, false]) {
+      await paste(example.selection.filter(id => id !== 'generate' && (localBody || id !== 'sibling')));
+      await expect(page.getByText('This operation crosses a private Block scope. Copy its producers too, or bind inputs explicitly.', { exact: true })).toBeVisible();
+      await expect(seed).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+      await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+      expect(parse(readFileSync(file, 'utf8'))).toEqual(example.target);
+    }
+    await paste(example.selection);
     await expect(seed).toBeVisible();
     await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(seed).toHaveCount(0);
     await page.getByRole('button', { name: 'Redo', exact: true }).click(); await expect(seed).toBeVisible();
-    const start = canvas.getByLabel('Workflow Start', { exact: true }); await start.focus(); await start.press('Enter');
+    await start.focus(); await start.press('Enter');
     const panel = page.getByRole('complementary', { name: 'Inspector' });
     await panel.getByRole('button', { name: 'Choose next node for Next step', exact: true }).click();
     const picker = page.getByRole('dialog', { name: 'Choose a workflow node' });
