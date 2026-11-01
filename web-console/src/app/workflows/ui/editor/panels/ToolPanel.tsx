@@ -136,7 +136,9 @@ function ToolArgument({ name, schema, required, value, set, tool, edit }: PanelP
   return <div className={css.toolArgument}>
     <div className={css.toolArgumentHead}><b>{name}</b>{required && <span className={css.required} aria-label={tx('workflows:tool.required')}>*</span>}</div>
     {description && <p className={css.toolArgumentAbout}>{description}</p>}
-    {kind === 'string' ? <TemplateInput parts={templateParts(value)} address={address} edit={edit} label={name} badge={tx('workflows:tool.type-string')} invalid={required && !value}
+    {value && value.type !== 'literal' && value.type !== 'reference' && !(kind === 'string' && value.type === 'template')
+      ? <ValueEditor label={name} address={address} value={value} edit={edit} />
+      : kind === 'string' ? <TemplateInput parts={templateParts(value)} address={address} edit={edit} label={name} badge={tx('workflows:tool.type-string')} invalid={required && !value}
       onChange={(parts, session) => set(name, templateValue(parts), `${encodeField(address)}:${session}`)} />
       // As Dify's FormInputItem: a JSON constant's editor sits under the switch.
       : <div className={kind === 'json' && !variable ? css.toolArgumentStack : css.toolArgumentRow}>

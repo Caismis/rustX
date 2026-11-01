@@ -6,7 +6,7 @@ import type { WorkflowCandidateAnalysis, WorkflowAnalysisQuery, WorkflowAnalysis
 import type { WorkflowCommit } from '../src/workspaces/host';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { exampleSource } from './workflow-fixtures';
-import { type NodeDefinition, type Predicate } from '../src/app/workflows/document/model';
+import { type NodeDefinition, type Predicate, type Value } from '../src/app/workflows/document/model';
 import { connect } from '../src/app/workflows/document/commands';
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import { workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
@@ -32,11 +32,11 @@ beforeEach(() => {
   vi.stubGlobal('DOMMatrixReadOnly', class { m22 = 1; constructor() {} });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
-async function open(analyze: WorkflowScopePort['analyze'] = () => new Promise(() => {}), node = modelNode) {
+async function open(analyze: WorkflowScopePort['analyze'] = () => new Promise(() => {}), node = modelNode, initial = source(node)) {
   const port: WorkflowScopePort = {
     endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' }, enable: () => new Promise(() => {}), list: () => new Promise(() => {}),
     analyze, toolCatalog: async () => ({ sources: [] }), modelChoices: async query => query.type === 'models' ? { type: 'models', revision: 'catalog-1', models: ['fixture/model'], next_offset: null } : { type: 'profiles', revision: 'catalog-1', model: query.model, profiles: ['low'], next_offset: null },
-    read: async id => ({ ...source(node), id, revision: 'sha256:base' }), check: () => new Promise(() => {}),
+    read: async id => ({ ...initial, id, revision: 'sha256:base' }), check: () => new Promise(() => {}),
     write: (_id, _revision, edit) => { writes.push(edit); return new Promise<WorkflowCommit>(() => {}); },
   };
   const surface = createActor(workflowSurfaceMachine, { input: { ports: () => port } }).start();
@@ -436,4 +436,30 @@ it.each(['object', 'literal'] as const)('uses the displayed payload as the draft
   expect(argument()).toEqual(expected);
   act(() => actor.send({ type: 'UNDO' })); expect(argument()).toEqual(tool.arguments);
   act(() => actor.send({ type: 'REDO' })); expect(argument()).toEqual(expected);
+});
+
+it.each(['object', 'array'] as const)('preserves and edits existing %s parameter expressions after catalog resolution', async kind => {
+  const ref: Value = { type: 'reference', path: ['args', 'token'] };
+  const expression: Value = kind === 'object' ? { type: kind, fields: { x: ref, values: { type: 'array', items: [ref] } } } : { type: kind, items: [ref, ref] };
+  const tool: NodeDefinition = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: { path: { type: 'literal', value: 'sample.txt' }, options: expression } }, result: { type: 'text' } };
+  const initial = structuredClone(source(tool));
+  initial.document!.block.input = { type: 'object', properties: { token: { type: 'string' } }, required: ['token'], additionalProperties: false };
+  const contract = initial.vocabulary!.builtin_tools[0].input_schema as { properties: Record<string, unknown> };
+  contract.properties.options = kind === 'object' ? { type: kind } : { type: kind, items: { type: 'string' } };
+  const actor = await open(undefined, tool, initial);
+  const current = () => (actor.getSnapshot().context.document!.block.nodes.model as Extract<NodeDefinition, { type: 'tool' }>).arguments;
+  expect(current()).toEqual(tool.arguments); expect(actor.getSnapshot().context.past).toEqual([]); expect(actor.getSnapshot().context.drafts).toEqual({});
+  const parameter = within(inspector().getByRole('group', { name: 'options' }));
+  expect(parameter.getAllByRole('radio', { name: kind === 'object' ? 'Object' : 'Array', checked: true }).length).toBeGreaterThan(0);
+  const slot = within(parameter.getByRole('group', { name: kind === 'object' ? 'x' : '[0]' }));
+  expect(slot.getByRole('radio', { name: 'Reference', checked: true })).toBeTruthy();
+  fireEvent.click(slot.getByRole('radio', { name: 'Literal' }));
+  const control = slot.getByRole('textbox'); fireEvent.change(control, { target: { value: '"replacement"' } }); fireEvent.blur(control);
+  const changed = structuredClone(tool.arguments) as Extract<Value, { type: 'object' }>;
+  const replacement: Value = { type: 'literal', value: 'replacement' };
+  if (changed.fields.options.type === 'object') changed.fields.options.fields.x = replacement;
+  else if (changed.fields.options.type === 'array') changed.fields.options.items[0] = replacement;
+  expect(current()).toEqual(changed);
+  act(() => { actor.send({ type: 'UNDO' }); actor.send({ type: 'UNDO' }); }); expect(current()).toEqual(tool.arguments);
+  act(() => { actor.send({ type: 'REDO' }); actor.send({ type: 'REDO' }); }); expect(current()).toEqual(changed);
 });

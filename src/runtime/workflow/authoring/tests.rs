@@ -1479,3 +1479,101 @@ fn round_completion_analysis_and_compilation_share_the_same_proof() {
         );
     }
 }
+
+#[test]
+fn fail_branch_choices_use_the_consumer_outcome_for_tool_model_and_agent() {
+    let success_schema = object(json!({"passed":{"type":"boolean"}}), &["passed"]);
+    let producers = [
+        (
+            "tool",
+            "passed",
+            "boolean",
+            json!({"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":{"type":"literal","value":{}},"result":{"type":"json","schema":success_schema},"on_error":{"type":"fail_branch"}}),
+        ),
+        (
+            "model",
+            "text",
+            "string",
+            json!({"type":"model","model":{"mode":"session"},"messages":[{"role":"system","content":[{"type":"literal","value":"Follow instructions"}]},{"role":"user","content":[{"type":"literal","value":"Go"}]}],"output":{"type":"text"},"on_error":{"type":"fail_branch"}}),
+        ),
+        (
+            "agent",
+            "passed",
+            "boolean",
+            json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Go"}],"output":{"type":"json_schema","schema":success_schema},"on_error":{"type":"fail_branch"}}),
+        ),
+    ];
+    let branch = |boolean: bool| {
+        let value = if boolean { json!(false) } else { json!("") };
+        json!({"type":"branch","cases":[{"id":"yes","condition":{"type":"equal",
+            "left":{"type":"literal","value":value},"right":{"type":"literal","value":value}}}]})
+    };
+    for (kind, success, success_type, producer) in producers {
+        let candidate = definition(json!({"input":object(json!({}), &[]),"nodes":{
+            "start":{"type":"start"},"call":producer,
+            "on_success":branch(success_type == "boolean"),"on_failure":branch(false),"joined":branch(false),"done":done()},
+            "edges":[{"from":"start","to":"call"},{"from":"call","to":"on_success"},{"from":"call","to":"on_failure","port":"fail"},
+                {"from":"on_success","to":"joined","port":"yes"},{"from":"on_success","to":"joined","port":"false"},
+                {"from":"on_failure","to":"joined","port":"yes"},{"from":"on_failure","to":"joined","port":"false"},
+                {"from":"joined","to":"done","port":"yes"},{"from":"joined","to":"done","port":"false"}]}));
+        for node in ["on_success", "on_failure", "joined"] {
+            for (field, field_type) in [
+                (success, success_type),
+                ("error_type", "string"),
+                ("error_message", "string"),
+            ] {
+                let available = node == "on_success" && field == success
+                    || node == "on_failure" && field != success;
+                let mut query = query(
+                    node,
+                    WorkflowConsumerField::Condition {
+                        case_id: "yes".into(),
+                    },
+                    &["call", field],
+                );
+                query.consumer.path = vec![WorkflowExpressionStep::Left];
+                let analysis = analyze(&candidate, Some(&query)).unwrap();
+                let chosen = analysis.selected.as_ref().unwrap();
+                assert_eq!(
+                    chosen.availability,
+                    if available { Available } else { Unavailable },
+                    "{kind}/{node}/{field}"
+                );
+                let listed = analysis
+                    .references
+                    .iter()
+                    .find(|choice| choice.path == chosen.path);
+                if available {
+                    assert_eq!(
+                        listed.unwrap().availability,
+                        Available,
+                        "{kind}/{node}/{field}"
+                    );
+                    assert_eq!(chosen.schema.as_ref().unwrap()["type"], field_type);
+                    assert_eq!(chosen.compatibility, Compatible, "{kind}/{node}/{field}");
+                } else {
+                    assert!(
+                        !listed.is_some_and(|choice| choice.availability == Available),
+                        "{kind}/{node}/{field}"
+                    );
+                }
+                let mut with_reference = candidate.clone();
+                let WorkflowNodeDefinition::Branch { cases } =
+                    with_reference.block.nodes.get_mut(node).unwrap()
+                else {
+                    unreachable!()
+                };
+                cases[0].condition = serde_json::from_value(json!({"type":"equal","left":reference(&["call",field]),"right":{"type":"literal","value":if field_type == "boolean" { json!(false) } else { json!("") }}})).unwrap();
+                assert_eq!(
+                    super::super::WorkflowProgram::compile(
+                        super::super::WorkflowId::parse("branches").unwrap(),
+                        with_reference
+                    )
+                    .is_ok(),
+                    available,
+                    "compiler: {kind}/{node}/{field}"
+                );
+            }
+        }
+    }
+}

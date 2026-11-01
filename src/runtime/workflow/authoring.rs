@@ -1049,7 +1049,7 @@ fn analyze_query(
         block_context(definition, &path)
     });
     let BlockContext {
-        declarations,
+        mut declarations,
         owners,
         scopes,
         base,
@@ -1073,6 +1073,16 @@ fn analyze_query(
         scopes.and_then(|mut scopes| scopes.remove(&address.node))
     };
     let scope = scope.as_ref();
+    // Entry scopes use Null as a cheap presence proof for an unrefined
+    // declaration. Concrete refinements, such as a fail-branch error object,
+    // must drive resolution, compatibility and catalog enumeration together.
+    if let Some(scope) = scope {
+        for (id, schema) in &scope.0 {
+            if !schema.is_null() && declarations.0.get(id) != Some(schema) {
+                declarations.0.insert(id.clone(), schema.clone());
+            }
+        }
+    }
     let mut inference = ChoiceInference {
         schemas: SchemaInference::new(&declarations, &address.node, schema_budget),
         arrays: BTreeMap::new(),
