@@ -304,8 +304,7 @@
             "to": "done"
           }
         ]
-      },
-      "timeout_ms": 600000
+      }
     },
     "target": {
       "description": "Paste target",
@@ -321,8 +320,7 @@
           }
         },
         "edges": []
-      },
-      "timeout_ms": 600000
+      }
     },
     "selection": [
       "seed",
@@ -634,8 +632,7 @@
             "to": "seed_copy"
           }
         ]
-      },
-      "timeout_ms": 600000
+      }
     }
   },
   {
@@ -906,8 +903,7 @@
             "to": "done"
           }
         ]
-      },
-      "timeout_ms": 600000
+      }
     },
     "target": {
       "description": "Paste target",
@@ -923,8 +919,7 @@
           }
         },
         "edges": []
-      },
-      "timeout_ms": 600000
+      }
     },
     "selection": [
       "seed",
@@ -1199,8 +1194,7 @@
             "to": "seed_copy"
           }
         ]
-      },
-      "timeout_ms": 600000
+      }
     }
   }
 ]

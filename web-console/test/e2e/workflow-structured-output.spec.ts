@@ -203,7 +203,9 @@ test('cross-workflow paste preserves local and inherited producer bindings throu
     await page.getByRole('button', { name: 'Save File', exact: true }).click();
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     const { editor: _presentation, ...saved } = parse(readFileSync(file, 'utf8'));
-    expect(saved).toEqual(example.pasted);
+    // Native files materialize the default as an integer; the editor DTO
+    // represents this optional u64 field as a decimal string.
+    expect(saved).toEqual({ ...example.pasted, timeout_ms: 600000 });
     await page.screenshot({ path: '/tmp/rustx-scoped-workflow-paste.png' });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
