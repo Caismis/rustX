@@ -313,6 +313,20 @@ impl<'a> LocalReservation<'a> {
         self.bytes += other.bytes;
         other.bytes = 0;
     }
+    fn release(&mut self, bytes: usize) {
+        self.bytes = self
+            .bytes
+            .checked_sub(bytes)
+            .expect("owned reservation release");
+        self.run.budgets.lock().expect("run budgets").retained_bytes -= bytes;
+    }
+    fn shrink_to(&mut self, bytes: usize) {
+        self.release(
+            self.bytes
+                .checked_sub(bytes)
+                .expect("reservation only shrinks"),
+        );
+    }
     fn retain(&mut self, value: &Value) -> Result<(), WorkflowRunError> {
         let bytes = super::expressions::bounded_value_bytes(value)?;
         self.retain_bytes(bytes)
@@ -359,7 +373,8 @@ fn merge_writes<'a>(
                 "assigned owner is not an object".into(),
             ));
         };
-        let mut bytes = super::expressions::bounded_value_bytes(current)?;
+        let previous_bytes = super::expressions::bounded_value_bytes(current)?;
+        let mut bytes = previous_bytes;
         for (label, value) in &fields {
             let previous = variables.get(label).ok_or_else(|| {
                 WorkflowRunError::InvalidProgram("assigned variable is missing".into())
@@ -367,11 +382,13 @@ fn merge_writes<'a>(
             bytes = bytes - super::expressions::bounded_value_bytes(previous)?
                 + super::expressions::bounded_value_bytes(value)?;
         }
-        retained.retain_bytes(bytes)?;
+        let peak = previous_bytes.max(bytes);
+        retained.retain_bytes(peak)?;
         let mut merged = variables.clone();
         merged.extend(fields);
         let merged = Value::Object(merged);
         super::expressions::bounded_value_bytes(&merged)?;
+        retained.release(peak - bytes);
         prepared.push((owner, merged));
     }
     for (owner, value) in prepared {
@@ -591,11 +608,32 @@ impl WorkflowRuntime {
                         writes,
                         reservation: completed,
                     } = output;
-                    reservation.absorb(completed);
-                    match merge_writes(run, &mut values, writes) {
+                    let assigner = matches!(block.nodes[&id], WorkflowNodeProgram::Assigner { .. });
+                    let merged = merge_writes(run, &mut values, writes);
+                    if assigner {
+                        // Pending writes now belong to the merged snapshot, or
+                        // were rejected and dropped. Their old lease retires.
+                        drop(completed);
+                    } else {
+                        reservation.absorb(completed);
+                    }
+                    if merged.is_err() {
+                        admitting.store(false, std::sync::atomic::Ordering::Release);
+                    }
+                    if assigner {
+                        self.settle_node(
+                            run,
+                            WorkflowNodeInstance {
+                                block: instance.clone(),
+                                node: id.clone(),
+                                visit: 0,
+                            },
+                            outcome(&merged),
+                        );
+                    }
+                    match merged {
                         Ok(merged) => reservation.absorb(merged),
                         Err(error) => {
-                            admitting.store(false, std::sync::atomic::Ordering::Release);
                             failures.insert(id, error);
                             continue;
                         }
@@ -936,24 +974,25 @@ impl WorkflowRuntime {
                         let mut retained = LocalReservation::new(run);
                         let value = assign(item.operation, *var_type, current, operand, &mut retained)?;
                         validate_commit(&var_type.schema(), &value)?;
-                        let bytes = super::expressions::bounded_value_bytes(variables)?
-                            - super::expressions::bounded_value_bytes(current)?
+                        let previous_bytes = super::expressions::bounded_value_bytes(variables)?;
+                        let bytes = previous_bytes - super::expressions::bounded_value_bytes(current)?
                             + super::expressions::bounded_value_bytes(&value)?;
                         // Reserve the complete copy-on-write owner before cloning it.
                         let mut snapshot = LocalReservation::new(run);
-                        snapshot.retain_bytes(bytes)?;
+                        snapshot.retain_bytes(previous_bytes.max(bytes))?;
                         if let Some(Value::Object(variables)) = values.get_mut(owner) {
                             variables.insert(label.clone(), value.clone());
                         }
+                        snapshot.shrink_to(bytes);
                         working.insert(owner.clone(), snapshot);
                         retained_writes.insert((owner.clone(), label.clone()), (value, retained));
                     }
                     // The private working copies retire here. Only the final write
                     // to each variable transfers to the graph's merge owner.
-                    for (owner, retained) in working {
-                        values.remove(&owner);
-                        reservation.absorb(retained);
+                    for owner in working.keys() {
+                        values.remove(owner);
                     }
+                    drop(working);
                     for ((owner, label), (value, retained)) in retained_writes {
                         reservation.absorb(retained);
                         writes.push((owner, label, value));
@@ -1169,21 +1208,23 @@ impl WorkflowRuntime {
         if effect_started && let Some(effects) = &run.effects {
             effects.finish(&node_instance)?;
         }
-        if started {
-            self.read_model.node(&node_instance, |view| {
-                view.state = WorkflowState::Settled {
-                    outcome: outcome(&result),
-                }
-            });
-            self.emit_observability(
-                run,
-                RuntimeEvent::WorkflowNodeSettled {
-                    instance: node_instance,
-                    outcome: outcome(&result),
-                },
-            );
+        // An Assigner's success is not final until the graph accepts its writes.
+        if started && !(result.is_ok() && matches!(node, WorkflowNodeProgram::Assigner { .. })) {
+            self.settle_node(run, node_instance, outcome(&result));
         }
         result
+    }
+
+    fn settle_node(
+        &self,
+        run: &WorkflowRun,
+        instance: WorkflowNodeInstance,
+        outcome: WorkflowExecutionOutcome,
+    ) {
+        self.read_model.node(&instance, |view| {
+            view.state = WorkflowState::Settled { outcome };
+        });
+        self.emit_observability(run, RuntimeEvent::WorkflowNodeSettled { instance, outcome });
     }
 }
 
@@ -1365,9 +1406,11 @@ fn assign(
         Mode::Multiply => arithmetic(|left, right| Some(left * right))?,
         Mode::Divide => arithmetic(|left, right| (right != 0.0).then(|| left / right))?,
     };
-    super::expressions::bounded_value_bytes(&value)?;
-    if !precharged {
-        reservation.retain(&value)?;
+    let bytes = super::expressions::bounded_value_bytes(&value)?;
+    if precharged {
+        reservation.shrink_to(bytes);
+    } else {
+        reservation.retain_bytes(bytes)?;
     }
     Ok(value)
 }

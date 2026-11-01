@@ -1032,6 +1032,83 @@ async fn many_ordered_boolean_assigners_remain_within_their_small_value_budget()
     assert_eq!(result, json!({"flag": true}));
 }
 
+#[tokio::test]
+async fn shrinking_array_writes_release_their_construction_reservations() {
+    for operation in ["remove_first", "remove_last"] {
+        let definition = around(
+            "repeat",
+            &schema(
+                json!({"payload":{"type":"array","items":{"type":"string"}}}),
+                &["payload"],
+            ),
+            &schema(json!({}), &[]),
+            &json!({"type":"loop","loop_count":1,"loop_variables":[
+                {"label":"x1","var_type":"array[string]","value":path(&["args","payload"])},
+                {"label":"x2","var_type":"array[string]","value":{"type":"literal","value":[]}},
+                {"label":"x3","var_type":"array[string]","value":{"type":"literal","value":[]}}],
+                "body":{"nodes":{"start":{"type":"start"},"save":{"type":"assigner","items":[
+                    {"variable":["repeat","x1"],"operation":operation},
+                    {"variable":["repeat","x2"],"operation":"overwrite","value":path(&["args","payload"])},
+                    {"variable":["repeat","x2"],"operation":operation},
+                    {"variable":["repeat","x3"],"operation":"overwrite","value":path(&["args","payload"])}]}},
+                    "edges":[{"from":"start","to":"save"}]}}),
+        );
+        // Keep the original static bound: retired array contents must release
+        // their credit, rather than inflating the run's frozen reservation.
+        assert_eq!(
+            compile_test(definition.clone()).unwrap().retained_bound,
+            458_760
+        );
+        let plane = workflow_test_plane(1);
+        let executor = checker(1);
+        let result = run(
+            &plane,
+            workflow_runtime(&plane),
+            executor.clone(),
+            definition,
+            json!({"payload":["x".repeat(60_000)]}),
+        )
+        .await;
+        assert_eq!(result.unwrap(), json!({}), "{operation}");
+        assert_eq!(executor.starts.load(Ordering::SeqCst), 0);
+    }
+}
+
+fn assert_assignment_outcome(
+    events: &[RuntimeEvent],
+    read_model: &read_model::WorkflowReadModel,
+    node: &str,
+    expected: WorkflowExecutionOutcome,
+) {
+    let outcomes = events
+        .iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::WorkflowNodeSettled { instance, outcome } if instance.node == node => {
+                Some(*outcome)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes,
+        vec![expected],
+        "exactly one terminal event for {node}"
+    );
+    let snapshot = read_model.snapshot();
+    let rows = snapshot
+        .runs
+        .iter()
+        .flat_map(|run| &run.instances)
+        .filter(|row| row.node.as_deref() == Some(node))
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 1, "exactly one node row for {node}");
+    assert_eq!(
+        rows[0].state,
+        read_model::WorkflowState::Settled { outcome: expected },
+        "{node}"
+    );
+}
+
 fn merged_assignment_loop(parallel: bool) -> WorkflowDefinition {
     let edges = if parallel {
         json!([{"from":"start","to":"b_x"},{"from":"start","to":"c_y"},{"from":"b_x","to":"z_effect"},{"from":"c_y","to":"z_effect"}])
@@ -1060,6 +1137,7 @@ async fn merged_assignment_owners_are_bounded_before_successor_admission() {
             let plane = workflow_test_plane(1);
             let runtime = workflow_runtime(&plane);
             let observations = runtime.observations.subscribe();
+            let read_model = runtime.read_model.clone();
             let executor = checker(1);
             let result = run(
                 &plane,
@@ -1083,6 +1161,22 @@ async fn merged_assignment_owners_are_bounded_before_successor_admission() {
                 assert_eq!(executor.starts.load(Ordering::SeqCst), 1);
                 assert!(started);
             }
+            assert_assignment_outcome(
+                &observations.borrow(),
+                &read_model,
+                "b_x",
+                WorkflowExecutionOutcome::Completed,
+            );
+            assert_assignment_outcome(
+                &observations.borrow(),
+                &read_model,
+                "c_y",
+                if bytes == 40_000 {
+                    WorkflowExecutionOutcome::Failed
+                } else {
+                    WorkflowExecutionOutcome::Completed
+                },
+            );
         }
     }
 }
@@ -1104,6 +1198,7 @@ async fn a_merge_budget_failure_drains_admitted_native_work_and_closes_queued_ad
     let plane = workflow_test_plane(1);
     let runtime = workflow_runtime(&plane);
     let observations = runtime.observations.subscribe();
+    let read_model = runtime.read_model.clone();
     let (entered, queued) = tokio::sync::oneshot::channel();
     let (release, gate) = tokio::sync::oneshot::channel();
     *runtime.node_frontier.lock().unwrap() = Some(execution::NodeFrontierHook {
@@ -1129,6 +1224,18 @@ async fn a_merge_budget_failure_drains_admitted_native_work_and_closes_queued_ad
         }
     });
     queued.await.unwrap(); // First polled while draining after c_y's failed merge.
+    assert_assignment_outcome(
+        &observations.borrow(),
+        &read_model,
+        "b_x",
+        WorkflowExecutionOutcome::Completed,
+    );
+    assert_assignment_outcome(
+        &observations.borrow(),
+        &read_model,
+        "c_y",
+        WorkflowExecutionOutcome::Failed,
+    );
     while *started.borrow() == 0 {
         started.changed().await.unwrap();
     }
@@ -1145,4 +1252,16 @@ async fn a_merge_budget_failure_drains_admitted_native_work_and_closes_queued_ad
     );
     assert_eq!(executor.starts.load(Ordering::SeqCst), 1);
     assert!(!observations.borrow().iter().any(|event| matches!(event,RuntimeEvent::WorkflowNodeStarted {instance} if ["z_effect","z_queued"].contains(&instance.node.as_str()))));
+    assert_assignment_outcome(
+        &observations.borrow(),
+        &read_model,
+        "b_x",
+        WorkflowExecutionOutcome::Completed,
+    );
+    assert_assignment_outcome(
+        &observations.borrow(),
+        &read_model,
+        "c_y",
+        WorkflowExecutionOutcome::Failed,
+    );
 }
