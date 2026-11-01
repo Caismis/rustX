@@ -102,18 +102,18 @@ test('adds parallel next nodes from the inspector and keeps every existing conne
     const picker = page.getByRole('dialog', { name: 'Choose a workflow node' });
     const search = picker.getByRole('textbox', { name: 'Search nodes' });
     await expect(search).toBeFocused(); await expect(picker.getByRole('option', { name: 'Parallel', exact: true })).toHaveCount(0);
-    await search.fill('review'); await search.press('Enter'); await chooseExistingNext(page, 'done');
+    await search.fill('human input'); await search.press('Enter'); await chooseExistingNext(page, 'done');
     await activate(page, 'Model node model'); await next.getByRole('button', { name: 'Add parallel node on Next step' }).click();
-    await search.fill('review'); await search.press('Enter'); await chooseExistingNext(page, 'done');
+    await search.fill('human input'); await search.press('Enter'); await chooseExistingNext(page, 'done');
     await activate(page, 'Model node model');
-    await expect(next.getByRole('button', { name: 'Review', exact: true })).toBeVisible();
-    await expect(next.getByRole('button', { name: 'Review 2', exact: true })).toBeVisible();
+    await expect(next.getByRole('button', { name: 'Human Input', exact: true })).toBeVisible();
+    await expect(next.getByRole('button', { name: 'Human Input 2', exact: true })).toBeVisible();
     await next.scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath('parallel-next-steps.png') });
-    await next.getByRole('button', { name: 'Disconnect Review', exact: true }).click();
-    await expect(next.getByRole('button', { name: 'Review', exact: true })).toHaveCount(0);
-    await expect(next.getByRole('button', { name: 'Review 2', exact: true })).toBeVisible();
+    await next.getByRole('button', { name: 'Disconnect Human Input', exact: true }).click();
+    await expect(next.getByRole('button', { name: 'Human Input', exact: true })).toHaveCount(0);
+    await expect(next.getByRole('button', { name: 'Human Input 2', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
-    await expect(next.getByRole('button', { name: 'Review', exact: true })).toBeVisible();
+    await expect(next.getByRole('button', { name: 'Human Input', exact: true })).toBeVisible();
     await activate(page, 'Workflow Start'); await next.getByRole('button', { name: 'Add parallel node on Next step' }).click();
     await search.fill('branch'); await search.press('Enter');
     await panel(page).getByRole('button', { name: 'Add condition', exact: true }).click();
@@ -234,7 +234,7 @@ test('discovers every matching display title together with original field paths'
   try {
     let document: WorkflowDocument = { description: 'All matching titles and paths', block: rootBlock() };
     document.block.input = { type: 'object', properties: { Draft: { type: 'string' } }, required: ['Draft'], additionalProperties: false };
-    document.block.nodes.done = { type: 'return', outputs: [] };
+    document.block.nodes.done = { type: 'return', outputs: [{ variable: 'draft', value_selector: [] }] };
     document = addNode(addNode(document, [], 'model', 'first'), [], 'model', 'second');
     document = connect(connect(document, [], 'first', 'next', 'second'), [], 'second', 'next', 'done');
     document = connectStart(document, [], 'first');
@@ -242,9 +242,9 @@ test('discovers every matching display title together with original field paths'
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true }); writeFileSync(join(directory, 'title_search.yaml'), JSON.stringify(document));
     await openLibrary(page, fixture); await page.getByRole('button', { name: 'title_search', exact: true }).click();
     await activate(page, 'Output node done'); await panel(page).getByRole('button', { name: 'Choose a variable', exact: true }).click();
-    const picker = panel(page).getByRole('dialog', { name: 'Choose a variable' });
+    const picker = page.getByRole('dialog', { name: 'Choose a variable' });
     await picker.getByRole('textbox', { name: 'Search reference paths…' }).fill('Draft');
-    for (const path of ['args / Draft', 'first', 'second']) await expect(picker.getByRole('button', { name: new RegExp(`^${path} ·`) })).toBeVisible();
+    for (const path of ['args / Draft', 'first / text', 'second / text']) await expect(picker.getByRole('button', { name: new RegExp(`^${path} ·`) })).toBeVisible();
     await expect(picker.locator('legend').filter({ hasText: 'First Draft' })).toBeVisible();
     await expect(picker.locator('legend').filter({ hasText: 'Second Draft' })).toBeVisible();
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
@@ -375,7 +375,8 @@ test('measures the native 256-node nested fixture and one metadata-only organize
     const renderMs = await page.evaluate(start => performance.now() - start, start);
     expect(renderMs).toBeLessThan(10_000);
     await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
-    await panel(page).getByRole('button', { name: 'Close inspector' }).click();
+    // As Dify, nothing is selected on open, so no panel covers the canvas.
+    await expect(panel(page)).toHaveCount(0);
     const organize = canvas(page).getByRole('button', { name: 'Organize nodes', exact: true });
     const before = await page.evaluate(() => performance.now()); await organize.click();
     await expect(organize).toBeEnabled(); await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();

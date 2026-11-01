@@ -12,7 +12,7 @@ import { LinkPlugin } from '@lexical/react/LexicalLinkPlugin';
 import { ListPlugin } from '@lexical/react/LexicalListPlugin';
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
 import { $getSelectionStyleValueForProperty, $isAtNodeEnd, $patchStyleText, $setBlocksType } from '@lexical/selection';
-import { $createParagraphNode, $getNodeByKey, $getRoot, $getSelection, $isParagraphNode, $isRangeSelection, FORMAT_TEXT_COMMAND, type EditorThemeClasses, type RangeSelection } from 'lexical';
+import { $createParagraphNode, $createTextNode, $getNodeByKey, $getRoot, $getSelection, $isParagraphNode, $isRangeSelection, FORMAT_TEXT_COMMAND, type EditorThemeClasses, type LexicalEditor, type RangeSelection } from 'lexical';
 import clsx from 'clsx';
 import { createContext, memo, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -45,12 +45,25 @@ const THEME: EditorThemeClasses = {
   text: { bold: css.bold, italic: css.italic, strikethrough: css.strikethrough },
 };
 
+/** A note's text is its Lexical state as JSON. Text that is not one, as a
+ * hand-written file may hold, reads as one plain paragraph rather than
+ * failing the editor. */
+function lexicalState(text: string) {
+  try { if (JSON.parse(text)?.root) return text; } catch { /* plain text */ }
+  return () => { $getRoot().clear().append($createParagraphNode().append($createTextNode(text))); };
+}
+function load(editor: LexicalEditor, text: string) {
+  const state = lexicalState(text);
+  if (typeof state === 'string') editor.setEditorState(editor.parseEditorState(state));
+  else editor.update(state);
+}
+
 /** As Dify's NoteNode: a rich-text note written in place on the canvas. Its
  * text is the Lexical editor state as JSON; selecting it shows the toolbar. */
 export const NoteNode = memo(function NoteNode({ id, note, selected, resizer }: { id: string; note: WorkflowNote; selected: boolean; resizer: ReactNode }) {
   const tx = useTranslation(), { editable } = useContext(NoteActions), editing = selected && editable;
   return <div className={clsx(css.note, css[note.theme], selected && css.selected)}>
-    <LexicalComposer initialConfig={{ namespace: 'workflow-note', nodes: [LinkNode, ListNode, ListItemNode], editorState: note.text || null, theme: THEME, editable, onError: error => { throw error; } }}>
+    <LexicalComposer initialConfig={{ namespace: 'workflow-note', nodes: [LinkNode, ListNode, ListItemNode], editorState: note.text ? lexicalState(note.text) : null, theme: THEME, editable, onError: error => { throw error; } }}>
       {resizer}
       <div className={css.titleBar} />
       <div className={clsx(css.body, selected && 'nodrag nopan nowheel')}>
@@ -77,11 +90,14 @@ function Sync({ id, text }: { id: string; text: string }) {
   const [editor] = useLexicalComposerContext(), actions = useContext(NoteActions), written = useRef([text]);
   useEffect(() => editor.registerUpdateListener(({ editorState, dirtyElements, dirtyLeaves }) => {
     if (!dirtyElements.size && !dirtyLeaves.size) return;
+    const last = written.current.at(-1)!;
     const next = editorState.read(() => {
       const root = $getRoot(), only = root.getFirstChild();
+      // Plain text shown as it was is not an edit.
+      if (typeof lexicalState(last) !== 'string' && root.getTextContent() === last) return last;
       return root.getChildrenSize() <= 1 && (!only || $isParagraphNode(only) && only.isEmpty()) ? '' : JSON.stringify(editorState.toJSON());
     });
-    if (next === written.current.at(-1)) return;
+    if (next === last) return;
     written.current.push(next);
     actions.change(id, { text: next });
   }), [editor, id, actions]);
@@ -89,7 +105,7 @@ function Sync({ id, text }: { id: string; text: string }) {
     const echo = written.current.indexOf(text);
     if (echo >= 0) { written.current = written.current.slice(echo); return; }
     written.current = [text];
-    if (text) editor.setEditorState(editor.parseEditorState(text));
+    if (text) load(editor, text);
     else editor.update(() => { $getRoot().clear(); });
   }, [editor, text]);
   return null;

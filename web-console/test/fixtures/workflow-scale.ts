@@ -12,7 +12,8 @@ function branchTree(): WorkflowBlock {
       edges.push({ from: id, to: `node_${index * 2 + 1}`, port: 'true' }, { from: id, to: `node_${index * 2 + 2}`, port: 'false' });
     } else nodes[id] = { type: 'loop_end' };
   }
-  return { nodes, edges };
+  // A saved file always holds every block's input schema.
+  return { input: empty, nodes, edges };
 }
 export function scaleWorkflow(): WorkflowFileDocument {
   return { description: 'Native 256-node editor capacity fixture.', block: { input: empty, nodes: {

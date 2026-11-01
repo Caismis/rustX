@@ -114,7 +114,7 @@ test('structured output uses transactional Dify-style visual and JSON editors wi
     await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     const saved = parse(readFileSync(file, 'utf8'));
     expect(saved.block.nodes.model.output.schema).toMatchObject({ properties: { rating: { type: 'string' }, tags: { type: 'array' }, details: { properties: { approved: { type: 'boolean' } } } } });
-    expect(saved.block.nodes.done.output.fields.value.path).toEqual(['model', 'structured_output', 'rating']);
+    expect(saved.block.nodes.done.outputs[0].value_selector).toEqual(['model', 'structured_output', 'rating']);
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'schema_editor', exact: true }).click();
     await model.focus(); await model.press('Enter'); await configure();

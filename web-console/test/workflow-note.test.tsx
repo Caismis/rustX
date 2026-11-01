@@ -38,3 +38,11 @@ it('shows Dify\'s toolbar when selected: color, font size, marks, link, list and
   fireEvent.click(await screen.findByRole('button', { name: 'Green' }));
   expect(actions.change).toHaveBeenCalledWith('view:note', { theme: 'green' });
 });
+
+it('reads text that is not a Lexical state as one plain paragraph, unchanged until edited', async () => {
+  const actions = { editable: true, change: vi.fn(), copy: vi.fn(), duplicate: vi.fn(), remove: vi.fn() };
+  render(<NoteActions.Provider value={actions}><NoteNode id="view:note" note={{ ...note, text: 'Keep relative' }} selected={false} resizer={null} /></NoteActions.Provider>);
+  await act(async () => {});
+  expect(screen.getByRole('textbox', { name: 'Note' }).textContent).toBe('Keep relative');
+  expect(actions.change).not.toHaveBeenCalled();
+});

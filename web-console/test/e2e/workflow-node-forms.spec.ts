@@ -63,7 +63,11 @@ test('shows each native node in the Dify-style card and grouped settings panel',
     const positions: [string, number, number][] = [['agent', 340, 80], ['model', 690, 80], ['tool', 1040, 80], ['review', 340, 400], ['loop', 690, 400], ['done', 1040, 400]];
     for (const [id, x, y] of positions) document = setNodePresentation(document, [], id, { title: id, description: id === 'model' ? 'Configure model here.\nWrite a concise response.' : `Configure ${id} here.`, position: { x, y } });
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
-    writeFileSync(join(directory, 'node_surfaces.yaml'), JSON.stringify(document));
+    // The Agent picker lists the profiles discovered in this scope.
+    mkdirSync(join(fixture.workspaceA, '.agents/agents'), { recursive: true });
+    writeFileSync(join(fixture.workspaceA, '.agents/agents/reviewer.toml'), 'description = "Reviewer"\ninstructions = "Review carefully."\n');
+    // The protocol carries u64 as a string; the file holds the integer.
+    writeFileSync(join(directory, 'node_surfaces.yaml'), JSON.stringify(document).replace('"timeout_ms":"3600000"', '"timeout_ms":3600000'));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
@@ -76,18 +80,16 @@ test('shows each native node in the Dify-style card and grouped settings panel',
     const cases: { id: string; kind: NodeKind; row: string; section: string }[] = [
       { id: 'agent', kind: 'agent', row: 'reviewer', section: 'Agent configuration' },
       { id: 'model', kind: 'model', row: 'Follow Attempt model', section: 'Output variables' },
-      { id: 'tool', kind: 'tool', row: 'path', section: 'Tool configuration' },
-      { id: 'loop', kind: 'loop', row: '3', section: 'Loop Variables' },
+      { id: 'tool', kind: 'tool', row: 'path', section: 'Input variables' },
       { id: 'done', kind: 'return', row: 'text', section: 'Output variables' },
     ];
     for (const { id, kind, row, section } of cases) {
       const label = kind === 'return' ? 'Output' : `${kind[0].toUpperCase()}${kind.slice(1)}`;
       const card = canvas(page).getByLabel(`${label} node ${id}`, { exact: true });
       await card.focus(); await card.press('Enter');
-      if (id === 'loop') await card.getByRole('button', { name: 'Collapse loop' }).click();
       await expect(card.locator('[data-node-preview]')).toContainText(row);
       if (id === 'tool') await expect(card).not.toContainText('super-secret');
-      await expect(inspector(page).getByRole(id === 'model' ? 'region' : 'heading', { name: section, exact: true }).first()).toBeVisible();
+      await expect(inspector(page).getByRole(id === 'model' ? 'region' : 'heading', { name: id === 'model' ? section : new RegExp(`^${section}`) }).first()).toBeVisible();
       await expect(inspector(page).getByLabel('Node ID', { exact: true })).toHaveCount(0);
       await expect(inspector(page).getByText('Native identity and rename', { exact: true })).toHaveCount(0);
       await checkCardHeight(page, card, id, info);
@@ -128,20 +130,13 @@ test('shows each native node in the Dify-style card and grouped settings panel',
         await strategy.click(); await page.getByRole('menuitem', { name: /^None/ }).click();
         await expect.poll(height).toBe(baseline);
       }
-      if (id === 'loop') {
-        const limit = inspector(page).getByRole('textbox', { name: 'Maximum iterations' });
-        await limit.fill('4'); await limit.blur();
-        await expect(card.locator('[data-node-preview]')).toContainText(/Limit\s*4/);
-        await card.getByRole('button', { name: 'Expand loop', exact: true }).click();
-        const container = await card.evaluate(element => ({ outer: (element as HTMLElement).offsetHeight, inner: (element.firstElementChild as HTMLElement).offsetHeight }));
-        expect(container.outer).toBeGreaterThanOrEqual(260); expect(container.inner).toBe(container.outer);
-        const nestedStart = canvas(page).getByLabel(/^Block inputs ·/);
-        await nestedStart.focus(); await nestedStart.press('Enter');
-        await checkCardHeight(page, nestedStart, 'nested-start', info);
-        await card.focus(); await card.press('Enter');
-        await card.getByRole('button', { name: 'Collapse loop', exact: true }).click();
-      }
     }
+    // As Dify's Loop: a container whose body shows on the canvas, set up in its panel.
+    const loop = canvas(page).getByLabel('Loop node loop', { exact: true });
+    await loop.focus(); await loop.press('Enter');
+    await expect(inspector(page).getByRole('heading', { name: /^Loop Variables/ }).first()).toBeVisible();
+    await expect(inspector(page).getByRole('heading', { name: /^Maximum Loop Count/ }).first()).toBeVisible();
+    await captureEvidence(page, 'loop-panel', info);
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(inspector(page)).toHaveCSS('position', 'absolute');
     await captureEvidence(page, 'return-panel-mobile', info);
