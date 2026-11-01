@@ -138,7 +138,7 @@ test('equality picker rejects numeric operands and admits a matching string bind
   try {
     await seed(fixture);
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/equality_types.yaml'), JSON.stringify({ description: 'Native equality type necessities', block: {
-      input: { type: 'object', properties: { count: { type: 'integer' }, text: { type: 'string' } }, required: ['count', 'text'], additionalProperties: false }, 
+      input: { type: 'object', properties: { count: { type: 'integer' }, text: { type: 'string' } }, required: ['count', 'text'], additionalProperties: false },
       nodes: {workflow_start:{type:'start'}, ...{ gate: { type: 'branch', cases: [{ id: 'true', condition: { type: 'equal', left: { type: 'reference', path: ['args', 'count'] }, right: { type: 'literal', value: 1 } } }] }, done: { type: 'return', outputs: []} }},
       edges: [{from:'workflow_start',to:'gate'}, ...[{ from: 'gate', to: 'done', port: 'true' }, { from: 'gate', to: 'done', port: 'false' }]],
     } }));
@@ -205,7 +205,7 @@ test('incomplete candidate variable picking and file-owned keyboard positions pr
     const notes = [{ id: 'note', block: [], text: '# Author note\n\n**Keep this**', theme: 'blue', position: { x: 0, y: 100 }, dimensions: { width: 240, height: 180 } }];
     const empty = { type: 'object', properties: {}, additionalProperties: false };
     writeFileSync(file, JSON.stringify({ description: 'Candidate with file metadata', block: {
-      input: empty, 
+      input: empty,
        nodes: {workflow_start:{type:'start'}, ...{
         text: { type: 'model', messages: [{ role: 'system', content: [] }, { role: 'user', content: [{ type: 'literal', value: 'Go.' }] }], output: { type: 'text' } },
         done: { type: 'return', outputs: [{ variable: 'summary', value_selector: ['text', 'text'] }]},

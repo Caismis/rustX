@@ -48,7 +48,8 @@ impl ActivationScopes {
                 _ => 0,
             })
             .sum::<usize>();
-        let variables = BddVariableSet::new_anonymous(count as u16);
+        let variables =
+            BddVariableSet::new_anonymous(u16::try_from(count).map_err(|_| too_complex())?);
         let mut allocated = variables.variables().into_iter();
         let mut gates = BTreeMap::new();
         let mut succeeded = BTreeMap::new();

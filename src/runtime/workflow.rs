@@ -1064,6 +1064,7 @@ pub enum WorkflowPort {
 }
 
 impl WorkflowPort {
+    #[must_use]
     pub fn case(id: &str) -> Self {
         if id == "true" {
             Self::True
@@ -2320,8 +2321,7 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
     }
     if incoming[&entry] != 0 {
         return Err(WorkflowCompileError::InvalidEntry(format!(
-            "entry node {:?} must not have an incoming edge",
-            entry
+            "entry node {entry:?} must not have an incoming edge"
         ))
         .at(format!("nodes.{entry}")));
     }
@@ -2338,10 +2338,10 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
 
     let scopes = flow::ActivationScopes::new(definition, &entry, &outgoing, &topological)?;
     Ok(ControlFlow {
-        outgoing,
-        topological,
         entry,
         scopes,
+        outgoing,
+        topological,
     })
 }
 

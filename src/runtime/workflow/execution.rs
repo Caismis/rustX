@@ -481,9 +481,9 @@ impl WorkflowRuntime {
                         port,
                         ended: exit,
                         writes,
-                        _reservation,
+                        reservation: completed,
                     } = output;
-                    reservation.absorb(_reservation);
+                    reservation.absorb(completed);
                     if let Some(value) = value {
                         values.insert(id.clone(), value);
                     }
@@ -816,7 +816,7 @@ impl WorkflowRuntime {
                     Ok(None)
                 }
                 WorkflowNodeProgram::Review { content: parts, actions, timeout_ms } => {
-                    let shown = super::model::render_parts(parts, |part| evaluate_value(part, &input, &values))?;
+                    let shown = super::model::render_parts(parts, |part| evaluate_value(part, input, &values))?;
                     let (value, port) = self
                         .review(context, &node_instance, shown, actions, *timeout_ms, cancellation)
                         .await?;
@@ -832,7 +832,7 @@ impl WorkflowRuntime {
                     Ok(None)
                 }
                 WorkflowNodeProgram::Model(model) => {
-                    let prompt = super::model::render_prompt(&model.messages, |part| evaluate_value(part, &input, &values))?;
+                    let prompt = super::model::render_prompt(&model.messages, |part| evaluate_value(part, input, &values))?;
                     let mut retries = 0;
                     let outcome = loop {
                         match self.invoke_model(run, context, &node_instance, model, prompt.clone(), cancellation).await {
@@ -901,7 +901,7 @@ impl WorkflowRuntime {
                     retry,
                     on_error,
                 } => {
-                    let arguments = evaluate_value(arguments, &input, &values)?;
+                    let arguments = evaluate_value(arguments, input, &values)?;
                     let mut retries = 0;
                     // Only a proven-settled failure or timeout is retried or
                     // handled; anything else is projected and stops as before.
@@ -953,7 +953,7 @@ impl WorkflowRuntime {
                         .admit_agent(
                             run,
                             context,
-                            &input,
+                            input,
                             &values,
                             &node_instance,
                             agent,
@@ -996,7 +996,7 @@ impl WorkflowRuntime {
                 WorkflowNodeProgram::Branch { cases } => {
                     selected = WorkflowPort::False;
                     for case in cases {
-                        if evaluate_predicate(&case.condition, &input, &values)? {
+                        if evaluate_predicate(&case.condition, input, &values)? {
                             selected = WorkflowPort::case(&case.id);
                             break;
                         }
@@ -1010,7 +1010,7 @@ impl WorkflowRuntime {
                     Ok(None)
                 }
                 WorkflowNodeProgram::Return { output } => {
-                    let value = evaluate_value(output, &input, &values)?;
+                    let value = evaluate_value(output, input, &values)?;
                     validate_commit(&block.output_schema, &value)?;
                     Ok(Some(value))
                 }
@@ -1019,7 +1019,7 @@ impl WorkflowRuntime {
         .await
         .and_then(|returned| {
             if let Some(value) = &returned { reservation.retain(value)?; }
-            Ok(NodeCompletion { value: values.remove(node_id), returned, port: selected, ended, writes, _reservation: reservation })
+            Ok(NodeCompletion { value: values.remove(node_id), returned, port: selected, ended, writes, reservation })
         });
         if effect_started && let Some(effects) = &run.effects {
             effects.finish(&node_instance)?;
@@ -1050,7 +1050,7 @@ struct NodeCompletion<'a> {
     ended: bool,
     /// Loop variables an Assigner wrote: owner, label and value.
     writes: Vec<(String, String, Value)>,
-    _reservation: LocalReservation<'a>,
+    reservation: LocalReservation<'a>,
 }
 
 /// Whether an Iteration's error mode may handle a round's failure: a node

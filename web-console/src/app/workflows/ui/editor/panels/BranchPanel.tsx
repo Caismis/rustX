@@ -32,4 +32,3 @@ export function BranchPanel(props: PanelProps) {
     <section className={css.branchElse}><b>{tx('workflows:branch.else')}</b><p>{tx('workflows:branch.else-description')}</p></section>
   </section>;
 }
-

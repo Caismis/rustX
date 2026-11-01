@@ -98,17 +98,17 @@ it("Concurrent human wait and child coexist without Candidate or handoff rows", 
   assert.match(text, /root HITL/);
 });
 
-it("draining is not terminal cancellation and Loop exhaustion is not business acceptance", () => {
+it("draining is not terminal cancellation and a completed Loop is not business acceptance", () => {
   assert.match(workflowStatus({ type: "draining" }), /requested.*draining/);
   assert.doesNotMatch(workflowStatus({ type: "draining" }), /cancelled/);
   assert.equal(workflowStatus({ type: "settled", outcome: "cancelled" }), "execution cancelled");
   const value = run();
   value.state = { type: "settled", outcome: "completed" };
   value.instances = [{ ...row("repair", "body"), kind: "loop", state: { type: "settled", outcome: "completed" }, interaction: null,
-    checks_passed: false, iteration: 3, iterations_max: 3, loop_exit: "exhausted" }];
+    checks_passed: false, iteration: 3, iterations_max: 3, loop_exit: "loop_completed" }];
   const text = workflowDetails(value).join("\n");
   assert.match(text, /execution completed/);
-  assert.match(text, /iteration 3\/3 · exhausted.*business checks failed/);
+  assert.match(text, /iteration 3\/3 · loop_completed.*business checks failed/);
   assert.doesNotMatch(text, /task accepted|✓/);
 });
 
