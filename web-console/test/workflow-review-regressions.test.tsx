@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createActor, waitFor } from 'xstate';
-import { addNode, renameLoopVariable, renameNode, replaceNode } from '../src/app/workflows/document/commands';
+import { addNode, connect, renameLoopVariable, renameNode, replaceNode } from '../src/app/workflows/document/commands';
 import { rootBlock } from './workflow-root';
 import { copyFragment, duplicateFragment, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
 import { blockField, encodeField, nodeField, setField, type FieldAddress } from '../src/app/workflows/document/fields';
@@ -17,6 +17,7 @@ import { exampleSource } from './workflow-fixtures';
 import renameCases from '../../tests/fixtures/workflow/schema-rename.json';
 import collisionCases from '../../tests/fixtures/workflow/schema-rename-collisions.json';
 import scopeCases from '../../tests/fixtures/workflow/schema-rename-scopes.json';
+import clipboardCases from '../../tests/fixtures/workflow/clipboard-producer-scopes.json';
 import { putProperty } from '../src/app/workflows/ui/editor/forms/structured-output/schema';
 
 afterEach(cleanup);
@@ -321,4 +322,20 @@ it.each(scopeCases)('keeps the independent $kind producer bound when renaming th
   expect(Object.hasOwn(after.block.nodes, 'generate')).toBe(false);
   expect(after.block.nodes.done).toMatchObject({ outputs: [{ value_selector: ['root_generator', ...(example.kind === 'model' ? ['structured_output'] : []), 'foo'] }] });
   oneTransaction(actor, before, after); actor.stop();
+});
+
+
+it.each(clipboardCases)('pastes complete $kind groups across documents without rebinding local producers', async example => {
+  const source = example.source as WorkflowDocument, target = example.target as WorkflowDocument;
+  const original = structuredClone(source);
+  const fragment = parseFragment(copyFragment(source, 'source', [], example.selection));
+  const actor = await actorFor(target);
+  actor.send({ type: 'EDIT', apply: document => pasteFragment(document, 'target', [], fragment).document });
+  const pasted = actor.getSnapshot().context.document!;
+  oneTransaction(actor, target, pasted);
+  const connected = connect(pasted, [], 'start', 'next', 'seed_copy');
+  const { editor: _presentation, ...core } = connected;
+  expect(core).toEqual(example.pasted);
+  expect(source).toEqual(original);
+  actor.stop();
 });

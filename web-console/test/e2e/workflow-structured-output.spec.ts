@@ -11,6 +11,8 @@ import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
 import { addOutputField, replaceJson, schemaJson, structuredDialog } from './workflow-schema-actions';
 import scopeCases from '../../../tests/fixtures/workflow/schema-rename-scopes.json' with { type: 'json' };
+import clipboardCases from '../../../tests/fixtures/workflow/clipboard-producer-scopes.json' with { type: 'json' };
+import { copyFragment } from '../../src/app/workflows/document/clipboard';
 
 test('structured output uses transactional Dify-style visual and JSON editors with native validation', async ({ page }, info) => {
   const fixture = await startDogfood('web_console_dogfood');
@@ -163,6 +165,46 @@ test('structured output rename preserves a preceding Iteration with an independe
     expect(saved.block.nodes.sibling.body.nodes.generate.output.schema.properties).toEqual({ foo: { type: 'boolean' } });
     expect(saved.block.nodes.sibling.body.nodes.consume.messages[1].content[0].path).toEqual(['generate', 'structured_output', 'foo']);
     await page.screenshot({ path: '/tmp/rustx-scoped-schema-rename.png' });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+
+test('cross-workflow paste preserves local and inherited producer bindings through native save', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood'), errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    const example = clipboardCases.find(example => example.kind === 'model')!;
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'scope_paste.yaml'); writeFileSync(file, JSON.stringify(example.target));
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'scope_paste', exact: true }).click();
+    await expect(page).toHaveTitle(/rustX$/);
+    const canvas = page.getByRole('region', { name: 'Workflow canvas' });
+    await canvas.focus();
+    await canvas.evaluate((element, text) => {
+      const clipboardData = new DataTransfer(); clipboardData.setData('text/plain', text);
+      element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData }));
+    }, copyFragment(example.source as WorkflowDocument, 'another-workflow', [], example.selection));
+    const seed = canvas.getByLabel('Loop node seed_copy', { exact: true });
+    await expect(seed).toBeVisible();
+    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(seed).toHaveCount(0);
+    await page.getByRole('button', { name: 'Redo', exact: true }).click(); await expect(seed).toBeVisible();
+    const start = canvas.getByLabel('Workflow Start', { exact: true }); await start.focus(); await start.press('Enter');
+    const panel = page.getByRole('complementary', { name: 'Inspector' });
+    await panel.getByRole('button', { name: 'Choose next node for Next step', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: 'Choose a workflow node' });
+    await picker.getByRole('tab', { name: 'Existing', exact: true }).click();
+    await picker.locator('[data-node-id="seed_copy"]').click();
+    await page.getByRole('button', { name: 'Save File', exact: true }).click();
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    const { editor: _presentation, ...saved } = parse(readFileSync(file, 'utf8'));
+    expect(saved).toEqual(example.pasted);
+    await page.screenshot({ path: '/tmp/rustx-scoped-workflow-paste.png' });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally { await fixture.stop(false); }

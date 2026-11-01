@@ -33,10 +33,9 @@ function predicate(input: Predicate, rewrite: PathRewrite): Predicate {
   }
 }
 
-/** Rewrite every binding a node evaluates, including those of its body. As
- * in Dify, a body reads the variables around it and node IDs never hide one
- * another, so one rewrite covers the whole subtree. An Assigner's written
- * variable is a path too. */
+/** Entry expressions read the enclosing block; round expressions read the
+ * body. A separate body declaration binds references of that name locally.
+ * An Assigner's written variable is a path too. */
 function node(input: NodeDefinition, rewrite: PathRewrite, producer?: string): NodeDefinition {
   switch (input.type) {
     case 'start': case 'loop_end': return input;

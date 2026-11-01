@@ -4,7 +4,7 @@ import { boundedDocument, CommandRejected, freshNodeId, validLocalKey, validNode
 import { blockAt, deepNodeCount, edgesOf, sameBlockPath, sameDocument, updateBlock, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from './model';
 import type { FieldAddress } from './fields';
 import { MAX_COORDINATE, dimensions, freshNote, position, presentationEdit, utf8Length } from './geometry';
-import { blockReferences, rewriteBlockReferences } from './references';
+import { blockReferences, renameProducer, rewriteBlockReferences } from './references';
 import { schemaObject } from './schema';
 import { requireVacantNodePresentation } from './presentation';
 import { RESERVED_PORTS, TIMEOUT_PORT } from './ports';
@@ -290,7 +290,9 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
     }
   };
   checkBodies(fragment.nodes, outer);
-  const rewritten = rewriteBlockReferences(block, reference => names.has(reference[0]) ? [names.get(reference[0])!, ...reference.slice(1)] : undefined);
+  // Allocated names avoid every copied ID, so these bound rewrites cannot
+  // cascade into another rename or capture an independent body declaration.
+  const rewritten = [...names].reduce((current, [from, to]) => rewriteBlockReferences(current, renameProducer(from, to), from), block);
   let next = updateBlock(document, path, current => ({ ...current, nodes: { ...current.nodes, ...Object.fromEntries(ids.map(id => [names.get(id)!, structuredClone(rewritten.nodes[id])])) },
     edges: [...edgesOf(current), ...edgesOf(block).map(edge => ({ ...edge, from: names.get(edge.from) ?? fail(), to: names.get(edge.to) ?? fail() }))] }));
   if (deepNodeCount(next.block) > 256) throw new CommandRejected('limit_exceeded');

@@ -1596,3 +1596,22 @@ fn scoped_schema_renames_preserve_native_workflow_validity() {
         }
     }
 }
+
+#[test]
+fn scoped_clipboard_groups_preserve_native_workflow_validity() {
+    let cases: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/workflow/clipboard-producer-scopes.json"
+    ))
+    .unwrap();
+    for case in cases {
+        for side in ["source", "pasted"] {
+            let definition: WorkflowDefinition =
+                serde_json::from_value(case[side].clone()).unwrap();
+            super::super::WorkflowProgram::compile(
+                super::super::WorkflowId::parse("scope_paste").unwrap(),
+                definition,
+            )
+            .unwrap_or_else(|error| panic!("{}/{side}: {error}", case["kind"]));
+        }
+    }
+}
