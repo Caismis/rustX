@@ -1577,3 +1577,22 @@ fn fail_branch_choices_use_the_consumer_outcome_for_tool_model_and_agent() {
         }
     }
 }
+
+#[test]
+fn scoped_schema_renames_preserve_native_workflow_validity() {
+    let cases: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/workflow/schema-rename-scopes.json"
+    ))
+    .unwrap();
+    for case in cases {
+        for side in ["before", "after"] {
+            let definition: WorkflowDefinition =
+                serde_json::from_value(case[side].clone()).unwrap();
+            super::super::WorkflowProgram::compile(
+                super::super::WorkflowId::parse("scope_rename").unwrap(),
+                definition,
+            )
+            .unwrap_or_else(|error| panic!("{}/{side}: {error}", case["kind"]));
+        }
+    }
+}

@@ -184,10 +184,10 @@ export function renameSchemaField(document: WorkflowDocument, address: FieldAddr
   const path = target.path.map(step => (step as { name: string }).name);
   for (const construction of schemaConstructions(next, target)) next = setField(next, construction, mappingKey(fieldValue(next, construction)!.value as Value, path, from, to));
   const rewrite = (prefix: string[]): PathRewrite => reference => reference.length > prefix.length && prefix.every((part, index) => reference[index] === part) && reference[prefix.length] === from ? [...prefix, to, ...reference.slice(prefix.length + 1)] : undefined;
-  const rewriteAt = (block: BlockPath, prefix: string[]) => { next = updateBlock(next, block, value => rewriteBlockReferences(value, rewrite(prefix))); };
+  const rewriteAt = (block: BlockPath, prefix: string[], producer?: string) => { next = updateBlock(next, block, value => rewriteBlockReferences(value, rewrite(prefix), producer)); };
   if (target.kind === 'node_output') {
     const prefix = [address.node!, ...path];
-    rewriteAt(address.block, prefix);
+    rewriteAt(address.block, prefix, address.node);
     const parent = address.block.slice(0, -1), owner = address.block.at(-1)?.node;
     if (owner) next = updateBlock(next, parent, block => ({ ...block, nodes: { ...block.nodes, [owner]: rewriteRoundReferences(block.nodes[owner], rewrite(prefix)) } }));
   }
@@ -212,7 +212,7 @@ export function schemaConsumers(document: WorkflowDocument, address: FieldAddres
   const matches = (prefix: string[], path: readonly string[]) => path.slice(0, Math.min(prefix.length, path.length)).every((part, index) => part === prefix[index]);
   const scan = (path: BlockPath, prefix: string[]) => {
     const block = blockAt(document, path); if (!block) return;
-    for (const [id, node] of Object.entries(block.nodes)) rewriteBlockReferences({ ...block, nodes: { [id]: node } }, reference => { if (matches(prefix, reference)) add(path, id); return undefined; });
+    for (const [id, node] of Object.entries(block.nodes)) rewriteBlockReferences({ ...block, nodes: { [id]: node } }, reference => { if (matches(prefix, reference)) add(path, id); return undefined; }, target.kind === 'node_output' ? address.node : undefined);
   };
   if (target.kind === 'node_output') {
     const prefix = [address.node!, ...property];

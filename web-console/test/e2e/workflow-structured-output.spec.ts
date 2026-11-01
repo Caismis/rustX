@@ -10,6 +10,7 @@ import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
 import { addOutputField, replaceJson, schemaJson, structuredDialog } from './workflow-schema-actions';
+import scopeCases from '../../../tests/fixtures/workflow/schema-rename-scopes.json' with { type: 'json' };
 
 test('structured output uses transactional Dify-style visual and JSON editors with native validation', async ({ page }, info) => {
   const fixture = await startDogfood('web_console_dogfood');
@@ -119,6 +120,49 @@ test('structured output uses transactional Dify-style visual and JSON editors wi
     await page.getByRole('button', { name: 'schema_editor', exact: true }).click();
     await model.focus(); await model.press('Enter'); await configure();
     expect(await dialog.locator('[data-schema-field]').evaluateAll(elements => elements.map(element => element.getAttribute('data-schema-field')))).toEqual(['structured_output', 'rating', 'tags', 'details', 'approved']);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+
+test('structured output rename preserves a preceding Iteration with an independent same-name producer', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    const example = scopeCases.find(example => example.kind === 'model')!;
+    const document = setNodePresentation(example.before as WorkflowDocument, [], 'generate', { title: 'Root generator', position: { x: 960, y: 140 } });
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'scope_rename.yaml'); writeFileSync(file, JSON.stringify(document));
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'scope_rename', exact: true }).click();
+    await expect(page).toHaveTitle(/rustX$/);
+    const root = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Model node generate', { exact: true }).filter({ hasText: 'Root generator' });
+    await root.focus(); await root.press('Enter');
+    const panel = page.getByRole('complementary', { name: 'Inspector' }), dialog = structuredDialog(page);
+    const configure = async () => { await panel.getByRole('button', { name: 'Configure', exact: true }).click(); await expect(dialog).toBeVisible(); };
+    await configure();
+    await dialog.getByRole('button', { name: 'Edit field foo', exact: true }).click();
+    await dialog.getByRole('textbox', { name: 'Field name', exact: true }).fill('bar');
+    await dialog.getByRole('button', { name: /^Confirm/ }).click();
+    await dialog.getByRole('button', { name: 'Save', exact: true }).click(); await expect(dialog).toHaveCount(0);
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await configure(); await expect(dialog.locator('[data-schema-field="foo"]')).toBeVisible(); await expect(dialog.locator('[data-schema-field="bar"]')).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Redo', exact: true }).click();
+    await configure(); await expect(dialog.locator('[data-schema-field="bar"]')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    const saved = parse(readFileSync(file, 'utf8'));
+    expect(saved).toMatchObject(example.after);
+    expect(saved.block.nodes.sibling.output.path).toEqual(['generate', 'structured_output', 'foo']);
+    expect(saved.block.nodes.sibling.body.nodes.generate.output.schema.properties).toEqual({ foo: { type: 'boolean' } });
+    expect(saved.block.nodes.sibling.body.nodes.consume.messages[1].content[0].path).toEqual(['generate', 'structured_output', 'foo']);
+    await page.screenshot({ path: '/tmp/rustx-scoped-schema-rename.png' });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally { await fixture.stop(false); }

@@ -175,7 +175,7 @@ export function renameNode(document: WorkflowDocument, path: BlockPath, from: st
   const parent = path.slice(0, -1), owner = path.at(-1)?.node;
   const outer = owner ? updateBlock(document, parent, current => ({ ...current, nodes: { ...current.nodes, [owner]: rewriteRoundReferences(current.nodes[owner], renameProducer(from, to)) } })) : document;
   const next = updateBlock(outer, path, current => {
-    const renamed = rewriteBlockReferences(current, renameProducer(from, to));
+    const renamed = rewriteBlockReferences(current, renameProducer(from, to), from);
     return {
       ...renamed,
       nodes: Object.fromEntries(Object.entries(renamed.nodes).map(([id, node]) => [id === from ? to : id, node])),

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createActor, waitFor } from 'xstate';
-import { addNode, renameLoopVariable, replaceNode } from '../src/app/workflows/document/commands';
+import { addNode, renameLoopVariable, renameNode, replaceNode } from '../src/app/workflows/document/commands';
 import { rootBlock } from './workflow-root';
 import { copyFragment, duplicateFragment, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
 import { blockField, encodeField, nodeField, setField, type FieldAddress } from '../src/app/workflows/document/fields';
@@ -16,6 +16,8 @@ import { ReferencePicker } from '../src/app/workflows/ui/editor/forms/ReferenceP
 import { exampleSource } from './workflow-fixtures';
 import renameCases from '../../tests/fixtures/workflow/schema-rename.json';
 import collisionCases from '../../tests/fixtures/workflow/schema-rename-collisions.json';
+import scopeCases from '../../tests/fixtures/workflow/schema-rename-scopes.json';
+import { putProperty } from '../src/app/workflows/ui/editor/forms/structured-output/schema';
 
 afterEach(cleanup);
 const fixture = (): WorkflowDocument => ({ description: 'Review regressions', block: rootBlock() });
@@ -288,4 +290,35 @@ it('keeps an unrelated body-local producer with the same ID bound to its own var
   const after = renameLoopVariable(before, [], 'repeat', 'old', 'new');
   expect(after.block.nodes.repeat).toMatchObject({ loop_variables: [{ label: 'new' }], break_condition: { value: { path: ['repeat', 'new'] } } });
   expect(after.block.nodes.sibling).toEqual(before.block.nodes.sibling);
+});
+
+
+describe('schema rename producer identities', () => {
+  it.each(scopeCases)('renames only the bound $kind producer through the structured output command', async example => {
+    const before = example.before as WorkflowDocument;
+    const address = nodeField([], 'generate', ['output', 'schema']);
+    expect(schemaConsumers(before, { ...address, path: [...address.path, 'properties', { key: 'foo' }] })).toEqual([{ block: [], node: 'done' }]);
+    const direct = renameSchemaField(before, address, 'foo', 'bar');
+    const { editor: _directPresentation, ...directCore } = direct;
+    expect(directCore).toEqual(example.after);
+    const actor = await actorFor(before);
+    actor.send({ type: 'EDIT', apply: putProperty(address, 'foo', 'bar', { type: 'boolean' }, true) });
+    const after = actor.getSnapshot().context.document!;
+    const { editor: _presentation, ...core } = after;
+    expect(core).toEqual(example.after);
+    expect(after.block.nodes.sibling).toEqual(before.block.nodes.sibling);
+    oneTransaction(actor, before, after); actor.stop();
+  });
+});
+
+
+it.each(scopeCases)('keeps the independent $kind producer bound when renaming the root node ID', async example => {
+  const before = example.before as WorkflowDocument, actor = await actorFor(before);
+  actor.send({ type: 'EDIT', apply: document => renameNode(document, [], 'generate', 'root_generator') });
+  const after = actor.getSnapshot().context.document!;
+  expect(after.block.nodes.sibling).toEqual(before.block.nodes.sibling);
+  expect(after.block.nodes.root_generator).toEqual(before.block.nodes.generate);
+  expect(Object.hasOwn(after.block.nodes, 'generate')).toBe(false);
+  expect(after.block.nodes.done).toMatchObject({ outputs: [{ value_selector: ['root_generator', ...(example.kind === 'model' ? ['structured_output'] : []), 'foo'] }] });
+  oneTransaction(actor, before, after); actor.stop();
 });
