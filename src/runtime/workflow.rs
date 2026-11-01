@@ -1772,6 +1772,28 @@ fn compile_block(
         scopes,
     } = control_flow(&definition)?;
 
+    let writers = definition
+        .nodes
+        .iter()
+        .filter_map(|(id, node)| match node {
+            WorkflowNodeDefinition::Assigner { items } => Some((id, items)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for (index, (left, items)) in writers.iter().enumerate() {
+        for (right, other) in &writers[index + 1..] {
+            if scopes.unordered_together(left, right)
+                && items
+                    .iter()
+                    .any(|item| other.iter().any(|other| item.variable == other.variable))
+            {
+                return Err(WorkflowCompileError::InvalidField(format!(
+                    "Assigners {left:?} and {right:?} write the same variable without an execution order"
+                )).at(format!("nodes.{right}.items")));
+            }
+        }
+    }
+
     let mut nodes = BTreeMap::new();
     let mut available_after: BTreeMap<String, SchemaMap> = BTreeMap::new();
     let mut returned = Vec::new();
@@ -2094,10 +2116,15 @@ fn compile_block(
         match &compiled {
             // Return and Branch ports were validated above. A body's path
             // may end at any node.
-            WorkflowNodeProgram::Return { .. } | WorkflowNodeProgram::Branch { .. } => {}
-            _ if edges.is_empty() && container.is_none() => {
+            WorkflowNodeProgram::Return { .. }
+            | WorkflowNodeProgram::Branch { .. }
+            | WorkflowNodeProgram::Review { .. } => {}
+            WorkflowNodeProgram::Agent(agent) if !agent.routes.is_empty() => {}
+            _ if container.is_none()
+                && !edges.iter().any(|edge| edge.port == WorkflowPort::Next) =>
+            {
                 return Err(WorkflowCompileError::Unterminated(format!(
-                    "node {node_id:?} must have at least one successor"
+                    "node {node_id:?} requires a successor on its success (next) exit"
                 ))
                 .at(format!("nodes.{node_id}")));
             }
@@ -2800,6 +2827,22 @@ fn validate_review(
     available: &SchemaMap,
     node: &str,
 ) -> Result<(), WorkflowCompileError> {
+    let fixed_chars = content
+        .iter()
+        .filter_map(|part| match part {
+            WorkflowValue::Literal {
+                value: Value::String(text),
+            } => Some(text.chars().count()),
+            _ => None,
+        })
+        .sum::<usize>();
+    let limit = crate::events::interaction::MAX_QUESTION_TEXT_CHARS;
+    if fixed_chars > limit {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "Human Input {node:?} content exceeds {limit} Unicode characters"
+        ))
+        .at("content"));
+    }
     if validate_prompt(
         content,
         available,

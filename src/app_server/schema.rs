@@ -893,12 +893,14 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         Method::WorkflowToolCatalog {
             target: target.clone(),
             source: Some("github".into()),
+            cursor: None,
         },
     ));
     fixtures.push(success(
         "workflow-tool-catalog",
         MethodResult::WorkflowToolCatalog {
             catalog: crate::local_runtime::workflow_tools::WorkflowToolCatalog {
+                next: None,
                 sources: vec![crate::local_runtime::workflow_tools::WorkflowToolSource {
                     source_id: "github".into(),
                     kind: crate::local_runtime::workflow_tools::WorkflowToolSourceKind::Mcp,

@@ -1293,7 +1293,8 @@ export const fixtures = [
         "kind": "workspace",
         "directory": "/workspace/fixture"
       },
-      "source": "github"
+      "source": "github",
+      "cursor": null
     }
   },
   {

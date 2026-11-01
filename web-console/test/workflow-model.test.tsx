@@ -43,7 +43,7 @@ async function open(analyze: WorkflowScopePort['analyze'] = () => new Promise(()
   const actor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: 'model_flow' } } }).start();
   await act(async () => { await Promise.resolve(); });
   render(<WorkflowEditor surface={surface} editor={actor} scopeLabel="Global" />);
-  select(`${node.type[0].toUpperCase()}${node.type.slice(1)} node model`);
+  select(node.type === 'review' ? 'Human Input node model' : `${node.type[0].toUpperCase()}${node.type.slice(1)} node model`);
   return actor;
 }
 function select(label: string) {
@@ -462,4 +462,44 @@ it.each(['object', 'array'] as const)('preserves and edits existing %s parameter
   expect(current()).toEqual(changed);
   act(() => { actor.send({ type: 'UNDO' }); actor.send({ type: 'UNDO' }); }); expect(current()).toEqual(tool.arguments);
   act(() => { actor.send({ type: 'REDO' }); actor.send({ type: 'REDO' }); }); expect(current()).toEqual(changed);
+});
+
+
+it.each(['title', 'action', 'route'] as const)('applies focused %s drafts on Ctrl+S and keeps Undo/Redo authoritative', async kind => {
+  const node: NodeDefinition = kind === 'route'
+    ? { type: 'agent', profile: 'reviewer', task: [], output: { type: 'text' }, routes: [{ id: 'first', description: 'First' }, { id: 'second', description: 'Second' }] }
+    : { type: 'review', content: [{ type: 'literal', value: 'Choose' }], actions: [{ id: 'first', title: 'First' }, { id: 'second', title: 'Second' }], timeout_ms: '60000' };
+  const actor = await open(undefined, node);
+  const label = kind === 'title' ? 'Button text' : kind === 'route' ? 'Route ID' : 'Action ID';
+  const input = inspector().getAllByRole('textbox', { name: label })[0];
+  act(() => input.focus()); fireEvent.change(input, { target: { value: 'replacement' } });
+  expect(Object.keys(actor.getSnapshot().context.drafts)).toHaveLength(1);
+  save();
+  const document = (writes[0] as { document: WorkflowFileDocument }).document;
+  expect(document.block.nodes.model).toMatchObject(kind === 'route' ? { routes: [{ id: 'replacement' }, {}] }
+    : { actions: [kind === 'title' ? { title: 'replacement' } : { id: 'replacement' }, {}] });
+  // A pending transport write keeps history frozen; undo the same applied
+  // transaction in a fresh editor before asking it to save.
+  cleanup();
+  const history = await open(undefined, node);
+  const field = () => inspector().getAllByRole('textbox', { name: label })[0] as HTMLInputElement;
+  fireEvent.change(field(), { target: { value: 'replacement' } }); fireEvent.blur(field());
+  act(() => history.send({ type: 'UNDO' })); expect(field().value).toBe(kind === 'title' ? 'First' : 'first');
+  fireEvent.blur(field()); expect(history.getSnapshot().context.document!.block.nodes.model).toEqual(node);
+  act(() => history.send({ type: 'REDO' })); expect(field().value).toBe('replacement');
+});
+
+it.each(['title', 'route'] as const)('keeps a surviving %s draft attached when an earlier list item is removed', async kind => {
+  const node: NodeDefinition = kind === 'route'
+    ? { type: 'agent', profile: 'reviewer', task: [], output: { type: 'text' }, routes: [{ id: 'first', description: 'First' }, { id: 'second', description: 'Second' }] }
+    : { type: 'review', content: [{ type: 'literal', value: 'Choose' }], actions: [{ id: 'first', title: 'First' }, { id: 'second', title: 'Second' }], timeout_ms: '60000' };
+  const actor = await open(undefined, node);
+  const label = kind === 'route' ? 'Route ID' : 'Button text';
+  fireEvent.change(inspector().getAllByRole('textbox', { name: label })[1], { target: { value: 'pending' } });
+  fireEvent.click(inspector().getByRole('button', { name: kind === 'route' ? 'Remove route first' : 'Remove action first' }));
+  expect((inspector().getByRole('textbox', { name: label }) as HTMLInputElement).value).toBe('pending');
+  expect(Object.values(actor.getSnapshot().context.drafts)[0].address.path[1]).toBe(0);
+  save();
+  const document = (writes[0] as { document: WorkflowFileDocument }).document;
+  expect(document.block.nodes.model).toMatchObject(kind === 'route' ? { routes: [{ id: 'pending' }] } : { actions: [{ id: 'second', title: 'pending' }] });
 });

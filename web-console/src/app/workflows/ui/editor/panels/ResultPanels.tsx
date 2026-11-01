@@ -3,6 +3,7 @@ import { useTranslation } from '../../../../../locale/react';
 import { IconPlus } from '../../icons';
 import { ReferencePicker } from '../forms/ReferencePicker';
 import { RouteId } from './InferencePanels';
+import { setField } from '../../../document/fields';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 
@@ -20,8 +21,7 @@ export function ReturnPanel(props: PanelProps) {
     {!node.outputs.length && <p className={css.reviewEmpty}>{tx('workflows:end.empty')}</p>}
     <div className={css.reviewActions}>
       {node.outputs.map((output, index) => <div key={index} className={css.endOutput}>
-        <RouteId key={output.variable} value={output.variable} label={tx('workflows:end.name')} className={css.endOutputName}
-          onCommit={variable => update(current => ({ ...current, outputs: current.outputs.map((item, i) => i === index ? { ...item, variable } : item) }), at('outputs', index, 'variable'))} />
+        <RouteId value={output.variable} label={tx('workflows:end.name')} className={css.endOutputName} address={at('outputs', index, 'variable')} rename={(document, _from, to) => setField(document, at('outputs', index, 'variable'), to)} />
         <ReferencePicker address={at('outputs', index, 'value_selector')} path={output.value_selector} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')}
           // As Dify: a nameless output takes the variable's own name.
           onChoose={choice => update(current => ({ ...current, outputs: current.outputs.map((item, i) => i === index

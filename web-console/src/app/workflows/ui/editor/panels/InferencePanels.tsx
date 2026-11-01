@@ -14,10 +14,11 @@ import { PromptEditor, useInsertVariable } from '../forms/PromptEditor';
 import { promptText } from '../summary';
 import { KindIcon } from '../../icons';
 import { useTranslation } from '../../../../../locale/react';
-import { encodeField, within, type FieldAddress } from '../../../document/fields';
+import { encodeField, fieldValue, within, type ArrayEdit, type FieldAddress } from '../../../document/fields';
 import { ModelSelection } from '../forms/ModelSelection';
-import { DraftTextField, JsonField } from '../forms/fields';
+import { ConflictActions, DraftTextField, JsonField, useFieldError } from '../forms/fields';
 import { useNode, type PanelProps } from './shared';
+import { useFieldDraft } from '../forms/drafts';
 import css from '../Editor.module.css';
 
 const StructuredOutputDialog = lazy(() => import('../forms/structured-output/StructuredOutputDialog').then(module => ({ default: module.StructuredOutputDialog })));
@@ -234,11 +235,11 @@ type Agent = Extract<NodeDefinition, { type: 'agent' }>;
 
 /** Replace this Agent and drop connections on exits it no longer has. */
 function useAgentExits(props: PanelProps) {
-  return (change: (agent: Agent) => Agent) => props.edit(document => {
+  return (change: (agent: Agent) => Agent, array?: ArrayEdit) => props.edit(document => {
     const owner = blockAt(document, props.block), current = owner && nodeAt(owner, props.id);
     if (current?.type !== 'agent') throw new CommandRejected('missing_node');
     return replaceNodeExits(document, props.block, props.id, change(current));
-  });
+  }, undefined, array);
 }
 
 /** As Dify's Agent output routes: the Agent picks one when it finishes,
@@ -260,24 +261,35 @@ function AgentRoutes(props: PanelProps) {
     {!!routes.length && <div className={css.routeList}>
       {routes.map((route, index) => <div key={route.id} className={css.routeItem}>
         <div className={css.routeItemHead}>
-          <RouteId value={route.id} label={tx('workflows:routes.id')} onCommit={to => props.edit(document => renameExit(document, props.block, props.id, route.id, to))} />
+          <RouteId value={route.id} address={at('routes', index, 'id')} label={tx('workflows:routes.id')} rename={(document, from, to) => renameExit(document, props.block, props.id, from, to)} />
           <button type="button" className={css.smallButton} disabled={routes.length < 2} aria-label={tx('workflows:routes.remove', { p0: route.id })} title={tx('workflows:routes.remove', { p0: route.id })}
-            onClick={() => exits(agent => withRoutes(agent, (agent.routes ?? []).filter(item => item.id !== route.id)))}>×</button>
+            onClick={() => exits(agent => withRoutes(agent, (agent.routes ?? []).filter(item => item.id !== route.id)), { array: at('routes'), removed: index })}>×</button>
         </div>
         <DraftTextField label={tx('workflows:routes.description')} value={route.description} address={at('routes', index, 'description')} multiline />
       </div>)}
       <button type="button" className={css.promptAddMessage} disabled={routes.length >= 32}
-        onClick={() => exits(agent => withRoutes(agent, [...(agent.routes ?? []), { id: fresh(agent.routes ?? []), description: '' }]))}><IconPlus size={13} />{tx('workflows:routes.add')}</button>
+        onClick={() => exits(agent => withRoutes(agent, [...(agent.routes ?? []), { id: fresh(agent.routes ?? []), description: '' }]), { array: at('routes'), inserted: routes.length })}><IconPlus size={13} />{tx('workflows:routes.add')}</button>
     </div>}
   </section>;
 }
 
-/** A route ID, or a Human Input action's ID or title, commits on blur or Enter. */
-export function RouteId({ value, label, className, onCommit }: { value: string; label: string; className?: string; onCommit: (value: string) => void }) {
-  const [draft, setDraft] = useState(value);
-  const commit = () => { const next = draft.trim(); if (next && next !== value) onCommit(next); else setDraft(value); };
-  return <input className={clsx(css.routeIdInput, className)} aria-label={label} value={draft} onChange={event => setDraft(event.target.value)} onBlur={commit}
-    onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { setDraft(value); event.currentTarget.blur(); } }} />;
+/** A versioned exit ID: Save applies it after the other visible fields. */
+export function RouteId({ value, address, label, className, rename }: { value: string; address: FieldAddress; label: string; className?: string; rename: (document: WorkflowDocument, from: string, to: string) => WorkflowDocument }) {
+  const describe = useFieldError();
+  const field = useFieldDraft({ address, canonical: JSON.stringify(value), rename: true, command: (document, text) => {
+    const from = fieldValue(document, address)?.value;
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch { return { status: 'rejected', error: { kind: 'syntax' } }; }
+    if (typeof from !== 'string') return { status: 'rejected', error: { kind: 'missing' } };
+    if (typeof parsed !== 'string' || !parsed.trim()) return { status: 'rejected', error: { kind: 'empty' } };
+    const to = parsed.trim();
+    return to === from ? { status: 'unchanged' } : { status: 'applied', document: rename(document, from, to) };
+  } });
+  let shown = field.text;
+  try { const parsed: unknown = JSON.parse(shown); if (typeof parsed === 'string') shown = parsed; } catch { /* Detached text remains visible. */ }
+  return <><input className={clsx(css.routeIdInput, className)} data-workflow-field={encodeField(address)} aria-label={label} aria-invalid={!!field.error || undefined} value={shown} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply}
+    onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); field.apply(); } else if (event.key === 'Escape') field.reset(); }} />
+    {field.error && <small className={css.hintError} role="alert">{describe(field.error)}</small>}<ConflictActions field={field} /></>;
 }
 
 /** As Dify's Agent error handling. There is no retry: a workflow child

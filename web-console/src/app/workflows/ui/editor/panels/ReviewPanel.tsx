@@ -4,10 +4,11 @@ import { IconChevronDownOutline14, IconQuestionOutline14, IconTrashOutline16 } f
 import { Tooltip } from '../../../../../presentation/primitives/Tooltip';
 import { useTranslation } from '../../../../../locale/react';
 import { CommandRejected, freshIdentifier, renameExit, replaceNodeExits } from '../../../document/commands';
-import { encodeField } from '../../../document/fields';
+import { encodeField, type ArrayEdit } from '../../../document/fields';
 import { blockAt, nodeAt, type NodeDefinition } from '../../../document/model';
 import { IconPlus } from '../../icons';
 import { PromptCard } from '../forms/PromptCard';
+import { DraftTextField } from '../forms/fields';
 import { PromptEditor } from '../forms/PromptEditor';
 import { promptText } from '../summary';
 import { InsertVariable, RouteId } from './InferencePanels';
@@ -56,20 +57,20 @@ function ReviewContent(props: PanelProps) {
 
 /** Replace this node and drop connections on actions it no longer has. */
 function useReviewExits(props: PanelProps) {
-  return (change: (review: Review) => Review) => props.edit(document => {
+  return (change: (review: Review) => Review, array?: ArrayEdit) => props.edit(document => {
     const owner = blockAt(document, props.block), current = owner && nodeAt(owner, props.id);
     if (current?.type !== 'review') throw new CommandRejected('missing_node');
     return replaceNodeExits(document, props.block, props.id, change(current));
-  });
+  }, undefined, array);
 }
 
 function ReviewActions(props: PanelProps) {
-  const tx = useTranslation(), { node, at, update } = useNode(props, 'review'), exits = useReviewExits(props);
+  const tx = useTranslation(), { node, at } = useNode(props, 'review'), exits = useReviewExits(props);
   // As Dify: `action_N` with "Button Text N", N one past the count.
   const add = () => exits(review => {
     const id = freshIdentifier({ input: {}, nodes: Object.fromEntries(review.actions.map(action => [action.id, { type: 'start' }])), edges: [] }, `action_${review.actions.length + 1}`);
     return { ...review, actions: [...review.actions, { id, title: tx('workflows:review.default-title', { p0: String(review.actions.length + 1) }) }] };
-  });
+  }, { array: at('actions'), inserted: node.actions.length });
   return <section className={css.group} aria-label={tx('workflows:review.actions')}>
     <Heading title={tx('workflows:review.actions')} tip={tx('workflows:review.actions-tip')}>
       <button type="button" className={css.iconButton} disabled={node.actions.length >= 12} aria-label={tx('workflows:review.add-action')} title={tx('workflows:review.add-action')} onClick={add}><IconPlus size={14} /></button>
@@ -77,12 +78,11 @@ function ReviewActions(props: PanelProps) {
     {!node.actions.length && <p className={css.reviewEmpty}>{tx('workflows:review.actions-empty')}</p>}
     <div className={css.reviewActions}>
       {node.actions.map((action, index) => <div key={action.id} className={css.reviewAction}>
-        <RouteId value={action.id} label={tx('workflows:review.action-id')} className={css.reviewActionId}
-          onCommit={to => props.edit(document => renameExit(document, props.block, props.id, action.id, to))} />
-        <RouteId value={action.title} label={tx('workflows:review.action-title')} className={css.reviewActionTitle}
-          onCommit={title => update(current => ({ ...current, actions: current.actions.map((item, at) => at === index ? { ...item, title } : item) }), at('actions', index, 'title'))} />
+        <RouteId value={action.id} address={at('actions', index, 'id')} label={tx('workflows:review.action-id')} className={css.reviewActionId}
+          rename={(document, from, to) => renameExit(document, props.block, props.id, from, to)} />
+        <div className={css.reviewActionTitle}><DraftTextField value={action.title} label={tx('workflows:review.action-title')} address={at('actions', index, 'title')} /></div>
         <button type="button" className={css.iconButton} aria-label={tx('workflows:review.remove-action', { p0: action.id })} title={tx('workflows:review.remove-action', { p0: action.id })}
-          onClick={() => exits(review => ({ ...review, actions: review.actions.filter(item => item.id !== action.id) }))}><IconTrashOutline16 /></button>
+          onClick={() => exits(review => ({ ...review, actions: review.actions.filter(item => item.id !== action.id) }), { array: at('actions'), removed: index })}><IconTrashOutline16 /></button>
       </div>)}
     </div>
   </section>;

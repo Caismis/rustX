@@ -204,6 +204,10 @@ impl RunBudgets {
 /// private input, node local and export. Mutually exclusive paths may be
 /// overcounted deliberately. Actual byte accounting still follows lifetimes.
 pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
+    retained_bound(block, 0)
+}
+
+fn retained_bound(block: &WorkflowBlockProgram, loop_value_bytes: usize) -> usize {
     let mut bytes =
         schema_value_bound(&block.input_schema) + schema_value_bound(&block.output_schema);
     for node in block.nodes.values() {
@@ -213,22 +217,35 @@ pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
             WorkflowNodeProgram::Tool { result, .. } => schema_value_bound(&result.schema()),
             WorkflowNodeProgram::Start
             | WorkflowNodeProgram::Branch { .. }
-            | WorkflowNodeProgram::LoopEnd
-            | WorkflowNodeProgram::Assigner { .. } => 0,
+            | WorkflowNodeProgram::LoopEnd => 0,
+            WorkflowNodeProgram::Assigner { items, types } => {
+                let writes = items
+                    .iter()
+                    .zip(types)
+                    .map(|(item, var_type)| (&item.variable, var_type))
+                    .collect::<BTreeMap<_, _>>()
+                    .values()
+                    .map(|var_type| schema_value_bound(&var_type.schema()))
+                    .sum::<usize>()
+                    .min(loop_value_bytes);
+                // Working snapshots and pending writes overlap their replacements.
+                2 * loop_value_bytes + 2 * writes
+            }
             WorkflowNodeProgram::Loop {
                 body,
                 output_schema,
                 ..
             } => {
                 // One live round, the variables it started from and the Loop's value.
-                static_retained_bound(body) + 2 * schema_value_bound(output_schema)
+                retained_bound(body, schema_value_bound(output_schema))
+                    + 2 * schema_value_bound(output_schema)
             }
             WorkflowNodeProgram::Iteration {
                 body,
                 parallel,
                 output_schema,
                 ..
-            } => (static_retained_bound(body) + MAX_VALUE_BYTES)
+            } => (retained_bound(body, 0) + MAX_VALUE_BYTES)
                 .saturating_mul(*parallel as usize)
                 .saturating_add(schema_value_bound(output_schema)),
             WorkflowNodeProgram::Review { actions, .. } => {
@@ -298,6 +315,9 @@ impl<'a> LocalReservation<'a> {
     }
     fn retain(&mut self, value: &Value) -> Result<(), WorkflowRunError> {
         let bytes = super::expressions::bounded_value_bytes(value)?;
+        self.retain_bytes(bytes)
+    }
+    fn retain_bytes(&mut self, bytes: usize) -> Result<(), WorkflowRunError> {
         let mut budgets = self.run.budgets.lock().expect("run budgets");
         if bytes > MAX_VALUE_BYTES || budgets.retained_bytes + bytes > budgets.reserved_bytes {
             return Err(WorkflowRunError::LimitExceeded(
@@ -477,6 +497,7 @@ impl WorkflowRuntime {
         }
         let mut active = std::collections::BTreeSet::from([block.entry.clone()]);
         let mut ready = std::collections::BTreeSet::from([block.entry.clone()]);
+        let admitting = std::sync::atomic::AtomicBool::new(true);
         let mut pending = FuturesUnordered::new();
         let mut failures = BTreeMap::new();
         let mut returned = BTreeMap::new();
@@ -486,7 +507,13 @@ impl WorkflowRuntime {
                 && let Some(id) = ready.pop_first()
             {
                 let scope = values.clone();
+                let admitting = &admitting;
                 pending.push(async move {
+                    #[cfg(test)]
+                    self.node_frontier(&id).await;
+                    if !admitting.load(std::sync::atomic::Ordering::Acquire) {
+                        return (id, None);
+                    }
                     let result = self
                         .execute_node(
                             run,
@@ -499,14 +526,16 @@ impl WorkflowRuntime {
                             cancellation,
                         )
                         .await;
-                    (id, result)
+                    (id, Some(result))
                 });
             }
             let Some((id, settled)) = pending.next().await else {
                 break;
             };
+            let Some(settled) = settled else { continue };
             match settled {
                 Err(error) => {
+                    admitting.store(false, std::sync::atomic::Ordering::Release);
                     failures.insert(id, error);
                 }
                 Ok(output) => {
@@ -526,9 +555,8 @@ impl WorkflowRuntime {
                         returned.insert(id.clone(), value);
                     }
                     ended |= exit;
-                    // Each write lands on the variable as it is now, so
-                    // parallel Assigners keep each other's other writes;
-                    // the last write to one variable wins, as in Dify.
+                    // Unordered writers are proven disjoint or write different
+                    // variables. An authored edge orders every shared write.
                     for (owner, label, value) in writes {
                         if let Some(Value::Object(variables)) = values.get_mut(&owner) {
                             variables.insert(label, value);
@@ -571,6 +599,23 @@ impl WorkflowRuntime {
             ended,
             _reservation: reservation,
         })
+    }
+
+    /// Pause before admission, including before the graph's failure gate.
+    #[cfg(test)]
+    async fn node_frontier(&self, node: &str) {
+        let hook = {
+            let mut slot = self.node_frontier.lock().expect("node frontier");
+            if slot.as_ref().is_some_and(|hook| hook.node == node) {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        if let Some(hook) = hook {
+            let _ = hook.entered.send(());
+            let _ = hook.release.await;
+        }
     }
 
     /// Test-only pause before round `round` is admitted.
@@ -661,21 +706,6 @@ impl WorkflowRuntime {
             node: node_id.to_owned(),
             visit: 0,
         };
-        #[cfg(test)]
-        {
-            let hook = {
-                let mut hook = self.node_frontier.lock().expect("node frontier");
-                if hook.as_ref().is_some_and(|hook| hook.node == node_id) {
-                    hook.take()
-                } else {
-                    None
-                }
-            };
-            if let Some(hook) = hook {
-                let _ = hook.entered.send(());
-                let _ = hook.release.await;
-            }
-        }
         let mut started = false;
         let mut effect_started = false;
         let result = Box::pin(async {
@@ -847,25 +877,46 @@ impl WorkflowRuntime {
                     Ok(None)
                 }
                 WorkflowNodeProgram::Assigner { items, types } => {
+                    let mut working = BTreeMap::new();
+                    let mut retained_writes = BTreeMap::new();
                     for (item, var_type) in items.iter().zip(types) {
                         let [owner, label] = item.variable.as_slice() else {
                             return Err(WorkflowRunError::InvalidProgram("assigned variable".into()));
                         };
                         // Earlier writes of this node are already visible to later ones.
-                        let current = values.get(owner).and_then(|variables| variables.get(label)).cloned()
+                        let variables = values.get(owner).ok_or_else(|| WorkflowRunError::InvalidValue("Loop variables are missing".into()))?;
+                        let current = variables.get(label)
                             .ok_or_else(|| WorkflowRunError::InvalidValue(format!("Loop variable {label:?} is missing")))?;
                         let operand = item.value.as_ref().map(|value| evaluate_value(value, input, &values)).transpose()?;
-                        let value = assign(item.operation, *var_type, &current, operand)?;
+                        let mut retained = LocalReservation::new(run);
+                        let value = assign(item.operation, *var_type, current, operand, &mut retained)?;
                         validate_commit(&var_type.schema(), &value)?;
+                        let bytes = super::expressions::bounded_value_bytes(variables)?
+                            - super::expressions::bounded_value_bytes(current)?
+                            + super::expressions::bounded_value_bytes(&value)?;
+                        // Reserve the complete copy-on-write owner before cloning it.
+                        let mut snapshot = LocalReservation::new(run);
+                        snapshot.retain_bytes(bytes)?;
                         if let Some(Value::Object(variables)) = values.get_mut(owner) {
                             variables.insert(label.clone(), value.clone());
                         }
-                        writes.push((owner.clone(), label.clone(), value));
+                        working.insert(owner.clone(), snapshot);
+                        retained_writes.insert((owner.clone(), label.clone()), (value, retained));
+                    }
+                    // The private working copies retire here. Only the final write
+                    // to each variable transfers to the graph's merge owner.
+                    for (owner, retained) in working {
+                        values.remove(&owner);
+                        reservation.absorb(retained);
+                    }
+                    for ((owner, label), (value, retained)) in retained_writes {
+                        reservation.absorb(retained);
+                        writes.push((owner, label, value));
                     }
                     Ok(None)
                 }
                 WorkflowNodeProgram::Review { content: parts, actions, timeout_ms } => {
-                    let shown = super::model::render_parts(parts, |part| evaluate_value(part, input, &values))?;
+                    let shown = super::review::render_content(parts, |part| evaluate_value(part, input, &values))?;
                     let (value, port) = self
                         .review(context, &node_instance, shown, actions, *timeout_ms, cancellation)
                         .await?;
@@ -1150,12 +1201,55 @@ fn flatten(outputs: Vec<Value>, flatten: bool) -> Vec<Value> {
         .collect()
 }
 
+/// Charge growing arrays before cloning the current value or extending it.
+fn reserve_array_write(
+    operation: super::WorkflowWriteMode,
+    current: &Value,
+    operand: Option<&Value>,
+    reservation: &mut LocalReservation<'_>,
+) -> Result<bool, WorkflowRunError> {
+    use super::WorkflowWriteMode as Mode;
+    let array_bytes = match operation {
+        Mode::Append => Some(
+            super::expressions::bounded_value_bytes(current)?
+                + operand
+                    .map(super::expressions::bounded_value_bytes)
+                    .transpose()?
+                    .unwrap_or(0)
+                + usize::from(current.as_array().is_some_and(|items| !items.is_empty())),
+        ),
+        Mode::Extend => Some(
+            super::expressions::bounded_value_bytes(current)?
+                + operand
+                    .map(super::expressions::bounded_value_bytes)
+                    .transpose()?
+                    .unwrap_or(2)
+                    .saturating_sub(2)
+                + usize::from(
+                    current.as_array().is_some_and(|items| !items.is_empty())
+                        && operand
+                            .and_then(Value::as_array)
+                            .is_some_and(|items| !items.is_empty()),
+                ),
+        ),
+        Mode::RemoveFirst | Mode::RemoveLast => {
+            Some(super::expressions::bounded_value_bytes(current)?)
+        }
+        _ => None,
+    };
+    if let Some(bytes) = array_bytes {
+        reservation.retain_bytes(bytes)?;
+    }
+    Ok(array_bytes.is_some())
+}
+
 /// One Variable Assigner write, as Dify's operations.
 fn assign(
     operation: super::WorkflowWriteMode,
     var_type: super::WorkflowVarType,
     current: &Value,
     operand: Option<Value>,
+    reservation: &mut LocalReservation<'_>,
 ) -> Result<Value, WorkflowRunError> {
     use super::WorkflowWriteMode as Mode;
     let number = |value: &Value| {
@@ -1186,7 +1280,8 @@ fn assign(
             "the variable is not an array".into(),
         )),
     };
-    Ok(match operation {
+    let precharged = reserve_array_write(operation, current, operand.as_ref(), reservation)?;
+    let value = match operation {
         Mode::Overwrite | Mode::Set => {
             operand.ok_or_else(|| WorkflowRunError::InvalidProgram("operand".into()))?
         }
@@ -1224,7 +1319,12 @@ fn assign(
         Mode::Decrement => arithmetic(|left, right| Some(left - right))?,
         Mode::Multiply => arithmetic(|left, right| Some(left * right))?,
         Mode::Divide => arithmetic(|left, right| (right != 0.0).then(|| left / right))?,
-    })
+    };
+    super::expressions::bounded_value_bytes(&value)?;
+    if !precharged {
+        reservation.retain(&value)?;
+    }
+    Ok(value)
 }
 
 pub(super) fn validate_commit(schema: &Value, value: &Value) -> Result<(), WorkflowRunError> {
@@ -1264,6 +1364,33 @@ mod tests {
     use super::*;
     use crate::runtime::workflow::{MAX_LOCAL_BYTES, WorkflowId, WorkflowProgram, test_instance};
     use std::sync::Arc;
+
+    #[test]
+    fn nested_sibling_limit_errors_are_never_handled_as_business_failures() {
+        for limit in [
+            super::super::WorkflowLimit::ModelCalls,
+            super::super::WorkflowLimit::Agents,
+        ] {
+            let error = WorkflowRunError::NodesFailed {
+                failures: BTreeMap::from([
+                    (
+                        "a".into(),
+                        WorkflowRunError::InvalidValue("business failure".into()),
+                    ),
+                    (
+                        "b".into(),
+                        WorkflowRunError::NodesFailed {
+                            failures: BTreeMap::from([
+                                ("first".into(), WorkflowRunError::LimitExceeded(limit)),
+                                ("second".into(), WorkflowRunError::LimitExceeded(limit)),
+                            ]),
+                        },
+                    ),
+                ]),
+            };
+            assert!(!round_failed(&error));
+        }
+    }
 
     #[test]
     fn model_call_limit_is_independent_of_agent_and_step_allowances() {

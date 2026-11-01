@@ -1,8 +1,8 @@
 //! The source Tools a Workflow of one scope can choose, as Dify lists the
 //! installed tools of each provider. A Global Workflow sees the User MCP
 //! servers and Managed Python packages; a Workspace Workflow also sees the
-//! Workspace's own. Each source is connected once, listed and closed, with
-//! the same owners and bounds as the settings probe. Choices, never
+//! Workspace's own. Each page connects, lists and closes its source, with
+//! a digest fence on continuation and the same owners and bounds as the settings probe. Choices, never
 //! admission: the native check decides.
 use super::configuration::{
     UserConfigManager,
@@ -67,6 +67,92 @@ pub struct WorkflowToolSource {
 #[serde(deny_unknown_fields)]
 pub struct WorkflowToolCatalog {
     pub sources: Vec<WorkflowToolSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<WorkflowToolCatalogCursor>,
+}
+
+/// A continuation is accepted only against the same complete catalog.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowToolCatalogCursor {
+    pub offset: u32,
+    pub digest: String,
+}
+
+const MAX_CATALOG_PAGE_BYTES: usize = 256 * 1024;
+
+fn page(
+    mut catalog: WorkflowToolCatalog,
+    cursor: Option<&WorkflowToolCatalogCursor>,
+    source: bool,
+) -> Result<WorkflowToolCatalog, SettingsError> {
+    use sha2::{Digest, Sha256};
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&catalog).map_err(|_| SettingsError::Io)?)
+    );
+    let offset = cursor.map_or(0, |cursor| cursor.offset as usize);
+    if cursor.is_some_and(|cursor| cursor.digest != digest) {
+        return Err(SettingsError::Invalid);
+    }
+    let sources = if source {
+        Vec::new()
+    } else {
+        std::mem::take(&mut catalog.sources)
+    };
+    let tools = if source {
+        std::mem::take(&mut catalog.sources[0].tools)
+    } else {
+        Vec::new()
+    };
+    let total = if source { tools.len() } else { sources.len() };
+    if offset > total {
+        return Err(SettingsError::Invalid);
+    }
+    // Include the complete envelope and reserve the bounded continuation.
+    let mut bytes = serde_json::to_vec(&catalog)
+        .map_err(|_| SettingsError::Io)?
+        .len()
+        + 256;
+    let mut consumed = offset;
+    for index in offset..total {
+        let size = if source {
+            serde_json::to_vec(&tools[index])
+        } else {
+            serde_json::to_vec(&sources[index])
+        }
+        .map_err(|_| SettingsError::Io)?
+        .len()
+            + 1;
+        if bytes + size > MAX_CATALOG_PAGE_BYTES {
+            break;
+        }
+        bytes += size;
+        consumed += 1;
+    }
+    if consumed == offset && offset < total {
+        return Err(SettingsError::Invalid);
+    }
+    if source {
+        catalog.sources[0].tools = tools
+            .into_iter()
+            .skip(offset)
+            .take(consumed - offset)
+            .collect();
+    } else {
+        catalog.sources = sources
+            .into_iter()
+            .skip(offset)
+            .take(consumed - offset)
+            .collect();
+    }
+    if consumed < total {
+        catalog.next = Some(WorkflowToolCatalogCursor {
+            offset: u32::try_from(consumed).map_err(|_| SettingsError::Invalid)?,
+            digest,
+        });
+    }
+    Ok(catalog)
 }
 
 enum Connect {
@@ -93,6 +179,7 @@ impl SessionRuntimeManager {
         &self,
         target: SourceTarget,
         source: Option<String>,
+        cursor: Option<WorkflowToolCatalogCursor>,
     ) -> Result<WorkflowToolCatalog, SettingsError> {
         let owner = self.configuration.clone();
         let (plans, workspace, runtime_root) =
@@ -100,32 +187,45 @@ impl SessionRuntimeManager {
                 .await
                 .map_err(|_| SettingsError::Io)??;
         let Some(source) = source else {
-            return Ok(WorkflowToolCatalog {
-                sources: plans
-                    .into_iter()
-                    .map(|plan| WorkflowToolSource {
-                        state: if matches!(plan.connect, Connect::Invalid) {
-                            WorkflowToolSourceState::Invalid
-                        } else {
-                            WorkflowToolSourceState::Pending
-                        },
-                        source_id: plan.source_id,
-                        kind: plan.kind,
-                        scope: plan.scope,
-                        tools: Vec::new(),
-                    })
-                    .collect(),
-            });
+            return page(
+                WorkflowToolCatalog {
+                    next: None,
+                    sources: plans
+                        .into_iter()
+                        .map(|plan| WorkflowToolSource {
+                            state: if matches!(plan.connect, Connect::Invalid) {
+                                WorkflowToolSourceState::Invalid
+                            } else {
+                                WorkflowToolSourceState::Pending
+                            },
+                            source_id: plan.source_id,
+                            kind: plan.kind,
+                            scope: plan.scope,
+                            tools: Vec::new(),
+                        })
+                        .collect(),
+                },
+                cursor.as_ref(),
+                false,
+            );
         };
         let plan = plans
             .into_iter()
             .find(|plan| plan.source_id == source)
             .ok_or(SettingsError::Invalid)?;
         let _permit = LISTINGS.acquire().await.map_err(|_| SettingsError::Io)?;
-        let listed = list(plan, &workspace, &runtime_root, &CancellationSignal::new()).await;
-        Ok(WorkflowToolCatalog {
-            sources: vec![listed],
-        })
+        let mut listed = list(plan, &workspace, &runtime_root, &CancellationSignal::new()).await;
+        listed
+            .tools
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        page(
+            WorkflowToolCatalog {
+                sources: vec![listed],
+                next: None,
+            },
+            cursor.as_ref(),
+            true,
+        )
     }
 }
 
@@ -270,4 +370,79 @@ fn python_store(
         .confined(&product.root().join("environments/python-tools"))
         .map_err(|error| error.to_string())?;
     crate::tools::python::PythonToolStore::new(path).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn large() -> WorkflowToolCatalog {
+        let properties = (0..64)
+            .map(|index| {
+                (
+                    format!("field_{index}"),
+                    json!({"type":"string","description":"A field description. ".repeat(6)}),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        WorkflowToolCatalog {
+            next: None,
+            sources: vec![WorkflowToolSource {
+                source_id: "large".into(),
+                kind: WorkflowToolSourceKind::Mcp,
+                scope: SourceScope::User,
+                state: WorkflowToolSourceState::Listed,
+                tools: (0..128)
+                    .map(|index| WorkflowToolChoice {
+                        name: format!("tool_{index:03}"),
+                        description: "Quoted \"description\" and Unicode 界\n".repeat(8),
+                        input_schema: json!({"type":"object","properties":properties}),
+                        result: WorkflowToolResult::Text {},
+                    })
+                    .collect(),
+            }],
+        }
+    }
+
+    #[test]
+    fn legal_large_catalog_is_complete_in_encoded_byte_bounded_pages() {
+        let catalog = large();
+        assert!(serde_json::to_vec(&catalog).unwrap().len() > 1024 * 1024);
+        let mut cursor = None;
+        let mut all = Vec::new();
+        let mut pages = 0;
+        loop {
+            let listed = page(catalog.clone(), cursor.as_ref(), true).unwrap();
+            assert!(serde_json::to_vec(&listed).unwrap().len() <= MAX_CATALOG_PAGE_BYTES);
+            all.extend(listed.sources[0].tools.clone());
+            pages += 1;
+            cursor = listed.next;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert!(pages > 1);
+        assert_eq!(all, catalog.sources[0].tools);
+    }
+
+    #[test]
+    fn changed_catalog_and_out_of_range_continuations_are_refused() {
+        let catalog = large();
+        let cursor = page(catalog.clone(), None, true).unwrap().next.unwrap();
+        let mut changed = catalog.clone();
+        changed.sources[0].tools[0].description.push('!');
+        assert!(page(changed, Some(&cursor), true).is_err());
+        assert!(
+            page(
+                catalog,
+                Some(&WorkflowToolCatalogCursor {
+                    offset: u32::MAX,
+                    ..cursor
+                }),
+                true
+            )
+            .is_err()
+        );
+    }
 }

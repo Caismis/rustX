@@ -101,6 +101,7 @@ function renameFiniteValue(value: unknown, path: readonly WorkflowSchemaStep[], 
 
 function renameContract(schema: Schema, path: readonly WorkflowSchemaStep[], from: string, to: string): Schema {
   let next: Schema = { ...schema,
+    ...(Object.hasOwn(schema, 'default') ? { default: renameFiniteValue(schema.default, path, from, to) } : {}),
     ...(Object.hasOwn(schema, 'const') ? { const: renameFiniteValue(schema.const, path, from, to) } : {}),
     ...(Array.isArray(schema.enum) ? { enum: schema.enum.map(value => renameFiniteValue(value, path, from, to)) } : {}),
   };

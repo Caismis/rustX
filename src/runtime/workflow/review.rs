@@ -36,6 +36,24 @@ pub(super) fn result_schema(actions: &[WorkflowReviewAction]) -> Value {
     serde_json::json!({"type":"object","properties":{"action":{"type":"string","enum":ids},"content":{"type":"string"}},"required":["action","content"],"additionalProperties":false})
 }
 
+/// The rendering frontier uses the same character contract as the published DTO.
+pub(super) fn render_content(
+    parts: &[super::WorkflowValue],
+    mut resolve: impl FnMut(&super::WorkflowValue) -> Result<Value, WorkflowRunError>,
+) -> Result<String, WorkflowRunError> {
+    let limit = crate::events::interaction::MAX_QUESTION_TEXT_CHARS;
+    let mut remaining = limit;
+    super::model::render_parts(parts, |part| {
+        let text = super::model::rendered_value(resolve(part)?);
+        remaining = remaining.checked_sub(text.chars().count()).ok_or_else(|| {
+            WorkflowRunError::InvalidValue(format!(
+                "Human Input content exceeds {limit} Unicode characters"
+            ))
+        })?;
+        Ok(Value::String(text))
+    })
+}
+
 impl WorkflowRuntime {
     pub(super) async fn review(
         &self,
@@ -117,5 +135,26 @@ impl WorkflowRuntime {
             serde_json::json!({"action": action, "content": shown}),
             WorkflowPort::case(action),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn human_rendering_stops_before_building_an_oversized_question() {
+        let parts = vec![
+            super::super::WorkflowValue::Reference {
+                path: vec!["args".into(), "report".into()]
+            };
+            64
+        ];
+        let mut resolved = 0;
+        let result = render_content(&parts, |_| {
+            resolved += 1;
+            Ok(Value::String("x".repeat(1000)))
+        });
+        assert!(result.unwrap_err().to_string().contains("4096"));
+        assert_eq!(resolved, 5);
     }
 }

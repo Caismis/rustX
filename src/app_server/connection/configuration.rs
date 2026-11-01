@@ -196,11 +196,15 @@ impl AppServerConnection {
                     .map_err(source_settings_error)?;
                 Ok(MethodResult::WorkflowModelChoices { choices })
             }
-            Method::WorkflowToolCatalog { target, source } => {
+            Method::WorkflowToolCatalog {
+                target,
+                source,
+                cursor,
+            } => {
                 let catalog = self
                     .host
                     .manager()
-                    .workflow_tool_catalog(target, source)
+                    .workflow_tool_catalog(target, source, cursor)
                     .await
                     .map_err(source_error)?;
                 Ok(MethodResult::WorkflowToolCatalog { catalog })

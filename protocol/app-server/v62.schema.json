@@ -9178,6 +9178,17 @@
                     "null"
                   ],
                   "default": null
+                },
+                "cursor": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/WorkflowToolCatalogCursor"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
                 }
               },
               "additionalProperties": false,
@@ -11810,6 +11821,26 @@
             "offset"
           ]
         }
+      ]
+    },
+    "WorkflowToolCatalogCursor": {
+      "description": "A continuation is accepted only against the same complete catalog.",
+      "type": "object",
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "digest": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "offset",
+        "digest"
       ]
     },
     "WorkflowFileDocument": {
@@ -33680,6 +33711,16 @@
           "items": {
             "$ref": "#/$defs/WorkflowToolSource"
           }
+        },
+        "next": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowToolCatalogCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,

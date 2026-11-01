@@ -276,6 +276,20 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
     names.set(id, name);
     reserved = updateBlock(reserved, path, current => ({ ...current, nodes: { ...current.nodes, [name]: fragment.nodes[id] } }));
   }
+  // A copied descendant must not shadow any variable around its new body.
+  // Check the complete subtree before accepting the paste transaction.
+  const produces = (node: NodeDefinition) => ['agent', 'model', 'tool', 'loop', 'iteration', 'review'].includes(node.type);
+  const outer = new Set(['args', ...[...names].filter(([id]) => produces(fragment.nodes[id])).map(([, name]) => name)]);
+  for (let depth = 0; depth <= path.length; depth++)
+    for (const [id, node] of Object.entries(blockAt(document, path.slice(0, depth))?.nodes ?? {})) if (produces(node)) outer.add(id);
+  const checkBodies = (nodes: Record<string, NodeDefinition>, around: ReadonlySet<string>) => {
+    for (const node of Object.values(nodes)) if (node.type === 'iteration' || node.type === 'loop') {
+      const ids = Object.keys(node.body.nodes);
+      if (ids.some(id => around.has(id))) throw new CommandRejected('duplicate_identifier');
+      checkBodies(node.body.nodes, new Set([...around, ...Object.entries(node.body.nodes).filter(([, node]) => produces(node)).map(([id]) => id)]));
+    }
+  };
+  checkBodies(fragment.nodes, outer);
   const rewritten = rewriteBlockReferences(block, reference => names.has(reference[0]) ? [names.get(reference[0])!, ...reference.slice(1)] : undefined);
   let next = updateBlock(document, path, current => ({ ...current, nodes: { ...current.nodes, ...Object.fromEntries(ids.map(id => [names.get(id)!, structuredClone(rewritten.nodes[id])])) },
     edges: [...edgesOf(current), ...edgesOf(block).map(edge => ({ ...edge, from: names.get(edge.from) ?? fail(), to: names.get(edge.to) ?? fail() }))] }));

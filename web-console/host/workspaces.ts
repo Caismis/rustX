@@ -548,7 +548,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'enable' };
         }
         case 'tool_catalog': {
-          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source }, 'workflow_tool_catalog');
+          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor }, 'workflow_tool_catalog');
           await unchanged();
           return { kind: 'tool_catalog', catalog };
         }
@@ -613,11 +613,19 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
       && (row.type === 'models' && Object.keys(row).every(key => ['type', 'offset'].includes(key))
         || row.type === 'profiles' && typeof row.model === 'string' && row.model.length > 0 && row.model.length <= 256 && Object.keys(row).every(key => ['type', 'model', 'offset'].includes(key)));
   };
+  const catalogCursor = (cursor: unknown) => {
+    if (cursor == null) return true;
+    if (!object(cursor)) return false;
+    const row = cursor as Record<string, unknown>;
+    return typeof row.digest === 'string' && /^[a-f0-9]{64}$/.test(row.digest)
+      && Number.isInteger(row.offset) && Number(row.offset) >= 0 && Number(row.offset) <= 4294967295
+      && Object.keys(row).every(key => ['offset', 'digest'].includes(key));
+  };
   const valid = object(value) && (
     value!.kind === 'list' ? fields(['kind'])
       : value!.kind === 'enable' ? fields(['kind', 'id', 'expected_revision', 'enabled']) && id() && typeof value!.expected_revision === 'string' && typeof value!.enabled === 'boolean'
       : value!.kind === 'read' ? fields(['kind', 'id']) && id()
-        : value!.kind === 'tool_catalog' ? fields(['kind', 'source']) && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256)
+        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor']) && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256) && catalogCursor(value!.cursor)
         : value!.kind === 'model_choices' ? fields(['kind', 'query', 'expected_revision']) && choicesQuery(value!.query) && (value!.expected_revision == null || typeof value!.expected_revision === 'string')
         : value!.kind === 'analyze' ? fields(['kind', 'id', 'document', 'generation', 'query']) && id() && object(value!.document) && typeof value!.generation === 'string' && value!.generation.length > 0 && value!.generation.length <= 64 && (value!.query == null || object(value!.query))
         : value!.kind === 'check' ? fields(['kind', 'id', 'document']) && id() && object(value!.document)

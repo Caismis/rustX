@@ -16,6 +16,18 @@ pub(super) struct ActivationScopes {
     succeeded: BTreeMap<String, Bdd>,
 }
 impl ActivationScopes {
+    /// Two writers need an authored order unless their activations are disjoint.
+    pub(super) fn unordered_together(&self, left: &str, right: &str) -> bool {
+        !self.ancestors[left].contains(right)
+            && !self.ancestors[right].contains(left)
+            && Bdd::binary_op_with_limit(
+                2,
+                &self.active[left],
+                &self.active[right],
+                op_function::and,
+            )
+            .is_none_or(|overlap| !overlap.is_false())
+    }
     #[allow(clippy::too_many_lines)] // One ordered pass builds every node's port gates.
     pub(super) fn new(
         block: &WorkflowBlock,

@@ -1057,6 +1057,7 @@ export type Request1 =
       params: {
         target: SourceTarget;
         source?: string | null;
+        cursor?: WorkflowToolCatalogCursor | null;
       };
     }
   | {
@@ -9469,6 +9470,16 @@ export interface SourceFieldRef {
   field: SourceFieldName;
   item_index?: number | null;
   byte_length: number;
+}
+/**
+ * A continuation is accepted only against the same complete catalog.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolCatalogCursor".
+ */
+export interface WorkflowToolCatalogCursor {
+  offset: number;
+  digest: string;
 }
 /**
  * Complete authored source, with the executable fields at their native YAML
@@ -18588,6 +18599,7 @@ export interface WorkflowToolChoice {
  */
 export interface WorkflowToolCatalog {
   sources: WorkflowToolSource[];
+  next?: WorkflowToolCatalogCursor | null;
 }
 /**
  * One MCP server or Managed Python package and the Tools it lists.

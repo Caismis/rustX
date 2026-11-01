@@ -589,3 +589,65 @@ async fn unanswered_review_takes_its_timeout_exit() {
     let events = plane.store.read_events(None, 128).unwrap().events;
     assert!(events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowBranchSelected { successor, .. } if successor == "no")));
 }
+
+#[tokio::test]
+async fn human_content_uses_the_questionnaire_unicode_limit_for_fixed_and_dynamic_text() {
+    let limit = crate::events::interaction::MAX_QUESTION_TEXT_CHARS;
+    for glyph in ["a", "界", "😀"] {
+        for count in [limit, limit + 1] {
+            let text = glyph.repeat(count);
+            let mut fixed = human_definition(false);
+            if let WorkflowNodeDefinition::Review { content, .. } =
+                fixed.block.nodes.get_mut("human").unwrap()
+            {
+                *content = vec![WorkflowValue::Literal { value: json!(text) }];
+            }
+            assert_eq!(
+                compile_test(fixed).is_ok(),
+                count == limit,
+                "fixed {glyph:?} count {count}"
+            );
+            let mut definition = human_definition(false);
+            definition.timeout_ms = 600_000;
+            definition.block.input = schema(json!({"report":{"type":"string"}}), &["report"]);
+            if let WorkflowNodeDefinition::Review { content, .. } =
+                definition.block.nodes.get_mut("human").unwrap()
+            {
+                *content = vec![WorkflowValue::Reference {
+                    path: vec!["args".into(), "report".into()],
+                }];
+            }
+            let plane = workflow_test_plane(1);
+            let (owner, audit, mut published) = owner(&plane);
+            let context = human_context(&plane, owner.clone());
+            let runtime = workflow_runtime(&plane);
+            let (_, cancellation) = workflow_cancellation();
+            let program = Arc::new(compile_test(definition).unwrap());
+            let mut task = tokio::spawn(async move {
+                runtime
+                    .run_test_foreground(
+                        program,
+                        ToolCallId::new("bounded-human"),
+                        context,
+                        json!({"report":text}),
+                        cancellation,
+                    )
+                    .await
+            });
+            if count == limit {
+                let request = tokio::select! { request=published.recv()=>request.unwrap(), result=&mut task=>panic!("settled before publication: {result:?}") };
+                owner
+                    .respond_async(&request.id, answer(&request, true))
+                    .await
+                    .unwrap();
+                assert!(task.await.unwrap().is_ok());
+                assert_eq!(audit.events().len(), 2);
+            } else {
+                let error = task.await.unwrap().unwrap_err();
+                assert!(error.to_string().contains("4096"), "{error:?}");
+                assert!(published.try_recv().is_err());
+                assert!(audit.events().is_empty());
+            }
+        }
+    }
+}

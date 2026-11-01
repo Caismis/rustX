@@ -60,6 +60,7 @@ const operations: WorkflowHostOperation[] = [
   { kind: 'list' },
   { kind: 'enable', id: 'flow', expected_revision: 'missing', enabled: true },
   { kind: 'tool_catalog', source: 'fast' },
+  { kind: 'tool_catalog', source: 'fast', cursor: { offset: 16, digest: 'a'.repeat(64) } },
   { kind: 'read', id: 'flow' },
   { kind: 'check', id: 'flow', document },
   { kind: 'write', id: 'flow', expected_revision: 'missing', edit: { operation: 'create', description: 'Created' } },
@@ -91,6 +92,10 @@ describe('Workflow operations and Product Host authority (R1)', () => {
     }
     expect(native.state.connects).toBe(0);
     expect(native.state.requests).toHaveLength(0);
+
+    const cursor = { offset: 16, digest: 'a'.repeat(64) };
+    await h2.workflowWorkspace({ authorityId: current.authorityId, endpoint: current.endpoint }, 'native-a', registration.id, { kind: 'tool_catalog', source: 'fast', cursor });
+    expect(dispatched().at(-1)?.params).toEqual({ target: { kind: 'workspace', directory: b }, source: 'fast', cursor });
 
     // The replacement's own scope reaches exactly its own mapping.
     await h2.workflowWorkspace({ authorityId: current.authorityId, endpoint: current.endpoint }, 'native-a', registration.id, operations.find(operation => operation.kind === 'write')!);

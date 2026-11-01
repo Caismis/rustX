@@ -49,6 +49,9 @@ something besides whitespace. References are the ordinary explicit
 `WorkflowValue` references, checked against the node's scope like any other;
 there is no template string syntax. No filesystem reads, child Conversation,
 Agent Loop or parent canonical Assistant message is introduced.
+All rendered Model messages share a 256 KiB UTF-8 budget, checked before each
+append and before the retry prompt can be cloned. Prepared-request validation
+still counts JSON encoding and any schema fallback added afterwards.
 
 ```yaml
 summarize:
@@ -251,13 +254,12 @@ No rediscovery or current-file lookup can replace a frozen registration.
 Tools run with their exact admitted execution contract in the invoking
 Session's workspace; a Workflow never rebinds a Tool's working directory.
 
-`result` projects exactly one zero-based native `ToolExecutionResult.content`
-part. `type: json` requires `ToolResultContent::Json` and a declared closed
-Workflow `schema`. `type: text` requires a Text part and produces a typed string.
-Missing/wrong-kind parts fail; other parts are not retained. Multiple parts
-are never concatenated or searched. JSON-looking text is never parsed.
-MCP structuredContent is its native JSON part after ordinary content parts;
-overflow previews are text, not complete JSON, and fail a JSON contract.
+`result` projects native content by kind. `type: json` requires exactly one
+`ToolResultContent::Json` and a declared closed Workflow `schema`; ordinary
+text content is ignored. `type: text` joins all Text blocks with newlines and
+produces `{text: string}`. JSON-looking text is never parsed. MCP
+structuredContent supplies the structured JSON part; overflow previews are not
+complete JSON and cannot satisfy a JSON contract.
 Projection validates the actual value and all WF-01 byte/depth/accounting
 bounds before committing the node-local value. Oversized output fails without
 a partial local commit or implicit spill-file parsing.
@@ -587,7 +589,8 @@ only as model correlation. Registry terminal routing and node facts carry
 the concrete instance; child ToolCall correlation is a bounded hash of it.
 
 The graph freezes its nodes and edges at run admission. Ready siblings execute
-concurrently. After a failure, no new nodes are admitted, and every already
+concurrently. Queueing a future does not admit it: the graph closes admission
+when it observes a failure, including for queued futures not yet polled. After a failure, no new nodes are admitted, and every already
 admitted future is drained. Failure aggregation uses node ID order, with
 OutcomeUnknown taking priority. Completion order never selects output keys or
 changes count/data admission limits. Native process staging, capacity contention
@@ -809,8 +812,12 @@ modes: `overwrite` and `set` assign (from a variable or a constant), `clear`
 leaves the type's empty value, `append`/`extend`/`remove_first`/`remove_last`
 change arrays, and `increment`/`decrement`/`multiply`/`divide` change numbers.
 The compiler checks each mode against the variable's type and its operand. Later
-nodes in the round read the written value; parallel writers of one variable keep
-the last write, as in Dify.
+nodes in the round read the written value. Two Assigners that can run in the
+same round may write one variable only when an authored edge orders them;
+mutually exclusive writers and parallel writers of different variables are
+allowed. Each intermediate assignment is bounded before a growing array is
+copied, working snapshots and pending writes retain byte reservations, and only
+the final write per variable is kept for the graph merge.
 
 **Bounds.** Each Loop round and Iteration round is one admitted step. The
 compiler multiplies a Loop body's worst case by `loop_count`. An Iteration's
@@ -925,8 +932,11 @@ edges:
   - {from: review_plan, to: rejected_plan, port: timeout}
 ```
 
-Content is fixed text and references, as an Agent's task, rendered when the
-node runs. There are 1–12 actions with unique IDs and unique titles of at most
+Content is fixed text and references, rendered when the node runs. Its complete
+rendered question is limited to 4,096 Unicode characters, shared with the
+questionnaire DTO (characters, not UTF-8 bytes). Fixed text beyond that limit is
+rejected by compilation; an oversized dynamic result fails before publication.
+Long reports must be summarized to this bounded question before Human Input. There are 1–12 actions with unique IDs and unique titles of at most
 60 characters; an ID cannot be `timeout` or another reserved port. In the root
 block every action and `timeout` needs a successor; in a body a path may end at
 any of them. The node value is `{action, content}`: the chosen action's ID, or
@@ -1002,3 +1012,10 @@ cancellation draining, and reconnect/process death.
 
 Workflow Agent children own their Conversations and run in the shared Session workspace; a
 Workflow owns no workspace resource and contributes no Session deletion blocker. See [capability identity and Session ownership](subagent-resources.md#capability-identity-and-session-ownership).
+
+
+Workflow external Tool catalogs use encoded-byte pages capped at 256 KiB, below
+the App Server message limit. Continuations bind an offset to the complete
+catalog digest; a changed source is rejected rather than mixing pages. Each
+page revalidates the scope and captured Host/native authority. The editor only
+marks a source listed after it has collected all pages of that same catalog.

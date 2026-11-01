@@ -748,7 +748,7 @@ async fn accumulated_iteration_exports_remain_reserved_and_stop_new_rounds() {
 }
 
 #[tokio::test]
-async fn continued_rounds_never_swallow_aggregated_native_call_limits() {
+async fn continued_rounds_never_swallow_native_call_admission_limits() {
     for mode in ["continue_on_error", "remove_abnormal_output"] {
         for (kind, limit) in [
             ("model", WorkflowLimit::ModelCalls),
@@ -795,15 +795,9 @@ async fn continued_rounds_never_swallow_aggregated_native_call_limits() {
             let Err(error) = result else {
                 panic!("{mode} swallowed {limit:?}")
             };
-            let WorkflowRunError::NodesFailed { failures } = error else {
-                panic!("both siblings must be retained: {error:?}")
-            };
-            assert_eq!(failures.len(), 2);
-            assert!(
-                failures
-                    .values()
-                    .all(|error| *error == WorkflowRunError::LimitExceeded(limit))
-            );
+            // The first rejected admission closes the graph's gate; its
+            // queued sibling is never admitted after that failure.
+            assert_eq!(error, WorkflowRunError::LimitExceeded(limit));
         }
     }
 }
@@ -837,4 +831,203 @@ async fn recursive_default_expansion_stops_before_any_graph_or_native_child_star
             .any(|event| matches!(event, RuntimeEvent::WorkflowNodeStarted { .. })),
         "no graph node, hence no Tool, Model or Agent can start"
     );
+}
+
+fn assigned_loop(items: &Value) -> WorkflowDefinition {
+    around(
+        "repeat",
+        &schema(json!({"payload":{"type":"string"}}), &["payload"]),
+        &schema(
+            json!({"xs":{"type":"array","items":{"type":"string"}}}),
+            &["xs"],
+        ),
+        &json!({"type":"loop","loop_count":1,"loop_variables":[
+            {"label":"xs","var_type":"array[string]","value":{"type":"literal","value":[]}},
+            {"label":"n","var_type":"number","value":{"type":"literal","value":1}}],
+            "body":{"nodes":{"start":{"type":"start"},"save":{"type":"assigner","items":items}},
+            "edges":[{"from":"start","to":"save"}]}}),
+    )
+}
+
+#[tokio::test]
+async fn append_then_clear_cannot_hide_intermediate_assignment_budget_overflow() {
+    let mut items = vec![
+        json!({"variable":["repeat","xs"],"operation":"append","value":path(&["args","payload"])});
+        31
+    ];
+    items.push(json!({"variable":["repeat","xs"],"operation":"clear"}));
+    let definition = assigned_loop(&json!(items));
+    let plane = workflow_test_plane(1);
+    let executor = checker(1);
+    let result = run(
+        &plane,
+        workflow_runtime(&plane),
+        executor.clone(),
+        definition,
+        json!({"payload":"x".repeat(50_000)}),
+    )
+    .await;
+    assert_eq!(
+        result,
+        Err(WorkflowRunError::LimitExceeded(WorkflowLimit::RetainedData))
+    );
+    assert_eq!(executor.starts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn observed_failure_closes_admission_before_a_queued_native_sibling() {
+    let mut definition = assigned_loop(&json!([]));
+    let WorkflowNodeDefinition::Loop { body: block, .. } =
+        definition.block.nodes.get_mut("repeat").unwrap()
+    else {
+        unreachable!()
+    };
+    block.nodes.remove("save");
+    block.nodes.insert("a_error".into(), serde_json::from_value(json!({"type":"assigner","items":[{"variable":["repeat","n"],"operation":"divide","value":{"type":"literal","value":0}}]})).unwrap());
+    block.nodes.insert(
+        "z_write".into(),
+        serde_json::from_value(check_node(
+            &json!({"type":"literal","value":{"passed":true,"label":"must not start"}}),
+        ))
+        .unwrap(),
+    );
+    block.edges = vec![edge("start", "a_error"), edge("start", "z_write")];
+    let plane = workflow_test_plane(1);
+    let runtime = workflow_runtime(&plane);
+    let observations = runtime.observations.subscribe();
+    let (entered, before_admission) = tokio::sync::oneshot::channel();
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *runtime.node_frontier.lock().unwrap() = Some(execution::NodeFrontierHook {
+        node: "z_write".into(),
+        entered,
+        release: gate,
+    });
+    let executor = checker(1);
+    let task = tokio::spawn({
+        let executor = executor.clone();
+        async move {
+            run(
+                &plane,
+                runtime,
+                executor,
+                definition,
+                json!({"payload":"x"}),
+            )
+            .await
+        }
+    });
+    before_admission.await.unwrap();
+    assert_eq!(executor.starts.load(Ordering::SeqCst), 0);
+    assert!(!observations.borrow().iter().any(|event| matches!(event, RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "z_write")));
+    release.send(()).unwrap();
+    assert!(task.await.unwrap().is_err());
+    assert_eq!(executor.starts.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn unordered_same_variable_writers_require_an_edge_or_disjoint_branches() {
+    let mut definition = assigned_loop(&json!([{"variable":["repeat","xs"],"operation":"clear"}]));
+    let WorkflowNodeDefinition::Loop { body: block, .. } =
+        definition.block.nodes.get_mut("repeat").unwrap()
+    else {
+        unreachable!()
+    };
+    block
+        .nodes
+        .insert("other".into(), block.nodes["save"].clone());
+    block.edges.push(edge("start", "other"));
+    assert!(
+        compile_test(definition.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("without an execution order")
+    );
+    let WorkflowNodeDefinition::Loop { body: block, .. } =
+        definition.block.nodes.get_mut("repeat").unwrap()
+    else {
+        unreachable!()
+    };
+    block.edges = vec![edge("start", "save"), edge("save", "other")];
+    assert!(compile_test(definition.clone()).is_ok());
+    let WorkflowNodeDefinition::Loop { body: block, .. } =
+        definition.block.nodes.get_mut("repeat").unwrap()
+    else {
+        unreachable!()
+    };
+    block.nodes.insert("choose".into(),serde_json::from_value(json!({"type":"branch","cases":[{"id":"yes","condition":{"type":"boolean","value":{"type":"literal","value":true}}}]})).unwrap());
+    block.edges = vec![
+        edge("start", "choose"),
+        branch_edge("choose", "save", WorkflowPort::case("yes")),
+        branch_edge("choose", "other", WorkflowPort::False),
+    ];
+    assert!(compile_test(definition).is_ok());
+}
+
+#[test]
+fn root_native_nodes_require_success_exits_but_bodies_may_finish_naturally() {
+    let nodes = [
+        json!({"type":"model","model":{"mode":"session"},"messages":[{"role":"system","content":[{"type":"literal","value":"Hello"}]},{"role":"user","content":[{"type":"literal","value":"Hello"}]}],"output":{"type":"text"},"on_error":{"type":"fail_branch"}}),
+        json!({"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":{"type":"literal","value":{}},"result":{"type":"text"},"on_error":{"type":"fail_branch"}}),
+        json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Hello"}],"output":{"type":"text"},"on_error":{"type":"fail_branch"}}),
+    ];
+    for node in nodes {
+        let mut definition: WorkflowDefinition = serde_json::from_value(json!({"description":"All semantic exits","block":{"input":schema(json!({}), &[]),"nodes":{"start":{"type":"start"},"work":node,"done":{"type":"return","outputs":[]}},"edges":[{"from":"start","to":"work"},{"from":"work","to":"done","port":"fail"}]}})).unwrap();
+        assert!(
+            compile_test(definition.clone())
+                .unwrap_err()
+                .to_string()
+                .contains("success (next)")
+        );
+        definition.block.edges.push(edge("work", "done"));
+        assert!(compile_test(definition).is_ok());
+        let mut definition =
+            assigned_loop(&json!([{"variable":["repeat","xs"],"operation":"clear"}]));
+        let WorkflowNodeDefinition::Loop { body, .. } =
+            definition.block.nodes.get_mut("repeat").unwrap()
+        else {
+            unreachable!()
+        };
+        body.nodes
+            .insert("work".into(), serde_json::from_value(node).unwrap());
+        body.edges = vec![
+            edge("start", "work"),
+            branch_edge("work", "save", WorkflowPort::Fail),
+        ];
+        assert!(compile_test(definition).is_ok());
+    }
+}
+
+#[tokio::test]
+async fn many_ordered_boolean_assigners_remain_within_their_small_value_budget() {
+    let mut definition = around(
+        "repeat",
+        &schema(json!({}), &[]),
+        &schema(json!({"flag":{"type":"boolean"}}), &["flag"]),
+        &json!({"type":"loop","loop_count":1,"loop_variables":[{"label":"flag","var_type":"boolean","value":{"type":"literal","value":false}}],"body":{"nodes":{"start":{"type":"start"}},"edges":[]}}),
+    );
+    let WorkflowNodeDefinition::Loop { body, .. } =
+        definition.block.nodes.get_mut("repeat").unwrap()
+    else {
+        unreachable!()
+    };
+    let mut previous = "start".to_owned();
+    for index in 0..31 {
+        let id = format!("write_{index}");
+        body.nodes.insert(id.clone(),serde_json::from_value(json!({"type":"assigner","items":[{"variable":["repeat","flag"],"operation":"overwrite","value":{"type":"literal","value":true}}]})).unwrap());
+        body.edges.push(edge(&previous, &id));
+        previous = id;
+    }
+    let program = compile_test(definition.clone()).unwrap();
+    assert!(program.retained_bound < MAX_VALUE_BYTES);
+    let plane = workflow_test_plane(1);
+    let result = run(
+        &plane,
+        workflow_runtime(&plane),
+        checker(1),
+        definition,
+        json!({}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, json!({"flag": true}));
 }

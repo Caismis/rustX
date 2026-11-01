@@ -47,8 +47,8 @@ describe('finite schema renames', () => {
     oneTransaction(actor, before, after); actor.stop();
   });
 
-  it.each(['const', 'enum'] as const)('refuses a conflicting ancestor %s atomically', async constraint => {
-    const before = fixture(); before.block.input = { type: 'object', properties: { child: { type: 'object', properties: { before: { type: 'string' } } } }, [constraint]: constraint === 'const' ? { child: { before: 'x', after: 'occupied' } } : [{ child: { before: 'x' } }, { child: { before: 'x', after: 'occupied' } }] };
+  it.each(['const', 'enum', 'default'] as const)('refuses a conflicting ancestor %s atomically', async constraint => {
+    const before = fixture(); before.block.input = { type: 'object', properties: { child: { type: 'object', properties: { before: { type: 'string' } } } }, [constraint]: constraint === 'enum' ? [{ child: { before: 'x' } }, { child: { before: 'x', after: 'occupied' } }] : { child: { before: 'x', after: 'occupied' } } };
     const actor = await actorFor(before);
     actor.send({ type: 'EDIT', apply: document => renameSchemaField(document, blockField([], ['input', 'properties', { key: 'child' }]), 'before', 'after') });
     const state = actor.getSnapshot().context;
@@ -202,10 +202,10 @@ describe('Agent and Model declaration paths', () => {
   for (const kind of ['agent', 'model'] as const) it.each([false, true])(`${kind} nested array=%s keeps ancestor finite constraints and references in one transaction`, async array => {
     const contract = (key: string) => {
       const finite = { [key]: 'value' };
-      const leaf = { type: 'object', properties: { [key]: { type: 'string' } }, required: [key], additionalProperties: false, const: finite, enum: [finite] };
+      const leaf = { type: 'object', properties: { [key]: { type: 'string' } }, required: [key], additionalProperties: false, const: finite, enum: [finite], default: finite };
       const parentValue = array ? { rows: [finite] } : finite;
-      const parent = array ? { type: 'object', properties: { rows: { type: 'array', items: leaf, const: [finite], enum: [[finite]] } }, required: ['rows'], additionalProperties: false, const: parentValue, enum: [parentValue] } : leaf;
-      return { type: 'object', properties: { parent }, required: ['parent'], additionalProperties: false, const: { parent: parentValue }, enum: [{ parent: parentValue }] };
+      const parent = array ? { type: 'object', properties: { rows: { type: 'array', items: leaf, const: [finite], enum: [[finite]], default: [finite] } }, required: ['rows'], additionalProperties: false, const: parentValue, enum: [parentValue], default: parentValue } : leaf;
+      return { type: 'object', properties: { parent }, required: ['parent'], additionalProperties: false, const: { parent: parentValue }, enum: [{ parent: parentValue }], default: { parent: parentValue } };
     };
     const before = fixture();
     before.block.nodes.produce = kind === 'agent' ? { type: 'agent', profile: 'reviewer', task: [], output: { type: 'json_schema', schema: contract('old') } }
@@ -221,4 +221,30 @@ describe('Agent and Model declaration paths', () => {
     expect(after.block.nodes.done).toMatchObject({ outputs: [{ value_selector: array ? reference : [...prefix, 'parent', 'new'] }] });
     oneTransaction(actor, before, after); actor.stop();
   });
+});
+
+
+it('renames Start defaults and references in one history transaction', async () => {
+  const before = fixture();
+  before.block.input = { type: 'object', properties: { old: { type: 'string' } }, required: ['old'], additionalProperties: false, default: { old: 'hello' } };
+  before.block.nodes.done = { type: 'return', outputs: [{ variable: 'result', value_selector: ['args', 'old'] }] };
+  const actor = await actorFor(before);
+  actor.send({ type: 'EDIT', apply: document => renameSchemaField(document, blockField([], ['input']), 'old', 'new') });
+  const after = actor.getSnapshot().context.document!;
+  expect(after.block.input).toMatchObject({ properties: { new: { type: 'string' } }, required: ['new'], default: { new: 'hello' } });
+  expect(after.block.nodes.done).toMatchObject({ outputs: [{ value_selector: ['args', 'new'] }] });
+  oneTransaction(actor, before, after); actor.stop();
+});
+
+it.each([false, true])('atomically rejects copied descendants that shadow target outer IDs, nested=%s', nested => {
+  const source = fixture();
+  source.block.nodes.repeat = { type: 'loop', loop_count: 1, body: { input: {}, nodes: { worker: { type: 'start' } }, edges: [] } };
+  const fragment = parseFragment(copyFragment(source, 'source', [], ['repeat'], []));
+  const target = fixture();
+  target.block.nodes.worker = { type: 'loop', loop_count: 1, body: { input: {}, nodes: { entry: { type: 'start' } }, edges: [] } };
+  target.block.nodes.target = { type: 'loop', loop_count: 1, body: { input: {}, nodes: { entry: { type: 'start' } }, edges: [] } };
+  const before = structuredClone(target);
+  expect(() => pasteFragment(target, 'target', nested ? [{ node: 'target' }] : [], fragment)).toThrow('duplicate_identifier');
+  expect(target).toEqual(before);
+  expect(pasteFragment(fixture(), 'target', [], fragment).nodes).toEqual(['repeat_copy']);
 });

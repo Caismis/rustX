@@ -881,6 +881,8 @@ pub enum Method {
         target: crate::local_runtime::configuration::settings::SourceTarget,
         #[serde(default)]
         source: Option<String>,
+        #[serde(default)]
+        cursor: Option<crate::local_runtime::workflow_tools::WorkflowToolCatalogCursor>,
     },
     /// Offline structural check, optional explanation, and dependency
     /// admission in an explicit Workspace context of one candidate document.

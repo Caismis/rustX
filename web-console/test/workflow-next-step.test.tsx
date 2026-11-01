@@ -79,7 +79,7 @@ it('lists each MCP server and Python package of the scope as a provider of its T
   fireEvent.click(screen.getByText('Tools'));
   expect(await screen.findByText('github')).toBeTruthy();
   await screen.findByText('1');
-  expect(toolCatalog.mock.calls).toEqual([[], ['github']]);
+  expect(toolCatalog.mock.calls.map(([source]) => source)).toEqual([undefined, 'github']);
   expect(screen.getByText('report-kit')).toBeTruthy();
   expect(screen.getByText('Environment not prepared')).toBeTruthy();
   expect(screen.getByText('Workspace')).toBeTruthy();
