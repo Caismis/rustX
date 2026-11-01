@@ -169,8 +169,8 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await expect(rail.getByRole('tooltip')).toContainText('Reading 0');
     await page.evaluate(() => { const s=(window as any).readingTransport; s.gate=false; s.held.shift()(); });
     await expect(mark).toHaveAttribute('aria-current', 'true');
-    // A Turn jump lands on the prompt that opens it, before its response.
-    const target = page.locator('[data-chat-flow-kind="user"]').filter({ hasText: /^Reading 0$/m }).first();
+    // The first loaded Turn opens on its own row; its prompt is on an earlier page.
+    const target = page.locator('[data-chat-anchor-key]').filter({ hasText: 'Native reading answer 0' }).first();
     await expect(page.getByText(/Native reading answer 0\n/).first()).toBeVisible();
     await expect.poll(async () => Math.abs(await target.evaluate(el => el.getBoundingClientRect().top) - await viewport.evaluate(el=>el.getBoundingClientRect().top))).toBeLessThan(3);
     // Manual reading across user prompts and message spacing must keep one

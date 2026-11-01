@@ -8,14 +8,6 @@ block:
     required:
     - task
     additionalProperties: false
-  output:
-    type: object
-    properties:
-      summary:
-        type: string
-    required:
-    - summary
-    additionalProperties: false
   nodes:
     workflow_start:
       type: start
@@ -55,24 +47,12 @@ block:
             - passed
     success:
       type: return
-      output:
-        type: object
-        fields:
-          summary:
-            type: reference
-            path:
-            - review
-            - summary
+      outputs:
+      - {variable: summary, value_selector: [review, summary]}
     failure:
       type: return
-      output:
-        type: object
-        fields:
-          summary:
-            type: reference
-            path:
-            - args
-            - task
+      outputs:
+      - {variable: summary, value_selector: [args, task]}
   edges:
   - from: workflow_start
     to: review
