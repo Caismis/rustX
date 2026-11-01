@@ -3,7 +3,7 @@ import { useTranslation } from '../../../../../locale/react';
 import { IconPlus } from '../../icons';
 import { ReferencePicker } from '../forms/ReferencePicker';
 import { RouteId } from './InferencePanels';
-import { setField } from '../../../document/fields';
+import { setField, type ArrayEdit } from '../../../document/fields';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 
@@ -11,12 +11,12 @@ import css from '../Editor.module.css';
  * it reads. Together they are the workflow's JSON result. */
 export function ReturnPanel(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'return');
-  const outputs = (change: (items: typeof node.outputs) => typeof node.outputs) => update(current => ({ ...current, outputs: change(current.outputs) }), at('outputs'));
+  const outputs = (change: (items: typeof node.outputs) => typeof node.outputs, array: ArrayEdit) => update(current => ({ ...current, outputs: change(current.outputs) }), at('outputs'), array);
   return <section className={css.group} aria-label={tx('workflows:end.outputs')}>
     <h3 className={css.groupHeading}>
       <span className={css.headingText}>{tx('workflows:end.outputs')}</span>
       <button type="button" className={css.iconButton} aria-label={tx('workflows:end.add')} title={tx('workflows:end.add')}
-        onClick={() => outputs(items => [...items, { variable: '', value_selector: [] }])}><IconPlus size={14} /></button>
+        onClick={() => outputs(items => [...items, { variable: '', value_selector: [] }], { array: at('outputs'), inserted: node.outputs.length })}><IconPlus size={14} /></button>
     </h3>
     {!node.outputs.length && <p className={css.reviewEmpty}>{tx('workflows:end.empty')}</p>}
     <div className={css.reviewActions}>
@@ -27,7 +27,7 @@ export function ReturnPanel(props: PanelProps) {
           onChoose={choice => update(current => ({ ...current, outputs: current.outputs.map((item, i) => i === index
             ? { variable: item.variable || choice.path[choice.path.length - 1], value_selector: choice.path } : item) }), at('outputs', index, 'value_selector'))} />
         <button type="button" className={css.iconButton} aria-label={tx('workflows:end.remove', { p0: output.variable || String(index + 1) })}
-          onClick={() => outputs(items => items.filter((_, i) => i !== index))}><IconTrashOutline16 /></button>
+          onClick={() => outputs(items => items.filter((_, i) => i !== index), { array: at('outputs'), removed: index })}><IconTrashOutline16 /></button>
       </div>)}
     </div>
   </section>;

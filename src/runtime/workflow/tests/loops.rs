@@ -1031,3 +1031,118 @@ async fn many_ordered_boolean_assigners_remain_within_their_small_value_budget()
     .unwrap();
     assert_eq!(result, json!({"flag": true}));
 }
+
+fn merged_assignment_loop(parallel: bool) -> WorkflowDefinition {
+    let edges = if parallel {
+        json!([{"from":"start","to":"b_x"},{"from":"start","to":"c_y"},{"from":"b_x","to":"z_effect"},{"from":"c_y","to":"z_effect"}])
+    } else {
+        json!([{"from":"start","to":"b_x"},{"from":"b_x","to":"c_y"},{"from":"c_y","to":"z_effect"}])
+    };
+    around(
+        "repeat",
+        &schema(json!({"payload":{"type":"string"}}), &["payload"]),
+        &schema(json!({}), &[]),
+        &json!({"type":"loop","loop_count":1,"loop_variables":[
+            {"label":"x","var_type":"string","value":{"type":"literal","value":""}},
+            {"label":"y","var_type":"string","value":{"type":"literal","value":""}}],
+            "body":{"nodes":{"start":{"type":"start"},
+                "b_x":{"type":"assigner","items":[{"variable":["repeat","x"],"operation":"set","value":path(&["args","payload"])}]},
+                "c_y":{"type":"assigner","items":[{"variable":["repeat","y"],"operation":"set","value":path(&["args","payload"])}]},
+                "z_effect":check_node(&json!({"type":"literal","value":{"passed":true,"label":"effect"}}))},
+                "edges":edges}}),
+    )
+}
+
+#[tokio::test]
+async fn merged_assignment_owners_are_bounded_before_successor_admission() {
+    for parallel in [false, true] {
+        for bytes in [30_000, 40_000] {
+            let plane = workflow_test_plane(1);
+            let runtime = workflow_runtime(&plane);
+            let observations = runtime.observations.subscribe();
+            let executor = checker(1);
+            let result = run(
+                &plane,
+                runtime,
+                executor.clone(),
+                merged_assignment_loop(parallel),
+                json!({"payload":"x".repeat(bytes)}),
+            )
+            .await;
+            let started=observations.borrow().iter().any(|event| matches!(event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node=="z_effect"));
+            if bytes == 40_000 {
+                assert_eq!(
+                    result,
+                    Err(WorkflowRunError::LimitExceeded(WorkflowLimit::RetainedData)),
+                    "parallel={parallel}"
+                );
+                assert_eq!(executor.starts.load(Ordering::SeqCst), 0);
+                assert!(!started);
+            } else {
+                assert_eq!(result.unwrap(), json!({}));
+                assert_eq!(executor.starts.load(Ordering::SeqCst), 1);
+                assert!(started);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_merge_budget_failure_drains_admitted_native_work_and_closes_queued_admission() {
+    let mut definition = merged_assignment_loop(true);
+    let WorkflowNodeDefinition::Loop { body, .. } =
+        definition.block.nodes.get_mut("repeat").unwrap()
+    else {
+        unreachable!()
+    };
+    let tool = json!({"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":{"type":"literal","value":{"passed":true,"label":"drain"}},"result":{"type":"text"}});
+    for id in ["a_inflight", "z_queued"] {
+        body.nodes
+            .insert(id.into(), serde_json::from_value(tool.clone()).unwrap());
+        body.edges.push(edge("start", id));
+    }
+    let plane = workflow_test_plane(1);
+    let runtime = workflow_runtime(&plane);
+    let observations = runtime.observations.subscribe();
+    let (entered, queued) = tokio::sync::oneshot::channel();
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *runtime.node_frontier.lock().unwrap() = Some(execution::NodeFrontierHook {
+        node: "z_queued".into(),
+        entered,
+        release: gate,
+    });
+    let mut executor = Probe::new(ToolExecutionStatus::Success);
+    let native_release = Arc::new(tokio::sync::Notify::new());
+    Arc::get_mut(&mut executor).unwrap().release = Some(native_release.clone());
+    let mut started = executor.started.subscribe();
+    let task = tokio::spawn({
+        let executor = executor.clone();
+        async move {
+            run(
+                &plane,
+                runtime,
+                executor,
+                definition,
+                json!({"payload":"x".repeat(40_000)}),
+            )
+            .await
+        }
+    });
+    queued.await.unwrap(); // First polled while draining after c_y's failed merge.
+    while *started.borrow() == 0 {
+        started.changed().await.unwrap();
+    }
+    assert!(!task.is_finished());
+    release.send(()).unwrap();
+    assert!(
+        !task.is_finished(),
+        "the admitted native owner still has to settle"
+    );
+    native_release.notify_one();
+    assert_eq!(
+        task.await.unwrap(),
+        Err(WorkflowRunError::LimitExceeded(WorkflowLimit::RetainedData))
+    );
+    assert_eq!(executor.starts.load(Ordering::SeqCst), 1);
+    assert!(!observations.borrow().iter().any(|event| matches!(event,RuntimeEvent::WorkflowNodeStarted {instance} if ["z_effect","z_queued"].contains(&instance.node.as_str()))));
+}

@@ -43,7 +43,7 @@ async function open(analyze: WorkflowScopePort['analyze'] = () => new Promise(()
   const actor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: 'model_flow' } } }).start();
   await act(async () => { await Promise.resolve(); });
   render(<WorkflowEditor surface={surface} editor={actor} scopeLabel="Global" />);
-  select(node.type === 'review' ? 'Human Input node model' : `${node.type[0].toUpperCase()}${node.type.slice(1)} node model`);
+  select(node.type === 'review' ? 'Human Input node model' : node.type === 'return' ? 'Output node model' : `${node.type[0].toUpperCase()}${node.type.slice(1)} node model`);
   return actor;
 }
 function select(label: string) {
@@ -502,4 +502,29 @@ it.each(['title', 'route'] as const)('keeps a surviving %s draft attached when a
   save();
   const document = (writes[0] as { document: WorkflowFileDocument }).document;
   expect(document.block.nodes.model).toMatchObject(kind === 'route' ? { routes: [{ id: 'pending' }] } : { actions: [{ id: 'second', title: 'pending' }] });
+});
+
+
+it.each(['add', 'remove'] as const)('keeps an invalid End name draft through %s and structural Undo/Redo, then saves its correction', async operation => {
+  const node: NodeDefinition = { type: 'return', outputs: [{ variable: 'first', value_selector: ['args', 'first'] }, { variable: 'second', value_selector: ['args', 'second'] }] };
+  const actor = await open(undefined, node);
+  const names = () => inspector().getAllByRole('textbox', { name: 'Variable name' }) as HTMLInputElement[];
+  fireEvent.change(names()[1], { target: { value: '' } }); fireEvent.blur(names()[1]);
+  expect(Object.values(actor.getSnapshot().context.drafts)[0].error).toEqual({ kind: 'empty' });
+  fireEvent.click(inspector().getByRole('button', { name: operation === 'add' ? 'Add output variable' : 'Remove first' }));
+  const index = operation === 'add' ? 1 : 0;
+  const check = (index: number) => {
+    expect(names()[index].value).toBe('');
+    const drafts = Object.values(actor.getSnapshot().context.drafts);
+    expect(drafts).toHaveLength(1); expect(drafts[0].address.path).toEqual(['outputs', index, 'variable']); expect(drafts[0].conflict).toBeUndefined();
+  };
+  check(index);
+  act(() => actor.send({ type: 'UNDO' })); check(1);
+  act(() => actor.send({ type: 'REDO' })); check(index);
+  if (operation === 'add') fireEvent.click(inspector().getByRole('button', { name: 'Remove 3' }));
+  fireEvent.change(names()[index], { target: { value: 'fixed' } }); fireEvent.blur(names()[index]);
+  expect(actor.getSnapshot().context.drafts).toEqual({});
+  save();
+  expect(writes).toHaveLength(1);
+  expect((writes[0] as { document: WorkflowFileDocument }).document.block.nodes.model).toMatchObject({ outputs: operation === 'add' ? [node.outputs[0], { variable: 'fixed', value_selector: ['args', 'second'] }] : [{ variable: 'fixed', value_selector: ['args', 'second'] }] });
 });

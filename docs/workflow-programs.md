@@ -817,7 +817,9 @@ same round may write one variable only when an authored edge orders them;
 mutually exclusive writers and parallel writers of different variables are
 allowed. Each intermediate assignment is bounded before a growing array is
 copied, working snapshots and pending writes retain byte reservations, and only
-the final write per variable is kept for the graph merge.
+the final write per variable is kept for the graph merge. The merge reserves
+and validates each complete variable object against the current graph state
+before publishing it or admitting any successor.
 
 **Bounds.** Each Loop round and Iteration round is one admitted step. The
 compiler multiplies a Loop body's worst case by `loop_count`. An Iteration's

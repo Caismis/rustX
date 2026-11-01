@@ -132,9 +132,11 @@ test('adds parallel next nodes from the inspector and keeps every existing conne
     await next.getByRole('button', { name: 'Add parallel node on Next step' }).click();
     await page.screenshot({ path: info.outputPath('parallel-node-picker.png') });
     await page.setViewportSize({ width: 390, height: 844 }); await expect(picker).toBeVisible();
-    const bounds = (await picker.boundingBox())!;
-    expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
-    expect(bounds.y).toBeGreaterThanOrEqual(0); expect(bounds.y + bounds.height).toBeLessThanOrEqual(844);
+    await expect(async () => {
+      const bounds = (await picker.boundingBox())!;
+      expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+      expect(bounds.y).toBeGreaterThanOrEqual(0); expect(bounds.y + bounds.height).toBeLessThanOrEqual(844);
+    }).toPass({ timeout: 5000 });
     await page.screenshot({ path: info.outputPath('parallel-node-picker-mobile.png') });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   } finally { await fixture.stop(false); }

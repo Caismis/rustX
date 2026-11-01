@@ -51,7 +51,7 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
   const trigger = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null), input = useRef<HTMLInputElement>(null);
   const { refs, floatingStyles, isPositioned } = useFloating({
     open: !!openPort, placement: 'left-start', strategy: 'fixed', whileElementsMounted: autoUpdate,
-    middleware: [offset(8), flip({ fallbackPlacements: ['right-start'], crossAxis: false }), shift({ padding: 12 })],
+    middleware: [offset(8), flip({ fallbackPlacements: ['right-start'], crossAxis: false }), shift({ padding: 12, crossAxis: true })],
   });
   // As Dify's next-step Line: one SVG connector from the source tile to each
   // port, meeting a labelled port at its label, as Dify's branch rows do.

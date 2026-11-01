@@ -336,6 +336,50 @@ impl Drop for LocalReservation<'_> {
     }
 }
 
+/// Merge completed Assigner writes against the current graph state, not the
+/// snapshot each writer captured. Reserve and validate every complete owner
+/// before publishing any of them or releasing successor edges.
+fn merge_writes<'a>(
+    run: &'a WorkflowRun,
+    values: &mut imbl::OrdMap<String, Value>,
+    writes: Vec<(String, String, Value)>,
+) -> Result<LocalReservation<'a>, WorkflowRunError> {
+    let mut updates = BTreeMap::<String, BTreeMap<String, Value>>::new();
+    for (owner, label, value) in writes {
+        updates.entry(owner).or_default().insert(label, value);
+    }
+    let mut retained = LocalReservation::new(run);
+    let mut prepared = Vec::new();
+    for (owner, fields) in updates {
+        let current = values
+            .get(&owner)
+            .ok_or_else(|| WorkflowRunError::InvalidProgram("assigned owner is missing".into()))?;
+        let Value::Object(variables) = current else {
+            return Err(WorkflowRunError::InvalidProgram(
+                "assigned owner is not an object".into(),
+            ));
+        };
+        let mut bytes = super::expressions::bounded_value_bytes(current)?;
+        for (label, value) in &fields {
+            let previous = variables.get(label).ok_or_else(|| {
+                WorkflowRunError::InvalidProgram("assigned variable is missing".into())
+            })?;
+            bytes = bytes - super::expressions::bounded_value_bytes(previous)?
+                + super::expressions::bounded_value_bytes(value)?;
+        }
+        retained.retain_bytes(bytes)?;
+        let mut merged = variables.clone();
+        merged.extend(fields);
+        let merged = Value::Object(merged);
+        super::expressions::bounded_value_bytes(&merged)?;
+        prepared.push((owner, merged));
+    }
+    for (owner, value) in prepared {
+        values.insert(owner, value);
+    }
+    Ok(retained)
+}
+
 pub(super) struct BlockOutput<'a> {
     pub(super) value: Value,
     _reservation: LocalReservation<'a>,
@@ -548,6 +592,14 @@ impl WorkflowRuntime {
                         reservation: completed,
                     } = output;
                     reservation.absorb(completed);
+                    match merge_writes(run, &mut values, writes) {
+                        Ok(merged) => reservation.absorb(merged),
+                        Err(error) => {
+                            admitting.store(false, std::sync::atomic::Ordering::Release);
+                            failures.insert(id, error);
+                            continue;
+                        }
+                    }
                     if let Some(value) = value {
                         values.insert(id.clone(), value);
                     }
@@ -555,13 +607,6 @@ impl WorkflowRuntime {
                         returned.insert(id.clone(), value);
                     }
                     ended |= exit;
-                    // Unordered writers are proven disjoint or write different
-                    // variables. An authored edge orders every shared write.
-                    for (owner, label, value) in writes {
-                        if let Some(Value::Object(variables)) = values.get_mut(&owner) {
-                            variables.insert(label, value);
-                        }
-                    }
                     // Resolve every edge, including inactive outcomes. A join is
                     // admitted once all incoming paths are settled, and runs once
                     // if at least one incoming path was selected.

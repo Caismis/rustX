@@ -67,3 +67,39 @@ test('a catalog larger than one RPC resolves a tool on the final page', async ({
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   } finally { await fixture.stop(false); }
 });
+
+for (const operation of ['add', 'remove'] as const) test(`End name drafts survive ${operation}, Undo/Redo and correction before save`, async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  try {
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'end_drafts.yaml');
+    const first = { variable: 'first', value_selector: ['args', 'first'] };
+    const second = { variable: 'second', value_selector: ['args', 'second'] };
+    writeFileSync(file, JSON.stringify({ description: 'End draft identity', block: {
+      input: { type: 'object', properties: { first: { type: 'string' }, second: { type: 'string' } }, required: ['first', 'second'], additionalProperties: false },
+      nodes: { start: { type: 'start' }, done: { type: 'return', outputs: [first, second] } }, edges: [{ from: 'start', to: 'done' }],
+    } }));
+    await editor(page, fixture, 'end_drafts');
+    const end = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Output node done', { exact: true });
+    await end.focus(); await end.press('Enter');
+    const panel = page.getByRole('complementary', { name: 'Inspector' });
+    const names = panel.getByRole('textbox', { name: 'Variable name', exact: true });
+    await names.nth(1).fill(''); await names.nth(1).blur();
+    await expect(names.nth(1)).toHaveAttribute('aria-invalid', 'true');
+    await panel.getByRole('button', { name: operation === 'add' ? 'Add output variable' : 'Remove first', exact: true }).click();
+    const index = operation === 'add' ? 1 : 0;
+    await expect(names.nth(index)).toHaveValue('');
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(names).toHaveCount(2); await expect(names.nth(1)).toHaveValue('');
+    await page.getByRole('button', { name: 'Redo', exact: true }).click();
+    await expect(names.nth(index)).toHaveValue('');
+    if (operation === 'add') await panel.getByRole('button', { name: 'Remove 3', exact: true }).click();
+    await names.nth(index).fill('fixed'); await names.nth(index).press('Enter');
+    await names.nth(index).press('ControlOrMeta+s');
+    const fixed = { variable: 'fixed', value_selector: ['args', 'second'] };
+    await expect.poll(() => parse(readFileSync(file, 'utf8')).block.nodes.done.outputs).toEqual(operation === 'add' ? [first, fixed] : [fixed]);
+    await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();
+    await page.screenshot({ path: `/tmp/rustx-end-draft-${operation}.png` });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  } finally { await fixture.stop(false); }
+});
