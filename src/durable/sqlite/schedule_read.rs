@@ -113,18 +113,24 @@ mod tests {
             Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
         let scope = Arc::new(ScheduleReadScope::default());
         scope.install(&reader).unwrap();
+        // Verify SQLite's actual wait policy. A wall-clock assertion also
+        // measures unrelated runner descheduling, which can exceed this budget.
+        assert_eq!(
+            reader
+                .query_row("PRAGMA busy_timeout", [], |row| row.get::<_, u64>(0))
+                .unwrap(),
+            250,
+        );
         let cancelling = scope.clone();
         let cancel = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(5));
             cancelling.cancel();
         });
-        let started = std::time::Instant::now();
         let result = reader.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0));
         assert!(matches!(
             result.unwrap_err().sqlite_error_code(),
             Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::OperationInterrupted)
         ));
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
         cancel.join().unwrap();
         assert_eq!(
             scope.check(),
