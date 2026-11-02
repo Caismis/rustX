@@ -1,14 +1,14 @@
 import { encodeField, type ArrayEdit, type FieldAddress } from '../../document/fields';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import clsx from 'clsx';
-import type { WorkflowVocabulary } from '../../../../../../protocol/app-server/v62';
+import type { WorkflowVocabulary } from '../../../../../../protocol/app-server/v63';
 import { useTranslation } from '../../../../locale/react';
 import { IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import { nodePresentation } from '../../document/geometry';
 import { nodeField } from '../../document/fields';
 import { blockAt, nodeAt, startOf, type BlockPath, type WorkflowDocument } from '../../document/model';
 import type { WorkflowScopePort } from '../../port';
-import { IconBlock, IconEntry, KindIcon } from '../icons';
+import { IconBlock, IconEntry, KindIcon, nodeIconKind } from '../icons';
 import type { Selection } from './selection';
 import { BlockForm } from './forms/BlockForm';
 import { NodePanel } from './panels/NodePanel';
@@ -59,7 +59,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
   if (selection.kind === 'node' && node && owner) {
     const id = selection.id, metadata = nodePresentation(document, path, id);
     head = <div className={css.inspectTitle}>
-      <span className={clsx(css.nodeIcon, css[`kind_${node.type}`])}><KindIcon kind={node.type} size={17} /></span>
+      <span className={clsx(css.nodeIcon, css[`kind_${node.type}`])}><KindIcon kind={nodeIconKind(node)} size={17} /></span>
       <span className={css.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} placeholder={tx('workflows:panel.title-placeholder')} value={metadata?.title || id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} /></span>
     </div>;
     description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />;

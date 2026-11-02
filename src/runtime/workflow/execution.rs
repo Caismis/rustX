@@ -212,6 +212,13 @@ fn retained_bound(block: &WorkflowBlockProgram, loop_value_bytes: usize) -> usiz
         schema_value_bound(&block.input_schema) + schema_value_bound(&block.output_schema);
     for node in block.nodes.values() {
         bytes = bytes.saturating_add(match node {
+            WorkflowNodeProgram::Template { .. } => {
+                schema_value_bound(&super::transform::text_schema())
+            }
+            WorkflowNodeProgram::List { output_schema, .. }
+            | WorkflowNodeProgram::Aggregate { output_schema, .. } => {
+                schema_value_bound(output_schema)
+            }
             WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.value_schema()),
             WorkflowNodeProgram::Model(model) => schema_value_bound(&model.output.schema()),
             WorkflowNodeProgram::Tool { result, .. } => schema_value_bound(&result.schema()),
@@ -1019,6 +1026,37 @@ impl WorkflowRuntime {
                     values.insert(node_id.to_owned(), value);
                     Ok(None)
                 }
+                WorkflowNodeProgram::Template { variables,template } => {
+                    let value = super::transform::render(template,variables,|part| evaluate_value(part,input,&values))?;
+                    validate_commit(&super::transform::text_schema(),&value)?;
+                    reservation.retain(&value)?;
+                    values.insert(node_id.to_owned(),value);
+                    Ok(None)
+                }
+                WorkflowNodeProgram::List {input:source,filter,sort,limit,output_schema} => {
+                    let value = super::transform::list(evaluate_value(source,input,&values)?,filter.as_ref(),sort.as_ref(),*limit)?;
+                    validate_commit(output_schema,&value)?;
+                    reservation.retain(&value)?;
+                    values.insert(node_id.to_owned(),value);
+                    Ok(None)
+                }
+                WorkflowNodeProgram::Aggregate {groups,output_schema} => {
+                    let mut fields = std::collections::BTreeMap::new();
+                    for group in groups {
+                        let mut chosen = None;
+                        for path in &group.variables {
+                            let Some(producer) = path.first() else { return Err(WorkflowRunError::InvalidValue("empty aggregate selector".into())); };
+                            if producer != "args" && !values.contains_key(producer) { continue; }
+                            if chosen.replace(path.clone()).is_some() { return Err(WorkflowRunError::InvalidValue("multiple aggregate sources executed".into())); }
+                        }
+                        fields.insert(group.name.clone(),super::WorkflowValue::Reference {path:chosen.ok_or_else(|| WorkflowRunError::InvalidValue("aggregate source is missing".into()))?});
+                    }
+                    let value = evaluate_value(&super::WorkflowValue::Object {fields},input,&values)?;
+                    validate_commit(output_schema,&value)?;
+                    reservation.retain(&value)?;
+                    values.insert(node_id.to_owned(),value);
+                    Ok(None)
+                }
                 WorkflowNodeProgram::Model(model) => {
                     let prompt = super::model::render_prompt(&model.messages, |part| evaluate_value(part, input, &values))?;
                     let mut retries = 0;
@@ -1072,6 +1110,13 @@ impl WorkflowRuntime {
                         },
                     };
                     validate_commit(&schema, &value)?;
+                    if !model.classes.is_empty() {
+                        let class = value.get("structured_output").and_then(|v| v.get("class_id")).and_then(Value::as_str).ok_or_else(|| WorkflowRunError::InvalidValue("Classifier returned no class ID".into()))?;
+                        selected = WorkflowPort::case(class);
+                        for successor in block.outgoing[node_id].iter().filter(|edge| edge.port == selected) {
+                            self.emit_observability(run, RuntimeEvent::WorkflowBranchSelected {workflow_id:run.program.id.clone(),run_id:run.run_id.clone(),node_id:node_instance.clone(),port:selected.clone(),successor:successor.to.clone()});
+                        }
+                    }
                     reservation.retain(&value)?;
                     #[cfg(test)]
                     if let Some(capability) = &context.workflow_model {

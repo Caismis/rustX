@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Icon, type IconifyIcon } from '@iconify/react/offline';
-import type { NodeKind } from '../document/model';
+import type { NodeKind, NodeDefinition } from '../document/model';
 import nodeIcons from './node-icons.json';
 
 /** Compact stroked glyphs of the Workflow surface, riding currentColor.
@@ -54,6 +54,11 @@ export const IconBraces = glyph(<path d="M8 3H6a2 2 0 0 0-2 2v4a3 3 0 0 1-2 3 3 
 
 const KIND_ICONS = {
   start: IconEntry,
+  template: iconify(nodeIcons.braces),
+  list: iconify(nodeIcons['list-filter']),
+  classifier: iconify(nodeIcons.tags),
+  aggregate: iconify(nodeIcons.combine),
+  code: iconify(nodeIcons['square-terminal']),
   agent: iconify(nodeIcons.bot),
   model: iconify(nodeIcons['brain-circuit']),
   tool: iconify(nodeIcons.wrench),
@@ -64,12 +69,14 @@ const KIND_ICONS = {
   loop_end: iconify(nodeIcons['circle-stop']),
   assigner: iconify(nodeIcons.variable),
   return: iconify(nodeIcons['log-out']),
-} satisfies Record<NodeKind | 'start', ReturnType<typeof iconify>>;
+} satisfies Record<NodeKind | 'start' | 'code', ReturnType<typeof iconify>>;
 
-export function KindIcon({ kind, size, className }: { kind: NodeKind | 'start'; size?: number; className?: string }) {
+export function KindIcon({ kind, size, className }: { kind: NodeKind | 'start' | 'code'; size?: number; className?: string }) {
   const Icon = KIND_ICONS[kind];
   return <Icon size={size} className={className} />;
 }
+
+export const nodeIconKind = (node: NodeDefinition): NodeKind | 'start' | 'code' => node.type==='tool' && node.selector.origin==='builtin' && node.selector.name==='bash' ? 'code' : node.type;
 
 /** Builtin Tools by name, as Dify gives each tool its provider's icon; any
  * other Tool shows the Tool kind's glyph. */
@@ -82,7 +89,7 @@ const TOOL_ICONS: Record<string, ReturnType<typeof glyph>> = {
   edit: glyph(<path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />),
   glob: IconFolder,
   grep: glyph(<><circle cx="10.5" cy="10.5" r="6.5" /><path d="m20 20-4.9-4.9M8 10.5h5" /></>),
-  bash: glyph(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M12.5 15H17" /></>),
+  bash: KIND_ICONS.code,
 };
 
 export function ToolIcon({ name, size, className }: { name: string; size?: number; className?: string }) {

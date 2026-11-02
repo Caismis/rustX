@@ -49,6 +49,9 @@ impl ActivationScopes {
                     routes.len().saturating_sub(1)
                         + usize::from(*on_error == WorkflowValueErrorStrategy::FailBranch)
                 }
+                WorkflowNodeDefinition::Classifier { classes, .. } => {
+                    classes.len().saturating_sub(1)
+                }
                 WorkflowNodeDefinition::Model {
                     on_error: WorkflowModelErrorStrategy::FailBranch,
                     ..
@@ -68,6 +71,33 @@ impl ActivationScopes {
         for (id, node) in &block.nodes {
             let mut ports = BTreeMap::new();
             match node {
+                WorkflowNodeDefinition::Classifier { classes, .. } => {
+                    let mut remaining = variables.mk_true();
+                    for (index, class) in classes.iter().enumerate() {
+                        let guard = if index + 1 == classes.len() {
+                            remaining.clone()
+                        } else {
+                            let selected =
+                                variables.mk_var(allocated.next().expect("allocated class"));
+                            let guard = Bdd::binary_op_with_limit(
+                                MAX_ACTIVATION_NODES,
+                                &remaining,
+                                &selected,
+                                op_function::and,
+                            )
+                            .ok_or_else(too_complex)?;
+                            remaining = Bdd::binary_op_with_limit(
+                                MAX_ACTIVATION_NODES,
+                                &remaining,
+                                &selected.not(),
+                                op_function::and,
+                            )
+                            .ok_or_else(too_complex)?;
+                            guard
+                        };
+                        ports.insert(WorkflowPort::case(&class.id), guard);
+                    }
+                }
                 WorkflowNodeDefinition::Branch { cases } => {
                     let mut remaining = variables.mk_true();
                     for case in cases {
@@ -272,6 +302,78 @@ impl ActivationScopes {
             }
         }
         scope
+    }
+
+    /// Aggregator selectors may name ancestors on exclusive paths. Only this
+    /// node receives their possible declarations; ordinary reads remain strict.
+    pub(super) fn potential_scope(
+        &self,
+        node: &str,
+        after: &BTreeMap<String, SchemaMap>,
+        base: &SchemaMap,
+    ) -> SchemaMap {
+        let mut scope = base.clone();
+        for producer in &self.ancestors[node] {
+            if let Some(schema) = after.get(producer).and_then(|s| s.0.get(producer)) {
+                scope.0.insert(producer.clone(), schema.clone());
+            }
+        }
+        scope
+    }
+
+    pub(super) fn validate_aggregate(
+        &self,
+        node: &str,
+        paths: &[Vec<String>],
+        base: &SchemaMap,
+    ) -> Result<(), WorkflowCompileError> {
+        let active = &self.active[node];
+        let mut union = active.and(&active.not());
+        for path in paths {
+            let producer = path.first().ok_or_else(|| {
+                WorkflowCompileError::InvalidReference("empty aggregate selector".into())
+            })?;
+            let present = if base.0.contains_key(producer) {
+                active.clone()
+            } else {
+                if !self.ancestors[node].contains(producer) {
+                    return Err(WorkflowCompileError::InvalidReference(
+                        "aggregate source must precede the node".into(),
+                    ));
+                }
+                let mut present = self.active[producer].clone();
+                if let Some(ok) = self.succeeded.get(producer) {
+                    present = Bdd::binary_op_with_limit(
+                        MAX_ACTIVATION_NODES,
+                        &present,
+                        ok,
+                        op_function::and,
+                    )
+                    .ok_or_else(too_complex)?;
+                }
+                Bdd::binary_op_with_limit(MAX_ACTIVATION_NODES, active, &present, op_function::and)
+                    .ok_or_else(too_complex)?
+            };
+            let overlap =
+                Bdd::binary_op_with_limit(MAX_ACTIVATION_NODES, &union, &present, op_function::and)
+                    .ok_or_else(too_complex)?;
+            if !overlap.is_false() {
+                return Err(WorkflowCompileError::InvalidReference(
+                    "aggregate sources must be mutually exclusive".into(),
+                ));
+            }
+            union =
+                Bdd::binary_op_with_limit(MAX_ACTIVATION_NODES, &union, &present, op_function::or)
+                    .ok_or_else(too_complex)?;
+        }
+        if !Bdd::binary_op_with_limit(2, active, &union, op_function::imp)
+            .is_some_and(|proof| proof.is_true())
+        {
+            return Err(WorkflowCompileError::InvalidReference(
+                "aggregate sources must cover every activation".into(),
+            ));
+        }
+        Ok(())
     }
 }
 fn too_complex() -> WorkflowCompileError {

@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode, type RefObject } from 'react';
 import clsx from 'clsx';
-import type { WorkflowToolChoice, WorkflowToolSource } from '../../../../../../protocol/app-server/v62';
+import type { WorkflowToolChoice, WorkflowToolSource } from '../../../../../../protocol/app-server/v63';
 import { useTranslation } from '../../../../locale/react';
 import type { Translate } from '../../../../locale/translation';
 import { IconChevronRightOutline14, IconSearchOutline16 } from '../../../../presentation/primitives/icons';
@@ -24,8 +24,8 @@ type Row = { kind: 'heading'; key: string; label: string } | { kind: 'note'; key
 /** As Dify's block classifications: the default group has no heading. */
 const GROUPS: readonly { group?: 'logic' | 'transform'; kinds: readonly Exclude<NodeKind, 'tool'>[] }[] = [
   { kinds: ['agent', 'model', 'return'] },
-  { group: 'logic', kinds: ['branch', 'iteration', 'loop', 'loop_end', 'review'] },
-  { group: 'transform', kinds: ['assigner'] },
+  { group: 'logic', kinds: ['classifier', 'branch', 'iteration', 'loop', 'loop_end', 'review'] },
+  { group: 'transform', kinds: ['template', 'list', 'aggregate', 'assigner'] },
 ];
 
 /** A Tool's description up to its first sentence, as a node description. */
@@ -48,9 +48,9 @@ export function chosenNode(tx: Translate, document: WorkflowDocument, block: Blo
   const { tool, source } = choice;
   const selector = source === undefined ? { origin: 'builtin' as const, name: tool.name } : { origin: 'source' as const, source_id: source, name: tool.name };
   return {
-    document: replaceNode(document, block, id, { type: 'tool', selector, arguments: { type: 'object', fields: {} }, result: tool.result }),
-    title: numbered(tool.name, others.filter(node => node.type === 'tool' && sameDocument(node.selector, selector)).length),
-    description: toolSummary(tool.description),
+    document: replaceNode(document, block, id, { type: 'tool', selector, arguments: { type: 'object', fields: !source && tool.name==='bash' ? {command:{type:'literal',value:''}} : {} }, result: tool.result }),
+    title: numbered(!source && tool.name==='bash' ? tx('workflows:kind.code') : tool.name, others.filter(node => node.type === 'tool' && sameDocument(node.selector, selector)).length),
+    description: !source && tool.name==='bash' ? tx('workflows:kind-about.code') : toolSummary(tool.description),
   };
 }
 
@@ -78,6 +78,8 @@ export function NodeChooser({ tools, omit = [], existing, onChoose, input, previ
     const shownKinds = kinds.filter(kind => !omit.includes(kind) && matches(kind, tx(`workflows:kind.${kind}`)));
     if (group && shownKinds.length) rows.push({ kind: 'heading', key: group, label: tx(`workflows:palette.group-${group}`) });
     for (const kind of shownKinds) option({ key: kind, label: tx(`workflows:kind.${kind}`), about: tx(`workflows:kind-about.${kind}`), icon: <KindIcon kind={kind} size={15} />, tone: css[`kind_${kind}`], choice: { kind } });
+    const bash=group==='transform' && !omit.includes('tool') ? tools.find(tool=>tool.name==='bash') : undefined;
+    if (bash && matches('bash',tx('workflows:kind.code'))) option({key:'code',label:tx('workflows:kind.code'),about:tx('workflows:kind-about.code'),icon:<KindIcon kind="code" size={15}/>,tone:css.kind_tool,choice:{kind:'tool',tool:bash}});
   } else if (!omit.includes('tool')) {
     const builtin = tools.filter(tool => matches(tool.name, tool.description));
     if (builtin.length) rows.push({ kind: 'heading', key: 'builtin', label: tx('workflows:palette.group-builtin') });

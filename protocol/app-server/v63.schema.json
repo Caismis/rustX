@@ -11929,6 +11929,134 @@
           ]
         },
         {
+          "description": "Jinja-style text transformation with explicit lexical inputs.",
+          "type": "object",
+          "properties": {
+            "variables": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowValue"
+              }
+            },
+            "template": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "template"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "variables",
+            "template"
+          ]
+        },
+        {
+          "description": "Pure filter, stable sort and selection over an array.",
+          "type": "object",
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "filter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowListFilter"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sort": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowListSort"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "type": {
+              "type": "string",
+              "const": "list"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "input"
+          ]
+        },
+        {
+          "description": "One tool-free classification Call with an exit per class.",
+          "type": "object",
+          "properties": {
+            "model": {
+              "$ref": "#/$defs/WorkflowModelPolicy",
+              "default": {
+                "mode": "session"
+              }
+            },
+            "input": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "instruction": {
+              "type": "string",
+              "default": ""
+            },
+            "classes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowAgentRoute"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "classifier"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "input",
+            "classes"
+          ]
+        },
+        {
+          "description": "Converge exactly one available source per named output group.",
+          "type": "object",
+          "properties": {
+            "groups": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowAggregateGroup"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "aggregate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "groups"
+          ]
+        },
+        {
           "description": "One tool-free logical Auxiliary Call using the invoking Attempt's authority.",
           "type": "object",
           "properties": {
@@ -12261,89 +12389,6 @@
         }
       ]
     },
-    "WorkflowModelPolicy": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "type": "string",
-              "const": "session"
-            }
-          },
-          "required": [
-            "mode"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "model": {
-              "type": "string"
-            },
-            "profile": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "request_params": {
-              "type": "object",
-              "additionalProperties": true,
-              "default": {}
-            },
-            "max_output_tokens": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "uint32",
-              "minimum": 0,
-              "maximum": 4294967295
-            },
-            "mode": {
-              "type": "string",
-              "const": "explicit"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode",
-            "model"
-          ]
-        }
-      ]
-    },
-    "WorkflowModelMessage": {
-      "description": "One prompt message of a Model node. The first message is the system\nprompt and every later one a user or assistant turn. Its content is fixed\ntext (string literals) and explicit references, rendered in order: a\nstring value as itself, any other value as its JSON text.",
-      "type": "object",
-      "properties": {
-        "role": {
-          "$ref": "#/$defs/WorkflowModelRole"
-        },
-        "content": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/WorkflowValue"
-          },
-          "default": []
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "role"
-      ]
-    },
-    "WorkflowModelRole": {
-      "description": "Who speaks a Model prompt message.",
-      "type": "string",
-      "enum": [
-        "system",
-        "user",
-        "assistant"
-      ]
-    },
     "WorkflowValue": {
       "description": "Closed, explicitly tagged value syntax; no evaluation of expression strings.",
       "oneOf": [
@@ -12447,6 +12492,209 @@
             "parts"
           ]
         }
+      ]
+    },
+    "WorkflowListFilter": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Empty selects a primitive item; otherwise literal object field names.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "operator": {
+          "$ref": "#/$defs/WorkflowListOperator"
+        },
+        "value": true
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "operator",
+        "value"
+      ]
+    },
+    "WorkflowListOperator": {
+      "type": "string",
+      "enum": [
+        "equal",
+        "not_equal",
+        "contains",
+        "not_contains",
+        "starts_with",
+        "ends_with",
+        "greater",
+        "greater_equal",
+        "less",
+        "less_equal"
+      ]
+    },
+    "WorkflowListSort": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "order": {
+          "$ref": "#/$defs/WorkflowSortOrder"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "order"
+      ]
+    },
+    "WorkflowSortOrder": {
+      "type": "string",
+      "enum": [
+        "asc",
+        "desc"
+      ]
+    },
+    "WorkflowModelPolicy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "session"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string"
+            },
+            "profile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request_params": {
+              "type": "object",
+              "additionalProperties": true,
+              "default": {}
+            },
+            "max_output_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "mode": {
+              "type": "string",
+              "const": "explicit"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "model"
+          ]
+        }
+      ]
+    },
+    "WorkflowAgentRoute": {
+      "description": "One exit an Agent may choose, as Dify's Agent output route. The child\nsees every route's ID and description when it picks one.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "description"
+      ]
+    },
+    "WorkflowAggregateGroup": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "output_type": {
+          "$ref": "#/$defs/WorkflowVarType"
+        },
+        "variables": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "output_type",
+        "variables"
+      ]
+    },
+    "WorkflowVarType": {
+      "description": "The value types of a Loop variable, as Dify offers them.",
+      "type": "string",
+      "enum": [
+        "string",
+        "number",
+        "boolean",
+        "object",
+        "array[string]",
+        "array[number]",
+        "array[boolean]",
+        "array[object]"
+      ]
+    },
+    "WorkflowModelMessage": {
+      "description": "One prompt message of a Model node. The first message is the system\nprompt and every later one a user or assistant turn. Its content is fixed\ntext (string literals) and explicit references, rendered in order: a\nstring value as itself, any other value as its JSON text.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/WorkflowModelRole"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkflowValue"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "role"
+      ]
+    },
+    "WorkflowModelRole": {
+      "description": "Who speaks a Model prompt message.",
+      "type": "string",
+      "enum": [
+        "system",
+        "user",
+        "assistant"
       ]
     },
     "WorkflowModelOutput": {
@@ -12579,20 +12827,6 @@
         "label",
         "var_type",
         "value"
-      ]
-    },
-    "WorkflowVarType": {
-      "description": "The value types of a Loop variable, as Dify offers them.",
-      "type": "string",
-      "enum": [
-        "string",
-        "number",
-        "boolean",
-        "object",
-        "array[string]",
-        "array[number]",
-        "array[boolean]",
-        "array[object]"
       ]
     },
     "WorkflowPredicate": {
@@ -13089,23 +13323,6 @@
         }
       ]
     },
-    "WorkflowAgentRoute": {
-      "description": "One exit an Agent may choose, as Dify's Agent output route. The child\nsees every route's ID and description when it picks one.",
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "description"
-      ]
-    },
     "WorkflowBranchCase": {
       "description": "A stable exit identity and its condition. The first matching case wins.",
       "type": "object",
@@ -13580,6 +13797,63 @@
     },
     "WorkflowConsumerField": {
       "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "template_variable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "transform_input"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "group": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "index": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "kind": {
+              "type": "string",
+              "const": "aggregate_variable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "group",
+            "index"
+          ]
+        },
         {
           "description": "A variable in one Model prompt message. Every part of a message shares\nits scope, so this also answers for a variable not inserted yet.",
           "type": "object",
@@ -24387,6 +24661,10 @@
     "WorkflowNodeKind": {
       "type": "string",
       "enum": [
+        "template",
+        "list",
+        "aggregate",
+        "classifier",
         "block",
         "agent",
         "model",

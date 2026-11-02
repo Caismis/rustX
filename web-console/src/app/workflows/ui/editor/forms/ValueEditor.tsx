@@ -77,7 +77,7 @@ export function ValueEditor({ label, address, value, edit }: { label: string; ad
 /** Explicit path components at the path array `address`; a component may
  * itself contain any text. A component being added is unapplied text of
  * the field `address` with the `append` role. */
-function PathEditor({ address, path, edit }: { address: FieldAddress; path: readonly string[]; edit: Edit }) {
+export function PathEditor({ address, path, edit }: { address: FieldAddress; path: readonly string[]; edit: Edit }) {
   const tx = useTranslation();
   const adding = useFieldDraft({
     address: { ...address, role: 'append' }, canonical: '',

@@ -39,6 +39,14 @@ pub struct WorkflowNodeAddress {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkflowConsumerField {
+    TemplateVariable {
+        name: String,
+    },
+    TransformInput,
+    AggregateVariable {
+        group: u32,
+        index: u32,
+    },
     /// A variable in one Model prompt message. Every part of a message shares
     /// its scope, so this also answers for a variable not inserted yet.
     Message {
@@ -185,6 +193,15 @@ pub fn declared_output(
     node: &WorkflowNodeDefinition,
 ) -> Result<Option<Value>, WorkflowCompileError> {
     let schema = match node {
+        WorkflowNodeDefinition::Template { .. } => super::transform::text_schema(),
+        WorkflowNodeDefinition::Classifier { classes, .. } => {
+            super::transform::classifier_output(classes).schema()
+        }
+        WorkflowNodeDefinition::Aggregate { groups } => {
+            super::transform::validate_groups(groups)?;
+            super::transform::aggregate_schema(groups)
+        }
+        WorkflowNodeDefinition::List { .. } => return Ok(None),
         WorkflowNodeDefinition::Model { output, .. } => {
             super::validate_model_output(output, "candidate")?;
             output.schema()
@@ -362,6 +379,28 @@ fn consumer<'a>(
     use WorkflowNodeDefinition as N;
     let node = block.nodes.get(&address.address.node)?;
     let (expression, expected, result_scope) = match (node, &address.field) {
+        (N::Template { variables, .. }, F::TemplateVariable { name }) => {
+            (Expression::Value(variables.get(name)?), None, false)
+        }
+        (N::List { input, .. }, F::TransformInput) => (
+            Expression::Value(input),
+            Some(Cow::Owned(serde_json::json!({"type":"array"}))),
+            false,
+        ),
+        (N::Classifier { input, .. }, F::TransformInput) => (
+            Expression::Value(input),
+            Some(Cow::Owned(serde_json::json!({"type":"string"}))),
+            false,
+        ),
+        (N::Aggregate { groups }, F::AggregateVariable { group, index }) => {
+            let group = groups.get(*group as usize)?;
+            group.variables.get(*index as usize)?;
+            (
+                Expression::Value(&UNSET_REFERENCE),
+                Some(Cow::Owned(group.output_type.schema())),
+                false,
+            )
+        }
         (N::Model { messages, .. }, F::Message { index }) => {
             messages.get(*index as usize)?;
             (Expression::Value(&UNSET_REFERENCE), None, false)
@@ -548,7 +587,11 @@ fn entry_scopes(
     let mut after = BTreeMap::new();
     let mut before = BTreeMap::new();
     for id in flow.topological {
-        let scope = flow.scopes.scope(&id, &after, base);
+        let scope = if matches!(block.nodes[&id], WorkflowNodeDefinition::Aggregate { .. }) {
+            flow.scopes.potential_scope(&id, &after, base)
+        } else {
+            flow.scopes.scope(&id, &after, base)
+        };
         // Unknown args and producer contracts retain their independent
         // presence facts through the compiler's native intersection.
         let next = declarations
@@ -891,6 +934,23 @@ fn declare(block: &WorkflowBlock, declarations: &mut SchemaMap) -> BTreeMap<Stri
     );
     for id in order {
         let node = &block.nodes[&id];
+        if let WorkflowNodeDefinition::List {
+            input,
+            filter,
+            sort,
+            limit,
+        } = node
+        {
+            let schema = super::value_schema(input, declarations, &id, 0)
+                .ok()
+                .and_then(|array| {
+                    super::transform::list_schema(&array, filter.as_ref(), sort.as_ref(), *limit)
+                        .ok()
+                })
+                .unwrap_or(Value::Null);
+            declarations.0.insert(id.clone(), schema.clone());
+            declared.insert(id.clone(), schema);
+        }
         if let WorkflowNodeDefinition::Iteration {
             output,
             error_handle_mode,

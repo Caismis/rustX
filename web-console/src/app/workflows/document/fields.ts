@@ -1,7 +1,7 @@
 import { CommandRejected, replaceNode } from './commands';
 import { blockAt, nodeAt, sameBlockPath, updateBlock, type BlockPath, type WorkflowDocument } from './model';
 import { nodePresentation, putNote, setNodePresentation } from './geometry';
-import type { WorkflowNodePresentation, WorkflowNote } from '../../../../../protocol/app-server/v62';
+import type { WorkflowNodePresentation, WorkflowNote } from '../../../../../protocol/app-server/v63';
 
 /** One component of a field path inside a node or block. A string is a
  * structural property of the native authoring type, `{ key }` an authored
@@ -184,7 +184,7 @@ export function renameAddress(address: FieldAddress, renamed: FieldAddress, to: 
   }
   // Schema-property drafts follow their contract's explicit key rename.
   const property = renamed.path.at(-1);
-  if (renamed.path.at(-2) === 'properties' && typeof property === 'object'
+  if ((renamed.path.at(-2) === 'properties' || renamed.path.at(-2) === 'variables') && typeof property === 'object'
     && address.block.length === depth && address.node === renamed.node
     && address.path.length >= renamed.path.length && renamed.path.every((part, index) => sameStep(part, address.path[index]))) {
     return { ...address, path: [...renamed.path.slice(0, -1), { key: to }, ...address.path.slice(renamed.path.length)] };

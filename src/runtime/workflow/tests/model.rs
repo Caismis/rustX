@@ -21,6 +21,102 @@ mod capacity_admission;
 #[path = "model_publication.rs"]
 mod publication;
 
+#[tokio::test]
+async fn classifier_uses_one_auxiliary_call_and_only_the_validated_class_path() {
+    for (class, expected) in [
+        ("support", Some("Support")),
+        ("other", Some("Other")),
+        ("invalid", None),
+    ] {
+        let plane = workflow_test_plane(1);
+        let template = |text: &str| WorkflowNodeDefinition::Template {
+            variables: BTreeMap::new(),
+            template: text.into(),
+        };
+        let definition = base_definition(
+            "classify",
+            BTreeMap::from([
+                (
+                    "classify".into(),
+                    WorkflowNodeDefinition::Classifier {
+                        model: WorkflowModelPolicy::Session,
+                        input: reference("args.task"),
+                        instruction: "Route the request.".into(),
+                        classes: vec![
+                            WorkflowAgentRoute {
+                                id: "support".into(),
+                                description: "Support requests".into(),
+                            },
+                            WorkflowAgentRoute {
+                                id: "other".into(),
+                                description: "Other questions".into(),
+                            },
+                        ],
+                    },
+                ),
+                ("support".into(), template("Support")),
+                ("other".into(), template("Other")),
+                (
+                    "merge".into(),
+                    WorkflowNodeDefinition::Aggregate {
+                        groups: vec![super::super::WorkflowAggregateGroup {
+                            name: "output".into(),
+                            output_type: super::super::WorkflowVarType::String,
+                            variables: vec![
+                                vec!["support".into(), "output".into()],
+                                vec!["other".into(), "output".into()],
+                            ],
+                        }],
+                    },
+                ),
+                (
+                    "done".into(),
+                    return_node(BTreeMap::from([(
+                        "answer".into(),
+                        reference("merge.output"),
+                    )])),
+                ),
+            ]),
+            vec![
+                branch_edge("classify", "support", WorkflowPort::case("support")),
+                branch_edge("classify", "other", WorkflowPort::case("other")),
+                edge("support", "merge"),
+                edge("other", "merge"),
+                edge("merge", "done"),
+            ],
+        );
+        let program = compile_test(definition).unwrap();
+        let (context, executor, mut entries, _) = setup(
+            &plane,
+            &program,
+            completed(
+                &json!({"class_id":class}).to_string(),
+                ModelFinishReason::Stop,
+            ),
+            true,
+        );
+        let runtime = workflow_runtime(&plane);
+        let run = start(&runtime, context, workflow_cancellation().1);
+        let request = entry(&mut entries).await;
+        assert!(request.request.tools.is_empty());
+        request.release.send(()).unwrap();
+        let result = run.await.unwrap();
+        if let Some(expected) = expected {
+            assert_eq!(result.unwrap(), json!({"answer":expected}));
+        } else {
+            assert!(result.is_err());
+            assert!(
+                !runtime.read_model.snapshot().runs[0]
+                    .instances
+                    .iter()
+                    .any(|row| row.node.as_deref() == Some("merge"))
+            );
+        }
+        assert!(entries.try_recv().is_err());
+        executor.drain().await;
+    }
+}
+
 struct Entry {
     request: ModelRequest,
     release: oneshot::Sender<()>,

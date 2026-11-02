@@ -1,4 +1,4 @@
-import type { WorkflowState } from '../../../../protocol/app-server/v62';
+import type { WorkflowState } from '../../../../protocol/app-server/v63';
 import type { Translate } from '../../locale/translation';
 import type { StateDotState } from '../../presentation/primitives/StateDot';
 

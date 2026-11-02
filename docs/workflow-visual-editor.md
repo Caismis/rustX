@@ -10,6 +10,21 @@ The read-only Dify checkout was inspected outside rustX at
 [`80265fcfe110f0aea056fcb3566d322986014b78`](https://github.com/langgenius/dify/tree/80265fcfe110f0aea056fcb3566d322986014b78).
 Reference paths below are relative to `web/app/components/workflow/`.
 
+The data-node work additionally inspected Dify at
+[`ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0`](https://github.com/langgenius/dify/tree/ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0):
+`nodes/template-transform/`, `nodes/list-operator/`, `nodes/question-classifier/`,
+`nodes/variable-assigner/`, `nodes/assigner/` and `nodes/code/` (types, defaults
+and configuration panels). That revision's `api/pyproject.toml` pins Graphon's
+backend implementation at
+[`4fa22141774dff80e90e4dfa98ea3e6fbf0421bb`](https://github.com/langgenius/graphon/tree/4fa22141774dff80e90e4dfa98ea3e6fbf0421bb).
+The inspected execution sources are `src/graphon/nodes/template_transform/template_transform_node.py`,
+`list_operator/node.py`, `variable_aggregator/variable_aggregator_node.py` and
+`question_classifier/question_classifier_node.py` under the same nodes directory.
+They informed named Jinja bindings, filter/sort/limit order, grouped aggregation
+and class-specific exits. rustX retains its native typed scope proofs and fails
+invalid classifier output explicitly. Code Execution reuses native Bash in the
+Session workspace, as requested, rather than adding Dify's separate sandbox.
+
 | Reference | Adopted interaction |
 | --- | --- |
 | `nodes/_base/node.tsx`, `nodes/_base/components/node-handle.tsx` | Readable cards, colored icons, output handles and add-after actions |
@@ -47,13 +62,15 @@ separately. All node icons have a solid semantic background and a white
 glyph, consistently across cards, inspector headers, successor rows and pickers.
 Node glyphs use Iconify's Lucide set: `log-in`, `bot`, `brain-circuit`, `wrench`,
 `git-branch`, `message-square-more`, `repeat-2`, `list-restart`, `circle-stop`,
-`variable` and `log-out`; private body Starts use `house`. The offline renderer
+`variable` and `log-out`; private body Starts use `house`. Template, List Operator,
+Question Classifier, Variable Aggregator and Code Execution use `braces`,
+`list-filter`, `tags`, `combine` and `square-terminal`. The offline renderer
 receives a small subset of the pinned `@iconify-json/lucide` dependency, generated
 by `node scripts/workflow-icons.ts` from `web-console/`. Icons render immediately
 without a network request; the full collection remains lazy for the icon picker.
 
 The canvas **+** and the next-step popover share one chooser, as Dify's block
-selector: a **Nodes** tab classified into a default group and **Logic**, a
+selector: a **Nodes** tab classified into a default group, **Logic** and data processing, a
 **Tools** tab, and, for a next step, the **Existing** nodes. The Tools tab
 lists the builtin Tools (the scope's vocabulary carries each one's
 description, argument schema and result; `ask_user` is left out, as a
@@ -127,6 +144,11 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | Model | Session/registered model, fixed instruction, bindings and text/JSON output |
 | Agent | Profile picked from the scope's profiles, task in the prompt editor with variables, structured output fields |
 | Tool | Exact selector, arguments and text/JSON result projection |
+| Template | Named typed inputs and a multiline Jinja template; native `output` string |
+| List Operator | Array input, optional typed filter, stable sort and limit, with literal field paths |
+| Question Classifier | Session/registered model, text input, optional instructions and stable class IDs with descriptions; one exit per class |
+| Variable Aggregator | Named typed groups with alternative source pickers; renaming a group updates downstream references |
+| Code Execution | Bash Tool preset with a multiline command and Session workspace execution; existing Tool outputs and lifecycle |
 | Branch | Compact IF/ELIF/ELSE card, ordered cases, searchable variable conditions, AND/OR and multiple successors per exit |
 | Loop | Loop variables (name, type, variable or constant value), termination conditions as IF/ELSE builds them, and a 1–100 maximum loop count slider |
 | Iteration | Array input and output variable pickers, parallel mode with a 1–10 maximum parallelism slider, error response method and flatten output |
@@ -149,7 +171,9 @@ removing them retains unfinished child text as a detached draft.
 References are structured arrays of literal field names. Native analysis proves
 that a producer is an ancestor and runs whenever the consumer runs. A join can
 read both concurrent producers; it cannot read an optional producer from a
-conditional path. As in Dify, a body sees the variables around its container,
+conditional path. Variable Aggregator alone can select possible ancestors:
+native validation proves exclusive and complete coverage for each output group.
+As in Dify, a body sees the variables around its container,
 the container's own variables (Loop variables, or Iteration `item` and `index`)
 and its own nodes. A break condition and an Iteration output read the body's
 scope after a round. Later consumers see a Loop's variables and an Iteration's
@@ -180,6 +204,8 @@ schemas, nodes, references and edges unchanged.
 | Inspector append, canvas +, real pointer reconnect, Save YAML and desktop/mobile picker | `web-console/test/e2e/workflow-visual.spec.ts` |
 | Renamed node titles across every native kind, real input/output drags, fail exits, surviving CASE exits and private Block connections | `web-console/test/e2e/workflow-node-connections.spec.ts` |
 | Human Input action ID changes, drag after Undo/Redo, Save and reopening | `web-console/test/e2e/workflow-review-connections.spec.ts` |
+| Data-node panels, renamed classifier drag/Undo/Redo, aggregate output references, workspace Bash preset, Loop assignment and Save/reopen at desktop/mobile widths | `web-console/test/e2e/workflow-data-nodes.spec.ts` |
+| Bounded Jinja, stable typed lists, conditional aggregation and actual classifier model dispatch | `src/runtime/workflow/tests/data_nodes.rs`, `tests/model.rs` |
 | Schema/value forms, drafts, references, presentation, clipboard and history | `web-console/test/workflow-*.test.*` |
 | Active-path joins, conditional scope, skipped Returns and retired syntax rejection | `src/runtime/workflow/tests/graph.rs` |
 | Opposite completion orders, capacity one, failure aggregation and cancellation drain | Native Workflow runtime and template tests |

@@ -26,14 +26,15 @@ block contains an `input` JSON Schema (omitted, it is the empty closed object),
 `nodes`, and `edges`. As in Dify, there is no declared output schema: the
 workflow's result is what its Return nodes return (see below). Exactly one node in each block has `type: start`;
 its outgoing edges select the initial work. The node vocabulary is Start, Agent,
-Model, Tool, Branch, Review, Iteration, Loop, Exit Loop (`loop_end`), Variable
-Assigner (`assigner`) and Return. Iteration and Loop own a body, a block with no
+Model, Tool, Template, List Operator, Question Classifier, Variable Aggregator,
+Branch, Review, Iteration, Loop, Exit Loop (`loop_end`), Variable Assigner
+(`assigner`) and Return. Code Execution is a builtin Bash Tool preset. Iteration and Loop own a body, a block with no
 input of its own. There is no explicit Parallel node, scalar `entry`
 field, callable subworkflow, conversation or independent job.
 
 Parallelism is expressed by multiple edges from the same output port, following
 Dify's graph convention. Ordinary edges omit `port`; Branch uses stable case IDs
-and `false` for ELSE. Each port may have
+and `false` for ELSE; Question Classifier uses its class IDs. Each port may have
 multiple distinct targets. Identical `(from, port, to)` connections are rejected.
 
 ## Direct Model nodes (Issue #496)
@@ -471,6 +472,125 @@ are presentation only. Editor titles/author notes/layout/order are separate file
 enter Tool contracts, trusted Model/Agent instructions or execution state. See
 [the complete file and authoring analysis contract](workflow-authoring.md#complete-native-file-document).
 
+## Data processing nodes
+
+These nodes follow Dify's explicit inputs and outputs. Template, List Operator
+and Variable Aggregator execute in the native runtime without model calls.
+Question Classifier lowers to one tool-free Model call under the invoking
+Attempt's frozen model policy. All four participate in ordinary compilation,
+candidate analysis, resource bounds and run observations; the browser only
+authors their configuration.
+
+### Template (`template`)
+
+Named `variables` bind ordinary typed value expressions. `template` is Jinja
+syntax rendered by MiniJinja, with conditionals, loops and standard filters:
+
+```yaml
+format_answer:
+  type: template
+  variables:
+    answer: {type: reference, path: [summarize, text]}
+  template: 'Answer: {{ answer | trim }}'
+```
+
+The result is `{output: <string>}`. Up to 32 inputs have unique ASCII identifier
+names. Unbound names, syntax errors and missing fields fail explicitly. There
+is no file loader; the synthetic `range` global is disabled. Template source,
+resolved input context and rendered text each have a 64 KiB budget. Rendering
+also has a 50,000-operation fuel budget and recursion limit 32. The final output
+object must fit the ordinary 64 KiB node-value limit.
+
+### List Operator (`list`)
+
+`input` must have an array schema with declared items. Operations run in the
+fixed order **filter, stable sort, limit**; each operation is optional:
+
+```yaml
+rank:
+  type: list
+  input: {type: reference, path: [args, records]}
+  filter: {path: [score], operator: greater_equal, value: 0.5}
+  sort: {path: [score], order: desc}
+  limit: 10
+```
+
+A `path` is a list of literal required object fields; `[]` selects a primitive
+item itself. Equality accepts strings, numbers and booleans; text supports
+`contains`, `not_contains`, `starts_with` and `ends_with`; numbers support
+`greater`, `greater_equal`, `less` and `less_equal`. There is no type coercion.
+Sorting accepts scalar fields and `asc` or `desc`, preserving source order for
+ties. An enabled limit is 1–65,536.
+
+Outputs are `result` (the resulting typed array), `first_record` and
+`last_record`. On an empty result the latter two are absent, so ordinary direct
+references to these optional fields are rejected. A Template may bind the
+whole List output and guard access with Jinja. The complete output, including
+first/last copies, must fit 64 KiB.
+
+### Question Classifier (`classifier`)
+
+The model policy is the same Session/explicit policy as a Model node. `input`
+must be text; `instruction` is optional. Each class has a stable local ID and a
+nonempty description:
+
+```yaml
+classify:
+  type: classifier
+  model: {mode: session}
+  input: {type: reference, path: [args, question]}
+  instruction: Choose the closest topic.
+  classes:
+    - {id: support, description: Product support requests}
+    - {id: other, description: All other questions}
+```
+
+There are 1–32 classes, with descriptions at most 4096 bytes each. Each class
+requires an outgoing edge whose `port` equals its ID. Exactly one class port
+activates, with ordinary parallelism allowed on that port. The native Model
+JSON schema restricts `class_id` to those IDs. Invalid output fails the node;
+it never silently selects a class. The result has the usual Model fields and
+`structured_output.class_id`. Existing Model request, schema and response
+budgets also apply to the generated classification prompt.
+
+### Variable Aggregator (`aggregate`)
+
+Each named output group specifies one type and the alternative source selectors
+that feed it:
+
+```yaml
+merge:
+  type: aggregate
+  groups:
+    - name: answer
+      output_type: string
+      variables: [[support_answer, output], [other_answer, output]]
+```
+
+The result here is `{answer: <selected value>}`. Groups and sources each have a
+1–32 limit. Output types are the same scalar/object/typed-array vocabulary as
+Loop variables. The compiler proves that the sources are mutually exclusive,
+that exactly one is available whenever the Aggregator activates, and that
+every source matches the declared type. This allows values from conditional
+paths to join without making optional producers readable by ordinary nodes.
+Concurrent sources or incomplete path coverage are errors. Native candidate
+analysis exposes possible ancestor outputs specifically to these selectors.
+
+### Code Execution and Variable Assigner
+
+The **Code Execution** chooser entry creates an ordinary
+`tool` node with `selector: {origin: builtin, name: bash}`. Its multiline command
+uses the existing Bash `command` argument, literal text or a Workflow template
+value with explicit references. Execution runs in the calling Session's
+workspace and reuses native Tool approval, timeout, cancellation, retry and
+error handling. Outputs remain the existing `exit_code`, `stdout`, `stderr`
+and `combined` result fields. There is no second script runtime or selectable
+working directory.
+
+**Variable Assigner** remains the native `assigner` node described under Loop
+below. It is offered inside a Loop body and updates that Loop's declared
+variables with the operations supported by their types.
+
 ## Values and predicates
 
 Values are a closed tagged AST:
@@ -488,8 +608,9 @@ like a Model message's `content`, is a list of fixed string literals and
 references, rendered in order when the AgentRun starts: a string is inserted
 as itself, any other value as JSON text. The task is the only way workflow
 values reach an Agent. A `template` value renders its parts the same way into
-one string; the visual editor writes a Tool's text parameters as templates. There is no interpolation, truthiness, callback, Transform node,
-or embedded programming language. Unknown fields/tags and duplicate
+one string; the visual editor writes a Tool's text parameters as templates.
+This value expression does not interpret Jinja or interpolate string literals;
+Jinja belongs to the explicit Template node above. Unknown fields/tags and duplicate
 construction field keys are rejected. A failing construction commits no
 partial local value.
 

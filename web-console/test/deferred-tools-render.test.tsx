@@ -1,6 +1,6 @@
 import { cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { ForegroundToolExecution, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v62';
+import type { ForegroundToolExecution, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v63';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { isFinalTurnDescriptor } from '../src/bindings/turn-process';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';

@@ -5,7 +5,7 @@ import { writeFileSync } from 'node:fs';
 import lucide from '@iconify-json/lucide/icons.json' with { type: 'json' };
 
 const names = ['log-in', 'bot', 'brain-circuit', 'wrench', 'git-branch', 'message-square-more',
-  'repeat-2', 'list-restart', 'circle-stop', 'variable', 'log-out', 'house'] as const;
+  'repeat-2', 'list-restart', 'circle-stop', 'variable', 'log-out', 'house', 'braces', 'list-filter', 'tags', 'combine', 'square-terminal'] as const;
 const icons = Object.fromEntries(names.map(name => [name, {
   width: lucide.width, height: lucide.height, ...lucide.icons[name],
 }]));

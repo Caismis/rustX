@@ -1,4 +1,4 @@
-import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowConsumerAddress, WorkflowConsumerField, WorkflowExpressionStep } from '../../../../../protocol/app-server/v62';
+import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowConsumerAddress, WorkflowConsumerField, WorkflowExpressionStep } from '../../../../../protocol/app-server/v63';
 import { sameAnalysisQuery } from '../../../../../protocol/app-server/workflow-analysis';
 import { blockAt, nodeAt, sameDocument, type WorkflowDocument } from './model';
 import type { FieldAddress } from './fields';
@@ -12,7 +12,13 @@ export function consumerAddress(document: WorkflowDocument, field: FieldAddress)
   const first = parts.shift();
   let consumer: WorkflowConsumerField;
   const key = () => { const part = parts.shift(); return typeof part === 'object' ? part.key : undefined; };
-  if (first === 'messages' && node.type === 'model') {
+  if (first === 'variables' && node.type === 'template') {
+    const name = key(); if (name === undefined) return undefined; consumer = { kind: 'template_variable', name };
+  } else if (first === 'input' && (node.type === 'list' || node.type === 'classifier')) consumer = { kind: 'transform_input' };
+  else if (first === 'groups' && node.type === 'aggregate') {
+    const group = parts.shift(); if (typeof group !== 'number' || parts.shift() !== 'variables') return undefined;
+    const index = parts.shift(); if (typeof index !== 'number') return undefined; consumer = { kind: 'aggregate_variable', group, index };
+  } else if (first === 'messages' && node.type === 'model') {
     // Every variable of a message shares its scope, inserted or not.
     const index = parts.shift(); if (typeof index !== 'number' || !node.messages[index]) return undefined;
     return { address: { block: [...field.block], node: field.node }, field: { kind: 'message', index }, path: [] };

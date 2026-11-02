@@ -1,7 +1,7 @@
 import type {
   WorkflowBlock, WorkflowFileDocument, WorkflowEdgeDefinition, WorkflowNodeDefinition,
   WorkflowPredicate, WorkflowValue,
-} from '../../../../../protocol/app-server/v62';
+} from '../../../../../protocol/app-server/v63';
 
 /** The one browser editing document: exactly the native authoring type.
  * Canvas nodes, edges and inspector forms are projections of it. */
@@ -14,7 +14,7 @@ export type Predicate = WorkflowPredicate;
 export type Edge = WorkflowEdgeDefinition;
 
 /** The creatable native node kinds, in palette order. */
-export const NODE_KINDS = ['agent', 'model', 'tool', 'branch', 'iteration', 'loop', 'loop_end', 'assigner', 'review', 'return'] as const satisfies readonly NodeKind[];
+export const NODE_KINDS = ['agent', 'model', 'tool', 'template', 'list', 'classifier', 'aggregate', 'branch', 'iteration', 'loop', 'loop_end', 'assigner', 'review', 'return'] as const satisfies readonly NodeKind[];
 
 /** The kinds that own a body. */
 export type ContainerKind = 'loop' | 'iteration';

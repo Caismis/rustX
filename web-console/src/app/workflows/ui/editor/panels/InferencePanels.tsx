@@ -14,7 +14,7 @@ import { PromptEditor, useInsertVariable } from '../forms/PromptEditor';
 import { promptText } from '../summary';
 import { KindIcon } from '../../icons';
 import { useTranslation } from '../../../../../locale/react';
-import { encodeField, fieldValue, within, type ArrayEdit, type FieldAddress } from '../../../document/fields';
+import { encodeField, fieldValue, fieldText, within, type ArrayEdit, type FieldAddress } from '../../../document/fields';
 import { ModelSelection } from '../forms/ModelSelection';
 import { ConflictActions, DraftTextField, JsonField, useFieldError } from '../forms/fields';
 import { useNode, type PanelProps } from './shared';
@@ -276,18 +276,19 @@ function AgentRoutes(props: PanelProps) {
 /** A versioned exit ID: Save applies it after the other visible fields. */
 export function RouteId({ value, address, label, className, rename }: { value: string; address: FieldAddress; label: string; className?: string; rename: (document: WorkflowDocument, from: string, to: string) => WorkflowDocument }) {
   const describe = useFieldError();
-  const field = useFieldDraft({ address, canonical: JSON.stringify(value), rename: true, command: (document, text) => {
-    const from = fieldValue(document, address)?.value;
+  const key=address.role==='key';
+  const field = useFieldDraft({ address, canonical: key ? value : JSON.stringify(value), rename: true, command: (document, text) => {
+    const from = key ? fieldText(document,address) : fieldValue(document, address)?.value;
     let parsed: unknown;
-    try { parsed = JSON.parse(text); } catch { return { status: 'rejected', error: { kind: 'syntax' } }; }
+    try { parsed = key ? text : JSON.parse(text); } catch { return { status: 'rejected', error: { kind: 'syntax' } }; }
     if (typeof from !== 'string') return { status: 'rejected', error: { kind: 'missing' } };
     if (typeof parsed !== 'string' || !parsed.trim()) return { status: 'rejected', error: { kind: 'empty' } };
     const to = parsed.trim();
     return to === from ? { status: 'unchanged' } : { status: 'applied', document: rename(document, from, to) };
   } });
   let shown = field.text;
-  try { const parsed: unknown = JSON.parse(shown); if (typeof parsed === 'string') shown = parsed; } catch { /* Detached text remains visible. */ }
-  return <><input className={clsx(css.routeIdInput, className)} data-workflow-field={encodeField(address)} aria-label={label} aria-invalid={!!field.error || undefined} value={shown} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply}
+  if (!key) try { const parsed: unknown = JSON.parse(shown); if (typeof parsed === 'string') shown = parsed; } catch { /* Detached text remains visible. */ }
+  return <><input className={clsx(css.routeIdInput, className)} data-workflow-field={encodeField(address)} aria-label={label} aria-invalid={!!field.error || undefined} value={shown} onChange={event => field.change(key ? event.target.value : JSON.stringify(event.target.value))} onBlur={field.apply}
     onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); field.apply(); } else if (event.key === 'Escape') field.reset(); }} />
     {field.error && <small className={css.hintError} role="alert">{describe(field.error)}</small>}<ConflictActions field={field} /></>;
 }

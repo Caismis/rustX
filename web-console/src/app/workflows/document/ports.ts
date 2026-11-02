@@ -12,6 +12,7 @@ export const TIMEOUT_PORT = 'timeout';
 export function outputPorts(kind: NodeDefinition['type']): readonly ControlPort[] {
   switch (kind) {
     case 'branch': return ['true', 'false'];
+    case 'classifier': return [];
     // As Dify's Exit Loop, it ends its round; Return ends the workflow.
     case 'loop_end': case 'return': return [];
     // Its actions are exits too; see `portsOf`.
@@ -39,6 +40,7 @@ export function authoredEdge(from: string, port: ControlPort, to: string): Edge 
 export const RESERVED_PORTS: readonly string[] = ['false', 'next', 'fail'];
 
 export function portsOf(node: NodeDefinition): readonly ControlPort[] {
+  if (node.type === 'classifier') return node.classes.map(item => item.id);
   if (node.type === 'branch') return [...node.cases.map(item => item.id), 'false'];
   // As Dify's Human Input: each action is an exit, then its timeout.
   if (node.type === 'review') return [...node.actions.map(action => action.id), TIMEOUT_PORT];

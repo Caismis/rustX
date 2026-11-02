@@ -6,11 +6,13 @@ import { BranchPanel } from './BranchPanel';
 import { ReturnPanel } from './ResultPanels';
 import { ReviewPanel } from './ReviewPanel';
 import { ToolPanel } from './ToolPanel';
+import { AggregatePanel, ClassifierPanel, ListPanel, TemplatePanel } from './DataPanels';
 import { type PanelProps } from './shared';
 import { NextStep } from '../NextStep';
 import css from '../Editor.module.css';
 
 const PANELS: Record<NodeKind, ComponentType<PanelProps>> = { agent: AgentPanel, model: ModelPanel, tool: ToolPanel, branch: BranchPanel, loop: LoopPanel,
+  template:TemplatePanel,list:ListPanel,classifier:ClassifierPanel,aggregate:AggregatePanel,
   iteration: IterationPanel, loop_end: LoopEndPanel, assigner: AssignerPanel, return: ReturnPanel, review: ReviewPanel };
 export function NodePanel(props: PanelProps) {
   const node = nodeAt(blockAt(props.document, props.block)!, props.id);

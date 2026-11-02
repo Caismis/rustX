@@ -1,4 +1,4 @@
-import type { AttachmentTarget } from './v62.ts';
+import type { AttachmentTarget } from './v63.ts';
 
 /** Whether two attachment targets name the same attachment in every domain:
  * Session, Conversation, runtime incarnation and attachment. An absent

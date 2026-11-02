@@ -4507,8 +4507,8 @@ coordinates and viewports.
 
 The native `ModelCapabilities` object now serializes `jsonSchemaOutput`, which
 is incompatible with the closed v53 schema. Web and TUI therefore negotiate
-App Server v62 and reject v53 peers before loading Model or configuration data.
-Only the v62 generated schema and TypeScript pair remains. Existing strict
+App Server v63 and reject v53 peers before loading Model or configuration data.
+Only the v63 generated schema and TypeScript pair remains. Existing strict
 validation stays in place. Derived source changes are protocol import paths;
 the source inventory records their current hashes and dependency paths without
 changing the pinned Harness baseline or licenses.
@@ -4516,7 +4516,7 @@ changing the pinned Harness baseline or licenses.
 
 ## Issue #499: live readiness and submission receipt
 
-The current mandatory contracts are App Server v62 and Runtime Client v79.
+The current mandatory contracts are App Server v63 and Runtime Client v80.
 Only the current generated artifacts and strict decoders are retained. Scheduled
 Workflow recovery and execution origins share this generation with live MCP
 readiness. The shared native
@@ -4538,13 +4538,13 @@ Workspace changes keep the existing composer text, ordered Files and model inten
 No sidebar/composer restyle, asset, dependency, localization vocabulary or visible
 prewarm presentation is introduced.
 
-App Server v62 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
+App Server v63 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
 inventory diagnostics and `session/create.submission`. First Send now carries its
 intent with creation, so the native timestamp precedes configuration/capacity/load
 waiting. Durable creation acknowledgement, upload receipts and canonical input
 acceptance remain distinct. The earlier Issue #499 paragraph describes its
 historical boundary; Issue #504 replaces the Web create-then-intent sequence.
-All consumers use the regenerated mandatory v62 vocabulary; earlier generated protocol artifacts are removed.
+All consumers use the regenerated mandatory v63 vocabulary; earlier generated protocol artifacts are removed.
 
 The new `test/e2e/mcp-prewarm.spec.ts` uses the real native stdio peer, supervisor
 and provider emulator, with explicit protocol/process counters. It exercises
@@ -4582,8 +4582,8 @@ The port retains rustX's exact native Session/node task binding, revisioned
 mutation receipts, pause/resume, Workflow arguments/results and physical
 settlement diagnostics. Harness Host/Peer services, Cordis stores and schedule
 execution APIs are excluded. Native `schedule/catalog` and `schedule/changed`
-provide bounded cold reads and invalidation under mandatory App Server v62;
-Runtime Client v79, SQLite 82 and child IPC 37 are unchanged. Ordinary message
+provide bounded cold reads and invalidation under mandatory App Server v63;
+The current internal versions are Runtime Client v80, SQLite 82 and child IPC 37. Ordinary message
 admission is presented separately from execution success, and the UI explicitly
 states that only the latest trigger is retained.
 
@@ -4625,3 +4625,21 @@ The exact release is the pnpm minimum-release-age exclusion, not a range or an
 unrestricted package exemption. `scripts/notices.ts --write` regenerates the
 production closure (309 packages); `check:provenance` and the built-artifact
 inspection verify it. No upstream source modifications or patches are applied.
+
+
+## Workflow data nodes
+
+Native Template, List Operator, Question Classifier and Variable Aggregator nodes
+follow Dify's named bindings, operation order, class exits and grouped sources.
+Code Execution is a dedicated chooser entry over rustX's existing Bash Tool in
+the Session workspace. Variable Assigner retains its native Loop scope.
+The exact frontend and Graphon execution source revisions and inspected paths
+are recorded in [the editor reference](../docs/workflow-visual-editor.md). No
+Dify or Graphon source, assets or Python runtime are copied into rustX.
+
+App Server v63 and Runtime Client v80 are mandatory. The sole generated schema
+and TypeScript pair describe the new definitions and consumer addresses; old
+protocol artifacts are removed. Derived presentation files only change their
+protocol import paths, with current hashes and dependency paths recorded in the
+source inventory. Node glyphs extend the existing pinned offline Iconify/Lucide
+subset. Native Jinja rendering uses MiniJinja; no frontend dependency is added.

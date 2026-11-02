@@ -1,5 +1,5 @@
 import type { ArrayEdit } from '../../document/fields';
-import type { WorkflowNote, WorkflowToolChoice } from '../../../../../../protocol/app-server/v62';
+import type { WorkflowNote, WorkflowToolChoice } from '../../../../../../protocol/app-server/v63';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import { Background, BackgroundVariant, MiniMap, ReactFlow, applyNodeChanges, useReactFlow, useViewport, useNodesInitialized, type Connection, type EdgeChange, type NodeChange, type Viewport } from '@xyflow/react';
@@ -348,7 +348,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       if (event.nativeEvent.isComposing || event.defaultPrevented || keyboardOwned(event.target) || window.getSelection()?.toString()) return;
       const mod = event.metaKey || event.ctrlKey, key = event.key.toLowerCase();
       const focused = (event.target as Element).closest<HTMLElement>('.react-flow__node');
-      if ((event.key === 'Enter' || event.key === ' ') && focused) { const node = byId.get(focused.dataset.id ?? ''); if (node) { event.preventDefault(); choose(node); } }
+      if ((event.key === 'Enter' || event.key === ' ') && focused && event.target === focused) { const node = byId.get(focused.dataset.id ?? ''); if (node) { event.preventDefault(); choose(node); } }
       else if (event.key === 'Escape') { event.preventDefault(); setPalette(undefined); setMenu(undefined); setSearch(undefined); onSelect(undefined); container.current?.focus(); }
       else if (mod && key === 'd') { event.preventDefault(); if (editable) duplicate(); }
       else if (mod && key === 'f') { event.preventDefault(); setSearch(''); }

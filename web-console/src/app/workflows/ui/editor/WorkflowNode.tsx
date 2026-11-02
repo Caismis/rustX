@@ -6,7 +6,7 @@ import { useTranslation } from '../../../../locale/react';
 import { IconEllipsisOutline16 } from '../../../../presentation/primitives/icons';
 import { NoteNode } from './note/NoteNode';
 import { portsOf, TIMEOUT_PORT, type ControlPort, type BuiltinPort } from '../../document/ports';
-import { KindIcon, IconEntry, IconHome, IconPlus } from '../icons';
+import { KindIcon, IconEntry, IconHome, IconPlus, nodeIconKind } from '../icons';
 import { predicateText } from './summary';
 import { NodePreview } from './NodePreview';
 import { PredicateView } from './VariableLabel';
@@ -62,7 +62,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
   </div>;
   // A fail branch's port sits on the card's error row and each Agent route's
   // on its own row, not beside the head.
-  const routes = node?.type === 'agent' ? node.routes ?? [] : [];
+  const routes = node?.type === 'agent' ? node.routes ?? [] : node?.type === 'classifier' ? node.classes : [];
   const choices = node?.type === 'review' ? [...node.actions.map(action => action.id), TIMEOUT_PORT] : [];
   const exits = ports.filter(port => port !== 'fail' && !routes.some(route => route.id === port) && !choices.includes(port));
   const card = <div className={clsx(css.node, container && css.containerNode, node?.type === 'branch' && css.branchCard, selected && css.nodeSelected)} title={data.description}>
@@ -72,7 +72,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
       {adding && !entered && <button type="button" className={clsx(css.handleAdd, 'nodrag nopan')} aria-label={tx('workflows:canvas.add-before', { p0: data.local })} onClick={event => { event.stopPropagation(); actions.addBefore(id, event.currentTarget); }}><IconPlus size={10} /></button>}
     </Handle>}
     <div className={clsx(css.nodeHead, container && css.containerHead)}>
-      <span className={clsx(css.nodeIcon, node ? css[`kind_${node.type}`] : css.startIcon)}>{node ? <KindIcon kind={node.type} size={17} /> : <IconEntry size={17} />}</span>
+      <span className={clsx(css.nodeIcon, node ? css[`kind_${node.type}`] : css.startIcon)}>{node ? <KindIcon kind={nodeIconKind(node)} size={17} /> : <IconEntry size={17} />}</span>
       <span className={css.nodeText}><span className={css.nodeTitle}>{data.view === 'start' ? data.title || tx(data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : data.title}</span></span>
       <button type="button" className={clsx(css.iconButton, css.nodeMenu, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local || tx('workflows:canvas.start') })} onClick={event => { event.stopPropagation(); data.view === 'start' ? actions.addIn(id, event.currentTarget) : actions.menu(id, event.currentTarget); }}><IconEllipsisOutline16 /></button>
     </div>

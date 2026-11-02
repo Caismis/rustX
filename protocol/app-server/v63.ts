@@ -1886,6 +1886,31 @@ export type WorkflowNodeDefinition =
       type: 'start';
     }
   | {
+      variables: {
+        [k: string]: WorkflowValue;
+      };
+      template: string;
+      type: 'template';
+    }
+  | {
+      input: WorkflowValue;
+      filter?: WorkflowListFilter | null;
+      sort?: WorkflowListSort | null;
+      limit?: number | null;
+      type: 'list';
+    }
+  | {
+      model?: WorkflowModelPolicy;
+      input: WorkflowValue;
+      instruction?: string;
+      classes: WorkflowAgentRoute[];
+      type: 'classifier';
+    }
+  | {
+      groups: WorkflowAggregateGroup[];
+      type: 'aggregate';
+    }
+  | {
       model?: WorkflowModelPolicy;
       /**
        * The prompt: a system message, then user and assistant turns.
@@ -2089,30 +2114,6 @@ export type WorkflowNodeDefinition =
       type: 'return';
     };
 /**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelPolicy".
- */
-export type WorkflowModelPolicy =
-  | {
-      mode: 'session';
-    }
-  | {
-      model: string;
-      profile?: string | null;
-      request_params?: {
-        [k: string]: unknown;
-      };
-      max_output_tokens?: number | null;
-      mode: 'explicit';
-    };
-/**
- * Who speaks a Model prompt message.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelRole".
- */
-export type WorkflowModelRole = 'system' | 'user' | 'assistant';
-/**
  * Closed, explicitly tagged value syntax; no evaluation of expression strings.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -2142,18 +2143,41 @@ export type WorkflowValue =
       type: 'template';
     };
 /**
- * The single authored output contract of a Workflow Model node.
- *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelOutput".
+ * via the `definition` "WorkflowListOperator".
  */
-export type WorkflowModelOutput =
+export type WorkflowListOperator =
+  | 'equal'
+  | 'not_equal'
+  | 'contains'
+  | 'not_contains'
+  | 'starts_with'
+  | 'ends_with'
+  | 'greater'
+  | 'greater_equal'
+  | 'less'
+  | 'less_equal';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowSortOrder".
+ */
+export type WorkflowSortOrder = 'asc' | 'desc';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelPolicy".
+ */
+export type WorkflowModelPolicy =
   | {
-      type: 'text';
+      mode: 'session';
     }
   | {
-      schema: unknown;
-      type: 'json_schema';
+      model: string;
+      profile?: string | null;
+      request_params?: {
+        [k: string]: unknown;
+      };
+      max_output_tokens?: number | null;
+      mode: 'explicit';
     };
 /**
  * The value types of a Loop variable, as Dify offers them.
@@ -2170,6 +2194,27 @@ export type WorkflowVarType =
   | 'array[number]'
   | 'array[boolean]'
   | 'array[object]';
+/**
+ * Who speaks a Model prompt message.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelRole".
+ */
+export type WorkflowModelRole = 'system' | 'user' | 'assistant';
+/**
+ * The single authored output contract of a Workflow Model node.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelOutput".
+ */
+export type WorkflowModelOutput =
+  | {
+      type: 'text';
+    }
+  | {
+      schema: unknown;
+      type: 'json_schema';
+    };
 /**
  * Typed predicates. Equality requires matching scalar types; no coercion.
  *
@@ -2334,6 +2379,18 @@ export type WorkflowSchemaStep =
  * via the `definition` "WorkflowConsumerField".
  */
 export type WorkflowConsumerField =
+  | {
+      name: string;
+      kind: 'template_variable';
+    }
+  | {
+      kind: 'transform_input';
+    }
+  | {
+      group: number;
+      index: number;
+      kind: 'aggregate_variable';
+    }
   | {
       index: number;
       kind: 'message';
@@ -4649,6 +4706,10 @@ export type WorkflowExecutionOutcome =
  * via the `definition` "WorkflowNodeKind".
  */
 export type WorkflowNodeKind =
+  | 'template'
+  | 'list'
+  | 'aggregate'
+  | 'classifier'
   | 'block'
   | 'agent'
   | 'model'
@@ -9522,6 +9583,46 @@ export interface WorkflowBlock {
   edges?: WorkflowEdgeDefinition[];
 }
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowListFilter".
+ */
+export interface WorkflowListFilter {
+  /**
+   * Empty selects a primitive item; otherwise literal object field names.
+   */
+  path: string[];
+  operator: WorkflowListOperator;
+  value: unknown;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowListSort".
+ */
+export interface WorkflowListSort {
+  path: string[];
+  order: WorkflowSortOrder;
+}
+/**
+ * One exit an Agent may choose, as Dify's Agent output route. The child
+ * sees every route's ID and description when it picks one.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAgentRoute".
+ */
+export interface WorkflowAgentRoute {
+  id: string;
+  description: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAggregateGroup".
+ */
+export interface WorkflowAggregateGroup {
+  name: string;
+  output_type: WorkflowVarType;
+  variables: string[][];
+}
+/**
  * One prompt message of a Model node. The first message is the system
  * prompt and every later one a user or assistant turn. Its content is fixed
  * text (string literals) and explicit references, rendered in order: a
@@ -9556,7 +9657,7 @@ export interface WorkflowLoopVariable {
   label: string;
   var_type: WorkflowVarType;
   /**
-   * A literal, or a reference read once before the first round.
+   * Closed, explicitly tagged value syntax; no evaluation of expression strings.
    */
   value:
     | {
@@ -9654,17 +9755,6 @@ export interface WorkflowAssignment {
 export interface WorkflowReviewAction {
   id: string;
   title: string;
-}
-/**
- * One exit an Agent may choose, as Dify's Agent output route. The child
- * sees every route's ID and description when it picks one.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowAgentRoute".
- */
-export interface WorkflowAgentRoute {
-  id: string;
-  description: string;
 }
 /**
  * A stable exit identity and its condition. The first matching case wins.

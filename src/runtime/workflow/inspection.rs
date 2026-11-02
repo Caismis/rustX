@@ -61,6 +61,11 @@ impl WorkflowProgram {
                     WorkflowNodeProgram::Review { actions, .. } => {
                         Some(super::review::result_schema(actions))
                     }
+                    WorkflowNodeProgram::Template { .. } => Some(super::transform::text_schema()),
+                    WorkflowNodeProgram::List { output_schema, .. }
+                    | WorkflowNodeProgram::Aggregate { output_schema, .. } => {
+                        Some(output_schema.clone())
+                    }
                     WorkflowNodeProgram::Loop {
                         body,
                         output_schema,
@@ -309,12 +314,50 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             loop_count: None,
         };
         match node {
+            WorkflowNodeProgram::Template { variables, .. } => {
+                view.kind = "template".into();
+                view.output_schema = Some(schema(&super::transform::text_schema()));
+                view.bindings.extend(
+                    variables
+                        .iter()
+                        .map(|(name, value)| (format!("variables.{name}"), binding(value))),
+                );
+            }
+            WorkflowNodeProgram::List {
+                input,
+                output_schema,
+                ..
+            } => {
+                view.kind = "list".into();
+                view.output_schema = Some(schema(output_schema));
+                view.bindings.insert("input".into(), binding(input));
+            }
+            WorkflowNodeProgram::Aggregate {
+                groups,
+                output_schema,
+            } => {
+                view.kind = "aggregate".into();
+                view.output_schema = Some(schema(output_schema));
+                for (index, group) in groups.iter().enumerate() {
+                    for (position, path) in group.variables.iter().enumerate() {
+                        view.bindings.insert(
+                            format!("groups.{index}.variables.{position}"),
+                            binding(&WorkflowValue::Reference { path: path.clone() }),
+                        );
+                    }
+                }
+            }
             WorkflowNodeProgram::Model(model) => {
                 result.runtime_requirements.extend([
                     "invoking_attempt_frozen_model_resolution",
                     "auxiliary_model_execution_and_settlement",
                 ]);
-                view.kind = "model".into();
+                view.kind = if model.classes.is_empty() {
+                    "model"
+                } else {
+                    "classifier"
+                }
+                .into();
                 view.model = Some(match &model.model {
                     crate::model::session::AuxiliaryModelPolicy::Session => {
                         ModelPolicyInspection::Session

@@ -46,6 +46,20 @@ pub(super) fn node(input: &WorkflowNodeDefinition) -> Vec<&[String]> {
     let mut reads = Vec::new();
     match input {
         WorkflowNodeDefinition::Start {} | WorkflowNodeDefinition::LoopEnd {} => {}
+        WorkflowNodeDefinition::Template { variables, .. } => {
+            for input in variables.values() {
+                value(input, &mut reads);
+            }
+        }
+        WorkflowNodeDefinition::List { input, .. }
+        | WorkflowNodeDefinition::Classifier { input, .. } => value(input, &mut reads),
+        WorkflowNodeDefinition::Aggregate { groups } => {
+            for group in groups {
+                for path in &group.variables {
+                    reads.push(path.as_slice());
+                }
+            }
+        }
         WorkflowNodeDefinition::Model { messages, .. } => {
             for message in messages {
                 for part in &message.content {
