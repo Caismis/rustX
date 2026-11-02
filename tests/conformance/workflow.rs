@@ -635,14 +635,11 @@ impl Driver {
         }
     }
 
-    fn assert_inflight_workflow_journal(
+    fn workflow_journal_at(
         &self,
         checkpoint: &rustx::runtime_client::checkpoint::RuntimeClientCheckpoint,
-        run: &rustx::runtime::workflow::read_model::WorkflowRunView,
-        check: &rustx::runtime::workflow::read_model::WorkflowInstanceView,
-    ) {
+    ) -> Vec<rustx::events::types::RuntimeEventEnvelope> {
         use rustx::durable::presentation::{FactQuery, FactScope};
-        use rustx::events::types::RuntimeEvent;
         let source_cut = checkpoint.read_cut.source_cut.as_ref().unwrap();
         assert_eq!(source_cut.read.journal, checkpoint.read_cut.through);
         let store = SqliteConversationStore::open_existing(
@@ -679,6 +676,17 @@ impl Driver {
         assert!(facts.iter().all(|fact| fact.conversation_id
             == checkpoint.read_cut.conversation_id
             && fact.sequence <= checkpoint.read_cut.through));
+        facts
+    }
+
+    fn assert_inflight_workflow_journal(
+        &self,
+        checkpoint: &rustx::runtime_client::checkpoint::RuntimeClientCheckpoint,
+        run: &rustx::runtime::workflow::read_model::WorkflowRunView,
+        check: &rustx::runtime::workflow::read_model::WorkflowInstanceView,
+    ) {
+        use rustx::events::types::RuntimeEvent;
+        let facts = self.workflow_journal_at(checkpoint);
         assert_eq!(
             facts
                 .iter()
@@ -1908,19 +1916,40 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
                     .snapshot()
                     .revision
                     .0;
-                while *workflow_publications.borrow_and_update() < required_revision {
+                let (checkpoint, workflows) = loop {
+                    while *workflow_publications.borrow_and_update() < required_revision {
+                        workflow_publications
+                            .changed()
+                            .await
+                            .expect("the held writer's native Workflow revision publishes");
+                    }
+                    let checkpoint = driver
+                        .runtime
+                        .host()
+                        .checkpoint()
+                        .expect("published first-check Workflow cut");
+                    assert!(checkpoint.read_cut.domain_revisions["workflows"] >= required_revision);
+                    let workflows = driver.workflow_runs_at(&checkpoint).await;
+                    let run = &workflows[0];
+                    let admitted = driver
+                        .workflow_journal_at(&checkpoint)
+                        .iter()
+                        .filter(|fact| matches!(&fact.event,
+                            rustx::events::types::RuntimeEvent::WorkflowAgentAdmitted {run_id, node_id, ..}
+                            if run_id == &run.id && node_id.node == "implement"
+                        ))
+                        .count();
+                    if admitted >= 2 {
+                        break (checkpoint, workflows);
+                    }
+                    // A different progress fact can publish the native child
+                    // row before this child's own admission fact commits.
+                    // Await the Journal frontier in the same public cut too.
                     workflow_publications
                         .changed()
                         .await
-                        .expect("the held writer's native Workflow revision publishes");
-                }
-                let checkpoint = driver
-                    .runtime
-                    .host()
-                    .checkpoint()
-                    .expect("published first-check Workflow cut");
-                assert!(checkpoint.read_cut.domain_revisions["workflows"] >= required_revision);
-                let workflows = driver.workflow_runs_at(&checkpoint).await;
+                        .expect("the held writer's admission Journal fact publishes");
+                };
                 let run = &workflows[0];
                 let checks = run
                     .instances
@@ -1979,6 +2008,8 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
                 _ => ("other", None),
             };
             if let Some(revision) = revision {
+                // Wake readers for a new Journal frontier even when the
+                // Workflow domain revision itself has not changed.
                 published_workflows.send_modify(|old| *old = (*old).max(revision));
             }
             let native = driver.runtime.tool_runtime().workflows().snapshot();
