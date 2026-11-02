@@ -1,0 +1,13 @@
+**Superseded:** the heap interval below incorrectly used initialization-to-warmup files 0003→0004. Use the corrected [investigation archive](../incremental-attempt-investigation-20261102/README.md), which binds measured-window files 0004→0005. This original archive and receipt remain unchanged for traceability.
+
+# Post-formal regression investigation
+
+Six separate live/64 profiler products executed after the formal and column/WAL batches: two heap and four CPU products, all controller-accepted, with the same ordinary O3 binaries. They are not additional formal repetitions, and their elapsed/CPU/write counters are not pooled with the formal results. No Pi/DeepSeek product runs.
+
+CPU phase `before_measured_turns -> after_turns` has only 94/101/96/98 samples at requested 250 Hz. Baseline totals 192, candidate 197. Publication encoding remains a material existing cost; its overlapping cumulative counts are baseline 17/9 and candidate 20/19. SQLite step is baseline 23/16 and candidate 24/11. These sparse, variable observations do not establish which change caused the formal approximately 5% long-history regression. No claim assigns it to scheduling noise, a lost covering scan, or any particular cache.
+
+Both heap products emitted approximately 1 MiB stack listings whose rows fail to sum to their own header totals. `heap-completeness.json` records this failure. The retained `baseline-heap-summary.json` was generated before that check and is only an incomplete-prefix calculation: it must not be used as full allocation attribution. Header-only measured-window deltas are 2,340,570 / 619,267,263 requested allocations/bytes for baseline and 2,338,849 / 620,514,857 for candidate. Heap mode replaces the allocator and includes driver/profiler effects; it is not an ordinary-runtime allocation count or a precise cause of wall-time differences.
+
+The synthetic SQLite probe checks identical results and covering/range ordering for explicit trailing sequence versus implicit rowid: each tested query takes one fewer VM instruction with the narrow index. It is a limited SQLite 3.45.1 probe, not whole-rustX attribution or proof against every query-plan regression. Production bundled-SQLite correctness tests independently verify the range/covering behavior.
+
+The four requested optimizations are implemented and all functional checks pass, but the formal long-history regressions remain observed. This investigation did not identify another safely removable operation that would explain and eliminate them. The report therefore retains the adverse results and makes no whole-matrix speedup or Pi-parity claim.

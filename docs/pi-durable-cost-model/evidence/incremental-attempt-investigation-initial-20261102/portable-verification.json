@@ -1,0 +1,31 @@
+{
+  "accepted": true,
+  "archive_sha256": "969bff06f064e07dcabfee96d96b336bfe7a86f40a9fe87af71b285ff1395874",
+  "verified_files": 139,
+  "verification_script_sha256": "9e51ade803fba5029177ba51e482a45d5d314e270a922eeb31f6da4eb2101840",
+  "recomputed": {
+    "products": 6,
+    "cpu_products": 4,
+    "heap_products": 2,
+    "cpu_samples": [
+      {
+        "name": "2-cpu-baseline",
+        "samples": 94
+      },
+      {
+        "name": "3-cpu-candidate",
+        "samples": 101
+      },
+      {
+        "name": "4-cpu-candidate",
+        "samples": 96
+      },
+      {
+        "name": "5-cpu-baseline",
+        "samples": 98
+      }
+    ],
+    "heap_stack_attribution_complete": false,
+    "scope": "Hash integrity, retained controller acceptance and independently recomputed raw profile counts/completeness. No fresh execution, symbolization or causal explanation of formal latency."
+  }
+}
