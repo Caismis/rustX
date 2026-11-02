@@ -78,6 +78,9 @@ are ordinary document transactions with Undo/Redo.
 
 The output handle's **+** opens the same append action whether that port has
 zero, one or several edges. Dragging from the handle adds another connection.
+Semantic node edits explicitly refresh React Flow's handle identities and bounds.
+This also applies when the card keeps the same size, such as renaming a Human
+Input action, and when Undo/Redo restores a previous definition.
 Explicit insertion uses the connection's midpoint button: it replaces only
 that edge with two edges through a new single-exit node, preserving siblings.
 Select a connection to reveal its reconnectable endpoints. The selected edge
