@@ -155,6 +155,10 @@ export class AppServerClient {
     const retiredClaim = !!previous?.facts.target && !facts.target;
     const attached = context.attachmentResult && context.attachmentResult !== previous?.attachmentResult && facts.attachmentObservation;
     const result = context.attachmentResult;
+    // Hand released rows to the new observation only for its exact Conversation.
+    // Old read/navigation authority still retires; a frozen jump is not a live head.
+    const readingHistory = attached && result && (view.snapshot?.conversation_id === result.target.conversation_id && view.history && !view.history.window ? view.history
+      : view.preview?.conversationId === result.target.conversation_id ? view.preview.history : undefined);
     const projection: SessionView = { ...view, ...facts, lifecycle: lifecycleAvailability(context),
       ...(revoked ? {
         history:view.history?.loading?{...view.history,loading:false}:view.history,
@@ -166,6 +170,7 @@ export class AppServerClient {
       ...(opening ? { modelIntent: undefined, cancellation: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(facts.attachmentIntent === 'released' ? { modelIntent: undefined, cancellation: undefined } : {}),
       ...(attached && result ? { snapshot: undefined, publicationHeads: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
+        history: readingHistory ? { ...readingHistory, loading: false, initialLoading: false, error: undefined } : undefined,
         turnOutline: undefined, turnNavigation: undefined } : {}),
     };
     if (context.deleted) {
@@ -243,7 +248,7 @@ export class AppServerClient {
         this.observationChains.set(id,chain);
         this.setSession(id,{snapshot:observed,checkpoint,cursor:checkpoint.cursor,observationState:'subscribePending',
           ...(!resumable&&this.state.views[id]?.modelMutation?.generation!==this.state.generation?{modelMutation:undefined}:{}),
-          history:replaceTranscript(observed.transcript,this.state.views[id]?.history),
+          history:refreshTranscript(this.state.views[id]?.history,observed.transcript),
           trace:this.traces.supersede(id,({...replaceTrace(observed.trace,this.state.views[id]?.trace,checkpoint.read_cut),fields:this.traces.liveFields(result.target)}))});
         chain.beginSubscription(checkpoint.cursor);
         try {

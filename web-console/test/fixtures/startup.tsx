@@ -19,7 +19,7 @@ import { AppSurface } from '../../src/app/App';
 import { workflowSurfaceMachine } from '../../src/app/workflows/machines/surface';
 import { createWorkflowPort } from '../../src/app/workflows/port';
 import { inspectionAcknowledger, RepairAcknowledgements } from '../../src/app/repair-notices';
-import { Server, snapshot, childConversation } from '../fixture';
+import { Server, snapshot, checkpoint, childConversation, readingWindow } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/errors';
@@ -100,6 +100,17 @@ if (new URL(location.href).searchParams.has('reading-window')) {
   });
 }
 let advanceHistory: (() => Promise<void>) | undefined;
+if (new URL(location.href).searchParams.has('opening-history')) {
+  const saved = server.snapshots.get('A')!;
+  const entries = saved.transcript.entries!;
+  // Match the native eight-row checkpoint after a larger durable preview.
+  server.handlers.set('session/checkpoint', () => ({ type: 'checkpoint', checkpoint: checkpoint({ ...saved, transcript: { entries: entries.slice(-8), next_cursor: entries.at(-8)!.cursor } }) }));
+  server.handlers.set('session/transcript', request => {
+    if (request.method !== 'session/transcript' || request.params.at.type !== 'older') throw Error('Expected older history');
+    const before = BigInt(request.params.at.before);
+    return { type: 'transcript_window', window: readingWindow({ entries: entries.filter(entry => BigInt(entry.cursor) < before), next_cursor: null }) };
+  });
+}
 if (new URL(location.href).searchParams.has('history-refresh')) {
   const saved = server.snapshots.get('A')!;
   const question: RuntimeClientTranscriptEntry = { cursor: '1', item: { type: 'message', message: { id: 'repair-question', role: 'user', source: 'human', content: [{ type: 'text', text: 'Run a background task and keep my conversation visible.' }] } } };

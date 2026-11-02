@@ -321,6 +321,10 @@ ceiling or history exhaustion. Tool results and model-only Context do not consum
 that conversational message budget. Loaded Chat and Trace pages accumulate;
 normal live updates do not evict previously read rows or create artificial
 "load earlier" recovery work.
+Attachment hands the exact Conversation's released preview or resident history
+to the new observation. Its bounded checkpoint refreshes overlapping rows instead
+of replacing the reading window with the eight-row native head. Read admission
+and frozen navigation windows still retire at the attachment boundary.
 Returning to the bottom of ordinary Chat preserves all loaded pages; it does not
 reload a smaller latest window. Only an explicit historical jump needs its frozen
 window released on return to latest. Root and child readers share this behavior.
