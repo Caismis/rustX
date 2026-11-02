@@ -205,7 +205,10 @@ fn append_facts_reuse_observes_changed_and_corrupt_stored_cells() {
     transaction
         .execute(
             "UPDATE events SET observation_execution=?2 WHERE sequence=?1",
-            params![sequence, observation_codec::encode_admitted(&value).unwrap()],
+            params![
+                sequence,
+                observation_codec::encode_admitted(&value).unwrap()
+            ],
         )
         .unwrap();
     let changed = observation_execution::summary_at_sequence_prepared(
@@ -390,4 +393,110 @@ fn lifecycle_first_write_rechecks_trigger_changed_later_keys() {
         drop(connection);
         assert_eq!(store.read_events(None, 64).unwrap().events.len(), 1);
     }
+}
+
+#[test]
+fn aggregate_folds_reuse_current_full_state_and_keep_old_cuts() {
+    use super::observation_response_tests::{response_complete, response_message, response_start};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = response_start(&store, "fold-owned");
+    let old = store.observation_statistics(1).unwrap();
+    append_facts::take_fold_work();
+    response_message(&store, &attempt, "fold-owned-message");
+    assert_eq!(append_facts::take_fold_work(), (2, 0));
+    response_complete(&store, &attempt);
+    assert_eq!(append_facts::take_fold_work(), (2, 0));
+    assert_eq!(store.observation_statistics(1).unwrap(), old);
+    let current = store.observation_read_cut().unwrap().read.journal;
+    assert_eq!(
+        store
+            .observation_statistics(current)
+            .unwrap()
+            .completed_responses,
+        1
+    );
+}
+
+#[test]
+fn aggregate_fold_reuse_rechecks_corrupt_current_bytes_without_hiding_other_domains() {
+    use super::observation_response_tests::{response_message, response_start};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = response_start(&store, "fold-corrupt");
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE events SET observation_statistics=x'ff' WHERE sequence=1",
+            [],
+        )
+        .unwrap();
+    append_facts::take_fold_work();
+    response_message(&store, &attempt, "fold-corrupt-message");
+    let (hits, misses) = append_facts::take_fold_work();
+    assert!(misses >= 1);
+    assert!(hits >= 1);
+    assert!(store.observation_statistics(2).is_err());
+    assert_eq!(store.load_canonical().unwrap().len(), 1);
+}
+
+#[test]
+fn aggregate_fold_pending_value_does_not_survive_rollback_as_current_state() {
+    use super::observation_response_tests::{response_message, response_start};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = response_start(&store, "fold-rollback");
+    let mut event = store.read_events(None, 1).unwrap().events.pop().unwrap();
+    event.event_id = EventId::new("rollback-fold-event");
+    event.event = RuntimeEvent::TurnStarted;
+    event.turn_id = Some(TurnId::new("1"));
+    {
+        let connection = store.lock().unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        persist_event_tx(
+            &store.conn.event_guard,
+            &transaction,
+            &store.conversation_id,
+            event,
+        )
+        .unwrap();
+        transaction.rollback().unwrap();
+    }
+    append_facts::take_fold_work();
+    response_message(&store, &attempt, "fold-rollback-message");
+    let (_, misses) = append_facts::take_fold_work();
+    assert!(misses >= 1);
+    assert_eq!(store.observation_statistics(2).unwrap().steps, 0);
+}
+
+#[test]
+fn aggregate_fold_reuse_observes_a_valid_external_header_rewrite() {
+    use super::observation_response_tests::{response_message, response_start};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("fold.sqlite");
+    let store = SqliteConversationStore::open(ConversationId::generate(), &path).unwrap();
+    store.initialize(&[]).unwrap();
+    let attempt = response_start(&store, "fold-external");
+    let other = rusqlite::Connection::open(&path).unwrap();
+    let bytes: Vec<u8> = other
+        .query_row(
+            "SELECT observation_statistics FROM events WHERE sequence=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut value: serde_json::Value = observation_codec::decode(&bytes).unwrap();
+    value[0][0] = serde_json::json!(44);
+    other
+        .execute(
+            "UPDATE events SET observation_statistics=?1 WHERE sequence=1",
+            [observation_codec::encode_admitted(&value).unwrap()],
+        )
+        .unwrap();
+    append_facts::take_fold_work();
+    response_message(&store, &attempt, "fold-external-message");
+    let (_, misses) = append_facts::take_fold_work();
+    assert!(misses >= 1);
+    assert_eq!(store.observation_statistics(2).unwrap().turns, 44);
 }

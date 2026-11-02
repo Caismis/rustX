@@ -139,7 +139,7 @@ mod tests {
                     .filter(|line| line
                         .contains("SEARCH events USING INDEX events_attempt_kind_idx")
                         && line.contains("attempt_id=?")
-                        && line.contains("sequence<?"))
+                        && line.contains("rowid<?"))
                     .count(),
                 kinds.len(),
                 "{plan:?}"

@@ -206,9 +206,18 @@ fn add_count(total: &mut u64, part: u64) -> Result<(), ConversationStoreError> {
         .ok_or_else(|| storage("native statistics count exceeds representation"))?;
     Ok(())
 }
+#[derive(Default)]
+pub(super) struct FoldCache(super::append_facts::FoldCache<StatisticsLayout>);
 fn layout(
     connection: &Connection,
     through: u64,
+) -> Result<StatisticsLayout, ConversationStoreError> {
+    layout_cached(connection, through, None)
+}
+fn layout_cached(
+    connection: &Connection,
+    through: u64,
+    cache: Option<&FoldCache>,
 ) -> Result<StatisticsLayout, ConversationStoreError> {
     let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (4,5,6,7) AND sequence<=?1)").and_then(|mut statement| statement.query_row([through],|row| row.get(0))).map_err(|error| storage(error.to_string()))?;
     if missing {
@@ -241,6 +250,9 @@ fn layout(
             }
         },
         |bytes| {
+            if let Some(value) = cache.and_then(|cache| cache.0.take(&bytes)) {
+                return Ok(value);
+            }
             #[cfg(test)]
             READ_WORK.with(|work| {
                 let (rows, total, original) = work.get();
@@ -398,9 +410,17 @@ pub(super) struct Prepared {
     pub(super) statistics: Option<super::append_facts::Captured<ConversationStatistics>>,
 }
 
+#[cfg(test)]
 pub(super) fn prepare(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
+) -> Result<Prepared, ConversationStoreError> {
+    prepare_cached(connection, event, None)
+}
+pub(super) fn prepare_cached(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    cache: Option<&FoldCache>,
 ) -> Result<Prepared, ConversationStoreError> {
     let trace_total = if is_trace_anchor(&event.event) {
         Some(
@@ -421,7 +441,7 @@ pub(super) fn prepare(
     if !requires_statistics(event) {
         return Ok(prepared);
     }
-    let mut state = layout(connection, event.sequence.saturating_sub(1))?;
+    let mut state = layout_cached(connection, event.sequence.saturating_sub(1), cache)?;
     let was_shared = shared(&state);
     let facts = NativeFacts::read(connection, event, attempt)?;
     let mut activity = ActivityFold::default();
@@ -455,11 +475,34 @@ pub(super) fn prepare(
     }
     record_duration(connection, event, &mut state.local)?;
     let bytes = encode(&state)?;
-    prepared.statistics = Some(super::append_facts::Captured {
-        bytes,
-        value: state.statistics,
-    });
+    let value = if let Some(cache) = cache {
+        let value = state.statistics.clone();
+        cache.0.remember(&bytes, normalized_fold(state));
+        value
+    } else {
+        state.statistics
+    };
+    prepared.statistics = Some(super::append_facts::Captured { bytes, value });
     Ok(prepared)
+}
+// These are exactly the fields retained by the private tuple decoder.
+fn normalized_fold(mut state: StatisticsLayout) -> StatisticsLayout {
+    let shared = shared(&state);
+    state.activity = activity_from_fields(activity_fields(&state.activity));
+    state.local.activity = activity_from_fields(activity_fields(&state.local.activity));
+    state.local.view.occupancy = None;
+    if shared {
+        state.local.view.statistics.clone_from(&state.statistics);
+        state.local.activity.clone_from(&state.activity);
+    }
+    for statistics in [&mut state.statistics, &mut state.local.view.statistics] {
+        if let Some(timing) = &mut statistics.timing {
+            timing.output_tokens_per_second = timing
+                .output_tokens_per_second
+                .filter(|value| value.is_finite());
+        }
+    }
+    state
 }
 #[derive(Default)]
 struct NativeFacts {
@@ -939,6 +982,44 @@ mod compact_tests {
                 decode(&old).is_err(),
                 "obsolete duplicated encoding is not a fallback"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod fold_normalization_tests {
+    use super::*;
+    #[test]
+    fn cached_statistics_state_matches_stored_normalization_including_shared_signed_zero() {
+        for rate in [f64::NAN, f64::INFINITY, -0.0, 0.0, 123.5] {
+            let mut state = StatisticsLayout::default();
+            state.statistics.timing = Some(crate::durable::response::ConversationTiming {
+                output_tokens_per_second: Some(rate),
+                ..Default::default()
+            });
+            state.local.view.statistics = state.statistics.clone();
+            if rate == 0.0 {
+                state
+                    .local
+                    .view
+                    .statistics
+                    .timing
+                    .as_mut()
+                    .unwrap()
+                    .output_tokens_per_second = Some(-rate);
+            }
+            state.activity.steps = 999;
+            state.local.activity.steps = 999;
+            let bytes = encode(&state).unwrap();
+            let decoded = decode(&bytes).unwrap();
+            let normalized = normalized_fold(state);
+            assert_eq!(
+                serde_json::to_vec(&fields(&normalized, shared(&normalized))).unwrap(),
+                serde_json::to_vec(&fields(&decoded, shared(&decoded))).unwrap()
+            );
+            assert_eq!(normalized.activity, decoded.activity);
+            assert_eq!(normalized.local.activity, decoded.local.activity);
+            assert!(normalized.local.view.occupancy.is_none());
         }
     }
 }

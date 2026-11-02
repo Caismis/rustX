@@ -268,7 +268,7 @@ fn attempt_lookup_cost(connection: &Connection, id: &str, through: u64) -> i32 {
             |row| row.get(3),
         )
         .unwrap();
-    assert!(plan.contains("SEARCH events USING INDEX events_message_id_kind_idx (<expr>=? AND <expr>=? AND sequence<?)"), "{plan}");
+    assert!(plan.contains("SEARCH events USING INDEX events_message_id_kind_idx (<expr>=? AND <expr>=? AND rowid<?)"), "{plan}");
     println!("{plan}");
     let mut statement = connection.prepare(TRANSCRIPT_ATTEMPTS_SQL).unwrap();
     let results = statement

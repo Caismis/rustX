@@ -344,7 +344,8 @@ fn count_conversation_store_open() {
 /// Version 84 merges chronological attempt reads through the shared attempt-kind index.
 /// Version 85 stores immutable first content chunks alongside their exact frontier.
 /// Version 86 stores bounded binary Statistics and Execution tuples with unchanged JSON admission.
-pub const SQLITE_SCHEMA_VERSION: i64 = 86;
+/// Version 87 removes redundant trailing sequence keys from rowid event indexes.
+pub const SQLITE_SCHEMA_VERSION: i64 = 87;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -8445,51 +8446,51 @@ mod scoped_event_index_tests;
 const PRESENTATION_INDEXES: &[(&str, &str)] = &[
     (
         "events_context_reading_idx",
-        "(json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'), sequence) WHERE (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null') = 1",
+        "(json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null')) WHERE (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null') = 1",
     ),
     (
         "events_message_id_kind_idx",
-        "(json_extract(event_json, '$.event.message_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.message_id') IS NOT NULL",
+        "(json_extract(event_json, '$.event.message_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.message_id') IS NOT NULL",
     ),
     (
         "events_kind_idx",
-        "(json_extract(event_json, '$.event.type'), sequence)",
+        "(json_extract(event_json, '$.event.type'))",
     ),
     (
         "events_attempt_kind_idx",
-        "(attempt_id, json_extract(event_json, '$.event.type'), sequence)",
+        "(attempt_id, json_extract(event_json, '$.event.type'))",
     ),
     (
         "events_step_kind_idx",
-        "(attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence) WHERE attempt_id IS NOT NULL AND turn_id IS NOT NULL",
+        "(attempt_id, turn_id, json_extract(event_json, '$.event.type')) WHERE attempt_id IS NOT NULL AND turn_id IS NOT NULL",
     ),
     (
         "events_compaction_operation_kind_idx",
-        "(json_extract(event_json, '$.event.operation_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.operation_id') IS NOT NULL",
+        "(json_extract(event_json, '$.event.operation_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.operation_id') IS NOT NULL",
     ),
     (
         "events_request_id_kind_idx",
-        "(json_extract(event_json, '$.event.request_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.request_id') IS NOT NULL",
+        "(json_extract(event_json, '$.event.request_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.request_id') IS NOT NULL",
     ),
     (
         "events_tool_call_scope_kind_idx",
-        "(json_extract(event_json, '$.event.tool_call_id'), attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.tool_call_id') IS NOT NULL",
+        "(json_extract(event_json, '$.event.tool_call_id'), attempt_id, turn_id, json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.tool_call_id') IS NOT NULL",
     ),
     (
         "events_execution_id_kind_idx",
-        "(json_extract(event_json, '$.event.execution_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.execution_id') IS NOT NULL",
+        "(json_extract(event_json, '$.event.execution_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.execution_id') IS NOT NULL",
     ),
     (
         "events_subagent_id_kind_idx",
-        "(json_extract(event_json, '$.event.subagent_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.subagent_id') IS NOT NULL",
+        "(json_extract(event_json, '$.event.subagent_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.subagent_id') IS NOT NULL",
     ),
     (
         "events_run_id_kind_idx",
-        "(json_extract(event_json, '$.event.run_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.run_id') IS NOT NULL",
+        "(json_extract(event_json, '$.event.run_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.run_id') IS NOT NULL",
     ),
     (
         "events_interaction_id_kind_idx",
-        "(json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.interaction_id') IS NOT NULL",
+        "(json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.interaction_id') IS NOT NULL",
     ),
 ];
 
@@ -8890,28 +8891,28 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 turn_id TEXT,
                 event_json TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS events_aggregate_holes_idx ON events(observation_aggregate_holes,sequence) WHERE observation_aggregate_holes>0;
-            CREATE INDEX IF NOT EXISTS events_owner_holes_idx ON events(observation_owner_holes,sequence) WHERE observation_owner_holes>0;
-            CREATE INDEX IF NOT EXISTS events_trace_kind_idx ON events(observation_kind,sequence) WHERE observation_kind IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_trace_owner_idx ON events(observation_trace_owner,observation_kind,sequence) WHERE observation_trace_owner IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.run_id.conversation_id') IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_aggregate_holes_idx ON events(observation_aggregate_holes) WHERE observation_aggregate_holes>0;
+            CREATE INDEX IF NOT EXISTS events_owner_holes_idx ON events(observation_owner_holes) WHERE observation_owner_holes>0;
+            CREATE INDEX IF NOT EXISTS events_trace_kind_idx ON events(observation_kind) WHERE observation_kind IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_trace_owner_idx ON events(observation_trace_owner,observation_kind) WHERE observation_trace_owner IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type')) WHERE json_extract(event_json,'$.event.run_id.conversation_id') IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_readiness_missing_idx ON events(sequence) WHERE observation_readiness_missing=1;
-            CREATE INDEX IF NOT EXISTS events_observation_assistant_ledger_idx ON events(observation_assistant_ledger,sequence) WHERE observation_assistant_ledger IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_aggregate_heads_idx ON events(observation_aggregate_heads,sequence) WHERE observation_aggregate_heads>0;
+            CREATE INDEX IF NOT EXISTS events_observation_assistant_ledger_idx ON events(observation_assistant_ledger) WHERE observation_assistant_ledger IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_aggregate_heads_idx ON events(observation_aggregate_heads) WHERE observation_aggregate_heads>0;
             CREATE INDEX IF NOT EXISTS transcript_order_audit_position_idx ON transcript_order(position) WHERE reference_kind='publication_audit';
-            CREATE INDEX IF NOT EXISTS events_observation_tool_lifecycle_idx ON events(observation_tool_ledger,observation_tool_block,observation_tool_phase,sequence) WHERE observation_tool_phase IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_tool_occurrence_idx ON events(observation_tool_ledger,observation_tool_block,sequence) WHERE observation_tool_ledger IS NOT NULL AND json_extract(event_json,'$.event.type')='tool_execution_started';
-            CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_attempt_heads_idx ON events(attempt_id,observation_attempt_heads,sequence) WHERE observation_attempt_heads>0;
-            CREATE INDEX IF NOT EXISTS events_observation_member_holes_idx ON events(attempt_id,sequence) WHERE observation_members_required=1 AND observation_members IS NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_member_anchor_idx ON events(observation_member_anchor,sequence) WHERE observation_members IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_tool_lifecycle_idx ON events(observation_tool_ledger,observation_tool_block,observation_tool_phase) WHERE observation_tool_phase IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_tool_occurrence_idx ON events(observation_tool_ledger,observation_tool_block) WHERE observation_tool_ledger IS NOT NULL AND json_extract(event_json,'$.event.type')='tool_execution_started';
+            CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type')) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_attempt_heads_idx ON events(attempt_id,observation_attempt_heads) WHERE observation_attempt_heads>0;
+            CREATE INDEX IF NOT EXISTS events_observation_member_holes_idx ON events(attempt_id) WHERE observation_members_required=1 AND observation_members IS NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_member_anchor_idx ON events(observation_member_anchor) WHERE observation_members IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_unavailable_idx ON events(sequence) WHERE observation_unavailable=1;
             CREATE UNIQUE INDEX IF NOT EXISTS events_observation_transcript_idx ON events(observation_transcript) WHERE observation_transcript IS NOT NULL;
             CREATE UNIQUE INDEX IF NOT EXISTS events_observation_turn_ordinal_idx ON events(observation_turn_ordinal) WHERE observation_turn_ordinal IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_turn_anchor_idx ON events(observation_turn_anchor,sequence) WHERE observation_turn_header IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_idx ON events(attempt_id,sequence) WHERE observation_turn_prompt_positive=1;
+            CREATE INDEX IF NOT EXISTS events_observation_turn_anchor_idx ON events(observation_turn_anchor) WHERE observation_turn_header IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_idx ON events(attempt_id) WHERE observation_turn_prompt_positive=1;
             CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_holes_idx ON events(sequence) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL;
-            CREATE INDEX IF NOT EXISTS events_execution_owner_idx ON events(observation_execution_owner,sequence) WHERE observation_execution IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_execution_owner_idx ON events(observation_execution_owner) WHERE observation_execution IS NOT NULL;
             CREATE TABLE IF NOT EXISTS lifecycle_state (
                 lifecycle_key TEXT PRIMARY KEY,
                 terminal_event_id TEXT
@@ -9027,11 +9028,11 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
     for (name, expected) in [
         (
             "events_workflow_coordinates_idx",
-            "CREATE INDEX events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.run_id.conversation_id') IS NOT NULL",
+            "CREATE INDEX events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type')) WHERE json_extract(event_json,'$.event.run_id.conversation_id') IS NOT NULL",
         ),
         (
             "events_observation_tool_idx",
-            "CREATE INDEX events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL",
+            "CREATE INDEX events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type')) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL",
         ),
     ] {
         let actual: Option<String> = connection.query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='events'", [name], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
@@ -9085,11 +9086,11 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ),
         (
             "events_observation_turn_anchor_idx",
-            "CREATE INDEX events_observation_turn_anchor_idx ON events(observation_turn_anchor,sequence) WHERE observation_turn_header IS NOT NULL",
+            "CREATE INDEX events_observation_turn_anchor_idx ON events(observation_turn_anchor) WHERE observation_turn_header IS NOT NULL",
         ),
         (
             "events_observation_turn_prompt_idx",
-            "CREATE INDEX events_observation_turn_prompt_idx ON events(attempt_id,sequence) WHERE observation_turn_prompt_positive=1",
+            "CREATE INDEX events_observation_turn_prompt_idx ON events(attempt_id) WHERE observation_turn_prompt_positive=1",
         ),
         (
             "events_observation_turn_prompt_holes_idx",
@@ -19782,7 +19783,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 86);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 87);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19851,7 +19852,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 86);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 87);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

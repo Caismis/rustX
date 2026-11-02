@@ -7,7 +7,7 @@ use crate::runtime_client::{
     snapshot::{InFlightAssistantMessage, RuntimeClientAttemptPhase},
 };
 
-fn source() -> Arc<Option<RuntimeClientAttempt>> {
+fn source() -> Arc<Option<SharedAttempt>> {
     let model = ModelInvocationView {
         model: crate::model::catalog::ModelRef::parse("test/model").unwrap(),
         protocol: ModelProtocol::OpenAiChatCompletions,
@@ -23,7 +23,7 @@ fn source() -> Arc<Option<RuntimeClientAttempt>> {
         capabilities: ModelCapabilities::text_only(true, false),
         declared_capabilities: ModelCapabilities::text_only(true, false),
     };
-    Arc::new(Some(RuntimeClientAttempt {
+    Arc::new(Some(SharedAttempt {
         attempt_id: None,
         attempt_id_source: None,
         phase: RuntimeClientAttemptPhase::Running,
@@ -37,25 +37,24 @@ fn source() -> Arc<Option<RuntimeClientAttempt>> {
                     text: format!("block {i}: 水\\\n"),
                 })
                 .collect(),
-        }),
-        foreground: Vec::new(),
+        })
+        .into(),
+        foreground: Vec::new().into(),
         model: Some(Box::new(AttemptModelView {
             primary: model,
             summary: SummaryModelView::Session,
-        })),
+        }))
+        .into(),
         execution_settings: Some(AdmittedSettings {
             read_image_active: Some(true),
             resource_revision: RuntimeResourceRevision::new(1),
             approval_mode: crate::runtime::types::ApprovalMode::default(),
-        }),
+        })
+        .into(),
     }))
 }
 
-fn captured(
-    source: &RuntimeClientAttempt,
-    items: Option<&Items>,
-    pressure: usize,
-) -> (Vec<u8>, Capture) {
+fn captured(source: &SharedAttempt, items: Option<&Items>, pressure: usize) -> (Vec<u8>, Capture) {
     let mut capture = Capture::new(17);
     for _ in 0..pressure {
         capture.reserve(&"x".repeat(4000));
@@ -78,21 +77,29 @@ fn captured(
         .collect::<Vec<_>>();
     let model = if let Some(items) = items {
         super::capture(&mut capture, &items.model, |c| {
-            c.item("attempt.model", &source.model).flatten()
-        })
-        .into_owned()
-    } else {
-        capture.item("attempt.model", &source.model).flatten()
-    };
-    let settings = if let Some(items) = items {
-        super::capture(&mut capture, &items.settings, |c| {
-            c.item("attempt.execution_settings", &source.execution_settings)
-                .flatten()
+            c.item("attempt.model", source.model.value()).flatten()
         })
         .into_owned()
     } else {
         capture
-            .item("attempt.execution_settings", &source.execution_settings)
+            .item("attempt.model", source.model.value())
+            .flatten()
+    };
+    let settings = if let Some(items) = items {
+        super::capture(&mut capture, &items.settings, |c| {
+            c.item(
+                "attempt.execution_settings",
+                source.execution_settings.value(),
+            )
+            .flatten()
+        })
+        .into_owned()
+    } else {
+        capture
+            .item(
+                "attempt.execution_settings",
+                source.execution_settings.value(),
+            )
             .flatten()
     };
     (

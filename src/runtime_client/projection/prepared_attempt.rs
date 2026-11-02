@@ -1,7 +1,8 @@
 //! Only the latest immutable attempt owns these finite item preparations.
 //! Admission is replayed against the current shared budget; source references
 //! and deferred evidence are always assembled from the current seed.
-use super::{ForegroundToolExecution, ForegroundToolState, InFlightBlock, RuntimeClientAttempt};
+use super::shared_attempt::SharedAttempt;
+use super::{ForegroundToolExecution, ForegroundToolState, InFlightBlock};
 use crate::model::session::{AttemptModelView, SummaryModelView};
 use crate::runtime_client::checkpoint::{CHECKPOINT_PAGE_ITEMS, Capture, prepare_capture_item};
 use crate::runtime_client::settings::AdmittedSettings;
@@ -14,8 +15,9 @@ type Item<T> = Arc<OnceLock<T>>;
 /// Attempt fields contribute to the final attempt budget together. They need
 /// admission replay, but no separate structural-fit walk that is then discarded.
 pub(super) struct PreparedItem<T> {
-    value: T,
+    value: Arc<T>,
     capture: Capture,
+    fit: OnceLock<Option<usize>>,
 }
 
 pub(super) fn capture<'a, T: Clone>(
@@ -26,37 +28,83 @@ pub(super) fn capture<'a, T: Clone>(
     let prepared = owner.get_or_init(|| {
         let mut capture = Capture::new(0);
         let value = build(&mut capture);
-        PreparedItem { value, capture }
+        PreparedItem {
+            value: Arc::new(value),
+            capture,
+            fit: OnceLock::new(),
+        }
     });
     if capture.try_replay(&prepared.capture) {
-        Cow::Borrowed(&prepared.value)
+        Cow::Borrowed(prepared.value.as_ref())
     } else {
         Cow::Owned(build(capture))
+    }
+}
+
+pub(super) fn capture_shared<T>(
+    capture: &mut Capture,
+    owner: &OnceLock<PreparedItem<T>>,
+    build: impl Fn(&mut Capture) -> T,
+) -> Arc<T> {
+    let prepared = owner.get_or_init(|| {
+        let mut capture = Capture::new(0);
+        let value = build(&mut capture);
+        PreparedItem {
+            value: Arc::new(value),
+            capture,
+            fit: OnceLock::new(),
+        }
+    });
+    if capture.try_replay(&prepared.capture) {
+        Arc::clone(&prepared.value)
+    } else {
+        Arc::new(build(capture))
     }
 }
 
 // Source is a proof about the actual serde-normalized result, not an assumption
 // that every future DTO deserializer is an identity function. No body is kept.
 pub(super) enum PreparedLiveBlock {
-    Source { encoded: usize, required: usize },
+    Source {
+        encoded: usize,
+        required: usize,
+        fit: OnceLock<Option<usize>>,
+    },
     Rejected,
     Normalize,
 }
 
+#[cfg(test)]
 pub(super) fn live_block(
     capture: &mut Capture,
     owner: &OnceLock<PreparedLiveBlock>,
     block: &InFlightBlock,
 ) -> Option<InFlightBlock> {
-    live_block_with(capture, owner, block, || prepare_capture_item(block))
+    live_block_view(capture, owner, block).map(Cow::into_owned)
 }
 
+pub(super) fn live_block_view<'a>(
+    capture: &mut Capture,
+    owner: &OnceLock<PreparedLiveBlock>,
+    block: &'a InFlightBlock,
+) -> Option<Cow<'a, InFlightBlock>> {
+    live_block_view_with(capture, owner, block, || prepare_capture_item(block))
+}
+#[cfg(test)]
 fn live_block_with(
     capture: &mut Capture,
     owner: &OnceLock<PreparedLiveBlock>,
     block: &InFlightBlock,
     prepare: impl Fn() -> Option<(InFlightBlock, usize, usize)>,
 ) -> Option<InFlightBlock> {
+    live_block_view_with(capture, owner, block, prepare).map(Cow::into_owned)
+}
+fn live_block_view_with<'a>(
+    capture: &mut Capture,
+    owner: &OnceLock<PreparedLiveBlock>,
+    block: &'a InFlightBlock,
+    prepare: impl Fn() -> Option<(InFlightBlock, usize, usize)>,
+) -> Option<Cow<'a, InFlightBlock>> {
     let mut fresh = None;
     let prepared = owner.get_or_init(|| {
         let normalized = prepare();
@@ -78,6 +126,7 @@ fn live_block_with(
             Some((value, encoded, required)) if value == block => PreparedLiveBlock::Source {
                 encoded: *encoded,
                 required: *required,
+                fit: OnceLock::new(),
             },
             Some(_) => PreparedLiveBlock::Normalize,
             None => PreparedLiveBlock::Rejected,
@@ -91,10 +140,12 @@ fn live_block_with(
         value
     } else {
         match prepared {
-            PreparedLiveBlock::Source { encoded, required } => {
+            PreparedLiveBlock::Source {
+                encoded, required, ..
+            } => {
                 return capture
                     .admit_prepared(*encoded, *required)
-                    .then(|| block.clone());
+                    .then_some(Cow::Borrowed(block));
             }
             // First-stage rejection must not touch the shared eviction state.
             PreparedLiveBlock::Rejected => return None,
@@ -104,7 +155,9 @@ fn live_block_with(
     // Prepare exactly once even when the current shared budget cannot admit it.
     // These are the same two stages as Capture::live_block, in the same order.
     let (value, encoded, required) = normalized?;
-    capture.admit_prepared(encoded, required).then_some(value)
+    capture
+        .admit_prepared(encoded, required)
+        .then_some(Cow::Owned(value))
 }
 
 #[cfg(test)]
@@ -124,7 +177,7 @@ pub(super) struct Items {
 
 #[derive(Default)]
 struct Latest {
-    source: Arc<Option<RuntimeClientAttempt>>,
+    source: Arc<Option<SharedAttempt>>,
     items: Arc<Items>,
 }
 
@@ -132,7 +185,7 @@ struct Latest {
 pub(super) struct PreparedAttemptItems(Arc<Mutex<Latest>>);
 
 impl PreparedAttemptItems {
-    pub(super) fn select(&self, source: &Arc<Option<RuntimeClientAttempt>>) -> Arc<Items> {
+    pub(super) fn select(&self, source: &Arc<Option<SharedAttempt>>) -> Arc<Items> {
         let mut latest = self.0.lock().expect("immutable attempt preparation");
         if Arc::ptr_eq(source, &latest.source) {
             return Arc::clone(&latest.items);
@@ -144,10 +197,13 @@ impl PreparedAttemptItems {
         let mut items = Items {
             model: reused(
                 Some(&latest.items.model),
-                same_model(
-                    before.and_then(|a| a.model.as_deref()),
-                    after.and_then(|a| a.model.as_deref()),
-                ),
+                before
+                    .zip(after)
+                    .is_some_and(|(left, right)| left.model.same_owner(&right.model))
+                    || same_model(
+                        before.and_then(|a| a.model.as_deref()),
+                        after.and_then(|a| a.model.as_deref()),
+                    ),
             ),
             settings: reused(
                 Some(&latest.items.settings),
@@ -167,12 +223,18 @@ impl PreparedAttemptItems {
                     // coordinates only: native equality is exact wire equality.
                     reused(
                         latest.items.blocks.get(i),
-                        old_blocks.and_then(|v| v.get(i)) == Some(block),
+                        old_blocks.is_some_and(|old| old.same_block(blocks, i))
+                            || old_blocks.and_then(|v| v.get(i)) == Some(block),
                     )
                 })
                 .collect();
         }
-        if let Some(after) = after {
+        if before
+            .zip(after)
+            .is_some_and(|(left, right)| left.foreground.same_owner(&right.foreground))
+        {
+            items.tools.clone_from(&latest.items.tools);
+        } else if let Some(after) = after {
             items.tools = after
                 .foreground
                 .iter()
@@ -341,3 +403,51 @@ fn same_tool(left: &ForegroundToolExecution, right: &ForegroundToolExecution) ->
 
 #[cfg(test)]
 mod tests;
+
+fn output_budget(value: &impl serde::Serialize) -> Option<usize> {
+    #[cfg(test)]
+    BUDGET_WORK.with(|work| work.set(work.get() + 1));
+    crate::runtime_client::preflight::required_safe_integer_budget(
+        value,
+        crate::runtime_client::checkpoint::CHECKPOINT_TARGET_BYTES,
+    )
+}
+pub(super) fn shared_budget<T: serde::Serialize>(
+    owner: &OnceLock<PreparedItem<T>>,
+    value: &Arc<T>,
+) -> Option<usize> {
+    let original = owner.get().expect("captured item");
+    if Arc::ptr_eq(&original.value, value) {
+        *original.fit.get_or_init(|| output_budget(value))
+    } else {
+        output_budget(value)
+    }
+}
+pub(super) fn tool_budget(
+    owner: Option<&OnceLock<PreparedItem<bool>>>,
+    value: &ForegroundToolExecution,
+    borrowed: bool,
+) -> Option<usize> {
+    if borrowed && let Some(item) = owner.and_then(OnceLock::get) {
+        *item.fit.get_or_init(|| output_budget(value))
+    } else {
+        output_budget(value)
+    }
+}
+pub(super) fn block_budget(
+    owner: Option<&OnceLock<PreparedLiveBlock>>,
+    value: &InFlightBlock,
+    admitted: bool,
+) -> Option<usize> {
+    if admitted && let Some(PreparedLiveBlock::Source { fit, .. }) = owner.and_then(OnceLock::get) {
+        *fit.get_or_init(|| output_budget(value))
+    } else {
+        output_budget(value)
+    }
+}
+#[cfg(test)]
+thread_local! {static BUDGET_WORK:std::cell::Cell<usize>=const {std::cell::Cell::new(0)};}
+#[cfg(test)]
+pub(super) fn take_budget_work() -> usize {
+    BUDGET_WORK.with(|work| work.replace(0))
+}

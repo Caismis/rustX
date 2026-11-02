@@ -494,7 +494,7 @@ fn binary_aggregate_headers_reject_schema_85_without_rewriting_it() {
     drop(store);
     assert!(matches!(
         SqliteConversationStore::open_existing(conversation, &path),
-        Err(ConversationStoreError::SchemaVersionMismatch { stored: 85, expected: 86 })
+        Err(ConversationStoreError::SchemaVersionMismatch { stored: 85, expected: SQLITE_SCHEMA_VERSION })
     ));
     let connection = rusqlite::Connection::open(&path).unwrap();
     assert_eq!(connection.query_row("SELECT schema_version FROM rustx_store WHERE id=1", [], |row| row.get::<_, i64>(0)).unwrap(), 85);

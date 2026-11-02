@@ -93,7 +93,14 @@ pub(crate) struct LiveSnapshot<'a> {
     agents: &'a [crate::runtime_client::snapshot::RuntimeClientAgent],
     workflows: &'a crate::runtime::workflow::read_model::WorkflowSnapshot,
     pending_interactions: &'a [crate::runtime_client::snapshot::RuntimeClientInteractionHeader],
-    attempt: &'a Option<crate::runtime_client::snapshot::RuntimeClientAttempt>,
+    attempt: Option<LiveAttempt<'a>>,
+}
+#[derive(Clone, Copy)]
+struct LiveAttempt<'a> {
+    attempt_id: &'a Option<crate::runtime::identity::AttemptId>,
+    in_flight: Option<&'a crate::runtime::identity::MessageId>,
+    phase: &'a RuntimeClientAttemptPhase,
+    foreground: &'a [crate::runtime_client::snapshot::ForegroundToolExecution],
 }
 macro_rules! live_snapshot {
     ($snapshot:ty) => {
@@ -105,7 +112,12 @@ macro_rules! live_snapshot {
                     agents: &snapshot.agents,
                     workflows: &snapshot.workflows,
                     pending_interactions: &snapshot.pending_interactions,
-                    attempt: &snapshot.attempt,
+                    attempt: snapshot.attempt.as_ref().map(|attempt| LiveAttempt {
+                        attempt_id: &attempt.attempt_id,
+                        in_flight: attempt.in_flight.as_ref().map(|flight| &flight.message_id),
+                        phase: &attempt.phase,
+                        foreground: &attempt.foreground,
+                    }),
                 }
             }
         }
@@ -217,7 +229,7 @@ fn repair<'a>(targets: impl IntoIterator<Item = LiveTarget<'a>>, snapshot: LiveS
                 // the same step cannot claim an earlier request's row.
                 if let (Some(assistant), Some(in_flight)) =
                     (record.assistant_message_id, &attempt.in_flight)
-                    && *assistant == in_flight.message_id
+                    && *assistant == **in_flight
                 {
                     *record.state = TraceState::Running;
                 }
