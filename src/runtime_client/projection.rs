@@ -1773,33 +1773,26 @@ impl CheckpointSeed {
                 block_index,
             } = &binding.content_ref.source
             {
-                let raw = self
-                    .content_metadata
-                    .get(&(
-                        component.key(),
-                        locator.key().into_owned(),
-                        block_index.get(),
-                        super::content::ContentRepresentation::RawJsonUtf8.key(),
-                    ))
-                    .map(Arc::as_ref);
-                let native = self
-                    .content_metadata
-                    .get(&(
-                        component.key(),
-                        locator.key().into_owned(),
-                        block_index.get(),
-                        binding.content_ref.representation.key(),
-                    ))
-                    .map(Arc::as_ref);
-                let reference = if binding
+                let representation = binding.content_ref.representation.key();
+                let raw = super::content::ContentRepresentation::RawJsonUtf8.key();
+                let prefer_raw = binding
                     .path
                     .last()
-                    .is_some_and(|field| field == "arguments")
-                {
-                    raw.or(native)
-                } else {
-                    native
-                };
+                    .is_some_and(|field| field == "arguments");
+                let mut key = (
+                    component.key(),
+                    locator.key().into_owned(),
+                    block_index.get(),
+                    if prefer_raw { raw } else { representation },
+                );
+                let reference = self.content_metadata.get(&key).or_else(|| {
+                    if prefer_raw && representation != raw {
+                        key.3 = representation;
+                        self.content_metadata.get(&key)
+                    } else {
+                        None
+                    }
+                });
                 if let Some(reference) = reference {
                     *binding = binding.resolve(reference);
                 }

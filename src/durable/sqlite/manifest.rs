@@ -93,6 +93,18 @@ fn digest_branch(left: NodeRef, right: NodeRef) -> [u8; 32] {
     }
     sha.finalize().into()
 }
+type HeaderRow = (Vec<u8>, u64, u8);
+fn decoded_header(id: u64, row: HeaderRow) -> Result<NodeRef, ConversationStoreError> {
+    if row.1 == 0 || row.1 > MAX_ITEMS || row.2 == 0 || row.2 > MAX_HEIGHT {
+        return Err(invalid("native selected input header bounds"));
+    }
+    Ok(NodeRef {
+        id,
+        digest: bytes32(row.0)?,
+        count: row.1,
+        height: row.2,
+    })
+}
 fn header(connection: &Connection, id: u64) -> Result<NodeRef, ConversationStoreError> {
     #[cfg(test)]
     NODE_READ_WORK.with(|work| {
@@ -108,18 +120,10 @@ fn header(connection: &Connection, id: u64) -> Result<NodeRef, ConversationStore
     let mut statement = connection
         .prepare_cached("SELECT CASE WHEN typeof(digest)='blob' AND length(digest)=32 THEN digest END,count,height FROM native_input_nodes WHERE id=?1")
         .map_err(|error| storage(error.to_string()))?;
-    let row: (Vec<u8>, u64, u8) = statement
+    let row: HeaderRow = statement
         .query_row([seq_to_i64(id)?], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .map_err(|e| storage(e.to_string()))?;
-    if row.1 == 0 || row.1 > MAX_ITEMS || row.2 == 0 || row.2 > MAX_HEIGHT {
-        return Err(invalid("native selected input header bounds"));
-    }
-    Ok(NodeRef {
-        id,
-        digest: bytes32(row.0)?,
-        count: row.1,
-        height: row.2,
-    })
+    decoded_header(id, row)
 }
 type NodeRow = (
     Option<Vec<u8>>,
@@ -132,10 +136,6 @@ pub(super) fn node(
     connection: &Connection,
     expected: &NodeRef,
 ) -> Result<Node, ConversationStoreError> {
-    let actual = header(connection, expected.id)?;
-    if actual != *expected {
-        return Err(invalid("native selected input node identity"));
-    }
     #[cfg(test)]
     NODE_READ_WORK.with(|work| {
         let (headers, shapes) = work.get();
@@ -148,14 +148,24 @@ pub(super) fn node(
         );
     });
     let id = seq_to_i64(expected.id)?;
-    let (item, left, right, left_digest, right_digest): NodeRow = connection
-        .prepare_cached("SELECT CASE WHEN typeof(item_digest)='blob' AND length(item_digest)=32 THEN item_digest END,left_id,right_id,CASE WHEN typeof(left_digest)='blob' AND length(left_digest)=32 THEN left_digest END,CASE WHEN typeof(right_digest)='blob' AND length(right_digest)=32 THEN right_digest END FROM native_input_nodes WHERE id=?1")
+    // Read this node's identity and shape together. Child headers still come
+    // from their actual rows; no construction or historical proof is reused.
+    let (head, shape): (HeaderRow, NodeRow) = connection
+        .prepare_cached("SELECT CASE WHEN typeof(digest)='blob' AND length(digest)=32 THEN digest END,count,height,CASE WHEN typeof(item_digest)='blob' AND length(item_digest)=32 THEN item_digest END,left_id,right_id,CASE WHEN typeof(left_digest)='blob' AND length(left_digest)=32 THEN left_digest END,CASE WHEN typeof(right_digest)='blob' AND length(right_digest)=32 THEN right_digest END FROM native_input_nodes WHERE id=?1")
         .and_then(|mut statement| {
             statement.query_row([id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                Ok((
+                    (row.get(0)?, row.get(1)?, row.get(2)?),
+                    (row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?),
+                ))
             })
         })
         .map_err(|error| storage(error.to_string()))?;
+    let actual = decoded_header(expected.id, head)?;
+    if actual != *expected {
+        return Err(invalid("native selected input node identity"));
+    }
+    let (item, left, right, left_digest, right_digest) = shape;
     let kind = match (item, left, right, left_digest, right_digest) {
         (Some(item), None, None, None, None) if actual.count == 1 && actual.height == 1 => {
             if digest_leaf(&bytes32(item)?) != actual.digest {
