@@ -172,6 +172,8 @@ schemas, nodes, references and edges unchanged.
 | --- | --- |
 | Multi-edge append, duplicate rejection, real Start reconnect and sibling-preserving insertion | `web-console/test/workflow-graph.test.ts` |
 | Inspector append, canvas +, real pointer reconnect, Save YAML and desktop/mobile picker | `web-console/test/e2e/workflow-visual.spec.ts` |
+| Renamed node titles across every native kind, real input/output drags, fail exits, surviving CASE exits and private Block connections | `web-console/test/e2e/workflow-node-connections.spec.ts` |
+| Human Input action ID changes, drag after Undo/Redo, Save and reopening | `web-console/test/e2e/workflow-review-connections.spec.ts` |
 | Schema/value forms, drafts, references, presentation, clipboard and history | `web-console/test/workflow-*.test.*` |
 | Active-path joins, conditional scope, skipped Returns and retired syntax rejection | `src/runtime/workflow/tests/graph.rs` |
 | Opposite completion orders, capacity one, failure aggregation and cancellation drain | Native Workflow runtime and template tests |
