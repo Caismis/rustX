@@ -223,21 +223,31 @@ fn layout_cached(
     if missing {
         return Err(storage("native statistics header unavailable"));
     }
-    let bytes: Option<Vec<u8>> = connection
+    let decode_current = |row: &rusqlite::Row<'_>| {
+        super::append_facts::read_fold(row, cache.map(|cache| &cache.0), |bytes| {
+            #[cfg(test)]
+            READ_WORK.with(|work| {
+                let (rows, total, original) = work.get();
+                work.set((rows + 1, total + bytes.len(), original));
+            });
+            decode(bytes)
+        })
+    };
+    let value = connection
         .prepare_cached(super::event_heads::STATISTICS)
-        .and_then(|mut statement| statement.query_row([through], |row| row.get(0)))
+        .and_then(|mut statement| statement.query_row([through], decode_current))
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
-    let bytes = match bytes {
-        Some(bytes) => Some(bytes),
+        .map_err(|error| storage(error.to_string()))?
+        .transpose()?
+        .flatten();
+    let value = match value {
+        Some(value) => Some(value),
         None => connection
             .prepare_cached("SELECT observation_statistics FROM rustx_store WHERE id=1")
-            .and_then(|mut statement| {
-                statement.query_row([], |row| row.get::<_, Option<Vec<u8>>>(0))
-            })
-            .map_err(|error| storage(error.to_string()))?,
+            .and_then(|mut statement| statement.query_row([], decode_current))
+            .map_err(|error| storage(error.to_string()))??,
     };
-    bytes.map_or_else(
+    value.map_or_else(
         || {
             let initialized: bool = connection
                 .prepare_cached("SELECT bootstrap_initialized FROM rustx_store WHERE id=1")
@@ -249,17 +259,7 @@ fn layout_cached(
                 Ok(StatisticsLayout::default())
             }
         },
-        |bytes| {
-            if let Some(value) = cache.and_then(|cache| cache.0.take(&bytes)) {
-                return Ok(value);
-            }
-            #[cfg(test)]
-            READ_WORK.with(|work| {
-                let (rows, total, original) = work.get();
-                work.set((rows + 1, total + bytes.len(), original));
-            });
-            decode(&bytes)
-        },
+        Ok,
     )
 }
 fn at_cut(
@@ -408,6 +408,16 @@ pub(super) fn is_trace_anchor(event: &RuntimeEvent) -> bool {
 pub(super) struct Prepared {
     pub(super) trace_total: Option<u64>,
     pub(super) statistics: Option<super::append_facts::Captured<ConversationStatistics>>,
+    fold: Option<StatisticsLayout>,
+}
+impl Prepared {
+    pub(super) fn remember(self, cache: &FoldCache) {
+        if let (Some(capture), Some(fold)) = (self.statistics, self.fold) {
+            // All same-event consumers and the native INSERT have finished.
+            // Transfer the one encoding instead of keeping a second byte copy.
+            cache.0.remember_owned(capture.bytes, fold);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -434,6 +444,7 @@ pub(super) fn prepare_cached(
     let mut prepared = Prepared {
         trace_total,
         statistics: None,
+        fold: None,
     };
     let Some(attempt) = &event.attempt_id else {
         return Ok(prepared);
@@ -475,9 +486,9 @@ pub(super) fn prepare_cached(
     }
     record_duration(connection, event, &mut state.local)?;
     let bytes = encode(&state)?;
-    let value = if let Some(cache) = cache {
+    let value = if cache.is_some() {
         let value = state.statistics.clone();
-        cache.0.remember(&bytes, normalized_fold(state));
+        prepared.fold = Some(normalized_fold(state));
         value
     } else {
         state.statistics

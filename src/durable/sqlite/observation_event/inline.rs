@@ -1,22 +1,53 @@
-//! Small Journal Sources share the authoritative event body through an authenticated
-//! quote overlay. Navigation retains the exact structural bytes and resident bound.
+//! Audited closed events defer their structural Source behind a frozen native
+//! digest. Other small events retain an exact quote overlay, including scalar
+//! distinctions that cannot survive typed JSON decoding (such as Some(NaN)).
 use super::{Connection, ConversationStoreError, OptionalExtension, storage};
 use crate::durable::observation::{
     ObservationValueChunk, RequestObservationField, RequestObservationKey, RequestObservationPage,
 };
 use crate::runtime::read_layout::{FieldPreview, FieldPreviewPolicy, SeekableObservationSource};
+use sha2::{Digest as _, Sha256};
 
 mod overlay;
 pub(super) const MAX_BYTES: usize = 16_384;
-pub(super) fn encode_overlay(
+fn can_defer(event: &crate::events::types::RuntimeEvent) -> bool {
+    use crate::events::types::RuntimeEvent as Event;
+    matches!(
+        event,
+        Event::AttemptStarted { .. }
+            | Event::AttemptTimedOut { .. }
+            | Event::TurnStarted
+            | Event::TurnCompleted
+            | Event::ModelRequestStarted { .. }
+            | Event::InboundTurnAdopted { .. }
+            | Event::AssistantMessageCommitted { .. }
+            | Event::AttemptCompleted { .. }
+            | Event::ModelRequestCompleted { .. }
+    )
+}
+pub(super) fn capture_native(
+    event: &crate::events::types::RuntimeEvent,
     native: &[u8],
-    source: &[u8],
+) -> Option<Vec<u8>> {
+    (can_defer(event) && !native.is_empty() && native.len() <= MAX_BYTES).then(|| {
+        let mut record = Vec::with_capacity(33);
+        record.push(0);
+        record.extend_from_slice(&Sha256::digest(native));
+        record
+    })
+}
+pub(super) fn capture_overlay(
+    native: &[u8],
+    structural: &[u8],
 ) -> Result<Option<Vec<u8>>, ConversationStoreError> {
-    overlay::encode(native, source)
+    Ok(overlay::encode(native, structural)?.map(|mut bytes| {
+        bytes.insert(0, 1);
+        bytes
+    }))
 }
 
 pub(super) struct Source(pub(super) SeekableObservationSource);
-type StoredOverlay = (Option<Vec<u8>>, Option<Vec<u8>>);
+type StoredNative = (Option<Vec<u8>>, Option<Vec<u8>>);
 
 impl Source {
     pub(super) fn new(source: SeekableObservationSource) -> Result<Self, ConversationStoreError> {
@@ -48,23 +79,39 @@ impl Source {
         connection: &Connection,
         sequence: u64,
     ) -> Result<Self, ConversationStoreError> {
-        // Both allocations have SQL byte bounds. The caller has selected the
-        // overlay layout within its read transaction; losing that source cannot
-        // select a different reader or hide malformed metadata.
-        let row: Option<StoredOverlay> = connection
-            .prepare_cached("SELECT CASE WHEN observation_source_overlay IS NULL THEN NULL WHEN typeof(observation_source_overlay)='blob' AND length(observation_source_overlay) BETWEEN 1 AND 16384 THEN observation_source_overlay ELSE 0 END, CASE WHEN observation_source_overlay IS NULL THEN NULL WHEN typeof(event_json)='text' AND octet_length(event_json) BETWEEN 1 AND 16384 THEN CAST(event_json AS BLOB) ELSE 0 END FROM events WHERE sequence=?1")
+        // A present digest selects this layout. Missing or malformed evidence
+        // never becomes an unbuilt-cache miss or selects the segmented reader.
+        let row: Option<StoredNative> = connection
+            .prepare_cached("SELECT CASE WHEN typeof(observation_source)='blob' AND length(observation_source) BETWEEN 33 AND 16385 THEN observation_source END,CASE WHEN typeof(event_json)='text' AND octet_length(event_json) BETWEEN 1 AND 16384 THEN CAST(event_json AS BLOB) END FROM events WHERE sequence=?1")
             .map_err(|error| storage(error.to_string()))?
             .query_row([sequence], |row| Ok((row.get(0)?, row.get(1)?)))
             .optional()
             .map_err(|error| storage(error.to_string()))?;
         match row {
-            Some((Some(overlay), Some(native))) => {
-                let bytes = overlay::restore(&native, &overlay)?;
-                SeekableObservationSource::from_bounded_bytes(&bytes)
-                    .map_err(storage)
-                    .and_then(Self::new)
-            }
-            _ => Err(storage("event overlay has no native source")),
+            Some((Some(record), Some(native))) => match record.split_first() {
+                Some((0, digest)) if digest.len() == 32 => {
+                    if Sha256::digest(&native).as_slice() != digest {
+                        return Err(storage("native event source digest differs"));
+                    }
+                    let event: crate::events::types::RuntimeEventEnvelope =
+                        serde_json::from_slice(&native)
+                            .map_err(|_| storage("native event source malformed"))?;
+                    if event.sequence != sequence || !can_defer(&event.event) {
+                        return Err(storage("native event source identity or family differs"));
+                    }
+                    SeekableObservationSource::new(&event)
+                        .map_err(storage)
+                        .and_then(Self::new)
+                }
+                Some((1, overlay)) => {
+                    let bytes = overlay::restore(&native, overlay)?;
+                    SeekableObservationSource::from_bounded_bytes(&bytes)
+                        .map_err(storage)
+                        .and_then(Self::new)
+                }
+                _ => Err(storage("native event source representation malformed")),
+            },
+            _ => Err(storage("frozen native event source unavailable")),
         }
     }
 
@@ -74,7 +121,7 @@ impl Source {
             .read(
                 &[],
                 0,
-                u32::try_from(MAX_BYTES).map_err(|_| storage("inline event extent exceeds u32"))?,
+                u32::try_from(MAX_BYTES).map_err(|_| storage("inline event bound exceeds u32"))?,
             )
             .map_err(|error| storage(error.to_string()))?
             .bytes)

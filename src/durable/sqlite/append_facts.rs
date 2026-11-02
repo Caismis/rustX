@@ -37,10 +37,31 @@ impl<T> FoldCache<T> {
         value
     }
     pub(super) fn remember(&self, bytes: &[u8], value: T) {
-        *self.0.lock().expect("fold cache") = Some(Captured {
-            bytes: bytes.to_vec(),
-            value,
-        });
+        self.remember_owned(bytes.to_vec(), value);
+    }
+    pub(super) fn remember_owned(&self, bytes: Vec<u8>, value: T) {
+        *self.0.lock().expect("fold cache") = Some(Captured { bytes, value });
+    }
+}
+
+/// Compare/decode the current SQLite cell while it is borrowed. A cache hit
+/// neither copies the stored BLOB into a Vec nor skips its actual read.
+pub(super) fn read_fold<T>(
+    row: &rusqlite::Row<'_>,
+    cache: Option<&FoldCache<T>>,
+    decode: impl FnOnce(&[u8]) -> Result<T, ConversationStoreError>,
+) -> rusqlite::Result<Result<Option<T>, ConversationStoreError>> {
+    match row.get_ref(0)? {
+        rusqlite::types::ValueRef::Null => Ok(Ok(None)),
+        rusqlite::types::ValueRef::Blob(bytes) => Ok(cache
+            .and_then(|cache| cache.take(bytes))
+            .map_or_else(|| decode(bytes), Ok)
+            .map(Some)),
+        value => Err(rusqlite::Error::InvalidColumnType(
+            0,
+            "aggregate fold".into(),
+            value.data_type(),
+        )),
     }
 }
 
