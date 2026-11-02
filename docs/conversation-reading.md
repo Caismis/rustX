@@ -404,9 +404,12 @@ independent paging intent and survive window changes; resync retires both domain
 
 ChatViewport is the sole automatic Chat scroll writer. The rail and Return to
 latest share its existing overlay surface, without a second flex wrapper or
-scroll coordinator. It coalesces React and
-ResizeObserver changes into one animation-frame commit. Explicit navigation
-receives an intent ticket and resolves an exact native anchor in that frame.
+scroll coordinator. React changes and explicit navigation queue one frame;
+ResizeObserver flushes that same coordinator after layout and before paint,
+canceling any queued frame. A late-frame conversation switch or content resize
+therefore never paints the previous scroll offset before its correction.
+Explicit navigation receives an intent ticket and resolves an exact native
+anchor in that commit.
 Later native scrolling synchronously retires the ticket. Detached reading retains
 stable rendered anchors across prepend, width/sidebar/panel reflow, Tool disclosure
 and image/content growth. Missing anchors use retained adjacent reading anchors

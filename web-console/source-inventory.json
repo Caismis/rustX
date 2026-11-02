@@ -1716,7 +1716,7 @@
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
       "destination": "web-console/src/presentation/layout/ChatViewport.tsx",
-      "treatment": "Harness ChatView reading surface adapted to finite native history and exact turn anchors. A single animation-frame owner applies follow, detached reading, browser-clamp and navigation intent. Logical conversation/replay changes reset reading; same-conversation transport and attachment changes preserve it. Controls, read admission and asynchronous commits remain independently fenced by rustX.",
+      "treatment": "Harness ChatView reading surface adapted to finite native history and exact turn anchors. A single pre-paint coordinator applies follow, detached reading, browser-clamp and navigation intent. ResizeObserver flushes pending corrections before paint, including late-frame conversation switches. Logical conversation/replay changes reset reading; same-conversation transport and attachment changes preserve it. Controls, read admission and asynchronous commits remain independently fenced by rustX.",
       "upstream_sha256": "5f6ba885fc60f79cefd212f8b0cb89ceaf72115d971db771fa40c190df89f414",
       "retained_dependencies": [
         "../primitives/icons/index.tsx",
@@ -1730,7 +1730,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "7f4a1a526a1c4120095c07af2560be72b4e597917b70c818c4283ae5a1ad6f84",
+      "local_sha256": "b9447fe33623d262569133814af68ca963b0d07dbcb17aa24fe1bcc2b7ec1594",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
