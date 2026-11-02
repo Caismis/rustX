@@ -13,8 +13,8 @@ fn occupancy_origin_cut(
         revision: source.read.journal,
         through: source.read.journal,
         source_cut: Some(source),
-        domain_revisions: std::collections::BTreeMap::new(),
-        collection_cuts: std::collections::BTreeMap::new(),
+        domain_revisions: crate::runtime_client::checkpoint::MetadataFragment::default(),
+        collection_cuts: crate::runtime_client::checkpoint::MetadataFragment::default(),
     }
 }
 

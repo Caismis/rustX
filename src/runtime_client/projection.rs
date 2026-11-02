@@ -229,6 +229,58 @@ type DomainSources = imbl::OrdMap<String, (Arc<super::domain::DomainSource>, usi
 type ContentMetadata =
     imbl::OrdMap<(&'static str, String, u32, &'static str), Arc<super::content::ContentRef>>;
 
+/// Preserve source order and the first matching output, including duplicates.
+/// Index only borrowed source names; output growth cannot invalidate the keys.
+fn merge_source_frontiers(
+    sources: &imbl::OrdMap<String, super::checkpoint::CollectionFrontier>,
+    output: &mut Vec<super::checkpoint::CollectionFrontier>,
+) {
+    let overlay = |target: &mut super::checkpoint::CollectionFrontier,
+                   source: &super::checkpoint::CollectionFrontier| {
+        target.total = source.total;
+        target.next_offset = if target.loaded < source.loaded {
+            Some(0)
+        } else {
+            source.next_offset
+        };
+    };
+    if sources.is_empty() {
+        return;
+    }
+    if sources.len() == 1 {
+        let source = sources.values().next().expect("one source frontier");
+        if let Some(target) = output
+            .iter_mut()
+            .find(|value| value.domain == source.domain)
+        {
+            overlay(target, source);
+        } else {
+            output.push(source.clone());
+        }
+        return;
+    }
+    let mut positions: HashMap<&str, Option<usize>> = sources
+        .values()
+        .map(|source| (source.domain.as_str(), None))
+        .collect();
+    for (index, frontier) in output.iter().enumerate() {
+        if let Some(position) = positions.get_mut(frontier.domain.as_str()) {
+            position.get_or_insert(index);
+        }
+    }
+    for source in sources.values() {
+        let position = positions
+            .get_mut(source.domain.as_str())
+            .expect("indexed source frontier");
+        if let Some(index) = position {
+            overlay(&mut output[*index], source);
+        } else {
+            *position = Some(output.len());
+            output.push(source.clone());
+        }
+    }
+}
+
 #[derive(Default)]
 struct ObservationSourceState {
     source_unavailable: bool,
@@ -266,7 +318,7 @@ pub(crate) struct RuntimeClientProjection {
     /// Trace-only progress must not starve a Session snapshot candidate.
     read_through: u64,
     source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    head_bindings: std::collections::BTreeMap<MessageId, prepared_capture::PreparedBindingHead>,
+    head_bindings: imbl::OrdMap<MessageId, prepared_capture::PreparedBindingHead>,
     transcript_bindings: prepared_capture::PreparedBindingHead,
     transcript_head: super::checkpoint::PreparedTranscriptHead,
     foreground_content: Vec<ForegroundResultContent>,
@@ -317,7 +369,7 @@ pub(crate) struct RuntimeClientProjection {
             Option<super::snapshot::JournalFieldRef>,
         ),
     >,
-    live_frontiers: std::collections::BTreeMap<
+    live_frontiers: imbl::OrdMap<
         (
             crate::runtime::identity::PublicationStreamId,
             ContentBlockIndex,
@@ -335,14 +387,15 @@ pub(crate) struct RuntimeClientProjection {
     read_revision: u64,
     domain_sources: DomainSources,
     domain_source_bytes: usize,
-    source_frontiers: std::collections::BTreeMap<String, super::checkpoint::CollectionFrontier>,
-    collection_cuts:
-        std::collections::BTreeMap<String, crate::runtime::identity::ObservationCollectionCut>,
+    source_frontiers: imbl::OrdMap<String, super::checkpoint::CollectionFrontier>,
+    collection_cuts: super::checkpoint::MetadataFragment<
+        super::checkpoint::ReadCutMap<crate::runtime::identity::ObservationCollectionCut>,
+    >,
     pending_heads:
         std::collections::BTreeMap<String, Vec<super::snapshot::RuntimeClientInteractionHeader>>,
     collection_ordinal: Option<u64>,
     tool_occurrence: Option<crate::events::types::ToolObservationOccurrence>,
-    domain_revisions: std::collections::BTreeMap<&'static str, u64>,
+    domain_revisions: super::checkpoint::MetadataFragment<super::checkpoint::ReadCutMap<u64>>,
     /// The cursor of the last published event (0 = nothing published yet).
     cursor: RuntimeClientCursor,
     /// Set when the cursor space is exhausted: publishing stops and
@@ -414,17 +467,18 @@ pub(crate) struct CheckpointSeed {
     journal_failure: bool,
     source_pending: bool,
     source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    head_bindings: std::collections::BTreeMap<MessageId, prepared_capture::PreparedBindingHead>,
+    head_bindings: imbl::OrdMap<MessageId, prepared_capture::PreparedBindingHead>,
     transcript_bindings: prepared_capture::PreparedBindingHead,
     transcript_head: super::checkpoint::PreparedTranscriptHead,
     foreground_content: Vec<ForegroundResultContent>,
-    source_frontiers: std::collections::BTreeMap<String, super::checkpoint::CollectionFrontier>,
-    collection_cuts:
-        std::collections::BTreeMap<String, crate::runtime::identity::ObservationCollectionCut>,
-    domain_revisions: std::collections::BTreeMap<&'static str, u64>,
+    source_frontiers: imbl::OrdMap<String, super::checkpoint::CollectionFrontier>,
+    collection_cuts: super::checkpoint::MetadataFragment<
+        super::checkpoint::ReadCutMap<crate::runtime::identity::ObservationCollectionCut>,
+    >,
+    domain_revisions: super::checkpoint::MetadataFragment<super::checkpoint::ReadCutMap<u64>>,
     content_metadata: ContentMetadata,
     publication_start: Option<crate::publication::PublicationStreamStart>,
-    live_frontiers: std::collections::BTreeMap<
+    live_frontiers: imbl::OrdMap<
         (
             crate::runtime::identity::PublicationStreamId,
             ContentBlockIndex,
@@ -1111,7 +1165,7 @@ impl CheckpointSeed {
             collections: self.metadata_frontiers.prepare(capture.collections),
         };
         let prepared_metadata = self.metadata_arrays.prepare(&metadata);
-        let metadata_budget = prepared_metadata.fragment_budget(&metadata);
+        let metadata_budget = prepared_metadata.fragment_budget();
         let mut complete_budget = prepared_capture::FitBudget::from_budget(metadata_budget);
         complete_budget.field("snapshot", budget.finish());
         complete_budget.value("cursor", &self.cursor);
@@ -1364,39 +1418,11 @@ impl CheckpointSeed {
             .chain(std::iter::once(self.transcript_bindings.transcript()))
             .collect::<Vec<_>>();
         if heads.iter().any(|head| !head.is_empty()) {
-            let mut paths = capture
-                .content
-                .iter()
-                .map(|binding| binding.path.as_slice())
-                .collect::<std::collections::BTreeSet<_>>();
-            let mut appended = Vec::new();
-            for bindings in &heads {
-                for binding in bindings.iter() {
-                    if paths.insert(binding.path.as_slice()) {
-                        appended.push(binding.clone());
-                    }
-                }
-            }
-            drop(paths);
-            capture.content.extend(appended);
+            self.metadata_arrays
+                .append_evidence(&mut capture.content, heads);
         }
 
-        for original in self.source_frontiers.values() {
-            if let Some(frontier) = capture
-                .collections
-                .iter_mut()
-                .find(|frontier| frontier.domain == original.domain)
-            {
-                frontier.total = original.total;
-                frontier.next_offset = if frontier.loaded < original.loaded {
-                    Some(0)
-                } else {
-                    original.next_offset
-                };
-            } else {
-                capture.collections.push(original.clone());
-            }
-        }
+        merge_source_frontiers(&self.source_frontiers, &mut capture.collections);
         self.capture_collection_frontiers(capture);
     }
 
@@ -2628,7 +2654,7 @@ impl RuntimeClientProjection {
             publication_state: NativePublicationState::default(),
             read_through: 0,
             source_cut: None,
-            head_bindings: std::collections::BTreeMap::new(),
+            head_bindings: imbl::OrdMap::new(),
             transcript_bindings: prepared_capture::PreparedBindingHead::default(),
             transcript_head: super::checkpoint::PreparedTranscriptHead::default(),
             foreground_content: Vec::new(),
@@ -2658,16 +2684,16 @@ impl RuntimeClientProjection {
             source_state: ObservationSourceState::default(),
             prepared_outcomes: std::collections::BTreeMap::new(),
             prepared_journal: std::collections::BTreeMap::new(),
-            live_frontiers: std::collections::BTreeMap::new(),
+            live_frontiers: imbl::OrdMap::new(),
             read_domains_dirty: false,
             read_domains_requested: false,
             read_failure: None,
             read_revision: 0,
-            domain_revisions: std::collections::BTreeMap::new(),
+            domain_revisions: super::checkpoint::MetadataFragment::default(),
             domain_sources: DomainSources::new(),
             domain_source_bytes: 0,
-            source_frontiers: std::collections::BTreeMap::default(),
-            collection_cuts: std::collections::BTreeMap::new(),
+            source_frontiers: imbl::OrdMap::default(),
+            collection_cuts: super::checkpoint::MetadataFragment::default(),
             pending_heads: std::collections::BTreeMap::new(),
             collection_ordinal: None,
             tool_occurrence: None,
@@ -3186,14 +3212,14 @@ impl RuntimeClientProjection {
     ) {
         let before_cursor = self.cursor;
         let before_count = self.batch_events.as_ref().map(|batch| batch.0.len());
-        let changed = self
-            .collection_cuts
-            .get(owner)
-            .is_none_or(|current| cut.generation > current.generation);
-        let observed = self.collection_cuts.entry(owner.into()).or_insert(cut);
-        if cut.generation > observed.generation {
-            *observed = cut;
-        }
+        let current = self.collection_cuts.get(owner).copied();
+        let changed = current.is_none_or(|current| cut.generation > current.generation);
+        let observed = if changed {
+            self.collection_cuts.insert(owner.into(), cut);
+            cut
+        } else {
+            current.expect("existing collection proof")
+        };
         let adjusted = ordinal
             .and_then(|ordinal| ordinal.checked_add(observed.total.saturating_sub(cut.total)))
             .unwrap_or(u64::MAX);
@@ -3321,9 +3347,17 @@ impl RuntimeClientProjection {
             ConversationObservation::Workflow(cuts) => {
                 for source in cuts {
                     let header = source.header();
-                    self.domain_revisions.insert("workflows", header.revision.0);
-                    self.source_frontiers
-                        .retain(|domain, _| !domain.starts_with("workflows."));
+                    self.domain_revisions
+                        .insert("workflows".into(), header.revision.0);
+                    let removed: Vec<_> = self
+                        .source_frontiers
+                        .keys()
+                        .filter(|domain| domain.starts_with("workflows."))
+                        .cloned()
+                        .collect();
+                    for domain in removed {
+                        self.source_frontiers.remove(&domain);
+                    }
                     self.install_source_frontiers(source.frontiers());
                     let value = Arc::new(super::domain::SourceValue::new(Arc::new(source)));
                     let source = Arc::new(super::domain::DomainSource::Workflow(value));
@@ -6424,7 +6458,7 @@ impl RuntimeClientProjection {
             _ => &["attempt", "context", "trace"],
         };
         for owner in owners {
-            let revision = self.domain_revisions.entry(owner).or_default();
+            let revision = self.domain_revisions.entry(owner.to_string()).or_default();
             let Some(next) = revision.checked_add(1) else {
                 self.publication_failed(&RuntimeClientError::ProjectionExhausted);
                 return;
@@ -6935,11 +6969,7 @@ impl RuntimeClientProjection {
             revision: self.cursor.get(),
             through: self.read_through,
             collection_cuts: self.collection_cuts.clone(),
-            domain_revisions: self
-                .domain_revisions
-                .iter()
-                .map(|(key, revision)| ((*key).to_owned(), *revision))
-                .collect(),
+            domain_revisions: self.domain_revisions.clone(),
             source_cut: (!self.source_state.source_unavailable
                 && self.validate_source_prefix().is_ok())
             .then_some(self.source_cut.as_ref())
@@ -7016,10 +7046,12 @@ impl RuntimeClientProjection {
             .headers
             .iter()
             .filter_map(|header| {
-                header
-                    .identity
-                    .as_ref()
-                    .map(|identity| (identity.clone(), header.content.clone().into()))
+                header.identity.as_ref().map(|identity| {
+                    (
+                        identity.clone(),
+                        prepared_capture::PreparedBindingHead::from(header.content.clone()),
+                    )
+                })
             })
             .collect();
         self.snapshot.message_descriptors = (messages
@@ -7196,7 +7228,7 @@ impl RuntimeClientProjection {
         };
         self.read_revision = revision;
         for owner in ["inbound", "transcript"] {
-            let revision = self.domain_revisions.entry(owner).or_default();
+            let revision = self.domain_revisions.entry(owner.to_string()).or_default();
             let Some(next) = revision.checked_add(1) else {
                 self.publication_failed(&RuntimeClientError::ProjectionExhausted);
                 return;

@@ -33,8 +33,8 @@ fn metadata() -> ProjectionMetadata {
             revision: 9,
             through: 99,
             source_cut: None,
-            domain_revisions: std::collections::BTreeMap::new(),
-            collection_cuts: std::collections::BTreeMap::new(),
+            domain_revisions: crate::runtime_client::checkpoint::MetadataFragment::default(),
+            collection_cuts: crate::runtime_client::checkpoint::MetadataFragment::default(),
         },
         collections: Vec::new(),
         content: Vec::new(),
@@ -98,10 +98,7 @@ fn compare(metadata: ProjectionMetadata, count: usize) {
         direct,
         "fragment charge exactly matches original visitor"
     );
-    assert_eq!(
-        arrays.fragment_budget(&metadata),
-        metadata.fragment_budget()
-    );
+    assert_eq!(arrays.fragment_budget(), metadata.fragment_budget());
 }
 
 #[test]
@@ -144,10 +141,7 @@ fn metadata_array_cache_requires_ordered_owners_and_preserves_stable_duplicates(
         let mut repeated = original.clone();
         repeated.read_cut.revision = revision;
         let prepared = cache.prepare(&repeated);
-        assert_eq!(
-            prepared.fragment_budget(&repeated),
-            repeated.fragment_budget()
-        );
+        assert_eq!(prepared.fragment_budget(), repeated.fragment_budget());
         prepared.sort_into(&mut repeated);
         let mut expected = original.clone();
         expected.read_cut.revision = revision;
@@ -190,7 +184,7 @@ fn metadata_array_cache_requires_ordered_owners_and_preserves_stable_duplicates(
         original_bytes,
         "old values remain immutable"
     );
-    assert_eq!(first.fragment_budget(&original), original.fragment_budget());
+    assert_eq!(first.fragment_budget(), original.fragment_budget());
 }
 
 #[test]
@@ -207,8 +201,8 @@ fn metadata_array_cache_invalidates_changed_authority_without_changing_old_cut()
     metadata_fragment::take_array_work();
     let changed = cache.prepare(&value);
     assert_eq!(metadata_fragment::take_array_work(), [1, 0, 1]);
-    assert!(changed.fragment_budget(&value).is_none());
-    assert!(prepared.fragment_budget(&old).is_some());
+    assert!(changed.fragment_budget().is_none());
+    assert!(prepared.fragment_budget().is_some());
     assert_eq!(encoded(&old).unwrap(), old_bytes);
     compare(value, 1);
 }
@@ -269,7 +263,7 @@ fn metadata_sort_permutation_preserves_long_cycles_and_stable_duplicates_without
             assert_eq!(value.content.as_ptr(), content_buffer);
             assert_eq!(value.collections.as_ptr(), collection_buffer);
             assert_eq!(encoded(&value).unwrap(), expected_bytes);
-            assert_eq!(prepared.fragment_budget(&value), value.fragment_budget());
+            assert_eq!(prepared.fragment_budget(), value.fragment_budget());
             assert_eq!(
                 metadata_fragment::take_array_work(),
                 if replay == 0 { [2, 2, 0] } else { [0, 0, 2] }
@@ -475,4 +469,91 @@ fn prepared_capture_reuses_metadata_value_and_exact_length_without_deep_copy() {
         1,
         "capture replay neither clones nor remeasures metadata"
     );
+}
+
+#[test]
+fn metadata_binding_merge_reuses_only_ordered_owners_and_keeps_duplicate_priority() {
+    use metadata_fragment::{BindingFragments, MetadataArrays, take_evidence_work};
+    let cache = MetadataArrays::default();
+    let mut first = binding();
+    first.path = vec!["existing".into()];
+    first.content_ref.content_revision = 90;
+    let mut duplicate = first.clone();
+    duplicate.content_ref.content_revision = 91;
+    let prefix: Vec<MetadataFragment<_>> = vec![first.into(), duplicate.into()];
+    let mut a = binding();
+    a.path = vec!["new".into()];
+    a.content_ref.content_revision = 1;
+    let mut b = a.clone();
+    b.content_ref.content_revision = 2;
+    let heads: BindingFragments = std::sync::Arc::new(vec![prefix[0].clone(), a.into(), b.into()]);
+    let oracle = |prefix: &[MetadataFragment<ContentBinding>], heads: &[BindingFragments]| {
+        let mut result = prefix.to_vec();
+        for group in heads {
+            for value in group.iter() {
+                if !result.iter().any(|old| old.path == value.path) {
+                    result.push(value.clone());
+                }
+            }
+        }
+        result
+    };
+    take_evidence_work();
+    let mut first = prefix.clone();
+    cache.append_evidence(&mut first, vec![heads.clone()]);
+    assert_eq!(take_evidence_work(), 1);
+    assert_eq!(first, oracle(&prefix, std::slice::from_ref(&heads)));
+    let mut second = prefix.clone();
+    cache.append_evidence(&mut second, vec![heads.clone()]);
+    assert_eq!(take_evidence_work(), 0);
+    assert!(first.iter().zip(&second).all(|(a, b)| a.same_owner(b)));
+    assert_eq!(second[0].content_ref.content_revision, 90);
+    assert_eq!(second[1].content_ref.content_revision, 91);
+    assert_eq!(second[2].content_ref.content_revision, 1);
+    let mut changed = prefix.clone();
+    changed[0].deferred = false;
+    let expected = oracle(&changed, std::slice::from_ref(&heads));
+    cache.append_evidence(&mut changed, vec![heads.clone()]);
+    assert_eq!(take_evidence_work(), 1);
+    assert_eq!(changed, expected);
+    let replaced = std::sync::Arc::new(heads.as_ref().clone());
+    let mut output = prefix.clone();
+    cache.append_evidence(&mut output, vec![replaced]);
+    assert_eq!(take_evidence_work(), 1);
+    let mut reordered = prefix;
+    reordered.swap(0, 1);
+    let expected = oracle(&reordered, std::slice::from_ref(&heads));
+    cache.append_evidence(&mut reordered, vec![heads]);
+    assert_eq!(take_evidence_work(), 1);
+    assert_eq!(reordered, expected);
+}
+
+#[test]
+fn metadata_fragment_mutation_invalidates_size_and_resolution_without_changing_old_owner() {
+    let mut value: MetadataFragment<_> = binding().into();
+    let original = value.clone();
+    let before = encoded(&original).unwrap();
+    let old_size = value.size();
+    let mut reference = value.content_ref.clone();
+    reference.content_revision = 2;
+    let old_resolution = value.resolve(&reference);
+    let old_resolved_bytes = encoded(&old_resolution).unwrap();
+    value.deferred = false;
+    value.path.push("changed".into());
+    let current = encoded(&value).unwrap();
+    assert_eq!(value.size().exact, Some(current.len()));
+    assert_eq!(original.size(), old_size);
+    assert_eq!(encoded(&original).unwrap(), before);
+    let new_resolution = value.resolve(&reference);
+    assert!(!new_resolution.deferred);
+    assert!(!new_resolution.same_owner(&old_resolution));
+    assert_eq!(encoded(&old_resolution).unwrap(), old_resolved_bytes);
+    assert_eq!(
+        new_resolution.size().exact,
+        Some(encoded(&new_resolution).unwrap().len())
+    );
+    // The unique-owner case also clears a previously initialized certificate.
+    drop(original);
+    value.path.push("unique".into());
+    assert_eq!(value.size().exact, Some(encoded(&value).unwrap().len()));
 }

@@ -491,13 +491,13 @@ pub(crate) fn history_store_cut(
     Ok(CheckpointReadCut {
         canonical_foreground: None,
         live_publication: None,
-        collection_cuts: std::collections::BTreeMap::new(),
+        collection_cuts: crate::runtime_client::checkpoint::MetadataFragment::default(),
         conversation_id: store.conversation_id().clone(),
         activation_id: None,
         revision: 0,
         through: source.read.journal,
         source_cut: Some(source),
-        domain_revisions: std::collections::BTreeMap::new(),
+        domain_revisions: crate::runtime_client::checkpoint::MetadataFragment::default(),
     })
 }
 pub(crate) fn validate_history_cut(

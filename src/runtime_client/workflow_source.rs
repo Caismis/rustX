@@ -210,8 +210,8 @@ mod tests {
             revision: 7,
             through: 7,
             source_cut: None,
-            domain_revisions: std::collections::BTreeMap::default(),
-            collection_cuts: std::collections::BTreeMap::default(),
+            domain_revisions: crate::runtime_client::checkpoint::MetadataFragment::default(),
+            collection_cuts: crate::runtime_client::checkpoint::MetadataFragment::default(),
             canonical_foreground: None,
             live_publication: None,
         };

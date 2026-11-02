@@ -10,6 +10,15 @@ struct Inner<T> {
     size: OnceLock<Size>,
     resolved: OnceLock<MetadataFragment<T>>,
 }
+impl<T: Clone> Clone for Inner<T> {
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            size: OnceLock::new(),
+            resolved: OnceLock::new(),
+        }
+    }
+}
 
 /// A transparent immutable metadata value. Clone shares both its native value
 /// and its exact structural encoding certificate; mutation creates a new owner.
@@ -31,10 +40,23 @@ impl<T> From<T> for MetadataFragment<T> {
         }))
     }
 }
+impl<T: Default> Default for MetadataFragment<T> {
+    fn default() -> Self {
+        T::default().into()
+    }
+}
 impl<T> std::ops::Deref for MetadataFragment<T> {
     type Target = T;
     fn deref(&self) -> &T {
         &self.0.value
+    }
+}
+impl<T: Clone> std::ops::DerefMut for MetadataFragment<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        let inner = Arc::make_mut(&mut self.0);
+        inner.size.take();
+        inner.resolved.take();
+        &mut inner.value
     }
 }
 impl<T: PartialEq> PartialEq for MetadataFragment<T> {
@@ -110,16 +132,7 @@ impl<T: Serialize + schemars::JsonSchema> MetadataFragment<T> {
         *self.0.size.get_or_init(|| {
             #[cfg(test)]
             WORK.with(|work| work.set(work.get() + 1));
-            let budget = crate::runtime_client::preflight::required_safe_integer_budget(
-                &self.0.value,
-                CHECKPOINT_TARGET_BYTES,
-            );
-            let exact = super::bounded_structural_len_with_budget(
-                &self.0.value,
-                CHECKPOINT_TARGET_BYTES,
-                budget,
-            );
-            Size { budget, exact }
+            Size::measure(&self.0.value)
         })
     }
 }
@@ -208,16 +221,15 @@ impl<T> PreparedArray<T> {
     }
 }
 
-struct ArrayCache<T>(Mutex<Option<Arc<PreparedArray<T>>>>);
+struct ArrayCache<T>(Option<Arc<PreparedArray<T>>>);
 impl<T> Default for ArrayCache<T> {
     fn default() -> Self {
-        Self(Mutex::new(None))
+        Self(None)
     }
 }
 impl<T: Serialize + schemars::JsonSchema> ArrayCache<T> {
-    fn prepare(&self, values: &[MetadataFragment<T>]) -> Arc<PreparedArray<T>> {
-        let mut latest = self.0.lock().expect("immutable metadata array cache");
-        if let Some(previous) = &*latest
+    fn prepare(&mut self, values: &[MetadataFragment<T>]) -> Arc<PreparedArray<T>> {
+        if let Some(previous) = &self.0
             && previous.original.len() == values.len()
             && previous
                 .original
@@ -244,7 +256,7 @@ impl<T: Serialize + schemars::JsonSchema> ArrayCache<T> {
             order: OnceLock::new(),
             size: array_size(values),
         });
-        *latest = Some(Arc::clone(&prepared));
+        self.0 = Some(Arc::clone(&prepared));
         prepared
     }
 }
@@ -253,20 +265,82 @@ impl<T: Serialize + schemars::JsonSchema> ArrayCache<T> {
 /// old seed may replace that entry but cannot change any published value.
 /// Neither the cache nor its entries retain a seed or a previous cache entry.
 #[derive(Clone, Default)]
-pub(crate) struct MetadataArrays {
-    content: Arc<ArrayCache<ContentBinding>>,
-    collections: Arc<ArrayCache<CollectionFrontier>>,
+pub(crate) struct MetadataArrays(Arc<Mutex<LatestMetadata>>);
+pub(crate) type BindingFragments = Arc<Vec<MetadataFragment<ContentBinding>>>;
+#[derive(Default)]
+struct LatestMetadata {
+    content: ArrayCache<ContentBinding>,
+    collections: ArrayCache<CollectionFrontier>,
+    evidence: Option<PreparedEvidence>,
+}
+struct PreparedEvidence {
+    prefix: usize,
+    heads: Vec<BindingFragments>,
+    // Raw bindings only: current authority resolution still runs afterwards.
+    merged: Vec<MetadataFragment<ContentBinding>>,
 }
 pub(crate) struct PreparedMetadata {
     content: Arc<PreparedArray<ContentBinding>>,
     collections: Arc<PreparedArray<CollectionFrontier>>,
+    // Captured with these arrays; sorting never changes the read cut.
+    read_cut: Size,
 }
 impl MetadataArrays {
     pub(crate) fn prepare(&self, metadata: &ProjectionMetadata) -> PreparedMetadata {
+        let mut latest = self.0.lock().expect("immutable metadata cache");
         PreparedMetadata {
-            content: self.content.prepare(&metadata.content),
-            collections: self.collections.prepare(&metadata.collections),
+            content: latest.content.prepare(&metadata.content),
+            collections: latest.collections.prepare(&metadata.collections),
+            read_cut: metadata.read_cut.size(),
         }
+    }
+
+    /// Ordered immutable owners authenticate the complete merge input, including
+    /// duplicates. This cache cannot authorize a resolved or historical source.
+    pub(crate) fn append_evidence(
+        &self,
+        output: &mut Vec<MetadataFragment<ContentBinding>>,
+        heads: Vec<BindingFragments>,
+    ) {
+        let mut latest = self.0.lock().expect("immutable metadata cache");
+        if let Some(previous) = &latest.evidence
+            && previous.prefix == output.len()
+            && previous.heads.len() == heads.len()
+            && previous
+                .heads
+                .iter()
+                .zip(&heads)
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+            && previous.merged[..previous.prefix]
+                .iter()
+                .zip(&*output)
+                .all(|(a, b)| a.same_owner(b))
+        {
+            output.extend(previous.merged[previous.prefix..].iter().cloned());
+            return;
+        }
+        #[cfg(test)]
+        EVIDENCE_WORK.with(|work| work.set(work.get() + 1));
+        let prefix = output.len();
+        let mut paths = output
+            .iter()
+            .map(|binding| binding.path.as_slice())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut appended = Vec::new();
+        for head in &heads {
+            for binding in head.iter() {
+                if paths.insert(binding.path.as_slice()) {
+                    appended.push(binding.clone());
+                }
+            }
+        }
+        drop(paths);
+        output.extend(appended);
+        latest.evidence = Some(PreparedEvidence {
+            prefix,
+            heads,
+            merged: output.clone(),
+        });
     }
 }
 impl PreparedMetadata {
@@ -276,47 +350,43 @@ impl PreparedMetadata {
         self.collections
             .sort_into(&mut metadata.collections, |a, b| a.domain.cmp(&b.domain));
     }
-    pub(crate) fn fragment_budget(&self, metadata: &ProjectionMetadata) -> Option<usize> {
-        metadata.budget_with_arrays(self.collections.size.budget, self.content.size.budget)
+    pub(crate) fn fragment_budget(&self) -> Option<usize> {
+        ProjectionMetadata::budget_with_arrays(
+            self.read_cut.budget,
+            self.collections.size.budget,
+            self.content.size.budget,
+        )
     }
 }
 
 impl ProjectionMetadata {
     #[cfg(test)]
     pub(crate) fn fragment_budget(&self) -> Option<usize> {
-        self.budget_with_arrays(
+        Self::budget_with_arrays(
+            self.read_cut.size().budget,
             array_size(&self.collections).budget,
             array_size(&self.content).budget,
         )
     }
     fn budget_with_arrays(
-        &self,
+        read_cut: Option<usize>,
         collections: Option<usize>,
         content: Option<usize>,
     ) -> Option<usize> {
-        let read_cut = crate::runtime_client::preflight::required_safe_integer_budget(
-            &self.read_cut,
-            CHECKPOINT_TARGET_BYTES,
-        )?;
         // The same conservative struct charge as FitBudget::field.
         2_usize
             .checked_add("read_cut".len() + 5)?
-            .checked_add(read_cut)?
+            .checked_add(read_cut?)?
             .checked_add("collections".len() + 5)?
             .checked_add(collections?)?
             .checked_add("content".len() + 5)?
             .checked_add(content?)
     }
 
-    fn exact_length(
-        &self,
-        budget: Option<usize>,
-        arrays: Option<&PreparedMetadata>,
-    ) -> Option<usize> {
-        let read_cut = super::bounded_structural_len_with_budget(
-            &self.read_cut,
-            CHECKPOINT_TARGET_BYTES,
-            budget,
+    fn exact_length(&self, arrays: Option<&PreparedMetadata>) -> Option<usize> {
+        let read_cut = arrays.map_or_else(
+            || self.read_cut.size().exact,
+            |arrays| arrays.read_cut.exact,
         )?;
         b"{\"read_cut\":,\"collections\":,\"content\":}"
             .len()
@@ -355,7 +425,7 @@ pub(crate) fn transition_length(
     let length = b"{\"type\":\"projection_transition\",\"events\":,\"metadata\":}"
         .len()
         .checked_add(events)?
-        .checked_add(metadata.exact_length(prepared_budget, arrays)?)?;
+        .checked_add(metadata.exact_length(arrays)?)?;
     (length <= limit).then_some(length)
 }
 
@@ -378,4 +448,11 @@ thread_local! { static ARRAY_WORK: std::cell::Cell<[usize; 3]> = const { std::ce
 #[cfg(test)]
 pub(crate) fn take_array_work() -> [usize; 3] {
     ARRAY_WORK.with(|work| work.replace([0; 3]))
+}
+
+#[cfg(test)]
+thread_local! {static EVIDENCE_WORK:std::cell::Cell<usize>=const {std::cell::Cell::new(0)};}
+#[cfg(test)]
+pub(crate) fn take_evidence_work() -> usize {
+    EVIDENCE_WORK.with(|work| work.replace(0))
 }

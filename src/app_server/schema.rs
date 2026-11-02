@@ -494,13 +494,14 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 read_cut: crate::runtime_client::checkpoint::CheckpointReadCut {
                     canonical_foreground: None,
                     live_publication: None,
-                    collection_cuts: std::collections::BTreeMap::new(),
+                    collection_cuts: crate::runtime_client::checkpoint::MetadataFragment::default(),
                     conversation_id: target.conversation_id.clone(),
                     activation_id: None,
                     revision: EXACT,
                     through: EXACT,
                     source_cut: None,
-                    domain_revisions: std::collections::BTreeMap::default(),
+                    domain_revisions: crate::runtime_client::checkpoint::MetadataFragment::default(
+                    ),
                 },
                 domain: "jobs".into(),
                 total: 0,

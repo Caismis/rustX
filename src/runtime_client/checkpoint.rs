@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub(crate) mod metadata_fragment;
 pub use metadata_fragment::MetadataFragment;
+mod read_cut;
+pub use read_cut::ReadCutMap;
 mod prepared_trace;
 pub(super) use prepared_trace::PreparedTraceHead;
 pub(crate) mod prepared_transcript;
@@ -48,9 +50,13 @@ pub struct CheckpointReadCut {
     pub through: u64,
     /// Immutable durable descriptor frontier captured with this display cut.
     pub source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    pub domain_revisions: std::collections::BTreeMap<String, u64>,
+    #[schemars(with = "std::collections::BTreeMap<String, u64>")]
+    pub domain_revisions: MetadataFragment<ReadCutMap<u64>>,
+    #[schemars(
+        with = "std::collections::BTreeMap<String, crate::runtime::identity::ObservationCollectionCut>"
+    )]
     pub collection_cuts:
-        std::collections::BTreeMap<String, crate::runtime::identity::ObservationCollectionCut>,
+        MetadataFragment<ReadCutMap<crate::runtime::identity::ObservationCollectionCut>>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]

@@ -725,7 +725,8 @@ fn merged_frontier_pass_preserves_cut_and_duplicate_override_precedence() {
     seed.source_frontiers.clear();
     seed.collection_cuts.clear();
     seed.snapshot.pending_interactions.clear();
-    seed.domain_revisions.insert("pending_interactions", 8);
+    seed.domain_revisions
+        .insert("pending_interactions".into(), 8);
     for (domain, total) in [
         ("pending_primary", 3),
         ("pending_children", 4),
@@ -798,4 +799,65 @@ fn merged_frontier_pass_preserves_cut_and_duplicate_override_precedence() {
     );
     assert_eq!(capture.collections[0].revision, 8);
     assert_eq!(capture.collections[1].revision, 8);
+}
+
+#[test]
+fn cached_raw_evidence_merge_rechecks_current_resolution_and_preserves_old_cut() {
+    use crate::runtime_client::checkpoint::{Capture, metadata_fragment::take_evidence_work};
+    let mut draft = empty_draft();
+    let message = compactable_user("raw-cache-authority");
+    let raw = binding(
+        &draft,
+        &message,
+        vec!["content".into(), "0".into(), "text".into()],
+    );
+    let mut reference = raw.content_ref.clone();
+    reference.content_revision = 10;
+    let ContentSource::CanonicalMessageBlock {
+        component,
+        locator,
+        block_index,
+    } = &reference.source
+    else {
+        unreachable!()
+    };
+    let key = (
+        component.key(),
+        locator.key().into_owned(),
+        block_index.get(),
+        reference.representation.key(),
+    );
+    draft
+        .seed
+        .head_bindings
+        .insert(message.id().clone(), vec![raw].into());
+    draft
+        .seed
+        .content_metadata
+        .insert(key.clone(), Arc::new(reference.clone()));
+    let old = draft.seed.clone();
+    let mut first = Capture::new(7);
+    take_evidence_work();
+    old.capture_evidence(std::slice::from_ref(&message), &mut first);
+    assert_eq!(take_evidence_work(), 1);
+    assert_eq!(first.content[0].content_ref.content_revision, 10);
+    let first_wire = serde_json::to_vec(&first.content).unwrap();
+    reference.content_revision = 11;
+    reference.readable_end += 1;
+    draft.seed.content_metadata.insert(key, Arc::new(reference));
+    let mut second = Capture::new(8);
+    draft
+        .seed
+        .capture_evidence(std::slice::from_ref(&message), &mut second);
+    assert_eq!(
+        take_evidence_work(),
+        0,
+        "raw merge reuses ordered owners, not resolved authority"
+    );
+    assert_eq!(second.content[0].content_ref.content_revision, 11);
+    assert_eq!(serde_json::to_vec(&first.content).unwrap(), first_wire);
+    let mut historical = Capture::new(7);
+    old.capture_evidence(&[message], &mut historical);
+    assert_eq!(take_evidence_work(), 0);
+    assert_eq!(serde_json::to_vec(&historical.content).unwrap(), first_wire);
 }
