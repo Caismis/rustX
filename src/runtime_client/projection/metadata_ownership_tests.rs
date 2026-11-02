@@ -861,3 +861,66 @@ fn cached_raw_evidence_merge_rechecks_current_resolution_and_preserves_old_cut()
     assert_eq!(take_evidence_work(), 0);
     assert_eq!(serde_json::to_vec(&historical.content).unwrap(), first_wire);
 }
+
+#[test]
+fn content_resolution_keeps_argument_precedence_and_missing_representation_semantics() {
+    let mut draft = empty_draft();
+    let message = compactable_user("content-resolution-precedence");
+    for path in [vec![], vec!["text".into()], vec!["arguments".into()]] {
+        for representation in [
+            ContentRepresentation::Utf8Text,
+            ContentRepresentation::RawJsonUtf8,
+        ] {
+            for available in [0_u8, 1, 2, 3] {
+                draft.seed.content_metadata.clear();
+                let mut original = binding(&draft, &message, path.clone());
+                original.content_ref.representation = representation;
+                let ContentSource::CanonicalMessageBlock {
+                    component,
+                    locator,
+                    block_index,
+                } = &original.content_ref.source
+                else {
+                    unreachable!()
+                };
+                for (bit, kind, revision) in [
+                    (1, ContentRepresentation::Utf8Text, 10),
+                    (2, ContentRepresentation::RawJsonUtf8, 20),
+                ] {
+                    if available & bit == 0 {
+                        continue;
+                    }
+                    let mut reference = original.content_ref.clone();
+                    reference.representation = kind;
+                    reference.content_revision = revision;
+                    draft.seed.content_metadata.insert(
+                        (
+                            component.key(),
+                            locator.key().into_owned(),
+                            block_index.get(),
+                            kind.key(),
+                        ),
+                        Arc::new(reference),
+                    );
+                }
+                let expected = if available & 2 != 0
+                    && (path.last().is_some_and(|field| field == "arguments")
+                        || representation == ContentRepresentation::RawJsonUtf8)
+                {
+                    20
+                } else if available & 1 != 0
+                    && representation == ContentRepresentation::Utf8Text
+                {
+                    10
+                } else {
+                    1
+                };
+                let historical = original.clone();
+                let mut bindings = vec![original.into()];
+                draft.seed.resolve_captured_content(&mut bindings);
+                assert_eq!(bindings[0].content_ref.content_revision, expected);
+                assert_eq!(historical.content_ref.content_revision, 1);
+            }
+        }
+    }
+}

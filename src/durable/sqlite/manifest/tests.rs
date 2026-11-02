@@ -124,15 +124,22 @@ fn native_shape_statement_reuses_preparation_and_rebinds_leaf_and_branch_ids() {
                 Authorization::Allow
             }))
             .unwrap();
+        super::take_node_read_work();
         assert!(matches!(
             super::node(&connection, &leaf).unwrap().kind,
             super::NodeKind::Leaf
         ));
+        assert_eq!(super::take_node_read_work(), (0, 1));
         assert!(prepares.swap(0, Ordering::SeqCst) > 0);
         assert!(matches!(
             super::node(&connection, &branch).unwrap().kind,
             super::NodeKind::Branch { .. }
         ));
+        assert_eq!(
+            super::take_node_read_work(),
+            (2, 1),
+            "one combined node read plus the two current child headers"
+        );
         let repeated = prepares.swap(0, Ordering::SeqCst);
         if capacity == 0 {
             assert!(repeated > 0);
