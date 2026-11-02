@@ -38,21 +38,18 @@ fn layout_cached(
     through: u64,
     cache: Option<&FoldCache>,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
-    let bytes: Option<Vec<u8>> = connection
+    let value = connection
         .prepare_cached(super::event_heads::EXECUTION)
         .and_then(|mut statement| {
-            statement.query_row(params![attempt.as_str(), through], |row| row.get(0))
+            statement.query_row(params![attempt.as_str(), through], |row| {
+                super::append_facts::read_fold(row, cache.map(|cache| &cache.0), decode_layout)
+            })
         })
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
-    bytes.map_or_else(
-        || Ok(ExecutionLayout::default()),
-        |bytes| {
-            cache
-                .and_then(|cache| cache.0.take(&bytes))
-                .map_or_else(|| decode_layout(&bytes), Ok)
-        },
-    )
+        .map_err(|error| storage(error.to_string()))?
+        .transpose()?
+        .flatten();
+    Ok(value.unwrap_or_default())
 }
 pub(super) fn summary_at_sequence(
     connection: &Connection,

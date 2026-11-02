@@ -345,8 +345,8 @@ fn count_conversation_store_open() {
 /// Version 85 stores immutable first content chunks alongside their exact frontier.
 /// Version 86 stores bounded binary Statistics and Execution tuples with unchanged JSON admission.
 /// Version 87 removes redundant trailing sequence keys from rowid event indexes.
-/// Version 88 uses compact private content representation and metadata-source keys.
-pub const SQLITE_SCHEMA_VERSION: i64 = 88;
+/// Version 89 tags exact inline event sources and defers closed-family navigation.
+pub const SQLITE_SCHEMA_VERSION: i64 = 89;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -8860,7 +8860,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 observation_unavailable INTEGER NOT NULL DEFAULT 0 CHECK(observation_unavailable IN (0,1)),
                 observation_transcript INTEGER,
                 observation_witness BLOB CHECK(observation_witness IS NULL OR length(observation_witness)<=49152),
-                observation_source_overlay BLOB CHECK(observation_source_overlay IS NULL OR (typeof(observation_source_overlay)='blob' AND length(observation_source_overlay) BETWEEN 1 AND 16384)),
+                observation_source BLOB CHECK(observation_source IS NULL OR (typeof(observation_source)='blob' AND length(observation_source) BETWEEN 33 AND 16385)),
                 observation_assistant_ledger INTEGER,
                 observation_tool_ledger INTEGER,observation_tool_block INTEGER,
                 observation_tool_phase INTEGER CHECK(observation_tool_phase IS NULL OR observation_tool_phase IN (1,2)),
@@ -9484,7 +9484,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "turn_id",
                 "event_json",
                 "observation_unavailable",
-                "observation_source_overlay",
+                "observation_source",
             ],
         ),
         (
@@ -19786,7 +19786,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 88);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 89);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19855,7 +19855,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 88);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 89);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -20097,7 +20097,7 @@ mod tests {
         let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
         store.lock().unwrap().execute_batch(
             "CREATE TEMP TRIGGER readiness_failure BEFORE INSERT ON event_observation_readiness BEGIN SELECT RAISE(FAIL,'readiness failure'); END;
-             CREATE TRIGGER inline_source_failure BEFORE UPDATE OF observation_source_overlay ON events BEGIN SELECT RAISE(FAIL,'independent event source failure'); END;",
+             CREATE TRIGGER inline_source_failure BEFORE UPDATE OF observation_source ON events BEGIN SELECT RAISE(FAIL,'independent event source failure'); END;",
         ).unwrap();
         let mut event = envelope(
             &id,

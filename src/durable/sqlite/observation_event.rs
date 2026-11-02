@@ -490,7 +490,7 @@ pub(super) fn index_segmented_for_test(
 }
 pub(super) struct SourceCapture {
     pub(super) available: bool,
-    pub(super) overlay: Option<Vec<u8>>,
+    pub(super) inline_source: Option<Vec<u8>>,
     pub(super) witness: Captured,
 }
 fn pending_trace_total(
@@ -529,7 +529,7 @@ pub(super) fn prepare_pending(
                 mandatory_capture(connection, event, pending.execution, Some(pending))?;
             Ok(SourceCapture {
                 available: false,
-                overlay: None,
+                inline_source: None,
                 witness,
             })
         })
@@ -544,9 +544,9 @@ fn index_with_paths(
     execution: Option<&super::observation_execution::Captured>,
 ) -> Result<(bool, Captured), ConversationStoreError> {
     let capture = capture_with_paths(connection, event, selected, native_json, execution, None)?;
-    if let Some(overlay) = &capture.overlay {
-        let rows = connection.prepare_cached("UPDATE events SET observation_source_overlay=?2,observation_witness=?3 WHERE sequence=?1 AND CAST(event_json AS BLOB)=?4")
-            .and_then(|mut statement| statement.execute(params![event.sequence, overlay, capture.witness.bytes, native_json]))
+    if let Some(inline_source) = &capture.inline_source {
+        let rows = connection.prepare_cached("UPDATE events SET observation_source=?2,observation_witness=?3 WHERE sequence=?1 AND CAST(event_json AS BLOB)=?4")
+            .and_then(|mut statement| statement.execute(params![event.sequence, inline_source, capture.witness.bytes, native_json]))
             .map_err(|error| storage(error.to_string()))?;
         if rows != 1 {
             return Err(storage("native event bytes changed before source capture"));
@@ -562,6 +562,46 @@ fn index_with_paths(
     Ok((capture.available, capture.witness))
 }
 
+// These closed fields have no deferred children. All remaining identity,
+// usage, timing and terminal semantics already come from the typed owner below.
+fn direct_value(
+    event: &RuntimeEventEnvelope,
+    selected: Option<&[&str]>,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, ConversationStoreError> {
+    use crate::events::types::RuntimeEvent as Event;
+    let finish = match (&event.event, selected) {
+        (_, Some(["type"])) => None,
+        (Event::AttemptCompleted { finish_reason, .. }, Some(["type", "finish_reason"]))
+        | (
+            Event::ModelRequestCompleted { finish_reason, .. },
+            Some(["type", "finish_reason", "generation"]),
+        ) => {
+            if matches!(finish_reason, crate::model::ModelFinishReason::Other { reason } if reason.len()>256)
+            {
+                return Ok(None);
+            }
+            Some(finish_reason)
+        }
+        _ => return Ok(None),
+    };
+    let mut value = serde_json::Map::new();
+    value.insert("type".into(), native_kind(&event.event)?.into());
+    if let Some(finish) = finish {
+        value.insert(
+            "finish_reason".into(),
+            serde_json::to_value(finish).map_err(|error| storage(error.to_string()))?,
+        );
+    }
+    Ok(Some(value))
+}
+
+#[cfg(test)]
+thread_local! {static CAPTURE_WORK:std::cell::Cell<(usize,usize)>=const{std::cell::Cell::new((0,0))};}
+#[cfg(test)]
+pub(super) fn take_capture_work() -> (usize, usize) {
+    CAPTURE_WORK.with(|work| work.replace((0, 0)))
+}
+
 #[allow(clippy::too_many_lines)] // One optional source write and its authenticated finite witness.
 fn capture_with_paths(
     connection: &Connection,
@@ -572,40 +612,63 @@ fn capture_with_paths(
     pending: Option<&super::append_facts::PendingEvent<'_>>,
 ) -> Result<SourceCapture, ConversationStoreError> {
     let id = key(event.sequence);
-    let source =
-        crate::runtime::read_layout::SeekableObservationSource::new(event).map_err(storage)?;
-    let first = source
-        .read(&[], 0, 1)
-        .map_err(|error| storage(error.to_string()))?;
-    let mut overlay = None;
-    let inline = if let Some(native_json) = native_json
-        && first.readable_end <= inline::MAX_BYTES as u64
-    {
-        let source = inline::Source::new(source)?;
-        overlay = inline::encode_overlay(native_json, &source.bytes()?)?;
-        if overlay.is_some() {
-            Some(source)
-        } else {
-            super::observation_request::index_state_source(connection, KIND, &id, &source.0)?;
-            None
-        }
-    } else {
-        super::observation_request::index_state_source(connection, KIND, &id, &source)?;
-        None
-    };
-    let source = EventFields {
-        connection,
-        id: &id,
-        inline: inline.as_ref(),
-    };
-    let mut value = serde_json::Map::new();
+    let mut inline_source =
+        native_json.and_then(|native| inline::capture_native(&event.event, native));
     let mut fields = Vec::new();
-    // Fixed short keys have no generated key_header; the old root loop
-    // contributes nothing for the selected closed native families.
-    if selected.is_none() {
-        indexed_root_previews(&source, &mut value, &mut fields)?;
-    }
-    indexed_field_previews(&source, &mut value, &mut fields, selected)?;
+    let direct = inline_source
+        .as_ref()
+        .map(|_| direct_value(event, selected))
+        .transpose()?
+        .flatten();
+    let value = if let Some(value) = direct {
+        #[cfg(test)]
+        CAPTURE_WORK.with(|work| {
+            let (sources, direct) = work.get();
+            work.set((sources, direct + 1));
+        });
+        value
+    } else {
+        #[cfg(test)]
+        CAPTURE_WORK.with(|work| {
+            let (sources, direct) = work.get();
+            work.set((sources + 1, direct));
+        });
+        let source =
+            crate::runtime::read_layout::SeekableObservationSource::new(event).map_err(storage)?;
+        let inline = if let Some(native) = native_json
+            && (inline_source.is_some()
+                || source
+                    .read(&[], 0, 1)
+                    .map_err(|error| storage(error.to_string()))?
+                    .readable_end
+                    <= inline::MAX_BYTES as u64)
+        {
+            let source = inline::Source::new(source)?;
+            if inline_source.is_none() {
+                inline_source = inline::capture_overlay(native, &source.bytes()?)?;
+            }
+            if inline_source.is_some() {
+                Some(source)
+            } else {
+                super::observation_request::index_state_source(connection, KIND, &id, &source.0)?;
+                None
+            }
+        } else {
+            super::observation_request::index_state_source(connection, KIND, &id, &source)?;
+            None
+        };
+        let source = EventFields {
+            connection,
+            id: &id,
+            inline: inline.as_ref(),
+        };
+        let mut value = serde_json::Map::new();
+        if selected.is_none() {
+            indexed_root_previews(&source, &mut value, &mut fields)?;
+        }
+        indexed_field_previews(&source, &mut value, &mut fields, selected)?;
+        value
+    };
     let event_kind = value
         .get("type")
         .and_then(serde_json::Value::as_str)
@@ -663,7 +726,7 @@ fn capture_with_paths(
     let bytes = encode_witness(&witness)?;
     Ok(SourceCapture {
         available: !missing,
-        overlay,
+        inline_source,
         witness: Captured {
             bytes,
             value: witness,
@@ -686,7 +749,7 @@ fn readable(
     // event_json would still authorize that column while preparing the query.
     connection
         .query_row_cached(
-            "SELECT observation_source_overlay IS NOT NULL FROM events WHERE sequence=?1 AND observation_kind IS NOT NULL",
+            "SELECT observation_source IS NOT NULL FROM events WHERE sequence=?1 AND observation_kind IS NOT NULL",
             [sequence],
             |row| row.get(0),
         )
