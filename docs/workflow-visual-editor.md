@@ -45,6 +45,12 @@ successor and a dashed add row. An empty port says **Select the next node**;
 a connected port says **Add parallel node**. Branch lists each output port
 separately. All node icons have a solid semantic background and a white
 glyph, consistently across cards, inspector headers, successor rows and pickers.
+Node glyphs use Iconify's Lucide set: `log-in`, `bot`, `brain-circuit`, `wrench`,
+`git-branch`, `message-square-more`, `repeat-2`, `list-restart`, `circle-stop`,
+`variable` and `log-out`; private body Starts use `house`. The offline renderer
+receives a small subset of the pinned `@iconify-json/lucide` dependency, generated
+by `node scripts/workflow-icons.ts` from `web-console/`. Icons render immediately
+without a network request; the full collection remains lazy for the icon picker.
 
 The canvas **+** and the next-step popover share one chooser, as Dify's block
 selector: a **Nodes** tab classified into a default group and **Logic**, a
