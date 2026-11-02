@@ -152,3 +152,9 @@ pedantic = "warn"
 tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"
 nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir"] }
+
+[profile.test]
+# Bound non-incremental harness compilation on standard runners while
+# preserving file/line backtraces. Match incremental builds' CGU partitioning.
+debug = "line-tables-only"
+codegen-units = 256
