@@ -70,6 +70,17 @@ metadata += b" " * (-len(metadata) % 4)
 payload = struct.pack("<II", len(metadata), 0x4E4F534A) + metadata + struct.pack("<II", len(positions) + len(uv), 0x004E4942) + positions + uv
 (root / "cube-textured.glb").write_bytes(struct.pack("<III", 0x46546C67, 2, len(payload) + 12) + payload)
 
+embedded = json.loads(json.dumps(textured))
+embedded["images"] = [{"bufferView": len(embedded["bufferViews"]), "mimeType": "image/png"}]
+embedded["bufferViews"].append({"buffer": 0, "byteOffset": len(positions) + len(uv), "byteLength": len(png)})
+embedded["buffers"][0]["byteLength"] += len(png)
+metadata = json.dumps(embedded, separators=(",", ":")).encode()
+metadata += b" " * (-len(metadata) % 4)
+image_bin = positions + uv + png
+image_bin += b"\0" * (-len(image_bin) % 4)
+payload = struct.pack("<II", len(metadata), 0x4E4F534A) + metadata + struct.pack("<II", len(image_bin), 0x004E4942) + image_bin
+(root / "cube-embedded.glb").write_bytes(struct.pack("<III", 0x46546C67, 2, len(payload) + 12) + payload)
+
 # These formats are whitespace-delimited. IGES retains its fixed-width records.
 for name in ("cube.step", "cube-inch.step", "cube.brep"):
     path = root / name

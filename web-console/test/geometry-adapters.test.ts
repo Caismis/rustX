@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, it, vi } from 'vitest';
-import { Mesh, MeshStandardMaterial } from 'three';
+import { Frustum, Matrix4, Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Vector2 } from 'three';
 import { admitGlb, importGlb } from '../src/app/components/documents/geometry/glb';
 import { importStl } from '../src/app/components/documents/geometry/stl';
 import { importCad, convertCadResult } from '../src/app/components/documents/geometry/cad';
@@ -11,6 +11,17 @@ import { viewersForPath, loadsBytes } from '../src/app/components/workbench-docu
 
 vi.mock('occt-import-js/dist/occt-import-js.wasm?url', async () => ({ default: (await import('node:url')).fileURLToPath(new URL('../node_modules/occt-import-js/dist/occt-import-js.wasm', import.meta.url)) }));
 const fixture = (name: string) => new Uint8Array(readFileSync(fileURLToPath(new URL(`./fixtures/geometry/${name}`, import.meta.url))));
+it.each(['      ', '\n\t        ', 'uppercase'])('ASCII STL admission and loading agree with prefix %j without excessive allocation', prefix => {
+  const source = new TextDecoder().decode(fixture('cube-ascii.stl')).replaceAll('cube', 'MixedCasePart');
+  const text = prefix === 'uppercase' ? source.replace(/^(solid|endsolid|facet normal|outer loop|vertex|endloop|endfacet)\b/gm, token => token.toUpperCase()) : prefix + source;
+  const Native = globalThis.Float32Array;
+  vi.stubGlobal('Float32Array', new Proxy(Native, { construct(target, args, receiver) {
+    if (typeof args[0] === 'number' && args[0] > 3_000_000) throw new Error('Excessive STL allocation intercepted');
+    return Reflect.construct(target, args, receiver);
+  } }));
+  try { const model = importStl(new TextEncoder().encode(text)); expect(model.meshes[0].positions.length).toBe(108); expect(model.meshes[0].name).toBe('MixedCasePart'); }
+  finally { vi.unstubAllGlobals(); }
+});
 function modifyGlb(change: (value: any) => void) {
   const bytes = fixture('cube.glb'), view = new DataView(bytes.buffer), length = view.getUint32(12, true);
   const json = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + length))); change(json);
@@ -49,6 +60,17 @@ it('imports GLB hierarchy, color and translated coordinates', async () => {
     const mesh = loaded.scene.getObjectByName('Analytic_cube'); expect(mesh).toBeInstanceOf(Mesh);
     expect((mesh as Mesh).material).toBeInstanceOf(MeshStandardMaterial);
     expect(((mesh as Mesh).material as MeshStandardMaterial).color.toArray()).toEqual([0.15, 0.55, 0.85]);
+  } finally { loaded.dispose(); }
+});
+it('derives GLB culling and raycast spheres from positions rather than accessor bounds', async () => {
+  const loaded = await importGlb(modifyGlb(json => { json.accessors[0].min = [100000,100000,100000]; json.accessors[0].max = [100010,100010,100010]; }), new AbortController().signal);
+  try {
+    const mesh = loaded.scene.getObjectByName('Analytic_cube') as Mesh;
+    const camera = new PerspectiveCamera(45, 1, .1, 100); camera.position.set(20,20,20); camera.lookAt(5,5,5); camera.updateMatrixWorld(true);
+    const frustum = new Frustum().setFromProjectionMatrix(new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    expect(frustum.intersectsObject(mesh)).toBe(true);
+    const ray = new Raycaster(); ray.setFromCamera(new Vector2(), camera); expect(ray.intersectObject(loaded.scene, true).length).toBeGreaterThan(0);
+    expect(mesh.geometry.boundingSphere!.center.toArray()).toEqual([5,5,5]);
   } finally { loaded.dispose(); }
 });
 it('preserves ASCII solid names and separate selectable geometry', () => {

@@ -22,8 +22,10 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   centered.position.copy(center).negate(); centered.add(object); scene.add(centered);
   centered.updateMatrixWorld(true);
   scene.add(new HemisphereLight(0xffffff, 0x667080, 2)); const light = new DirectionalLight(0xffffff, 3); scene.add(light);
-  const controls = new OrbitControls(camera, canvas); controls.enableDamping = false; controls.minDistance = radius / 100; controls.maxDistance = radius * 100;
-  controls.listenToKeyEvents(canvas);
+  let controls = new OrbitControls(camera, canvas);
+  const orbitUp = camera.up.clone();
+  const configureControls = () => { controls.enableDamping = false; controls.minDistance = radius / 100; controls.maxDistance = radius * 100; controls.listenToKeyEvents(canvas); };
+  configureControls();
   const axes = new AxesHelper(1), axisScene = new Scene(), axisCamera = new PerspectiveCamera(45, 1, 0.01, 10);
   axisScene.add(axes); canvas.setAttribute('aria-description', labels.axes);
   const highlight = new BoxHelper(object, new Color(0xffbd45)); highlight.visible = false; scene.add(highlight);
@@ -58,9 +60,9 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const fit = (view: StandardView = 'isometric') => {
     const directions: Record<StandardView, [number, number, number]> = { isometric: [1, 1, 1], front: [0, 0, 1], back: [0, 0, -1], left: [-1, 0, 0], right: [1, 0, 0], top: [0, 1, 0], bottom: [0, -1, 0] };
     const distance = radius / Math.sin(Math.PI / 8) / Math.min(1, camera.aspect) * 1.1;
-    controls.target.set(0, 0, 0); camera.position.fromArray(directions[view]).normalize().multiplyScalar(distance);
+    camera.position.fromArray(directions[view]).normalize().multiplyScalar(distance);
     camera.up.set(0, view === 'top' || view === 'bottom' ? 0 : 1, view === 'top' ? -1 : view === 'bottom' ? 1 : 0);
-    camera.near = Math.max(radius / 10_000, 1e-9); camera.far = radius * 1000; camera.updateProjectionMatrix(); controls.update(); render(); emit();
+    camera.near = Math.max(radius / 10_000, 1e-9); camera.far = radius * 1000; camera.updateProjectionMatrix(); synchronizeOrbit(new Vector3()); render(); emit();
   };
   const visibility = (id: string, visible: boolean) => {
     const item = objects.get(id); if (!item) return;
@@ -76,13 +78,22 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
       const pose = saved?.camera;
       if (pose && [pose.position, pose.target, pose.up].every(values => values.length === 3 && values.every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate))) {
         const position = new Vector3().fromArray(pose.position), target = new Vector3().fromArray(pose.target), up = new Vector3().fromArray(pose.up);
-        if (position.distanceTo(target) > radius / 1000 && position.distanceTo(target) < radius * 1000 && up.lengthSq() > 0) { camera.position.copy(position); controls.target.copy(target); camera.up.copy(up).normalize(); controls.update(); }
+        if (position.distanceTo(target) > radius / 1000 && position.distanceTo(target) < radius * 1000 && up.lengthSq() > 0) { camera.position.copy(position); camera.up.copy(up).normalize(); synchronizeOrbit(target); }
       }
     }
     render();
   };
   const changed = () => { render(); emit(); };
   controls.addEventListener('change', changed);
+  function synchronizeOrbit(target: Vector3) {
+    if (!orbitUp.equals(camera.up)) {
+      // OrbitControls fixes its orbit-axis quaternion at construction time.
+      // Recreate through its public lifecycle instead of mutating internals.
+      controls.removeEventListener('change', changed); controls.dispose();
+      controls = new OrbitControls(camera, canvas); orbitUp.copy(camera.up); configureControls(); controls.addEventListener('change', changed);
+    }
+    controls.target.copy(target); controls.update();
+  }
   const observer = new ResizeObserver(resize); observer.observe(container);
   const raycaster = new Raycaster(); let down: [number, number] | undefined;
   const pointerDown = (event: PointerEvent) => { down = [event.clientX, event.clientY]; };

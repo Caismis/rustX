@@ -2,81 +2,81 @@
   {
     "entry": "delivery",
     "name": "cube.glb",
-    "displayMs": 899
+    "displayMs": 891
   },
   {
     "entry": "delivery",
     "name": "cube.stl",
-    "displayMs": 830
+    "displayMs": 842.6
   },
   {
     "entry": "delivery",
     "name": "cube-ascii.stl",
-    "displayMs": 826
+    "displayMs": 837.6
   },
   {
     "entry": "delivery",
     "name": "cube.step",
-    "displayMs": 1332
+    "displayMs": 948.5
   },
   {
     "entry": "delivery",
     "name": "cube-inch.step",
-    "displayMs": 853
+    "displayMs": 891.2
   },
   {
     "entry": "delivery",
     "name": "cube.iges",
-    "displayMs": 856
+    "displayMs": 853.3
   },
   {
     "entry": "delivery",
     "name": "cube.brep",
-    "displayMs": 845
+    "displayMs": 824.1
   },
   {
     "entry": "delivery",
     "name": "cube-textured.glb",
-    "displayMs": 156
+    "displayMs": 164.7
   },
   {
     "entry": "workspace",
     "name": "cube.glb",
-    "displayMs": -444
+    "displayMs": 156.4
   },
   {
     "entry": "workspace",
     "name": "cube.stl",
-    "displayMs": -189
+    "displayMs": 835.8
   },
   {
     "entry": "workspace",
     "name": "cube-ascii.stl",
-    "displayMs": 841
+    "displayMs": 821.5
   },
   {
     "entry": "workspace",
     "name": "cube.step",
-    "displayMs": 842
+    "displayMs": 835.1
   },
   {
     "entry": "workspace",
     "name": "cube-inch.step",
-    "displayMs": 887
+    "displayMs": 834.9
   },
   {
     "entry": "workspace",
     "name": "cube.iges",
-    "displayMs": 836
+    "displayMs": 831.1
   },
   {
     "entry": "workspace",
     "name": "cube.brep",
-    "displayMs": 847
+    "displayMs": 833.4
   },
   {
     "entry": "workspace",
     "name": "cube-textured.glb",
-    "displayMs": 135
+    "displayMs": 132.6
   }
 ]

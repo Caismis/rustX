@@ -51,6 +51,10 @@ export function validateScene(roots: Object3D[]): Box3 {
       }
       // File-declared accessor bounds are not an authority for framing or size.
       geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+      const sphere = geometry.boundingSphere;
+      check(sphere && sphere.center.toArray().every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate)
+        && Number.isFinite(sphere.radius) && sphere.radius >= 0);
       bytes += geometry.index?.array.byteLength ?? 0;
     });
   }

@@ -10,6 +10,8 @@ triangle list. GLB adds a named hierarchy and a blue material.
 `cube-textured.glb` additionally embeds an original 1x1 white PNG and UV
 coordinates to exercise image admission and disposal. GLB coordinates
 are meters according to glTF; STL coordinates have no intrinsic physical unit.
+`cube-embedded.glb` stores the same PNG in a BIN buffer view, exercising generated
+image-URL cleanup when native decoding fails.
 
 STEP, inch-encoded STEP, IGES and BREP are exported independently with
 cadquery-ocp-novtk 7.9.3.1.1 / OCCT 7.9.3, rather than with the browser importer.

@@ -53,7 +53,7 @@ export class PreviewContentOwner {
     // A previously hidden payload is never exposed until current authority and
     // version are rechecked. A live watch alone is not permission to reuse it.
     if (this.state.mode && (!this.reader.immutable && this.reader.observe || this.state.mode === 'geometry')) {
-      this.saved = this.state;
+      this.saved ??= this.state;
       this.state = { revision: this.state.revision, mode: this.state.mode, loading: true, loadedLines: 0 };
       this.pending = { kind: 'validate' }; this.notify(); this.drain();
     }
@@ -101,7 +101,7 @@ export class PreviewContentOwner {
     if (!this.visible) {
       // Version hints do not revoke a completed geometry copy. Reactivation
       // probes authority; terminal observation loss still evicts the copy.
-      if (this.state.mode !== 'geometry' || !this.state.data) this.evict();
+      if (this.state.mode !== 'geometry' || !(this.saved ?? this.state).data) this.evict();
       return;
     }
     this.saved ??= this.state;

@@ -132,8 +132,19 @@ export async function importGlb(bytes: Uint8Array<ArrayBuffer>, signal: AbortSig
   check(glbImports < L.owners, 'capacity');
   const uris = admitGlb(bytes), manager = new LoadingManager();
   glbImports++;
-  manager.setURLModifier(url => { check(uris.has(url) || url.startsWith(`blob:${globalThis.location.origin}/`), 'external'); return url; });
-  const pending = new Set<Texture>(), decodes: Promise<unknown>[] = []; let scenes: Object3D[] = [], retired = false;
+  const pending = new Set<Texture>(), decodes: Promise<unknown>[] = [], imageUrls = new Set<string>(); let scenes: Object3D[] = [], retired = false;
+  const releaseUrl = (url: string) => { if (imageUrls.delete(url)) URL.revokeObjectURL(url); };
+  manager.setURLModifier(url => {
+    const supplied = uris.has(url), generated = !supplied && url.startsWith(`blob:${globalThis.location.origin}/`);
+    check(supplied || generated, 'external');
+    if (retired) { if (generated) URL.revokeObjectURL(url); throw new DOMException('Geometry preview closed', 'AbortError'); }
+    if (generated) imageUrls.add(url);
+    return url;
+  });
+  // The pinned loader revokes generated URLs on success only. LoadingManager
+  // reports errors before item completion, so failures have an explicit owner.
+  manager.onError = releaseUrl;
+  manager.onProgress = url => { imageUrls.delete(url); };
   const dispose = () => {
     retired = true; signal.removeEventListener('abort', dispose);
     disposeScene(scenes, pending); scenes = []; pending.clear();
@@ -161,6 +172,6 @@ export async function importGlb(bytes: Uint8Array<ArrayBuffer>, signal: AbortSig
     signal.throwIfAborted(); check(!retired); validateScene(loaded.scenes);
     return { scene: loaded.scene, scenes: loaded.scenes, dispose };
   } catch (error) { dispose(); throw error; }
-  finally { void Promise.allSettled(decodes).then(() => { glbImports--; }); }
+  finally { void Promise.allSettled(decodes).then(() => { for (const url of imageUrls) releaseUrl(url); glbImports--; }); }
 }
 let glbImports = 0;

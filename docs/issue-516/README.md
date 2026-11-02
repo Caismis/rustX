@@ -11,8 +11,8 @@ Runtime behavior and bounds are specified in [geometry previews](../geometry-pre
 | `pnpm build` | Passed, including native Host build and production provenance/runtime checks |
 | `pnpm check:provenance` | Passed: 336 source records, 344 production notices, pinned geometry artifacts |
 | `node scripts/check-i18n.ts` | Passed |
-| Geometry adapters, Worker admission, view races and content-owner tests | 55 passed |
-| Pinned-container geometry browser suite | 6 passed |
+| Geometry adapters, Worker admission, view races, content ownership and evidence | 66 passed |
+| Pinned-container geometry browser suite | 9 passed |
 | Native Workbench Host suite after preparing standard supervisor paths | 22 passed |
 | `git diff --check` | Passed |
 
@@ -22,15 +22,19 @@ supervisor paths were prepared; that complete 22-test file passes on its focused
 rerun. One local failure remains in the unchanged `workflow-model.test.tsx`
 case `keeps invalid schema text inside the dialog and discards it on Cancel`,
 which times out awaiting `Structured output Schema`. A focused rerun reproduces
-that failure. This is not a claim of a clean all-Web run; exact-head CI remains
-the merge gate.
+that failure. The original PR head's CI Web client/Host/launcher job subsequently
+passed. This is not a claim of a clean local all-Web run; exact-head CI remains
+the merge gate for the current repair head.
 
 The geometry browser suite covers both committed-delivery and Workbench entry
 points for GLB, embedded-texture GLB, binary/ASCII STL, STEP including inch units,
 IGES and BREP. It also exercises current-original Download, copy refresh,
 authority retirement, split/fullscreen, narrow English/Chinese and light/dark
 presentation, keyboard menus, external-reference rejection, context loss,
-late-image disposal and bounded retiring decode admission.
+late-image disposal, failed embedded-image URL cleanup, Top/Bottom orbit before
+and after restoration, and bounded retiring decode admission. Adapter/owner
+regressions also cover guarded STL format classification, inaccurate accessor
+bounding spheres and interrupted reauthorization without replacing a copy.
 
 Fixtures are independently authored/exported as described in
 [the fixture manifest](../../web-console/test/fixtures/geometry/README.md).
@@ -48,13 +52,14 @@ connects the pinned browser to the existing test servers through Docker Desktop.
 - CAD WASM: 7,604,031 bytes, approximately 3.1 MB compressed. Exact original
   release sizes and hashes are in `web-console/geometry-runtime.json`; bundler
   compression estimates can differ with zlib settings.
-- [Display measurements](format-display-timings.json) include UI gesture,
+- [Display measurements](format-display-timings.json) use monotonic elapsed time,
+  assert finite nonnegative durations before publication, and include UI gesture,
   transport/test overhead and import/display, rather than claiming isolated
   tessellation timings. They cover first delivery opens and later Workspace
   opens in the same browser context.
 - [The STL envelope](stl-envelope.json) contains 245,000 triangles, 735,000
-  vertices and 12,250,084 source bytes. Observed first display was about 1.6 s,
-  with a maximum sampled animation-frame gap of 300 ms on this host. That is an
+  vertices and 12,250,084 source bytes. Observed first display was about 1.5 s,
+  with a maximum sampled animation-frame gap of about 283 ms on this host. That is an
   observation, not a hard responsiveness guarantee.
 - Browser-container cgroup `memory.peak` across acceptance runs was
   **1,190,846,464 bytes (about 1.11 GiB)**. It includes browser/Worker processes
@@ -87,7 +92,7 @@ change screenshot authority.
 The focused deterministic command is:
 
 ```sh
-pnpm exec vitest run test/geometry-adapters.test.ts test/geometry-worker.test.ts test/geometry-view.test.tsx test/preview-content.test.ts
+pnpm exec vitest run test/geometry-adapters.test.ts test/geometry-worker.test.ts test/geometry-view.test.tsx test/preview-content.test.ts test/geometry-evidence.test.ts
 ```
 
 Source/geometry admission and Worker termination are enforceable at their

@@ -43,6 +43,11 @@ async function instrument(page: Page) {
 const resources = (page: Page) => page.evaluate(() => ({ ...(window as any).geometryResources }));
 const ready = (page: Page) => expect(page.locator('[data-geometry-format]')).toContainText('10 × 10 × 10', { timeout: 20_000 });
 async function openDelivery(page: Page, name: string) { await page.getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).click(); await ready(page); }
+function measuredDuration(value: number) {
+  expect(Number.isFinite(value)).toBe(true); expect(value).toBeGreaterThanOrEqual(0);
+  return Math.round(value * 10) / 10;
+}
+const elapsed = (start: number) => measuredDuration(performance.now() - start);
 
 test('all geometry formats render through actual delivery and Workspace entry points', async ({ page }, info) => {
   await instrument(page); const errors: string[] = [], timings: { entry: string; name: string; displayMs: number }[] = [];
@@ -50,10 +55,10 @@ test('all geometry formats render through actual delivery and Workspace entry po
   await page.goto(`${origin}/test/fixtures/geometry.html`);
   await page.getByRole('button', { name: 'Show all 8 delivered files', exact: true }).click();
   for (const entry of ['delivery', 'workspace']) for (const name of names) {
-    const start = Date.now();
+    const start = performance.now();
     if (entry === 'delivery') await openDelivery(page, name);
     else { await page.getByRole('button', { name: `Workspace ${name}`, exact: true }).click(); await ready(page); }
-    timings.push({ entry, name, displayMs: Date.now() - start });
+    timings.push({ entry, name, displayMs: elapsed(start) });
     if (entry === 'delivery') expect(await page.evaluate(name => (window as any).geometryContract.snapshot().find((item: any) => item.name === name).state.camera.up, name)).toEqual([0, 1, 0]);
     await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(1);
     await expect.poll(async () => (await resources(page)).workers).toBe(0);
@@ -77,10 +82,10 @@ test('production startup defers geometry and the STL envelope remains responsive
     const sample = (now: number) => { delays.push(now - last); last = now; if (delays.length < 600) requestAnimationFrame(sample); };
     requestAnimationFrame(sample); Object.assign(window, { geometryFrameDelays: delays });
   });
-  const start = Date.now(); await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click();
+  const start = performance.now(); await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click();
   await expect(page.locator('[data-geometry-format]')).toContainText('350 × 350 × 0', { timeout: 20_000 });
-  const measurement = { triangles: 245000, vertices: 735000, sourceBytes: 12250084, displayMs: Date.now() - start,
-    observedFrameGapMs: await page.evaluate(() => Math.max(...(window as any).geometryFrameDelays)), resources: await resources(page) };
+  const measurement = { triangles: 245000, vertices: 735000, sourceBytes: 12250084, displayMs: elapsed(start),
+    observedFrameGapMs: measuredDuration(await page.evaluate(() => Math.max(...(window as any).geometryFrameDelays))), resources: await resources(page) };
   expect(runtime.filter(url => /cad-worker|occt-import-js/.test(url))).toEqual([]);
   await page.getByRole('button', { name: 'Fit view', exact: true }).click();
   await page.getByRole('button', { name: 'Close preview cube.stl', exact: true }).click();
@@ -169,4 +174,37 @@ test('a decoded texture arriving after close is released without mounting a stal
   await page.getByRole('button', { name: 'Close preview cube-textured.glb', exact: true }).click();
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
   await expect(page.locator('[data-geometry-format]')).toHaveCount(0);
+});
+
+test('failed embedded-image decodes release generated URLs and physical import slots', async ({ page }) => {
+  await instrument(page);
+  await page.addInitScript(() => { Object.defineProperty(window, 'createImageBitmap', { value: () => Promise.reject(new Error('Controlled decoder rejection')) }); });
+  await page.goto(`${origin}/test/fixtures/geometry.html`);
+  await page.evaluate(async () => {
+    const response = await fetch('/test/fixtures/geometry/cube-embedded.glb');
+    (window as any).geometryContract.replace('cube.glb', [...new Uint8Array(await response.arrayBuffer())]);
+  });
+  await page.getByRole('button', { name: 'Preview cube.glb in sidebar', exact: true }).click();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await expect(page.getByRole('alert')).toContainText('Could not preview this model');
+    await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
+    if (attempt < 2) await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  }
+});
+
+for (const view of ['Top', 'Bottom']) test(`${view} horizontal orbit uses the selected up axis before and after restoration`, async ({ page }) => {
+  await page.goto(`${origin}/test/fixtures/geometry.html`); await openDelivery(page, 'cube.stl');
+  const pose = () => page.evaluate(() => (window as any).geometryContract.snapshot().find((item: any) => item.name === 'cube.stl').state.camera as { position: number[]; target: number[]; up: number[] });
+  const drag = async () => {
+    const before = await pose(), box = (await page.locator('[data-geometry-format] canvas').boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2, { steps: 8 }); await page.mouse.up();
+    const after = await pose(); expect(Math.hypot(...after.position.map((value, index) => value - before.position[index]))).toBeGreaterThan(1);
+    const axisDistance = (value: typeof before) => value.position.reduce((sum, component, index) => sum + (component - value.target[index]) * before.up[index], 0);
+    expect(axisDistance(after)).toBeCloseTo(axisDistance(before), 5);
+  };
+  await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: view, exact: true }).click();
+  await drag();
+  await page.getByRole('button', { name: 'Hide delivery', exact: true }).click(); await page.getByRole('button', { name: 'Show delivery', exact: true }).click(); await ready(page);
+  await drag();
 });

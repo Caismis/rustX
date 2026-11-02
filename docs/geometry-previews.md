@@ -11,7 +11,7 @@ physical file-read settlement and original Download remain owned by the existing
 | Suffixes (case-insensitive) | Import | Coordinates and units |
 | --- | --- | --- |
 | GLB | Three.js GLTFLoader, static glTF 2.0 triangle scenes | Meters, original hierarchy/transforms, admitted materials and PNG/JPEG textures |
-| STL | Three.js STLLoader, binary or ASCII | Original coordinates, unknown units; ASCII solid names/groups become parts, supported binary vertex colors are retained |
+| STL | Three.js STLLoader, binary or ASCII | Original coordinates, unknown units; ASCII syntax is normalized before loading while solid names/groups are preserved, supported binary vertex colors are retained |
 | STEP, STP | occt-import-js ReadStepFile | Explicit millimeter output; this labels the imported output, not an inferred source unit |
 | IGES, IGS | occt-import-js ReadIgesFile | Explicit millimeter output |
 | Open CASCADE BREP | occt-import-js ReadBrepFile | Native coordinates, unknown units; linearUnit does not affect BREP |
@@ -26,9 +26,12 @@ One scene implementation supplies orbit/pan/zoom, fit, isometric and six standar
 views, an orientation axis indicator, part selection/highlighting and visibility.
 Camera fitting centers a presentation-only parent; original geometry and its
 physical scale remain intact. Bounds are recomputed from admitted coordinates,
-rather than trusting GLB accessor bounds. Camera, target, up vector, selected part
+rather than trusting GLB accessor bounds. Culling/raycast spheres are recomputed
+from the same positions. Camera, target, up vector, selected part
 and hidden IDs are bounded inert occurrence metadata tied to a content copy.
 Hiding a selected part also hides its selection outline.
+Changing or restoring the up axis recreates OrbitControls through its public
+lifecycle so orbit gestures use that axis and old listeners are released.
 The controls reuse the DSH floating zoom toolbar stylesheet, shared Button/Menu
 primitives and existing theme tokens. Standard views live in one view-angle menu.
 Product copy follows the existing concise preview vocabulary, and fixed-copy
@@ -55,8 +58,10 @@ the existing preview flow. Other viewers keep their automatic-refresh behavior.
 Hidden bodies terminate their import Worker and release every renderer resource.
 Only admitted source bytes remain in the existing 8-entry/64-MiB inactive cache.
 Reactivation probes authority before showing those bytes, including when the
-reader has no observation facility. A changed version alone preserves the copy;
-source-unavailable, revoked authority, observation loss, explicit close and
+reader has no observation facility. A changed version alone preserves the copy.
+interrupted probes and hidden version hints preserve the same completed saved
+snapshot while the newest validation retains publication authority.
+Source-unavailable, revoked authority, observation loss, explicit close and
 eviction retain their existing retirement rules. Eviction ends the copy lifetime.
 
 The renderer captures both the content-generation predicate and body signal.
@@ -106,6 +111,9 @@ disposed with the scene.
 The GLTFLoader texture hook owns partial import results too: decode completion
 after cancellation or parse rejection disposes its texture/bitmap even when no
 scene can be returned.
+LoadingManager also owns generated image URLs through settlement: successful
+loads use the loader's revocation path, decode failures revoke through the
+manager's error callback, and retired work cannot start another image load.
 
 For two panes, admitted attribute buffers are at most 128 MiB and admitted image
 pixels at most 16,777,216. RGBA image storage is approximately 32 MiB per body
