@@ -12,7 +12,7 @@ use std::{
 type Owner = Arc<OnceLock<Arc<dyn Any + Send + Sync>>>;
 
 #[derive(Clone)]
-pub(super) struct PreparedCaptures(BTreeMap<&'static str, Owner>);
+pub(super) struct PreparedCaptures(imbl::OrdMap<&'static str, Owner>);
 impl Default for PreparedCaptures {
     fn default() -> Self {
         Self(
@@ -46,7 +46,7 @@ impl Default for PreparedCaptures {
 }
 impl PreparedCaptures {
     pub(super) fn empty() -> Self {
-        Self(BTreeMap::new())
+        Self(imbl::OrdMap::new())
     }
 
     pub(super) fn inherit(current: &CheckpointSeed, previous: Option<&CheckpointSeed>) -> Self {
@@ -144,7 +144,7 @@ enum BindingPrefix {
     Message(usize),
     Transcript,
 }
-type BindingFragments = Arc<Vec<checkpoint::MetadataFragment<checkpoint::ContentBinding>>>;
+type BindingFragments = checkpoint::metadata_fragment::BindingFragments;
 struct BindingHead {
     values: Vec<checkpoint::ContentBinding>,
     budget: OnceLock<Option<usize>>,

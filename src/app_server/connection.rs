@@ -3179,8 +3179,8 @@ fn history_checkpoint_cut(
         revision: 0,
         through: cut.read.journal,
         source_cut: Some(cut),
-        domain_revisions: std::collections::BTreeMap::new(),
-        collection_cuts: std::collections::BTreeMap::new(),
+        domain_revisions: crate::runtime_client::checkpoint::MetadataFragment::default(),
+        collection_cuts: crate::runtime_client::checkpoint::MetadataFragment::default(),
     }
 }
 
@@ -3361,7 +3361,7 @@ mod capacity_tests {
             read_cut: crate::runtime_client::checkpoint::CheckpointReadCut {
                 canonical_foreground: None,
                 live_publication: None,
-                collection_cuts: std::collections::BTreeMap::new(),
+                collection_cuts: crate::runtime_client::checkpoint::MetadataFragment::default(),
                 conversation_id: crate::runtime::identity::ConversationId::new(
                     "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
                 ),
@@ -3369,7 +3369,7 @@ mod capacity_tests {
                 revision: 0,
                 through: 0,
                 source_cut: None,
-                domain_revisions: std::collections::BTreeMap::default(),
+                domain_revisions: crate::runtime_client::checkpoint::MetadataFragment::default(),
             },
             domain: "jobs".into(),
             total: 67,

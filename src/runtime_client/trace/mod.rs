@@ -195,8 +195,8 @@ impl<'a> TraceProjection<'a> {
             source_cut: Some(native),
             canonical_foreground: None,
             live_publication: None,
-            domain_revisions: std::collections::BTreeMap::new(),
-            collection_cuts: std::collections::BTreeMap::new(),
+            domain_revisions: crate::runtime_client::checkpoint::MetadataFragment::default(),
+            collection_cuts: crate::runtime_client::checkpoint::MetadataFragment::default(),
         })
     }
 

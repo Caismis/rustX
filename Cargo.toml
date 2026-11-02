@@ -83,7 +83,7 @@ serde_path_to_error = "0.1"
 toml = "0.8"
 url = "2"
 sha2 = "0.10"
-imbl = "7.0.0"
+imbl = { version = "7.0.0", features = ["serde"] }
 base64 = "0.22"
 # Bounded validation of native managed PNG image outputs.
 png = "0.18.1"
