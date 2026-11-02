@@ -394,7 +394,7 @@ fn final_transition_budget_preserves_the_existing_failure() {
         .seed
         .read_cut
         .domain_revisions
-        .insert("x".repeat(450_000), 1);
+        .insert("x".repeat(450_000).into(), 1);
     draft.replacement = true;
     assert_eq!(
         equivalent_error(draft),
@@ -411,7 +411,7 @@ fn authoritative_checkpoint_budget_preserves_the_existing_failure() {
         .seed
         .read_cut
         .domain_revisions
-        .insert("x".repeat(CHECKPOINT_TARGET_BYTES * 2), 1);
+        .insert("x".repeat(CHECKPOINT_TARGET_BYTES * 2).into(), 1);
     assert_eq!(
         equivalent_error(draft),
         RuntimeClientError::ObservationUnavailable {

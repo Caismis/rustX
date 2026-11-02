@@ -968,7 +968,7 @@ pub(super) fn observation_models(
     if offset > header.models_total {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    let rows=connection.prepare_cached("SELECT block_index,readable_end FROM content_frontiers WHERE source_kind='inherited_model' AND source_id=?1 AND representation='canonical_json_v1' AND revision=1 AND block_index>=?2 AND block_index<?3 ORDER BY block_index LIMIT ?4").map_err(|error|storage(error.to_string()))?.query_map(params![ordinal.to_string(),offset,header.models_total,limit],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,u64>(1)?))).map_err(|error|storage(error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
+    let rows=connection.prepare_cached("SELECT block_index,readable_end FROM content_frontiers WHERE source_kind='inherited_model' AND source_id=?1 AND representation='j' AND revision=1 AND block_index>=?2 AND block_index<?3 ORDER BY block_index LIMIT ?4").map_err(|error|storage(error.to_string()))?.query_map(params![ordinal.to_string(),offset,header.models_total,limit],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,u64>(1)?))).map_err(|error|storage(error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
     let mut names = Vec::with_capacity(rows.len());
     for (index, encoded_bytes) in rows {
         let value = if encoded_bytes <= 1024 {

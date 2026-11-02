@@ -1934,7 +1934,7 @@ pub(super) fn pending_value(
     if !at.reconstructible_from(&actual) {
         return Err(ConversationStoreError::ObservationCutExpired);
     }
-    let retained:Option<(u64,u64)>=connection.query_row("SELECT p.revision,f.readable_end FROM pending_inbound p JOIN content_frontiers f ON f.source_kind='pending' AND f.source_id=CAST(p.sequence AS TEXT) AND f.block_index=0 AND f.representation='canonical_json_v1' AND f.revision=p.revision+1 WHERE p.sequence=?1 AND p.sequence<=?2",params![sequence,at.pending_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let retained:Option<(u64,u64)>=connection.query_row("SELECT p.revision,f.readable_end FROM pending_inbound p JOIN content_frontiers f ON f.source_kind='pending' AND f.source_id=CAST(p.sequence AS TEXT) AND f.block_index=0 AND f.representation='j' AND f.revision=p.revision+1 WHERE p.sequence=?1 AND p.sequence<=?2",params![sequence,at.pending_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
     let (revision, readable_end) = retained
         .ok_or_else(|| ConversationStoreError::InvalidReference("pending source expired".into()))?;
     if offset > readable_end {

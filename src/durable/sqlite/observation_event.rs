@@ -17,7 +17,7 @@ pub(super) struct Prepared {
     pub(super) available: bool,
     pub(super) witness: Option<Captured>,
 }
-const KIND: &str = "observation_journal";
+const KIND: &str = "oj";
 const TABLE: &str = "state_observation_fields";
 fn key(sequence: u64) -> String {
     format!("journal/{sequence}")

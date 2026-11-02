@@ -7,7 +7,7 @@ fn immutable_inline_reads_keep_the_selected_revision_when_another_frontier_exist
     let bytes = vec![b'a'; 65_550];
     put(&connection, key, 1, &bytes, false).unwrap();
     connection.execute(
-        "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end,bytes) VALUES('canonical','revision-isolation',0,'utf8_text',2,65550,?1)",
+        "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end,bytes) VALUES('canonical','revision-isolation',0,'t',2,65550,?1)",
         [&vec![b'b'; 65_536]],
     ).unwrap();
     for (start, end) in [(0, 16), (65_530, 65_545)] {
@@ -51,6 +51,128 @@ fn stored_rows(connection: &Connection, id: &str) -> (u64, u64) {
         "SELECT (SELECT count(*) FROM content_frontiers WHERE source_id=?1),(SELECT count(*) FROM content_segments WHERE source_id=?1)",
         [id], |row| Ok((row.get(0)?, row.get(1)?)),
     ).unwrap()
+}
+
+#[test]
+fn sqlite_tail_append_keeps_binary_bytes_all_encodings_and_historical_prefixes() {
+    for encoding in ["UTF-8", "UTF-16le", "UTF-16be"] {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(&format!("PRAGMA encoding='{encoding}'"))
+            .unwrap();
+        super::super::create_schema(&mut connection).unwrap();
+        let key = ("live", "binary-tail", 0, Rep::RawJsonUtf8);
+        let mut expected = Vec::new();
+        let mut cuts = Vec::new();
+        for (index, length) in [0, 1, 255, 65_279, 2, 65_537, 3].into_iter().enumerate() {
+            let suffix: Vec<u8> = (0..length)
+                .map(|n| u8::try_from(n % 256).unwrap())
+                .collect();
+            let revision = index as u64 + 1;
+            put(&connection, key, revision, &suffix, true).unwrap();
+            expected.extend(suffix);
+            cuts.push((revision, expected.len()));
+            for &(cut, end) in &cuts {
+                for offset in (0..end).step_by(32_771) {
+                    let finish = end.min(offset + 65_536);
+                    assert_eq!(
+                        range_bytes_at(&connection, key, cut, offset as u64, finish as u64)
+                            .unwrap_or_else(|error| panic!("{encoding} revision={revision} cut={cut} range={offset}..{finish}: {error:?}")),
+                        expected[offset..finish]
+                    );
+                    assert!(last_read_work().0 <= 2);
+                }
+            }
+        }
+        assert_eq!(stored_rows(&connection, "binary-tail"), (7, 3));
+    }
+}
+
+#[test]
+fn sqlite_tail_append_rejects_missing_or_wrong_length_without_publishing_frontier() {
+    let connection = connection();
+    let key = ("live", "guarded-tail", 0, Rep::Utf8Text);
+    put(&connection, key, 1, b"original", true).unwrap();
+    for damage in [
+        "DELETE FROM content_segments",
+        "UPDATE content_segments SET bytes=x'01'",
+        "UPDATE content_segments SET bytes='original'",
+    ] {
+        connection.execute_batch("SAVEPOINT damage").unwrap();
+        connection.execute_batch(damage).unwrap();
+        assert!(put(&connection, key, 2, b" suffix", true).is_err());
+        assert_eq!(stored_rows(&connection, "guarded-tail").0, 1);
+        connection
+            .execute_batch("ROLLBACK TO damage; RELEASE damage")
+            .unwrap();
+        assert_eq!(
+            range_bytes_at(&connection, key, 1, 0, 8).unwrap(),
+            b"original"
+        );
+    }
+    connection.execute_batch("CREATE TEMP TRIGGER reject_tail BEFORE UPDATE ON content_segments BEGIN SELECT RAISE(FAIL,'tail failure'); END; SAVEPOINT failed").unwrap();
+    assert!(put(&connection, key, 2, b" suffix", true).is_err());
+    connection
+        .execute_batch("ROLLBACK TO failed; RELEASE failed")
+        .unwrap();
+    assert_eq!(stored_rows(&connection, "guarded-tail"), (1, 1));
+    assert_eq!(
+        range_bytes_at(&connection, key, 1, 0, 8).unwrap(),
+        b"original"
+    );
+}
+
+#[test]
+fn compact_content_representation_keys_keep_original_public_wire_names() {
+    let connection = connection();
+    for (index, (rep, wire)) in [
+        (Rep::Utf8Text, "utf8_text"),
+        (Rep::RawJsonUtf8, "raw_json_utf8"),
+        (Rep::BinaryBytes, "binary_bytes"),
+        (Rep::CanonicalJsonV1, "canonical_json_v1"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(serde_json::to_value(rep).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<Rep>(serde_json::json!(wire)).unwrap(),
+            rep
+        );
+        put(
+            &connection,
+            ("codec", "same-source", 0, rep),
+            1,
+            &[u8::try_from(index).unwrap()],
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            range_bytes(&connection, ("codec", "same-source", 0, rep), 0, 1).unwrap(),
+            [u8::try_from(index).unwrap()]
+        );
+    }
+    assert!(
+        connection
+            .query_row(
+                "SELECT rustx_append_content(zeroblob(65536),x'00')",
+                [],
+                |row| row.get::<_, Vec<u8>>(0)
+            )
+            .is_err()
+    );
+    assert!(
+        connection
+            .query_row("SELECT rustx_append_content('text',x'00')", [], |row| row
+                .get::<_, Vec<
+                u8,
+            >>(
+                0
+            ))
+            .is_err()
+    );
+    let (count, bytes, distinct): (u64,u64,u64) = connection.query_row("SELECT count(*),sum(length(representation)),count(DISTINCT representation) FROM content_frontiers WHERE source_id='same-source'", [], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    assert_eq!((count, bytes, distinct), (4, 4, 4));
 }
 
 #[test]
@@ -359,7 +481,7 @@ fn assert_inline_audit_layout(connection: &Connection) {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(first_chunks, ["raw_json_utf8"]);
+    assert_eq!(first_chunks, ["r"]);
     let inline: Vec<(String, bool)> = connection
         .prepare("SELECT representation,bytes IS NOT NULL FROM content_frontiers WHERE source_kind='audit' AND source_id='retained-audit' ORDER BY representation")
         .unwrap()
@@ -369,11 +491,7 @@ fn assert_inline_audit_layout(connection: &Connection) {
         .unwrap();
     assert_eq!(
         inline,
-        [
-            ("canonical_json_v1".into(), true),
-            ("raw_json_utf8".into(), false),
-            ("utf8_text".into(), true),
-        ]
+        [("j".into(), true), ("r".into(), false), ("t".into(), true),]
     );
 }
 

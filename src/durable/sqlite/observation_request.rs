@@ -33,7 +33,7 @@ impl SourceWriter<'_> {
             if self.segment == 0 {
                 self.first = std::mem::take(&mut self.buffer);
             } else {
-                self.connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES(?1,?2,0,'canonical_json_v1',?3,?4)",params![self.kind,self.id,self.segment,self.buffer]).map_err(std::io::Error::other)?;
+                self.connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES(?1,?2,0,'j',?3,?4)",params![self.kind,self.id,self.segment,self.buffer]).map_err(std::io::Error::other)?;
             }
             self.written = self
                 .written
@@ -132,7 +132,7 @@ pub(super) fn index_state_source(
     state_preview::index_fields(&writer, source)?;
     connection
         .execute(
-            "INSERT INTO content_frontiers VALUES(?1,?2,0,'canonical_json_v1',1,?3,?4)",
+            "INSERT INTO content_frontiers VALUES(?1,?2,0,'j',1,?3,?4)",
             params![kind, id, writer.written, writer.first],
         )
         .map_err(|error| storage(error.to_string()))?;

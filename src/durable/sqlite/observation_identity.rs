@@ -41,7 +41,7 @@ pub(super) fn inherited(
     ordinal: u64,
 ) -> Result<AttemptIdentitySource, ConversationStoreError> {
     let encoded_bytes: u64 = connection.query_row(
-        "SELECT readable_end FROM content_frontiers WHERE source_kind='inherited_attempt_identity' AND source_id=?1 AND block_index=0 AND representation='canonical_json_v1' AND revision=1",
+        "SELECT readable_end FROM content_frontiers WHERE source_kind='inherited_attempt_identity' AND source_id=?1 AND block_index=0 AND representation='j' AND revision=1",
         [key(kind,ordinal)], |row| row.get(0),
     ).map_err(|_| storage("original inherited owner field unavailable"))?;
     Ok(AttemptIdentitySource::Inherited {

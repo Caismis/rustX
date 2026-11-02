@@ -52,11 +52,11 @@ fn plain(cut: &CheckpointReadCut) -> PlainCut<'_> {
         source_cut,
         domain_revisions: domain_revisions
             .iter()
-            .map(|(k, v)| (k.clone(), *v))
+            .map(|(k, v)| (k.to_string(), *v))
             .collect(),
         collection_cuts: collection_cuts
             .iter()
-            .map(|(k, v)| (k.clone(), *v))
+            .map(|(k, v)| (k.to_string(), *v))
             .collect(),
     }
 }
@@ -102,9 +102,9 @@ fn read_cut_shared_maps_preserve_plain_wire_schema_and_composed_size() {
         value.through = quantity;
         value
             .domain_revisions
-            .insert(format!("domain-水\"\\-{quantity}"), quantity);
+            .insert(format!("domain-水\"\\-{quantity}").into(), quantity);
         value.collection_cuts.insert(
-            format!("collection-{quantity}"),
+            format!("collection-{quantity}").into(),
             ObservationCollectionCut {
                 generation: quantity,
                 total: quantity,
@@ -205,6 +205,31 @@ fn read_cut_map_certificates_reuse_unchanged_roots_and_invalidate_mutation() {
     );
     check(&value);
 }
+
+#[test]
+fn read_cut_revision_updates_share_keys_and_preserve_issued_cut_and_exhaustion() {
+    let mut value = cut();
+    assert_eq!(value.domain_revisions.advance_revision("attempt"), Some(1));
+    let original = value.clone();
+    let old_wire = wire(&original);
+    let old_key = original.domain_revisions.keys().next().unwrap();
+    for expected in 2..=128 {
+        assert_eq!(
+            value.domain_revisions.advance_revision("attempt"),
+            Some(expected)
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            old_key,
+            value.domain_revisions.keys().next().unwrap()
+        ));
+        check(&value);
+    }
+    assert_eq!(wire(&original), old_wire);
+    value.domain_revisions.insert("attempt".into(), u64::MAX);
+    assert_eq!(value.domain_revisions.advance_revision("attempt"), None);
+    assert_eq!(value.domain_revisions.get("attempt"), Some(&u64::MAX));
+    assert_eq!(original.domain_revisions.get("attempt"), Some(&1));
+}
 #[test]
 fn read_cut_map_exact_size_keeps_original_large_key_and_encoded_budget_boundaries() {
     for length in [
@@ -216,7 +241,7 @@ fn read_cut_map_exact_size_keeps_original_large_key_and_encoded_budget_boundarie
         CHECKPOINT_TARGET_BYTES + 1,
     ] {
         let mut value = cut();
-        value.domain_revisions.insert("x".repeat(length), 7);
+        value.domain_revisions.insert("x".repeat(length).into(), 7);
         check(&value);
     }
     let json = serde_json::json!({"canonical_foreground":null,"live_publication":null,

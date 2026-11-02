@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct ReadCutMap<V: Clone>(
-    #[schemars(with = "std::collections::BTreeMap<String, V>")] imbl::OrdMap<String, V>,
+    #[schemars(with = "std::collections::BTreeMap<String, V>")]
+    imbl::OrdMap<std::sync::Arc<str>, V>,
 );
 impl<V: Clone> Default for ReadCutMap<V> {
     fn default() -> Self {
@@ -14,7 +15,7 @@ impl<V: Clone> Default for ReadCutMap<V> {
     }
 }
 impl<V: Clone> std::ops::Deref for ReadCutMap<V> {
-    type Target = imbl::OrdMap<String, V>;
+    type Target = imbl::OrdMap<std::sync::Arc<str>, V>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -22,6 +23,18 @@ impl<V: Clone> std::ops::Deref for ReadCutMap<V> {
 impl<V: Clone> std::ops::DerefMut for ReadCutMap<V> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl ReadCutMap<u64> {
+    pub(crate) fn advance_revision(&mut self, owner: &str) -> Option<u64> {
+        let next = self.0.get(owner).copied().unwrap_or(0).checked_add(1)?;
+        if let Some(revision) = self.0.get_mut(owner) {
+            *revision = next;
+        } else {
+            self.0.insert(owner.into(), next);
+        }
+        Some(next)
     }
 }
 

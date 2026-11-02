@@ -235,13 +235,13 @@ fn auxiliary_metadata_seed_maps_share_roots_and_keep_issued_cuts() {
             },
         );
         projection.collection_cuts.insert(
-            domain.clone(),
+            domain.clone().into(),
             ObservationCollectionCut {
                 generation: 1,
                 total: index,
             },
         );
-        projection.domain_revisions.insert(domain.clone(), index);
+        projection.domain_revisions.insert(domain.clone().into(), index);
         projection
             .head_bindings
             .insert(MessageId::new(domain), Vec::new().into());
