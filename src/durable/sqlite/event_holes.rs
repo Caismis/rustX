@@ -20,11 +20,11 @@ const COLUMNS: &[(&str, &str)] = &[
 const INDEXES: &[(&str, &str)] = &[
     (
         "events_aggregate_holes_idx",
-        "CREATE INDEX events_aggregate_holes_idx ON events(observation_aggregate_holes,sequence) WHERE observation_aggregate_holes>0",
+        "CREATE INDEX events_aggregate_holes_idx ON events(observation_aggregate_holes) WHERE observation_aggregate_holes>0",
     ),
     (
         "events_owner_holes_idx",
-        "CREATE INDEX events_owner_holes_idx ON events(observation_owner_holes,sequence) WHERE observation_owner_holes>0",
+        "CREATE INDEX events_owner_holes_idx ON events(observation_owner_holes) WHERE observation_owner_holes>0",
     ),
 ];
 

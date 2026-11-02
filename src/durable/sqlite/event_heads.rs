@@ -63,15 +63,23 @@ const COLUMNS: &[(&str, &str)] = &[
 const INDEXES: &[(&str, &str)] = &[
     (
         "events_aggregate_heads_idx",
-        "CREATE INDEX events_aggregate_heads_idx ON events(observation_aggregate_heads,sequence) WHERE observation_aggregate_heads>0",
+        "CREATE INDEX events_aggregate_heads_idx ON events(observation_aggregate_heads) WHERE observation_aggregate_heads>0",
     ),
     (
         "events_attempt_heads_idx",
-        "CREATE INDEX events_attempt_heads_idx ON events(attempt_id,observation_attempt_heads,sequence) WHERE observation_attempt_heads>0",
+        "CREATE INDEX events_attempt_heads_idx ON events(attempt_id,observation_attempt_heads) WHERE observation_attempt_heads>0",
     ),
 ];
 
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
+    // Narrow indexes rely on the implicit rowid being the native sequence.
+    // INTEGER PRIMARY KEY DESC and WITHOUT ROWID have different layouts.
+    let alias:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_list WHERE schema='main' AND name='events' AND type='table' AND wr=0) AND EXISTS(SELECT 1 FROM pragma_table_xinfo('events') WHERE name='sequence' AND type='INTEGER' AND pk=1 AND hidden=0) AND NOT EXISTS(SELECT 1 FROM pragma_index_list('events') WHERE origin='pk')",[],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    if !alias {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "event sequence must alias rowid".into(),
+        ));
+    }
     let events: String = connection
         .query_row(
             "SELECT sql FROM sqlite_schema WHERE type='table' AND name='events'",

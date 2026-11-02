@@ -17,11 +17,17 @@ use crate::durable::sqlite::statements::FixedStatements;
 /// caller's pinned transaction, so external DDL cannot race the proof.
 pub(super) struct Guard {
     installed: Option<(i64, i64)>,
+    statistics: observation_statistics::FoldCache,
+    execution: observation_execution::FoldCache,
 }
 impl Guard {
     #[cfg(test)]
     pub(super) fn uninstalled() -> Self {
-        Self { installed: None }
+        Self {
+            installed: None,
+            statistics: observation_statistics::FoldCache::default(),
+            execution: observation_execution::FoldCache::default(),
+        }
     }
     pub(super) fn new(connection: &Connection) -> Self {
         let installed = connection
@@ -33,7 +39,11 @@ impl Guard {
                     .flatten();
                 transaction.commit().ok().and(installed)
             });
-        Self { installed }
+        Self {
+            installed,
+            statistics: observation_statistics::FoldCache::default(),
+            execution: observation_execution::FoldCache::default(),
+        }
     }
     pub(super) fn can_prepare(&self, connection: &Connection) -> bool {
         if let Some(installed) = self.installed
@@ -115,6 +125,7 @@ pub(super) fn prepared(
         .execute_cached("SAVEPOINT rustx_prepared_event", [])
         .map_err(|error| storage(format!("prepare native event: {error}")))?;
     let Ok(row) = prepare(
+        guard,
         transaction,
         event,
         json,
@@ -159,6 +170,7 @@ fn rollback(connection: &Connection) -> Result<(), ConversationStoreError> {
 
 #[allow(clippy::too_many_lines)]
 fn prepare(
+    guard: &Guard,
     transaction: &Transaction<'_>,
     event: &mut RuntimeEventEnvelope,
     json: &str,
@@ -193,7 +205,15 @@ fn prepare(
     let aggregates = aggregate_required
         // The builder only reads and encodes. Its stored columns are installed
         // by the final INSERT under the outer preparation savepoint.
-        .then(|| append_facts::prepare_aggregates(transaction, event, previous_members).ok())
+        .then(|| {
+            append_facts::prepare_aggregates_cached(
+                transaction,
+                event,
+                previous_members,
+                Some(&guard.statistics),
+            )
+            .ok()
+        })
         .flatten();
     let mut available = !aggregate_required || aggregates.is_some();
     if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
@@ -219,7 +239,12 @@ fn prepare(
     let execution = execution_required
         .then(|| {
             optional_display_layout(transaction, || {
-                observation_execution::prepare(transaction, event, true)
+                observation_execution::prepare_cached(
+                    transaction,
+                    event,
+                    true,
+                    Some(&guard.execution),
+                )
             })
         })
         .flatten()

@@ -189,8 +189,8 @@ fn unrelated_hole_history_does_not_expand_a_bounded_negative_probe() {
         assert!(
             plan.iter().any(|line| line.contains(&format!(
                 "SEARCH events USING INDEX events_{group}_holes_idx"
-            )) && line.contains("sequence>?")
-                && line.contains("sequence<?")),
+            )) && line.contains("rowid>?")
+                && line.contains("rowid<?")),
             "{plan:?}"
         );
         for (after, through, expected) in [(0, 4096, false), (0, 4097, true), (4097, 4097, false)] {

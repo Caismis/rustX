@@ -23,10 +23,20 @@ struct ExecutionLayout {
     generation_ms: u64,
     output_tokens: u64,
 }
+#[derive(Default)]
+pub(super) struct FoldCache(super::append_facts::FoldCache<ExecutionLayout>);
 fn layout(
     connection: &Connection,
     attempt: &AttemptId,
     through: u64,
+) -> Result<ExecutionLayout, ConversationStoreError> {
+    layout_cached(connection, attempt, through, None)
+}
+fn layout_cached(
+    connection: &Connection,
+    attempt: &AttemptId,
+    through: u64,
+    cache: Option<&FoldCache>,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
     let bytes: Option<Vec<u8>> = connection
         .prepare_cached(super::event_heads::EXECUTION)
@@ -37,7 +47,11 @@ fn layout(
         .map_err(|error| storage(error.to_string()))?;
     bytes.map_or_else(
         || Ok(ExecutionLayout::default()),
-        |bytes| decode_layout(&bytes),
+        |bytes| {
+            cache
+                .and_then(|cache| cache.0.take(&bytes))
+                .map_or_else(|| decode_layout(&bytes), Ok)
+        },
     )
 }
 pub(super) fn summary_at_sequence(
@@ -202,6 +216,15 @@ pub(super) fn prepare(
     event: &RuntimeEventEnvelope,
     pending: bool,
 ) -> Result<Option<Prepared>, ConversationStoreError> {
+    prepare_cached(connection, event, pending, None)
+}
+#[allow(clippy::too_many_lines)]
+pub(super) fn prepare_cached(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    pending: bool,
+    cache: Option<&FoldCache>,
+) -> Result<Option<Prepared>, ConversationStoreError> {
     let Some(attempt) = &event.attempt_id else {
         return Ok(None);
     };
@@ -220,7 +243,7 @@ pub(super) fn prepare(
     ) {
         return Ok(None);
     }
-    let mut state = layout(connection, attempt, event.sequence.saturating_sub(1))?;
+    let mut state = layout_cached(connection, attempt, event.sequence.saturating_sub(1), cache)?;
     if state.owner_anchor == 0 {
         state.owner_anchor = event.sequence;
     }
@@ -305,11 +328,14 @@ pub(super) fn prepare(
         }
         _ => {}
     }
-    let mut prepared = seal_execution(state)?;
+    let mut prepared = seal_execution_cached(state, cache)?;
     prepared.model = model_insert;
     Ok(Some(prepared))
 }
-fn seal_execution(mut state: ExecutionLayout) -> Result<Prepared, ConversationStoreError> {
+fn seal_execution_cached(
+    mut state: ExecutionLayout,
+    cache: Option<&FoldCache>,
+) -> Result<Prepared, ConversationStoreError> {
     state.summary.models_next_offset = ((state.summary.models.len() as u64)
         < state.summary.models_total)
         .then_some(state.summary.models.len() as u64);
@@ -323,13 +349,23 @@ fn seal_execution(mut state: ExecutionLayout) -> Result<Prepared, ConversationSt
         }
         state.summary.models_next_offset = Some(state.summary.models.len() as u64);
     };
+    let owner = state.owner_anchor;
+    let value = if let Some(cache) = cache {
+        let summary = state.summary.clone();
+        if let Some(timing) = &mut state.summary.timing {
+            timing.output_tokens_per_second = timing
+                .output_tokens_per_second
+                .filter(|value| value.is_finite());
+        }
+        cache.0.remember(&bytes, state);
+        summary
+    } else {
+        state.summary
+    };
     Ok(Prepared {
         model: None,
-        owner: state.owner_anchor,
-        capture: Captured {
-            bytes,
-            value: state.summary,
-        },
+        owner,
+        capture: Captured { bytes, value },
     })
 }
 fn attempt_failed(

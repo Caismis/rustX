@@ -13,6 +13,37 @@ impl<T: Clone> Captured<T> {
     }
 }
 
+/// A single decoded value, consumed only after the caller read the current cell.
+/// Equality is over all stored bytes; this never caches a SQL lookup or cut.
+#[derive(Default)]
+pub(super) struct FoldCache<T>(std::sync::Mutex<Option<Captured<T>>>);
+impl<T> FoldCache<T> {
+    pub(super) fn take(&self, stored: &[u8]) -> Option<T> {
+        let value = self
+            .0
+            .lock()
+            .expect("fold cache")
+            .take()
+            .filter(|entry| entry.bytes == stored)
+            .map(|entry| entry.value);
+        #[cfg(test)]
+        FOLD_WORK.with(|work| {
+            let (hits, misses) = work.get();
+            work.set((
+                hits + usize::from(value.is_some()),
+                misses + usize::from(value.is_none()),
+            ));
+        });
+        value
+    }
+    pub(super) fn remember(&self, bytes: &[u8], value: T) {
+        *self.0.lock().expect("fold cache") = Some(Captured {
+            bytes: bytes.to_vec(),
+            value,
+        });
+    }
+}
+
 pub(super) struct Facts {
     /// Fresh request core was already attempted in this append's independent domain.
     pub(super) request_trace_prepared: bool,
@@ -52,8 +83,16 @@ pub(super) fn prepare_aggregates(
     event: &crate::events::types::RuntimeEventEnvelope,
     previous_members: Option<&super::observation_members::Captured>,
 ) -> Result<Aggregates, ConversationStoreError> {
+    prepare_aggregates_cached(connection, event, previous_members, None)
+}
+pub(super) fn prepare_aggregates_cached(
+    connection: &Connection,
+    event: &crate::events::types::RuntimeEventEnvelope,
+    previous_members: Option<&super::observation_members::Captured>,
+    cache: Option<&super::observation_statistics::FoldCache>,
+) -> Result<Aggregates, ConversationStoreError> {
     Ok(Aggregates {
-        statistics: super::observation_statistics::prepare(connection, event)?,
+        statistics: super::observation_statistics::prepare_cached(connection, event, cache)?,
         members: super::observation_members::prepare_event(connection, event, previous_members)?,
     })
 }
@@ -121,4 +160,11 @@ pub(super) fn lifecycle_probe() {
 #[cfg(test)]
 pub(super) fn take_lifecycle_probes() -> usize {
     LIFECYCLE_PROBES.with(|count| count.replace(0))
+}
+
+#[cfg(test)]
+thread_local! { static FOLD_WORK: std::cell::Cell<(usize,usize)> = const {std::cell::Cell::new((0,0))}; }
+#[cfg(test)]
+pub(super) fn take_fold_work() -> (usize, usize) {
+    FOLD_WORK.with(|work| work.replace((0, 0)))
 }

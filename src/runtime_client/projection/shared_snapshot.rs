@@ -1,7 +1,7 @@
 //! Internal copy-on-write domains. Published seeds share immutable values;
 //! any mutable domain access detaches only that domain from issued snapshots.
 use super::super::snapshot::{
-    AgentStatusView, CapabilityView, InboundDiagnostics, RuntimeClientAgent, RuntimeClientAttempt,
+    AgentStatusView, CapabilityView, InboundDiagnostics, RuntimeClientAgent,
     RuntimeClientContextView, RuntimeClientInteractionHeader, RuntimeClientJob,
     RuntimeClientMessageDescriptor, RuntimeClientModelStatus,
     RuntimeClientPublicationSettlementRecord, RuntimeClientResourcesView, RuntimeClientSnapshot,
@@ -129,7 +129,7 @@ pub(crate) struct SharedSnapshot {
     pub(crate) transcript: SharedTranscript,
     pub(crate) trace: SharedTrace,
     pub(crate) trace_updates: CowDomain<Vec<super::super::trace::TraceLifecycle>>,
-    pub(crate) attempt: CowDomain<Option<RuntimeClientAttempt>>,
+    pub(crate) attempt: CowDomain<Option<super::shared_attempt::SharedAttempt>>,
     pub(crate) inbound: CowDomain<InboundDiagnostics>,
     pub(crate) pending_interactions: CowDomain<Vec<RuntimeClientInteractionHeader>>,
     pub(crate) jobs: CowDomain<Vec<RuntimeClientJob>>,
@@ -223,7 +223,7 @@ impl SharedSnapshot {
             transcript: self.transcript.owned(),
             trace: self.trace.owned(),
             trace_updates: self.trace_updates.owned(),
-            attempt: self.attempt.owned(),
+            attempt: self.attempt.public(),
             inbound: self.inbound.owned(),
             pending_interactions: self.pending_interactions.owned(),
             jobs: self.jobs.owned(),
@@ -255,7 +255,7 @@ impl PartialEq<SharedSnapshot> for RuntimeClientSnapshot {
             && other.transcript == self.transcript
             && other.trace == self.trace
             && self.trace_updates == *other.trace_updates
-            && self.attempt == *other.attempt
+            && self.attempt == other.attempt.public()
             && self.inbound == *other.inbound
             && self.pending_interactions == *other.pending_interactions
             && self.jobs == *other.jobs

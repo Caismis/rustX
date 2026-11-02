@@ -93,9 +93,11 @@
 //! Goal change is a durable phase/revision change: there is no activation-only
 //! Goal event, and no snapshot or event can represent an Active-but-inert Goal.
 
+mod attempt_view;
 mod canonical_tools;
 mod prepared_attempt;
 mod prepared_capture;
+mod shared_attempt;
 pub(crate) mod shared_snapshot;
 use shared_snapshot::SharedSnapshot;
 
@@ -777,69 +779,85 @@ impl CheckpointSeed {
             .map(|diagnostic| bounded_diagnostic(diagnostic));
         context
     }
+    #[cfg(test)]
     fn capture_attempt(
         &self,
         capture: &mut super::checkpoint::Capture,
     ) -> Option<super::snapshot::RuntimeClientAttempt> {
+        self.capture_attempt_view(capture)
+            .map(attempt_view::AttemptView::into_owned)
+    }
+    fn capture_attempt_view(
+        &self,
+        capture: &mut super::checkpoint::Capture,
+    ) -> Option<attempt_view::AttemptView<'_>> {
         let prepared = self.prepared_attempt.select(self.snapshot.attempt.owner());
         let mut bindings = Vec::new();
-        let result =
-            self.snapshot
-                .attempt
-                .as_ref()
-                .map(|attempt| super::snapshot::RuntimeClientAttempt {
-                    attempt_id: attempt.attempt_id.clone(),
-                    attempt_id_source: attempt.attempt_id_source.clone(),
-                    phase: match &attempt.phase {
-                        super::snapshot::RuntimeClientAttemptPhase::Incomplete => {
-                            super::snapshot::RuntimeClientAttemptPhase::Incomplete
+        let result = self.snapshot.attempt.as_ref().map(|attempt| {
+            let in_flight = attempt.in_flight.as_ref().map(|flight| {
+                let (blocks, fit) = self.capture_live_blocks_view(
+                    capture,
+                    flight.blocks.iter(),
+                    &mut bindings,
+                    Some(&prepared),
+                );
+                attempt_view::InFlightView {
+                    message_id: &flight.message_id,
+                    blocks,
+                    fit,
+                }
+            });
+            let (foreground, foreground_budget) = self.capture_foreground_view(
+                capture,
+                &attempt.foreground,
+                &mut bindings,
+                Some(&prepared),
+            );
+            let mut view = attempt_view::AttemptView {
+                fit: None,
+                attempt_id: &attempt.attempt_id,
+                attempt_id_source: &attempt.attempt_id_source,
+                phase: match &attempt.phase {
+                    super::snapshot::RuntimeClientAttemptPhase::Incomplete => {
+                        super::snapshot::RuntimeClientAttemptPhase::Incomplete
+                    }
+                    super::snapshot::RuntimeClientAttemptPhase::Admitted => {
+                        super::snapshot::RuntimeClientAttemptPhase::Admitted
+                    }
+                    super::snapshot::RuntimeClientAttemptPhase::Running => {
+                        super::snapshot::RuntimeClientAttemptPhase::Running
+                    }
+                    super::snapshot::RuntimeClientAttemptPhase::Settled { outcome } => {
+                        super::snapshot::RuntimeClientAttemptPhase::Settled {
+                            outcome: bounded_outcome(outcome),
                         }
-                        super::snapshot::RuntimeClientAttemptPhase::Admitted => {
-                            super::snapshot::RuntimeClientAttemptPhase::Admitted
-                        }
-                        super::snapshot::RuntimeClientAttemptPhase::Running => {
-                            super::snapshot::RuntimeClientAttemptPhase::Running
-                        }
-                        super::snapshot::RuntimeClientAttemptPhase::Settled { outcome } => {
-                            super::snapshot::RuntimeClientAttemptPhase::Settled {
-                                outcome: bounded_outcome(outcome),
-                            }
-                        }
+                    }
+                },
+                turn: attempt.turn,
+                last_usage: &attempt.last_usage,
+                in_flight,
+                foreground,
+                model: prepared_attempt::capture_shared(capture, &prepared.model, |capture| {
+                    capture
+                        .item("attempt.model", attempt.model.value())
+                        .flatten()
+                }),
+                execution_settings: prepared_attempt::capture_shared(
+                    capture,
+                    &prepared.settings,
+                    |capture| {
+                        capture
+                            .item(
+                                "attempt.execution_settings",
+                                attempt.execution_settings.value(),
+                            )
+                            .flatten()
                     },
-                    turn: attempt.turn,
-                    last_usage: attempt.last_usage.clone(),
-                    in_flight: attempt.in_flight.as_ref().map(|flight| {
-                        super::snapshot::InFlightAssistantMessage {
-                            message_id: flight.message_id.clone(),
-                            blocks: self.capture_live_blocks_prepared(
-                                capture,
-                                &flight.blocks,
-                                &mut bindings,
-                                Some(&prepared),
-                            ),
-                        }
-                    }),
-                    foreground: self.capture_foreground_prepared(
-                        capture,
-                        &attempt.foreground,
-                        &mut bindings,
-                        Some(&prepared),
-                    ),
-                    model: prepared_attempt::capture(capture, &prepared.model, |capture| {
-                        capture.item("attempt.model", &attempt.model).flatten()
-                    })
-                    .into_owned(),
-                    execution_settings: prepared_attempt::capture(
-                        capture,
-                        &prepared.settings,
-                        |capture| {
-                            capture
-                                .item("attempt.execution_settings", &attempt.execution_settings)
-                                .flatten()
-                        },
-                    )
-                    .into_owned(),
-                });
+                ),
+            };
+            view.fit = view.measure(&prepared, foreground_budget);
+            view
+        });
         self.attempt_bindings.append(bindings, &mut capture.content);
         result
     }
@@ -959,8 +977,13 @@ impl CheckpointSeed {
         // Preserve the shared optional-body admission order, but borrow the
         // normalized bodies until a replacement or a reader actually needs them.
         let context = cached!(context, |capture| self.capture_context(capture));
-        let attempt = self.capture_attempt(&mut capture);
-        budget.value("attempt", &attempt);
+        let attempt = self.capture_attempt_view(&mut capture);
+        budget.field(
+            "attempt",
+            attempt.as_ref().map_or(Some(4), |value| {
+                value.fit.and_then(|budget| budget.checked_add(1))
+            }),
+        );
         budget.value("settings_evidence", &source.settings_evidence);
         let effective_plugins = cached!(effective_plugins, |capture| capture
             .item("effective_plugins", source.effective_plugins.value())
@@ -1128,7 +1151,7 @@ impl CheckpointSeed {
                         next_cursor: source.trace.next_cursor.clone(),
                     },
                     trace_updates: trace_updates.into_owned(),
-                    attempt,
+                    attempt: attempt.map(attempt_view::AttemptView::into_owned),
                     inbound: inbound.into_owned(),
                     pending_interactions: pending_interactions.into_owned(),
                     jobs: jobs.into_owned(),
@@ -1448,6 +1471,7 @@ impl CheckpointSeed {
         self.capture_foreground_prepared(capture, foreground, bindings, None)
     }
 
+    #[cfg(test)]
     fn capture_foreground_prepared(
         &self,
         capture: &mut super::checkpoint::Capture,
@@ -1455,6 +1479,22 @@ impl CheckpointSeed {
         bindings: &mut Vec<super::checkpoint::ContentBinding>,
         prepared: Option<&prepared_attempt::Items>,
     ) -> Vec<ForegroundToolExecution> {
+        self.capture_foreground_view(capture, foreground, bindings, prepared)
+            .0
+            .into_iter()
+            .map(std::borrow::Cow::into_owned)
+            .collect()
+    }
+    fn capture_foreground_view<'a>(
+        &self,
+        capture: &mut super::checkpoint::Capture,
+        foreground: &'a [ForegroundToolExecution],
+        bindings: &mut Vec<super::checkpoint::ContentBinding>,
+        prepared: Option<&prepared_attempt::Items>,
+    ) -> (
+        Vec<std::borrow::Cow<'a, ForegroundToolExecution>>,
+        Option<usize>,
+    ) {
         let head: Vec<_> = foreground
             .iter()
             .take(super::checkpoint::CHECKPOINT_PAGE_ITEMS)
@@ -1466,13 +1506,13 @@ impl CheckpointSeed {
                     capture.reserve(tool)
                 };
                 if admitted {
-                    tool.clone()
+                    std::borrow::Cow::Borrowed(tool)
                 } else {
                     let source = self
                         .foreground_content
                         .iter()
                         .find(|source| source.occurrence == tool.occurrence);
-                    deferred_foreground_tool(tool, source)
+                    std::borrow::Cow::Owned(deferred_foreground_tool(tool, source))
                 }
             })
             .collect();
@@ -1482,17 +1522,34 @@ impl CheckpointSeed {
             head.len() as u64,
             (head.len() < foreground.len()).then_some(head.len() as u64),
         );
-        self.capture_foreground_evidence(capture, &head, bindings);
-        head
+        let mut budget = Some(2usize);
+        for (index, value) in head.iter().enumerate() {
+            let item = prepared
+                .and_then(|items| items.tools.get(index))
+                .map(Arc::as_ref);
+            budget = budget
+                .zip(prepared_attempt::tool_budget(
+                    item,
+                    value,
+                    matches!(value, std::borrow::Cow::Borrowed(_)),
+                ))
+                .and_then(|(total, part)| total.checked_add(2)?.checked_add(part));
+        }
+        self.capture_foreground_evidence(
+            capture,
+            head.iter().map(std::borrow::Cow::as_ref),
+            bindings,
+        );
+        (head, budget)
     }
 
-    fn capture_foreground_evidence(
+    fn capture_foreground_evidence<'a>(
         &self,
         capture: &mut super::checkpoint::Capture,
-        head: &[ForegroundToolExecution],
+        head: impl IntoIterator<Item = &'a ForegroundToolExecution>,
         bindings: &mut Vec<super::checkpoint::ContentBinding>,
     ) {
-        for (index, tool) in head.iter().enumerate() {
+        for (index, tool) in head.into_iter().enumerate() {
             let live_arguments = self.publication_start.as_ref().and_then(|start| {
                 self.live_frontiers.get(&(
                     start.stream_id.clone(),
@@ -1568,16 +1625,17 @@ impl CheckpointSeed {
         }
     }
 
-    fn capture_live_blocks_prepared(
+    fn capture_live_blocks_view<'a>(
         &self,
         capture: &mut super::checkpoint::Capture,
-        blocks: &[InFlightBlock],
+        blocks: impl ExactSizeIterator<Item = &'a InFlightBlock>,
         bindings: &mut Vec<super::checkpoint::ContentBinding>,
         prepared: Option<&prepared_attempt::Items>,
-    ) -> Vec<InFlightBlock> {
+    ) -> (Vec<std::borrow::Cow<'a, InFlightBlock>>, Option<usize>) {
         let mut result = Vec::new();
+        let mut budget = Some(2usize);
+        let total = blocks.len();
         for (index, block) in blocks
-            .iter()
             .take(super::checkpoint::CHECKPOINT_PAGE_ITEMS)
             .enumerate()
         {
@@ -1596,12 +1654,13 @@ impl CheckpointSeed {
                 ),
             };
             let copied = if let Some(owner) = prepared.and_then(|p| p.blocks.get(index)) {
-                prepared_attempt::live_block(capture, owner, block)
+                prepared_attempt::live_block_view(capture, owner, block)
             } else {
-                capture.live_block(block)
+                capture.live_block(block).map(std::borrow::Cow::Owned)
             };
             let deferred = copied.is_none();
-            let bounded = copied.unwrap_or_else(|| deferred_live_block(block));
+            let bounded =
+                copied.unwrap_or_else(|| std::borrow::Cow::Owned(deferred_live_block(block)));
             // Optional bytes share a budget; the first 32 structural descriptors
             // and their exact source references always survive its exhaustion.
             if let Some(start) = &self.publication_start {
@@ -1660,15 +1719,21 @@ impl CheckpointSeed {
                     });
                 }
             }
+            let owner = prepared
+                .and_then(|items| items.blocks.get(index))
+                .map(Arc::as_ref);
+            budget = budget
+                .zip(prepared_attempt::block_budget(owner, &bounded, !deferred))
+                .and_then(|(total, part)| total.checked_add(2)?.checked_add(part));
             result.push(bounded);
         }
         capture.frontier(
             "attempt.in_flight.blocks",
-            blocks.len() as u64,
+            total as u64,
             result.len() as u64,
-            (result.len() < blocks.len()).then_some(result.len() as u64),
+            (result.len() < total).then_some(result.len() as u64),
         );
-        result
+        (result, budget)
     }
 
     fn resolve_captured_content(
@@ -1835,8 +1900,9 @@ impl CheckpointSeed {
                     .attempt
                     .as_ref()
                     .and_then(|attempt| attempt.in_flight.as_ref())
-                    .map_or(&[][..], |flight| &flight.blocks[..]),
-                |block: &InFlightBlock| match block {
+                    .map_or_else(Vec::new, |flight| flight.blocks.iter().collect::<Vec<_>>())
+                    .as_slice(),
+                |block: &&InFlightBlock| match *block {
                     InFlightBlock::Text { block_index, .. }
                     | InFlightBlock::Reasoning { block_index, .. }
                     | InFlightBlock::Refusal { block_index, .. }
@@ -3448,7 +3514,7 @@ impl RuntimeClientProjection {
                         .is_some_and(|start| &start.message_id == block.id())
                     && let Some(attempt) = self.snapshot.attempt.as_mut()
                 {
-                    attempt.in_flight = None;
+                    attempt.in_flight = shared_snapshot::CowDomain::default();
                     self.publication_start = None;
                     self.live_frontiers.clear();
                 }
@@ -3634,7 +3700,8 @@ impl RuntimeClientProjection {
                     .in_flight = Some(InFlightAssistantMessage {
                     message_id: start.message_id.clone(),
                     blocks: Vec::new(),
-                });
+                })
+                .into();
                 vec![RuntimeClientEvent::AssistantMessageStarted {
                     attempt_id,
                     message_id: start.message_id,
@@ -4057,10 +4124,14 @@ impl RuntimeClientProjection {
                         }),
                     turn: 0,
                     last_usage: None,
-                    in_flight: retained
-                        .as_ref()
-                        .and_then(|current| current.in_flight.clone()),
-                    foreground: retained.map_or_else(Vec::new, |current| current.foreground),
+                    in_flight: retained.as_ref().and_then(|current| {
+                        current
+                            .in_flight
+                            .as_ref()
+                            .map(shared_attempt::SharedInFlight::owned)
+                    }),
+                    foreground: retained
+                        .map_or_else(Vec::new, |current| current.foreground.owned()),
                     model: model.inline().map(Box::new),
                     execution_settings: Some(super::settings::AdmittedSettings {
                         read_image_active: Some(read_image_active),
@@ -5602,7 +5673,7 @@ impl RuntimeClientProjection {
             .attempt
             .as_ref()
             .filter(|attempt| attempt.attempt_id.as_ref() == Some(attempt_id))
-            .and_then(|attempt| attempt.execution_settings.clone())
+            .and_then(|attempt| attempt.execution_settings.owned())
     }
 
     fn frozen_attempt_model(&self, attempt_id: &AttemptId) -> Option<Box<AttemptModelView>> {
@@ -5612,7 +5683,7 @@ impl RuntimeClientProjection {
             .as_ref()
             .filter(|attempt| attempt.attempt_id.as_ref() == Some(attempt_id))
         {
-            Some(attempt) => attempt.model.clone(),
+            Some(attempt) => attempt.model.owned(),
             None => None,
         }
     }
@@ -5935,7 +6006,7 @@ impl RuntimeClientProjection {
                     .as_ref()
                     .is_some_and(|flight| header.identity.as_ref() == Some(&flight.message_id))
                 {
-                    attempt.in_flight = None;
+                    attempt.in_flight = shared_snapshot::CowDomain::default();
                     self.publication_start = None;
                     self.live_frontiers.clear();
                 }
@@ -6032,7 +6103,7 @@ impl RuntimeClientProjection {
                     .as_ref()
                     .is_some_and(|flight| summary.message_id.as_ref() == Some(&flight.message_id))
             {
-                attempt.in_flight = None;
+                attempt.in_flight = shared_snapshot::CowDomain::default();
             }
         }
         let audit = receipt.header.display.map(|entry| {
@@ -6093,8 +6164,7 @@ impl RuntimeClientProjection {
         };
         let Some(existing) = in_flight
             .blocks
-            .iter_mut()
-            .find(|block| block_index_of(block) == block_index)
+            .find_mut(|block| block_index_of(block) == block_index)
         else {
             if in_flight.blocks.len() >= 32 {
                 return;
@@ -6151,7 +6221,7 @@ impl RuntimeClientProjection {
             .map(|flight| flight.message_id.clone());
         if let Some(in_flight) = attempt.in_flight.as_mut()
             && let Some(InFlightBlock::ToolCall { arguments, .. }) =
-                in_flight.blocks.iter_mut().find(|block| match block {
+                in_flight.blocks.find_mut(|block| match block {
                     InFlightBlock::ToolCall {
                         block_index: index, ..
                     }
@@ -8054,7 +8124,10 @@ fn block_index_of(block: &InFlightBlock) -> ContentBlockIndex {
 }
 
 /// Appends one block in its native publication creation order.
-fn push_in_flight_block(in_flight: &mut Option<InFlightAssistantMessage>, block: InFlightBlock) {
+fn push_in_flight_block(
+    in_flight: &mut Option<shared_attempt::SharedInFlight>,
+    block: InFlightBlock,
+) {
     let Some(message) = in_flight.as_mut() else {
         return;
     };
@@ -13864,7 +13937,8 @@ mod tests {
         projection.snapshot.attempt.as_mut().unwrap().foreground =
             projection.snapshot.message_descriptors[0]
                 .tool_calls
-                .clone();
+                .clone()
+                .into();
         let started = store
             .append_event(source_tool_event(
                 &store,

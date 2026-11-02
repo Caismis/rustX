@@ -161,3 +161,107 @@ fn changed_shared_head_index_definitions_are_rejected() {
         Err(ConversationStoreError::IncompatibleSchema(_))
     ));
 }
+
+#[test]
+fn event_indexes_store_sequence_once_and_keep_covering_range_order() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let connection = store.lock().unwrap();
+    let names:Vec<String>=connection.prepare("SELECT name FROM sqlite_schema WHERE type='index' AND tbl_name='events' AND sql LIKE 'CREATE INDEX%'").unwrap().query_map([],|row|row.get(0)).unwrap().collect::<Result<_,_>>().unwrap();
+    let mut narrowed = 0;
+    for name in names {
+        let keys: Vec<(i64, Option<String>, bool)> = connection
+            .prepare(&format!("PRAGMA index_xinfo('{name}')"))
+            .unwrap()
+            .query_map([], |row| Ok((row.get(1)?, row.get(2)?, row.get(5)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let explicit: Vec<_> = keys.iter().filter(|(_, _, key)| *key).collect();
+        if explicit[0].1.as_deref() != Some("sequence") {
+            assert!(
+                !explicit
+                    .iter()
+                    .any(|(_, column, _)| column.as_deref() == Some("sequence")),
+                "{name}"
+            );
+            assert_eq!(
+                keys.iter()
+                    .filter(|(cid, _, key)| *cid == -1 && !*key)
+                    .count(),
+                1,
+                "{name}"
+            );
+            narrowed += 1;
+        }
+    }
+    assert!(narrowed >= 20);
+    connection.execute_batch("CREATE TABLE rowid_probe(sequence INTEGER PRIMARY KEY,kind TEXT NOT NULL); CREATE INDEX probe_wide ON rowid_probe(kind,sequence); CREATE INDEX probe_narrow ON rowid_probe(kind);
+        WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v+1 FROM n WHERE v<20000) INSERT INTO rowid_probe SELECT v,printf('type%d',v%12) FROM n;").unwrap();
+    for through in [0, 1, 127, 128, 16383, 16384, 20000, 20001] {
+        for kind in ["type0", "type3", "absent"] {
+            let query = |index: &str| -> Vec<u64> {
+                connection.prepare(&format!("SELECT sequence FROM rowid_probe INDEXED BY {index} WHERE kind=?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 17")).unwrap().query_map(params![kind,through],|row|row.get(0)).unwrap().collect::<Result<_,_>>().unwrap()
+            };
+            assert_eq!(query("probe_narrow"), query("probe_wide"));
+        }
+    }
+    let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT sequence FROM rowid_probe INDEXED BY probe_narrow WHERE kind='type3' AND sequence<=12345 ORDER BY sequence DESC LIMIT 1",[],|row|row.get(3)).unwrap();
+    assert!(plan.contains("COVERING INDEX probe_narrow"));
+    assert!(!plan.contains("TEMP"));
+    let bytes = |name: &str| -> u64 {
+        connection
+            .query_row(
+                "SELECT sum(payload) FROM dbstat WHERE name=?1",
+                [name],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    assert!(bytes("probe_narrow") < bytes("probe_wide"));
+}
+
+#[test]
+fn narrowed_event_index_schema_rejects_version_86_without_migration() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("previous.sqlite");
+    let id = ConversationId::generate();
+    drop(SqliteConversationStore::open(id.clone(), &path).unwrap());
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    raw.execute("UPDATE rustx_store SET schema_version=86 WHERE id=1", [])
+        .unwrap();
+    drop(raw);
+    assert!(matches!(
+        SqliteConversationStore::open(id, &path),
+        Err(ConversationStoreError::SchemaVersionMismatch {
+            stored: 86,
+            expected: 87
+        })
+    ));
+    let raw = rusqlite::Connection::open(path).unwrap();
+    assert_eq!(
+        raw.query_row(
+            "SELECT schema_version FROM rustx_store WHERE id=1",
+            [],
+            |row| row.get::<_, u64>(0)
+        )
+        .unwrap(),
+        86
+    );
+}
+
+#[test]
+fn event_head_schema_requires_true_sequence_rowid_alias() {
+    for sql in [
+        "CREATE TABLE events(sequence INT PRIMARY KEY)",
+        "CREATE TABLE events(sequence INTEGER PRIMARY KEY DESC)",
+        "CREATE TABLE events(sequence INTEGER PRIMARY KEY) WITHOUT ROWID",
+        "CREATE TABLE events(sequence INTEGER, other TEXT,PRIMARY KEY(sequence,other))",
+    ] {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(sql).unwrap();
+        let error = verify_schema(&connection).unwrap_err();
+        assert!(
+            matches!(error,ConversationStoreError::IncompatibleSchema(message) if message=="event sequence must alias rowid")
+        );
+    }
+}

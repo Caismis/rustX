@@ -289,7 +289,7 @@ fn live_attempt_keeps_32_descriptors_and_reuses_binding_owners_across_unchanged_
     projection.snapshot.attempt.as_mut().unwrap().in_flight = Some(InFlightAssistantMessage {
         message_id: start.message_id.clone(),
         blocks,
-    });
+    }).into();
     let original = projection.capture_working_seed();
     let mut old_capture = Capture::new(1);
     checkpoint::take_prepared_fit_work();
@@ -359,7 +359,7 @@ fn prepared_tool_results_invalidate_order_and_signed_zero_at_shared_budget_bound
             }
             let mut projection = projection();
             projection.ensure_attempt(&attempt());
-            projection.snapshot.attempt.as_mut().unwrap().foreground = vec![tool];
+            projection.snapshot.attempt.as_mut().unwrap().foreground = vec![tool].into();
             let original = projection.capture_working_seed();
             let mut warm = Capture::new(17);
             let old_bytes = serde_json::to_vec(&original.capture_attempt(&mut warm)).unwrap();
@@ -441,7 +441,7 @@ fn prepared_tool_admission_reads_current_result_sources_with_unchanged_attempt_o
     );
     let mut projection = projection();
     projection.ensure_attempt(&attempt());
-    projection.snapshot.attempt.as_mut().unwrap().foreground = vec![tool.clone()];
+    projection.snapshot.attempt.as_mut().unwrap().foreground = vec![tool.clone()].into();
     let mut original = projection.capture_working_seed();
     original.foreground_content = vec![super::super::ForegroundResultContent {
         occurrence: tool.occurrence.clone(),
@@ -510,3 +510,5 @@ fn prepared_tool_admission_reads_current_result_sources_with_unchanged_attempt_o
         old_bytes
     );
 }
+
+include!("attempt_domains_tests.rs");
