@@ -28,8 +28,8 @@
 //! is evaluated, so a target's Linux coverage is complete across lanes.
 //!
 //! ```text
-//! cargo run --example check_test_lanes -- --job rust-contracts
-//! cargo run --example check_test_lanes            # every target on this host
+//! cargo run --profile test --all-features --example check_test_lanes -- --job rust-contracts
+//! cargo run --profile test --all-features --example check_test_lanes # all targets on this host
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -526,7 +526,13 @@ fn mentions_cargo_test(run: &str) -> bool {
         tokens
             .iter()
             .position(|token| *token == "cargo")
-            .is_some_and(|cargo| tokens[cargo..].contains(&"test"))
+            .is_some_and(|cargo| match tokens.get(cargo + 1) {
+                Some(&"test") => true,
+                Some(first) if first.starts_with('-') || first.starts_with('+') => {
+                    tokens[cargo + 1..].contains(&"test")
+                }
+                _ => false,
+            })
     })
 }
 
@@ -1133,6 +1139,27 @@ jobs:
     }
 
     #[test]
+    fn a_test_profile_does_not_turn_other_cargo_subcommands_into_tests() {
+        for command in [
+            "cargo run --profile test --all-features --example check_test_lanes",
+            "cargo build --profile test --bins",
+            "cargo check --profile test --all-targets",
+        ] {
+            let workflow = WORKFLOW.replace(
+                "      - name: In-crate",
+                &format!(
+                    "      - name: Not a test\n        run: {command}\n      - name: In-crate"
+                ),
+            );
+            assert_eq!(
+                parse_workflow(&workflow, &targets()).unwrap().len(),
+                parse_workflow(WORKFLOW, &targets()).unwrap().len(),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
     fn the_miniature_lane_shape_is_complete_on_both_platforms() {
         assert_eq!(
             run(WORKFLOW, Platform::Linux, &inventory()),
@@ -1357,6 +1384,14 @@ jobs:
             ),
             (
                 "nice cargo test --lib",
+                "is not a plain `cargo test` command",
+            ),
+            (
+                "cargo +nightly test --lib",
+                "is not a plain `cargo test` command",
+            ),
+            (
+                "cargo --color always test --lib",
                 "is not a plain `cargo test` command",
             ),
             (
