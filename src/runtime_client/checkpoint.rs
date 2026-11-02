@@ -2366,7 +2366,7 @@ mod budget_tests {
         expected
             .read_cut
             .domain_revisions
-            .insert("x".repeat(CHECKPOINT_TARGET_BYTES), 1);
+            .insert("x".repeat(CHECKPOINT_TARGET_BYTES).into(), 1);
         let mut actual = expected.clone();
         let legacy = super::super::preflight::with_structural_admission_only(|| {
             fit_checkpoint(&mut expected)

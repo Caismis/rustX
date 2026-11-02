@@ -1430,7 +1430,7 @@ impl CheckpointSeed {
         self.resolve_captured_content(&mut capture.content);
         for frontier in &mut capture.collections {
             frontier.revision = self.domain_revision(&frontier.domain);
-            if let Some(cut) = self.collection_cuts.get(&frontier.domain) {
+            if let Some(cut) = self.collection_cuts.get(frontier.domain.as_str()) {
                 frontier.total = cut.total;
                 frontier.next_offset =
                     (frontier.loaded < frontier.total).then_some(frontier.loaded);
@@ -3618,7 +3618,7 @@ impl RuntimeClientProjection {
                                     super::content::CanonicalContentLocator::ByLedgerPosition {
                                         position,
                                     };
-                                slot.metadata_ref=self.content_metadata.get(&("canonical_block_metadata",format!("ledger:{position}"),slot.block_index.get(),super::content::ContentRepresentation::CanonicalJsonV1.key())).map(Arc::as_ref).cloned().or_else(||header.content.iter().find_map(|binding|match &binding.content_ref.source {
+                                slot.metadata_ref=self.content_metadata.get(&("cb",format!("ledger:{position}"),slot.block_index.get(),super::content::ContentRepresentation::CanonicalJsonV1.key())).map(Arc::as_ref).cloned().or_else(||header.content.iter().find_map(|binding|match &binding.content_ref.source {
                                     super::content::ContentSource::CanonicalMessageBlock {component:super::content::CanonicalContentComponent::BlockMetadata,block_index,..} if *block_index==slot.block_index=>Some(binding.content_ref.clone()),
                                     _=>None,
                                 }));
@@ -6017,7 +6017,7 @@ impl RuntimeClientProjection {
                         .or_else(|| {
                             self.content_metadata
                                 .get(&(
-                                    "canonical_block_metadata",
+                                    "cb",
                                     locator.key().into_owned(),
                                     slot.block_index.get(),
                                     super::content::ContentRepresentation::CanonicalJsonV1.key(),
@@ -6458,12 +6458,10 @@ impl RuntimeClientProjection {
             _ => &["attempt", "context", "trace"],
         };
         for owner in owners {
-            let revision = self.domain_revisions.entry(owner.to_string()).or_default();
-            let Some(next) = revision.checked_add(1) else {
+            let Some(revision) = self.domain_revisions.advance_revision(owner) else {
                 self.publication_failed(&RuntimeClientError::ProjectionExhausted);
                 return;
             };
-            *revision = next;
             if *owner == "jobs" || *owner == "agents" {
                 let keys: Vec<_> = self
                     .domain_sources
@@ -6472,7 +6470,7 @@ impl RuntimeClientProjection {
                     .map(|(key, _)| key.clone())
                     .collect();
                 for key in keys {
-                    self.domain_sources.get_mut(&key).unwrap().2 = *revision;
+                    self.domain_sources.get_mut(&key).unwrap().2 = revision;
                 }
             }
         }
@@ -7228,12 +7226,10 @@ impl RuntimeClientProjection {
         };
         self.read_revision = revision;
         for owner in ["inbound", "transcript"] {
-            let revision = self.domain_revisions.entry(owner.to_string()).or_default();
-            let Some(next) = revision.checked_add(1) else {
+            let Some(_) = self.domain_revisions.advance_revision(owner) else {
                 self.publication_failed(&RuntimeClientError::ProjectionExhausted);
                 return;
             };
-            *revision = next;
         }
         let loaded = self.snapshot.inbound.pending.len() as u64;
         self.source_frontiers.insert(

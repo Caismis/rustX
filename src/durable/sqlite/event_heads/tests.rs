@@ -234,7 +234,7 @@ fn narrowed_event_index_schema_rejects_version_86_without_migration() {
         SqliteConversationStore::open(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 86,
-            expected: 87
+            expected: 88
         })
     ));
     let raw = rusqlite::Connection::open(path).unwrap();

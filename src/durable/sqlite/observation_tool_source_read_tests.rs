@@ -51,7 +51,7 @@ fn native_tool_page_keeps_one_snapshot_and_rechecks_after_external_changes() {
     let competing = writer.clone();
     super::super::observation_tools::probe_after_associations(move || {
         assert_eq!(competing.lock().unwrap().execute(
-            "UPDATE content_frontiers SET bytes=?1 WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='canonical_json_v1' AND revision=1",
+            "UPDATE content_frontiers SET bytes=?1 WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='j' AND revision=1",
             [br#"{"b":2,"a":1}"#.as_slice()],
         ).unwrap(), 1);
     });
@@ -70,7 +70,7 @@ fn native_tool_page_keeps_one_snapshot_and_rechecks_after_external_changes() {
         Some(r#"{"b":2,"a":1}"#)
     );
     assert_ne!(changed, original);
-    writer.lock().unwrap().execute("UPDATE content_frontiers SET bytes=?1 WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='canonical_json_v1'", [vec![255u8; 13]]).unwrap();
+    writer.lock().unwrap().execute("UPDATE content_frontiers SET bytes=?1 WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='j'", [vec![255u8; 13]]).unwrap();
     assert!(
         reader
             .transcript_tool_headers(&cut, &locator, 0, 32)
@@ -81,7 +81,7 @@ fn native_tool_page_keeps_one_snapshot_and_rechecks_after_external_changes() {
         reader.lock().unwrap().is_autocommit(),
         "the failed page rolls back its read transaction"
     );
-    writer.lock().unwrap().execute("UPDATE content_frontiers SET bytes=?1 WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='canonical_json_v1'", [br#"{"a":1,"b":2}"#.as_slice()]).unwrap();
+    writer.lock().unwrap().execute("UPDATE content_frontiers SET bytes=?1 WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='j'", [br#"{"a":1,"b":2}"#.as_slice()]).unwrap();
     assert_eq!(
         reader
             .transcript_tool_headers(&cut, &locator, 0, 32)
@@ -100,8 +100,8 @@ fn native_tool_page_retains_raw_priority_missing_frontier_and_cut_errors() {
     let raw = br#"{ "b":2, "a":1 }"#;
     {
         let connection = store.lock().unwrap();
-        connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES('canonical','ledger:1',0,'raw_json_utf8',0,?1)", [raw.as_slice()]).unwrap();
-        connection.execute("INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical','ledger:1',0,'raw_json_utf8',1,?1)", [raw.len() as u64]).unwrap();
+        connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES('canonical','ledger:1',0,'r',0,?1)", [raw.as_slice()]).unwrap();
+        connection.execute("INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical','ledger:1',0,'r',1,?1)", [raw.len() as u64]).unwrap();
     }
     let page = store
         .transcript_tool_headers(&cut, &locator, 0, 32)
@@ -110,7 +110,7 @@ fn native_tool_page_retains_raw_priority_missing_frontier_and_cut_errors() {
         page.headers[0].arguments_json.as_deref(),
         Some(std::str::from_utf8(raw).unwrap())
     );
-    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_id='ledger:1' AND representation='raw_json_utf8'", []).unwrap();
+    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_id='ledger:1' AND representation='r'", []).unwrap();
     let error = store
         .transcript_tool_headers(&cut, &locator, 0, 32)
         .unwrap_err();

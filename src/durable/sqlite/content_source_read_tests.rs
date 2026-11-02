@@ -112,7 +112,7 @@ fn canonical_content_read_keeps_range_source_frontier_error_order() {
     );
     {
         let connection = store.lock().unwrap();
-        connection.execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND representation='utf8_text'", []).unwrap();
+        connection.execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND representation='t'", []).unwrap();
     }
     assert!(
         matches!(
@@ -171,7 +171,12 @@ fn resolved_content_reads_preserve_raw_frontier_and_actual_byte_checks() {
     assert_eq!(bytes, raw);
     assert_eq!(take_source_work(), (0, 0));
     // The already resolved position does not replace frontier or body evidence.
-    transaction.execute("DELETE FROM content_frontiers WHERE source_id='ledger:1' AND representation='raw_json_utf8'", []).unwrap();
+    transaction
+        .execute(
+            "DELETE FROM content_frontiers WHERE source_id='ledger:1' AND representation='r'",
+            [],
+        )
+        .unwrap();
     let error = descriptor(
         &transaction,
         store.conversation_id(),
@@ -185,8 +190,8 @@ fn resolved_content_reads_preserve_raw_frontier_and_actual_byte_checks() {
             .contains("retained original raw arguments frontier unavailable")
     );
     assert!(read_bytes(&transaction, store.conversation_id(), &reference, 0, 1024).is_err());
-    transaction.execute("INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical','ledger:1',0,'raw_json_utf8',1,?1)", [raw.len() as u64]).unwrap();
-    transaction.execute("UPDATE content_segments SET bytes=x'ff' WHERE source_id='ledger:1' AND representation='raw_json_utf8'", []).unwrap();
+    transaction.execute("INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical','ledger:1',0,'r',1,?1)", [raw.len() as u64]).unwrap();
+    transaction.execute("UPDATE content_segments SET bytes=x'ff' WHERE source_id='ledger:1' AND representation='r'", []).unwrap();
     assert!(
         read_bytes(&transaction, store.conversation_id(), &reference, 0, 1024).is_err(),
         "short raw body cannot use a valid frontier as proof of its bytes"

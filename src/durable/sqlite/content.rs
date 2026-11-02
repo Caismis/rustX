@@ -18,6 +18,44 @@ use crate::runtime_client::content::{
 use base64::Engine;
 const SEGMENT: u64 = 65_536;
 const SEGMENT_BYTES: usize = 65_536;
+
+pub(super) fn register_tail_function(
+    connection: &Connection,
+) -> Result<(), ConversationStoreError> {
+    use rusqlite::functions::FunctionFlags;
+    connection
+        .create_scalar_function(
+            "rustx_append_content",
+            2,
+            FunctionFlags::SQLITE_UTF8
+                | FunctionFlags::SQLITE_DETERMINISTIC
+                | FunctionFlags::SQLITE_INNOCUOUS,
+            |context| {
+                let prefix = context
+                    .get_raw(0)
+                    .as_blob()
+                    .map_err(|error| rusqlite::Error::UserFunctionError(error.into()))?;
+                let suffix = context
+                    .get_raw(1)
+                    .as_blob()
+                    .map_err(|error| rusqlite::Error::UserFunctionError(error.into()))?;
+                let length = prefix
+                    .len()
+                    .checked_add(suffix.len())
+                    .filter(|length| *length <= SEGMENT_BYTES)
+                    .ok_or_else(|| {
+                        rusqlite::Error::UserFunctionError(
+                            std::io::Error::other("content segment exceeds 64 KiB").into(),
+                        )
+                    })?;
+                let mut bytes = Vec::with_capacity(length);
+                bytes.extend_from_slice(prefix);
+                bytes.extend_from_slice(suffix);
+                Ok(bytes)
+            },
+        )
+        .map_err(|error| storage(error.to_string()))
+}
 #[path = "content_binary.rs"]
 mod binary;
 pub(super) use binary::{
@@ -658,7 +696,7 @@ fn put(
         return Ok(());
     }
     let prior: u64 = if append {
-        connection.query_row("SELECT COALESCE(MAX(readable_end),0) FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4",params![kind,id,block,representation.key()],|r|r.get(0)).map_err(|e|storage(e.to_string()))?
+        connection.query_row_cached("SELECT COALESCE(MAX(readable_end),0) FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4",params![kind,id,block,representation.key()],|r|r.get(0)).map_err(|e|storage(e.to_string()))?
     } else {
         0
     };
@@ -686,10 +724,21 @@ fn append_segments(
     let mut consumed = 0usize;
     if !prior.is_multiple_of(SEGMENT) && !bytes.is_empty() {
         let segment = prior / SEGMENT;
-        let mut tail:Vec<u8>=connection.query_row("SELECT bytes FROM content_segments WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND segment=?5",params![kind,id,block,representation.key(),segment],|r|r.get(0)).map_err(|e|storage(e.to_string()))?;
-        consumed = bytes.len().min(SEGMENT_BYTES - tail.len());
-        tail.extend_from_slice(&bytes[..consumed]);
-        connection.execute("UPDATE content_segments SET bytes=?6 WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND segment=?5",params![kind,id,block,representation.key(),segment,tail]).map_err(|e|storage(e.to_string()))?;
+        let tail_length = prior % SEGMENT;
+        consumed = bytes
+            .len()
+            .min(SEGMENT_BYTES - usize::try_from(tail_length).map_err(|_| invalid())?);
+        // One lookup/update: borrow the SQLite cells inside the bounded BLOB
+        // function, without returning a separate old-tail Vec to the caller.
+        // SQL text concatenation cannot preserve all database encodings.
+        // The selected frontier must match the actual tail.
+        let changed = connection.execute_cached(
+            "UPDATE content_segments SET bytes=rustx_append_content(bytes,?6) WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND segment=?5 AND typeof(bytes)='blob' AND length(bytes)=?7",
+            params![kind,id,block,representation.key(),segment,&bytes[..consumed],tail_length],
+        ).map_err(|error| storage(error.to_string()))?;
+        if changed != 1 {
+            return Err(invalid());
+        }
     }
     while consumed < bytes.len() {
         let start = consumed;
@@ -720,7 +769,7 @@ fn append_canonical_raw(
     bytes: &[u8],
 ) -> Result<(), ConversationStoreError> {
     let prior: u64 = connection.query_row(
-        "SELECT COALESCE((SELECT readable_end FROM content_frontiers WHERE source_kind='canonical' AND source_id=?1 AND block_index=?2 AND representation='raw_json_utf8' AND revision=1),0)",
+        "SELECT COALESCE((SELECT readable_end FROM content_frontiers WHERE source_kind='canonical' AND source_id=?1 AND block_index=?2 AND representation='r' AND revision=1),0)",
         params![id, block], |row| row.get(0),
     ).map_err(|error| storage(error.to_string()))?;
     let end = append_segments(
@@ -730,7 +779,7 @@ fn append_canonical_raw(
         bytes,
     )?;
     connection.execute(
-        "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical',?1,?2,'raw_json_utf8',1,?3) ON CONFLICT(source_kind,source_id,block_index,representation,revision) DO UPDATE SET readable_end=excluded.readable_end",
+        "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical',?1,?2,'r',1,?3) ON CONFLICT(source_kind,source_id,block_index,representation,revision) DO UPDATE SET readable_end=excluded.readable_end",
         params![id, block, end],
     ).map_err(|error| storage(error.to_string()))?;
     Ok(())
@@ -745,7 +794,7 @@ fn index_metadata(
     super::content_encoding::put_json(
         connection,
         (
-            "canonical_block_metadata",
+            "cb",
             id,
             u32::try_from(index).map_err(|_| invalid())?,
             Rep::CanonicalJsonV1,
@@ -950,7 +999,7 @@ pub(super) fn index_message(
     super::observation_membership::canonical(connection, position, message.id())?;
     super::content_encoding::put_json(
         connection,
-        ("canonical_message_metadata", id, 0, Rep::CanonicalJsonV1),
+        ("cm", id, 0, Rep::CanonicalJsonV1),
         1,
         &MessageMetadata(message),
         false,
@@ -1407,8 +1456,8 @@ fn transfer(
     kind: &str,
     id: &str,
 ) -> Result<(), ConversationStoreError> {
-    connection.execute("INSERT INTO content_segments SELECT ?2,?3,block_index,representation,segment,bytes FROM content_segments WHERE source_kind=?4 AND source_id=?1 AND (representation='raw_json_utf8' OR segment>0)",params![stream.as_str(),kind,id,source_kind]).map_err(|e|storage(e.to_string()))?;
-    connection.execute("INSERT INTO content_frontiers SELECT ?2,?3,f.block_index,f.representation,1,MAX(f.readable_end),CASE WHEN f.representation='raw_json_utf8' THEN NULL ELSE COALESCE((SELECT s.bytes FROM content_segments s WHERE s.source_kind=?4 AND s.source_id=?1 AND s.block_index=f.block_index AND s.representation=f.representation AND s.segment=0),x'') END FROM content_frontiers f WHERE f.source_kind=?4 AND f.source_id=?1 GROUP BY f.block_index,f.representation",params![stream.as_str(),kind,id,source_kind]).map_err(|e|storage(e.to_string()))?;
+    connection.execute("INSERT INTO content_segments SELECT ?2,?3,block_index,representation,segment,bytes FROM content_segments WHERE source_kind=?4 AND source_id=?1 AND (representation='r' OR segment>0)",params![stream.as_str(),kind,id,source_kind]).map_err(|e|storage(e.to_string()))?;
+    connection.execute("INSERT INTO content_frontiers SELECT ?2,?3,f.block_index,f.representation,1,MAX(f.readable_end),CASE WHEN f.representation='r' THEN NULL ELSE COALESCE((SELECT s.bytes FROM content_segments s WHERE s.source_kind=?4 AND s.source_id=?1 AND s.block_index=f.block_index AND s.representation=f.representation AND s.segment=0),x'') END FROM content_frontiers f WHERE f.source_kind=?4 AND f.source_id=?1 GROUP BY f.block_index,f.representation",params![stream.as_str(),kind,id,source_kind]).map_err(|e|storage(e.to_string()))?;
     Ok(())
 }
 fn clear_live(
@@ -1475,8 +1524,8 @@ pub(super) fn settle_canonical(
             }
         }
     } else {
-        connection.execute_cached("INSERT INTO content_segments SELECT 'canonical',?2,block_index,representation,segment,bytes FROM content_segments WHERE source_kind='live' AND source_id=?1 AND representation='raw_json_utf8'",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
-        connection.execute_cached("INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) SELECT 'canonical',?2,block_index,representation,1,MAX(readable_end) FROM content_frontiers WHERE source_kind='live' AND source_id=?1 AND representation='raw_json_utf8' AND readable_end>0 GROUP BY block_index,representation",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
+        connection.execute_cached("INSERT INTO content_segments SELECT 'canonical',?2,block_index,representation,segment,bytes FROM content_segments WHERE source_kind='live' AND source_id=?1 AND representation='r'",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
+        connection.execute_cached("INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) SELECT 'canonical',?2,block_index,representation,1,MAX(readable_end) FROM content_frontiers WHERE source_kind='live' AND source_id=?1 AND representation='r' AND readable_end>0 GROUP BY block_index,representation",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
     }
     // These final suffixes were validated with the terminal marker but never
     // exposed as a live prefix. Preserve their original bytes directly in C.
@@ -1632,7 +1681,7 @@ pub(super) fn canonical_raw_arguments(
                 continue;
             }
             let block_index = u32::try_from(index).map_err(|_| invalid())?;
-            let end:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical' AND source_id=?1 AND block_index=?2 AND representation='raw_json_utf8' AND revision=1",params![key.as_str(),block_index],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+            let end:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical' AND source_id=?1 AND block_index=?2 AND representation='r' AND revision=1",params![key.as_str(),block_index],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
             let Some(end) = end else { continue };
             let mut bytes = Vec::new();
             let mut offset = 0;
@@ -1701,7 +1750,7 @@ pub(super) fn model_name_range(
     offset: u64,
     end: u64,
 ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
-    let readable_end:u64=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='attempt_model' AND source_id=?1 AND block_index=0 AND representation='canonical_json_v1' AND revision=1",[&source_sequence.to_string()],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let readable_end:u64=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='attempt_model' AND source_id=?1 AND block_index=0 AND representation='j' AND revision=1",[&source_sequence.to_string()],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     if end > readable_end || offset > end || end - offset > u64::from(CONTENT_READ_MAX_BYTES) {
         return Err(ConversationStoreError::InvalidContentRange);
     }
@@ -1743,7 +1792,7 @@ pub(super) fn attempt_failure_range(
     offset: u64,
     end: u64,
 ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
-    let readable_end:u64=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='attempt_failure' AND source_id=?1 AND block_index=0 AND representation='canonical_json_v1' AND revision=1",[&format!("journal:{sequence}")],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let readable_end:u64=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='attempt_failure' AND source_id=?1 AND block_index=0 AND representation='j' AND revision=1",[&format!("journal:{sequence}")],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     if end > readable_end || offset > end || end - offset > u64::from(CONTENT_READ_MAX_BYTES) {
         return Err(ConversationStoreError::InvalidContentRange);
     }
@@ -1790,7 +1839,7 @@ pub(super) fn utf8_field_end(
     id: &str,
     field: u32,
 ) -> Result<Option<u64>, ConversationStoreError> {
-    connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation='utf8_text' AND revision=1",params![kind,id,field],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))
+    connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation='t' AND revision=1",params![kind,id,field],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))
 }
 pub(super) fn utf8_field_read(
     connection: &Connection,
@@ -1840,7 +1889,7 @@ pub(super) fn structural_field_read(
     offset: u64,
     max_bytes: u32,
 ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
-    let readable_end:u64=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation='canonical_json_v1' AND revision=1",params![kind,id,field],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?.ok_or_else(invalid)?;
+    let readable_end:u64=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation='j' AND revision=1",params![kind,id,field],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?.ok_or_else(invalid)?;
     if max_bytes == 0 || max_bytes > CONTENT_READ_MAX_BYTES || offset > readable_end {
         return Err(ConversationStoreError::InvalidContentRange);
     }

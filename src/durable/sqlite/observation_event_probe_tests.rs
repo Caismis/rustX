@@ -37,12 +37,12 @@ fn event_source_oracle(connection: &Connection, sequence: u64) -> EventSourceOra
         ),
         segments: event_source_rows(
             connection,
-            "SELECT * FROM content_segments WHERE source_kind='observation_journal' AND source_id=?1 ORDER BY segment",
+            "SELECT * FROM content_segments WHERE source_kind='oj' AND source_id=?1 ORDER BY segment",
             &id,
         ),
         frontiers: event_source_rows(
             connection,
-            "SELECT * FROM content_frontiers WHERE source_kind='observation_journal' AND source_id=?1",
+            "SELECT * FROM content_frontiers WHERE source_kind='oj' AND source_id=?1",
             &id,
         ),
     };
@@ -462,7 +462,7 @@ fn assert_inline_event_oracle(connection: &Connection, event: &RuntimeEventEnvel
             for limit in [1, 67, 16_384] {
                 let bytes = observation_request::read_from(
                     &transaction,
-                    "observation_journal",
+                    "oj",
                     "state_observation_fields",
                     &id,
                     &path,
@@ -476,7 +476,7 @@ fn assert_inline_event_oracle(connection: &Connection, event: &RuntimeEventEnvel
     }
     let original = observation_request::read_from(
         &transaction,
-        "observation_journal",
+        "oj",
         "state_observation_fields",
         &id,
         &[],

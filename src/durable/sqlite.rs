@@ -345,7 +345,8 @@ fn count_conversation_store_open() {
 /// Version 85 stores immutable first content chunks alongside their exact frontier.
 /// Version 86 stores bounded binary Statistics and Execution tuples with unchanged JSON admission.
 /// Version 87 removes redundant trailing sequence keys from rowid event indexes.
-pub const SQLITE_SCHEMA_VERSION: i64 = 87;
+/// Version 88 uses compact private content representation and metadata-source keys.
+pub const SQLITE_SCHEMA_VERSION: i64 = 88;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -769,7 +770,7 @@ impl SqliteConversationStore {
         // Refuse obsolete development state before changing journal settings.
         reject_legacy_schema(&connection)?;
         if has_table(&connection, "rustx_store")? {
-            register_integrity_function(&connection)?;
+            register_native_functions(&connection)?;
             validate_existing_schema(&connection)?;
             validate_existing_identity(&connection, &conversation_id)?;
         }
@@ -849,7 +850,7 @@ impl SqliteConversationStore {
         }
         writer_busy_policy(&connection)
             .map_err(|error| storage(format!("configure SQLite busy policy: {error}")))?;
-        register_integrity_function(&connection)?;
+        register_native_functions(&connection)?;
         validate_existing_schema(&connection)?;
         validate_existing_identity(&connection, &conversation_id)?;
         connection
@@ -8207,7 +8208,7 @@ fn verify_contribution_start_tx(
     Ok(events)
 }
 
-fn register_integrity_function(connection: &Connection) -> Result<(), ConversationStoreError> {
+fn register_native_functions(connection: &Connection) -> Result<(), ConversationStoreError> {
     use rusqlite::functions::FunctionFlags;
     connection
         .create_scalar_function(
@@ -8225,14 +8226,15 @@ fn register_integrity_function(connection: &Connection) -> Result<(), Conversati
                 Ok(format!("{:x}", Sha256::digest(bytes.as_bytes())))
             },
         )
-        .map_err(|e| storage(e.to_string()))
+        .map_err(|e| storage(e.to_string()))?;
+    content::register_tail_function(connection)
 }
 
 fn configure_connection(
     connection: &mut Connection,
     in_memory: bool,
 ) -> Result<(), ConversationStoreError> {
-    register_integrity_function(connection)?;
+    register_native_functions(connection)?;
     connection
         .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
         .map_err(|error| storage(format!("configure SQLite: {error}")))?;
@@ -8496,6 +8498,7 @@ const PRESENTATION_INDEXES: &[(&str, &str)] = &[
 
 #[allow(clippy::too_many_lines)] // One fixed development schema; no migrations.
 fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreError> {
+    register_native_functions(connection)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| storage(format!("create schema transaction: {error}")))?;
@@ -19783,7 +19786,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 87);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 88);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19852,7 +19855,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 87);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 88);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -20322,7 +20325,7 @@ mod tests {
                 },
             ))
             .unwrap();
-        store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER refuse_display_body BEFORE INSERT ON content_frontiers WHEN NEW.source_kind='observation_journal' BEGIN SELECT RAISE(ABORT,'derived source unavailable'); END").unwrap();
+        store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER refuse_display_body BEFORE INSERT ON content_frontiers WHEN NEW.source_kind='oj' BEGIN SELECT RAISE(ABORT,'derived source unavailable'); END").unwrap();
         let event = store
             .append_event(envelope(
                 &id,

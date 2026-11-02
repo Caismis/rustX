@@ -262,7 +262,7 @@ fn live_attempt_keeps_32_descriptors_and_reuses_binding_owners_across_unchanged_
         .map(|index| {
             let block_index = ContentBlockIndex::new(index);
             projection.live_frontiers.insert(
-                (start.stream_id.clone(), block_index, "utf8_text", "live"),
+                (start.stream_id.clone(), block_index, "t", "live"),
                 ContentRef {
                     conversation_id: projection.snapshot.conversation_id.clone(),
                     source: ContentSource::LivePublicationPrefix {
@@ -323,7 +323,7 @@ fn live_attempt_keeps_32_descriptors_and_reuses_binding_owners_across_unchanged_
         .get_mut(&(
             start.stream_id.clone(),
             ContentBlockIndex::new(0),
-            "utf8_text",
+            "t",
             "live",
         ))
         .unwrap()

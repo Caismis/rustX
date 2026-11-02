@@ -306,7 +306,7 @@ fn final_model_tool_raw_suffixes_reopen_with_live_or_unindexed_prefix() {
         }
         forbid_final_staging(&fixture);
         let frontier = fixture.store.presentation_frontier().unwrap();
-        fixture.store.lock().unwrap().execute_batch("CREATE TRIGGER fail_final_raw BEFORE INSERT ON content_frontiers WHEN NEW.source_kind='canonical' AND NEW.representation='raw_json_utf8' BEGIN SELECT RAISE(FAIL,'mandatory raw retention'); END;").unwrap();
+        fixture.store.lock().unwrap().execute_batch("CREATE TRIGGER fail_final_raw BEFORE INSERT ON content_frontiers WHEN NEW.source_kind='canonical' AND NEW.representation='r' BEGIN SELECT RAISE(FAIL,'mandatory raw retention'); END;").unwrap();
         let mut candidate = fixture.candidate(None);
         candidate.boundary = None;
         assert!(fixture.store.settle_model_turn(candidate).is_err());
@@ -1321,7 +1321,7 @@ fn prepared_final_settlement_writes_each_event_once_with_final_raw_trace_binding
 fn prepared_final_raw_constraint_failure_preserves_native_error_priority_and_rolls_back() {
     let mut fixture = FinalFixture::new();
     fixture.frames = final_tool_frames(&mut fixture);
-    fixture.store.lock().unwrap().execute_batch("ALTER TABLE content_frontiers ADD COLUMN reject_raw INTEGER GENERATED ALWAYS AS (source_kind='canonical' AND representation='raw_json_utf8') VIRTUAL CHECK(reject_raw=0);").unwrap();
+    fixture.store.lock().unwrap().execute_batch("ALTER TABLE content_frontiers ADD COLUMN reject_raw INTEGER GENERATED ALWAYS AS (source_kind='canonical' AND representation='r') VIRTUAL CHECK(reject_raw=0);").unwrap();
     let before = fixture.store.presentation_frontier().unwrap();
     let mut candidate = fixture.candidate(None);
     candidate.boundary = None;
@@ -1537,7 +1537,7 @@ fn publication_header_keeps_shared_failure_repair_and_custom_trigger_order() {
                     "ALTER TABLE observation_headers ADD COLUMN reject_early INTEGER CHECK(reference_kind!='message' OR json_extract(header_json,'$.transcript_cursor') IS NOT NULL)"
                 }
                 "content" => {
-                    "ALTER TABLE content_frontiers ADD COLUMN reject_metadata INTEGER GENERATED ALWAYS AS (source_kind='canonical_message_metadata') VIRTUAL CHECK(reject_metadata=0)"
+                    "ALTER TABLE content_frontiers ADD COLUMN reject_metadata INTEGER GENERATED ALWAYS AS (source_kind='cm') VIRTUAL CHECK(reject_metadata=0)"
                 }
                 "header_after_t" => {
                     "ALTER TABLE observation_headers ADD COLUMN reject_late INTEGER CHECK(reference_kind!='message' OR json_extract(header_json,'$.transcript_cursor') IS NULL)"
@@ -1595,7 +1595,7 @@ fn publication_header_keeps_shared_failure_repair_and_custom_trigger_order() {
                     .unwrap()
                     .query_row(
                         &format!(
-                            "SELECT count(*) FROM {table} WHERE source_kind LIKE 'canonical%'"
+                            "SELECT count(*) FROM {table} WHERE source_kind IN ('canonical','cb','cm')"
                         ),
                         [],
                         |row| row.get::<_, u64>(0),
@@ -1621,7 +1621,7 @@ fn publication_header_keeps_shared_failure_repair_and_custom_trigger_order() {
                     .transcript_cursor
                     .is_some()
             );
-            assert_eq!(connection.query_row("SELECT count(*) FROM content_frontiers WHERE source_kind LIKE 'canonical%'",[],|row|row.get::<_,u64>(0)).unwrap(),0);
+            assert_eq!(connection.query_row("SELECT count(*) FROM content_frontiers WHERE source_kind IN ('canonical','cb','cm')",[],|row|row.get::<_,u64>(0)).unwrap(),0);
         }
     }
 }
