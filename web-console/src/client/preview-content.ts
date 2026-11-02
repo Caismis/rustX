@@ -4,7 +4,7 @@ import { WorkspaceHostError, fileSourceFailure } from '../workspaces/host';
 import type { PreviewObservation } from '../../shared/file-observation.ts';
 export interface PreviewTextPage { text: string; version: string; offset: number; lines: number; eof: boolean }
 export interface PreviewBytes { data: Uint8Array<ArrayBuffer>; version: string }
-export type PreviewLoadMode = 'pages' | 'bytes' | 'docx' | 'pptx';
+export type PreviewLoadMode = 'pages' | 'bytes' | 'geometry' | 'docx' | 'pptx';
 export interface PreviewReader {
   current(): boolean;
   immutable: boolean;
@@ -41,7 +41,7 @@ export class PreviewContentOwner {
   constructor(private readonly reader: PreviewReader) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
-  get automaticRefresh() { return this.reader.immutable || this.reader.observe !== undefined; }
+  get automaticRefresh() { return this.state.mode !== 'geometry' && (this.reader.immutable || this.reader.observe !== undefined); }
   get retired() { return this.closed; }
   get retainedBytes() { const value = this.saved ?? this.state; return (value.data?.byteLength ?? 0) + (value.text?.length ?? 0) * 2; }
   private publish(patch: Partial<PreviewContentSnapshot>) { this.state = { ...this.state, ...patch }; this.notify(); }
@@ -52,7 +52,7 @@ export class PreviewContentOwner {
     this.visible = true;
     // A previously hidden payload is never exposed until current authority and
     // version are rechecked. A live watch alone is not permission to reuse it.
-    if (!this.reader.immutable && this.reader.observe && this.state.mode) {
+    if (this.state.mode && (!this.reader.immutable && this.reader.observe || this.state.mode === 'geometry')) {
       this.saved = this.state;
       this.state = { revision: this.state.revision, mode: this.state.mode, loading: true, loadedLines: 0 };
       this.pending = { kind: 'validate' }; this.notify(); this.drain();
@@ -63,7 +63,7 @@ export class PreviewContentOwner {
     this.visible = false; this.epoch++; this.pending = undefined; this.resume = undefined; this.controller?.abort();
     if (!this.observation) this.retireObservation();
     this.publish({ loading: false });
-    if (!this.reader.immutable && !this.reader.observe) this.evict();
+    if (!this.reader.immutable && !this.reader.observe && this.state.mode !== 'geometry') this.evict();
   }
   private current(epoch: number) { return !this.closed && this.visible && this.reader.current() && this.epoch === epoch; }
   ensure(mode: PreviewLoadMode, wantedLines = 0) {
@@ -98,7 +98,12 @@ export class PreviewContentOwner {
     if (this.closed) return;
     if (this.activeIntent?.kind === 'read' && this.activeIntent.offset > 1 && this.state.text !== undefined) this.resume ??= this.activeIntent;
     this.epoch++; this.controller?.abort();
-    if (!this.visible) { this.evict(); return; }
+    if (!this.visible) {
+      // Version hints do not revoke a completed geometry copy. Reactivation
+      // probes authority; terminal observation loss still evicts the copy.
+      if (this.state.mode !== 'geometry' || !this.state.data) this.evict();
+      return;
+    }
     this.saved ??= this.state;
     this.wantedLines = Math.max(this.wantedLines, this.saved.loadedLines);
     this.state = { ...this.state, loading: true };
@@ -143,7 +148,8 @@ export class PreviewContentOwner {
           const saved = this.saved; this.saved = undefined;
           const previousVersion = saved?.version && saved.mode !== 'docx' && saved.mode !== 'pptx' ? saved.version : this.observedVersion;
           this.observedVersion = version;
-          if (saved && previousVersion === version && (saved.error !== undefined || saved.text !== undefined || saved.data !== undefined)) {
+          if (saved && (previousVersion === version || mode === 'geometry' && saved.data !== undefined)
+            && (saved.error !== undefined || saved.text !== undefined || saved.data !== undefined)) {
             this.state = saved;
             this.pending = this.resume ?? this.missingPage(); this.resume = undefined;
             this.state = { ...saved, loading: this.pending !== undefined }; this.notify();
@@ -155,7 +161,7 @@ export class PreviewContentOwner {
           return;
         }
         if (mode !== 'pages') {
-          const result = await (mode === 'bytes' ? this.reader.bytes(controller.signal) : this.reader.document(mode, controller.signal));
+          const result = await (mode === 'bytes' || mode === 'geometry' ? this.reader.bytes(controller.signal) : this.reader.document(mode, controller.signal));
           if (this.current(epoch)) this.publish({ data: result.data, version: result.version, loading: false });
         } else {
           const page = await this.reader.page(intent.offset, controller.signal);

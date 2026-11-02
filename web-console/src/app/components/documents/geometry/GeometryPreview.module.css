@@ -1,0 +1,13 @@
+.root { display: flex; flex-direction: column; box-sizing: border-box; gap: 12px; padding: 12px; width: 100%; min-width: 0; height: 100%; min-height: 400px; color: var(--dsw-alias-label-primary); font-family: var(--dsw-font, sans-serif); white-space: normal; }
+.viewport { position: relative; flex: 1 1 300px; min-height: 260px; overflow: hidden; background: var(--dsw-alias-bg-document-preview); border-radius: var(--dsw-radius-lg); }
+.viewport canvas { position: absolute; inset: 0; display: block; max-width: 100%; }
+.metadata, .heading { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.partsPanel { border-top: .5px solid var(--dsw-alias-border-l3); padding-top: 8px; }
+.heading { margin-bottom: 4px; }
+.parts { list-style: none; padding: 0; margin: 0; max-height: 140px; overflow: auto; }
+.parts li { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.parts input { width: 14px; height: 14px; margin: 0 4px; flex: none; accent-color: var(--dsw-alias-button-primary-fill); }
+.parts .partButton { justify-content: flex-start; border-radius: 8px; text-align: start; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.parts .partButton[aria-pressed="true"] { background: var(--dsw-alias-interactive-bg-active); }
+.message, .loading { margin: 0; padding: 20px; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; text-align: center; }
+.loading { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; z-index: 1; }

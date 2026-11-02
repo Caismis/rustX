@@ -1,6 +1,12 @@
 /** Inert occurrence metadata only. No bytes, URLs, source permissions or viewer owners. */
 export interface PreviewViewState {
-  viewer?: 'markdown' | 'html' | 'image' | 'pdf' | 'excel' | 'office' | 'code' | 'text';
+  viewer?: 'markdown' | 'html' | 'image' | 'pdf' | 'excel' | 'office' | 'geometry' | 'code' | 'text';
+  geometry?: {
+    copyId: string;
+    camera?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] };
+    selected?: string;
+    hidden?: string[];
+  };
   imageZoom?: { readonly kind: 'fit-width' } | { readonly kind: 'fixed'; readonly scale: number };
   wrap?: boolean;
   bodyScrollTop?: number;

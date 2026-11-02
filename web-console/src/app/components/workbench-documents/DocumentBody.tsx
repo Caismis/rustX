@@ -16,6 +16,7 @@ import css from './MarkdownBody.module.css';
 import { FILE_PREVIEW_LIMITS } from '../../../../shared/file-preview.ts';
 import { validateRaster } from '../../../client/raster';
 import { DocumentDependencies } from './dependencies';
+import { GeometryDocument } from '../documents/GeometryDocument';
 const Excel = lazy(() => import('./excel/excel').then(m => ({ default: m.ExcelBody })));
 const Pdf = lazy(() => import('../documents/PdfPreview'));
 const limits = { maxBytes: FILE_PREVIEW_LIMITS.spreadsheetBytes, maxCells: FILE_PREVIEW_LIMITS.spreadsheetCells, timeoutMs: FILE_PREVIEW_LIMITS.parserTimeoutMs };
@@ -28,6 +29,10 @@ export function DocumentBody({ mode, text, bytes, path, view, signal, retry, cal
 
   const split = useMemo(() => splitFrontmatter(text), [text]);
   const loading = <p role="status">{tx('artifacts:workbench.loading')}</p>;
+  if (mode === 'geometry') {
+    const owner = view.preview!.owner, snapshot = owner.getSnapshot();
+    return <GeometryDocument bytes={bytes} name={path} copyId={`${snapshot.revision}:${snapshot.version}`} signal={signal} current={() => !signal.aborted && view.current() && owner.getSnapshot().revision === snapshot.revision && owner.getSnapshot().data === bytes} viewState={state} onViewStateChange={patch => { if (!signal.aborted && view.current()) change(patch); }}/>;
+  }
   if (mode === 'markdown') return <DocumentResources.Provider value={{image:(url,alt)=>{const resolved=relativeDocumentPath(path,url);return resolved?<WorkspaceImage key={resolved} path={resolved} alt={alt} dependencies={dependencies}/>:<span>{alt}</span>;},link:(url,children)=>{const resolved=relativeDocumentPath(path,url);return resolved?<a href={url} onClick={event=>{event.preventDefault();onOpen(resolved);}}>{children}</a>:undefined;}}}><div className={css.document} data-document-markdown>
     {split && <div className={css.frontmatter} data-document-frontmatter><FrontmatterFields source={split.source} fallback={<pre className={css.frontmatterSource}>{split.source}</pre>}/></div>}
     <MarkdownText text={split?.body ?? text} streaming={false}/>

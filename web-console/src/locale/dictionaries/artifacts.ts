@@ -32,6 +32,7 @@ export const en = {
   "workbench.pdf": "PDF",
   "workbench.office": "Office",
   "workbench.excel": "Spreadsheet",
+  "workbench.geometry": "3D model",
   "workbench.zoom-in": "Zoom in",
   "workbench.zoom-out": "Zoom out",
   "workbench.fit-width": "Fit width",
@@ -133,6 +134,7 @@ export const en = {
   "document.failure": "Document preview failed. Reopen the file or download the authorized original.",
   "document.empty": "This file is empty.",
   "document.manual-refresh": "File change notifications are unavailable. Use Refresh to check the file.",
+  "document.fixed-copy": "Refresh to view the latest version of this file.",
 
   "artifact.preview": "Preview",
   "presented.file": "File",
@@ -195,6 +197,7 @@ export const zh = {
   "workbench.pdf": "PDF",
   "workbench.office": "Office",
   "workbench.excel": "表格",
+  "workbench.geometry": "三维模型",
   "workbench.zoom-in": "放大",
   "workbench.zoom-out": "缩小",
   "workbench.fit-width": "适合宽度",
@@ -296,6 +299,7 @@ export const zh = {
   "document.failure": "文档预览失败。请重新打开文件或下载已授权的原文件。",
   "document.empty": "此文件为空。",
   "document.manual-refresh": "文件变更通知不可用，请使用刷新检查文件。",
+  "document.fixed-copy": "刷新以查看文件的最新内容。",
 
   "artifact.preview": "预览",
   "presented.file": "文件",

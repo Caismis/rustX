@@ -1,19 +1,46 @@
 import { expect, it } from 'vitest';
 import { PreviewContentCache, PreviewContentOwner, type PreviewTextPage, type PreviewBytes } from '../src/client/preview-content';
 import { WorkspaceHostError } from '../src/workspaces/host';
+it.each([true, false])('geometry retains one completed copy across hints and reactivation (observation=%s)', async observe => {
+  const f = fixture(observe, false); f.owner.activate(); f.owner.ensure('geometry');
+  await f.waitCall(() => f.documents.length === 1);
+  const original = new Uint8Array([1, 2, 3]); f.documents[0].result.resolve({ data: original, version: 'v1' });
+  await until(f.owner, () => !f.owner.getSnapshot().loading); expect(f.owner.automaticRefresh).toBe(false);
+  if (observe) {
+    f.hint(); await f.waitCall(() => f.probes.length === 1); f.probes[0].result.resolve('v2');
+    await until(f.owner, () => !f.owner.getSnapshot().loading);
+    expect(f.owner.getSnapshot().data).toBe(original); expect(f.documents).toHaveLength(1);
+  }
+  f.owner.deactivate(); if (observe) f.hint(); f.owner.activate();
+  const probe = observe ? 1 : 0; await f.waitCall(() => f.probes.length === probe + 1);
+  expect(f.owner.getSnapshot().data).toBeUndefined(); f.probes[probe].result.resolve('v3');
+  await until(f.owner, () => !f.owner.getSnapshot().loading);
+  expect(f.owner.getSnapshot()).toMatchObject({ data: original, version: 'v1' }); expect(f.documents).toHaveLength(1);
+  f.owner.refresh(); await f.waitCall(() => f.documents.length === 2); const next = new Uint8Array([4]);
+  f.documents[1].result.resolve({ data: next, version: 'v4' }); await until(f.owner, () => !f.owner.getSnapshot().loading);
+  expect(f.owner.getSnapshot().data).toBe(next); f.revoke(); expect(f.owner.retainedBytes).toBe(0);
+});
+it('geometry clears a retained copy when reactivation cannot reauthorize its source', async () => {
+  const f = fixture(false, false); f.owner.activate(); f.owner.ensure('geometry');
+  f.documents[0].result.resolve({ data: new Uint8Array([1]), version: 'v1' }); await until(f.owner, () => !f.owner.getSnapshot().loading);
+  f.owner.deactivate(); f.owner.activate(); await f.waitCall(() => f.probes.length === 1);
+  f.probes[0].result.reject(new WorkspaceHostError('denied', 'authorization_revoked'));
+  await until(f.owner, () => !f.owner.getSnapshot().loading);
+  expect(f.owner.getSnapshot().data).toBeUndefined(); expect(f.owner.retainedBytes).toBe(0); expect(f.documents).toHaveLength(1); f.owner.dispose();
+});
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function until(owner: PreviewContentOwner, predicate: () => boolean) {
   if (predicate()) return Promise.resolve();
   return new Promise<void>(resolve => { const stop = owner.subscribe(() => { if (predicate()) { stop(); resolve(); } }); });
 }
-function fixture(observe = false) {
+function fixture(observe = false, immutable = !observe) {
   const pages: { offset: number; signal: AbortSignal; result: ReturnType<typeof deferred<PreviewTextPage>> }[] = [];
   const probes: { signal: AbortSignal; result: ReturnType<typeof deferred<string>> }[] = [];
   const documents: { signal: AbortSignal; result: ReturnType<typeof deferred<PreviewBytes>> }[] = [];
   let changed = () => {}, active = 0, maximum = 0, authorized = true;
   const entered = new Set<() => void>(), watched = deferred<void>();
   const call = <T>(promise: Promise<T>) => { active++; maximum = Math.max(maximum, active); entered.forEach(fn => fn()); return promise.finally(() => { active--; }); };
-  const owner = new PreviewContentOwner({ current: () => authorized, immutable: !observe,
+  const owner = new PreviewContentOwner({ current: () => authorized, immutable,
     page: (offset, signal) => { const result = deferred<PreviewTextPage>(); pages.push({ offset, signal, result }); return call(result.promise); },
     bytes: signal => { const result = deferred<PreviewBytes>(); documents.push({ signal, result }); return call(result.promise); },
     document: (_extension, signal) => { const result = deferred<PreviewBytes>(); documents.push({ signal, result }); return call(result.promise); },

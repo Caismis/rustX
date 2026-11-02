@@ -60,6 +60,11 @@ const pdfPackage = locate(root, 'pdfjs-dist'), pdfVersion = JSON.parse(readFileS
 for (const asset of ['cmaps/LICENSE', 'standard_fonts/LICENSE_FOXIT', 'standard_fonts/LICENSE_LIBERATION']) {
   packages.set(`pdfjs-dist ${pdfVersion} (${asset})`, readFileSync(join(dirname(pdfPackage), asset), 'utf8'));
 }
+// The CAD package's compiled OCCT closure has its own distributed license text.
+const cadPackage = locate(root, 'occt-import-js');
+for (const asset of ['dist/license.occt-import-js.txt', 'dist/license.occt.txt']) {
+  packages.set(`occt-import-js 0.0.23 (${asset})`, readFileSync(join(dirname(cadPackage), asset), 'utf8').replace(/\r\n/g, '\n'));
+}
 packages.set('Lucide 0.468.0 (vendored git-fork and wrench icons)', readFileSync(join(root, 'public/LICENSE-Lucide.txt'), 'utf8'));
 packages.set('Lucide 1.17.0 (vendored Cable icon used by ZCode)', readFileSync(join(root, 'public/LICENSE-Lucide-1.17.txt'), 'utf8'));
 const output = 'Production install dependency notices for rustX Web Console\nIncludes the complete pinned install closure; only selected modules enter the browser bundle.\n\n' + [...packages].sort(([a], [b]) => a.localeCompare(b)).map(([name, license]) => `===== ${name} =====\n${license.trim().replace(/[ \t]+$/gm, '')}\n`).join('\n');

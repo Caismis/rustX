@@ -1,0 +1,14 @@
+{
+  "triangles": 245000,
+  "vertices": 735000,
+  "sourceBytes": 12250084,
+  "displayMs": 1560,
+  "observedFrameGapMs": 300,
+  "resources": {
+    "workers": 0,
+    "contexts": 1,
+    "buffers": 4,
+    "textures": 5,
+    "urls": 0
+  }
+}

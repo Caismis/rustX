@@ -3959,7 +3959,7 @@
           "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ],
-      "local_sha256": "cdc6e2875a671729f87f5b22691a8d96b1b5ca3720043da21f02bb372742ac35"
+      "local_sha256": "a396cd6458aceaa2884d73b990e90c8e5a435d8151d98c7b5b2b90076d33aefa"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4793,7 +4793,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "019f6535a7b40c52caa47c7c8e6832ba9db80b73e1831d1730595e99348d871f"
+      "local_sha256": "f7371fc06febe15d56a84a56bb302681780391ae52769ef54eafbd0311218a60"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5750,6 +5750,7 @@
         "../../../presentation/markdown/DocumentResources",
         "../../../presentation/markdown/MarkdownText",
         "../WorkbenchFiles",
+        "../documents/GeometryDocument",
         "../documents/ImagePreview",
         "../documents/PdfPreview",
         "./MarkdownBody.module.css",
@@ -5763,7 +5764,7 @@
         "./resources",
         "react"
       ],
-      "local_sha256": "8313d02f7110163df4ec915961d11827f1cef6659c4ad6fb897f0faed6552251"
+      "local_sha256": "92f0ff80ef5a0eef43958f27ca56d84eba1c39531d89bfc82c398dff34c67fbe"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",

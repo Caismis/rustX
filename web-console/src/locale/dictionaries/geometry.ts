@@ -1,0 +1,27 @@
+export const en = {
+  loading: 'Loading preview…', canvas: '3D model. Drag to rotate, scroll to zoom.',
+  controls: 'Model controls', view: 'View angle',
+  fit: 'Fit view', isometric: 'Isometric', front: 'Front', back: 'Back', left: 'Left', right: 'Right', top: 'Top', bottom: 'Bottom',
+  parts: 'Parts', part: 'Part', visible: 'Visible', axes: 'Model axes: X, Y, Z', bounds: 'Dimensions',
+  unknown: 'Units not specified', meter: 'm', millimeter: 'Preview units: mm',
+  invalid: 'Could not preview this model. Try opening the original file.',
+  limit: 'This model is too large to preview. Open it in a CAD application.',
+  external: 'This model references external files. Open it in a CAD application.',
+  unsupported: 'This model format is not supported in preview.',
+  empty: 'This file has no model to display.', timeout: 'Preview timed out. Try a smaller model.',
+  worker: 'Could not open this preview. Try again.',
+  webgl: '3D preview is unavailable. Reopen the file or try another browser.',
+  capacity: 'Preview is busy. Try again in a moment.',
+} as const;
+export const zh = {
+  loading: '正在加载预览…', canvas: '三维模型。拖动旋转，滚动缩放。',
+  controls: '模型控件', view: '视角',
+  fit: '适合窗口', isometric: '等轴视图', front: '前视图', back: '后视图', left: '左视图', right: '右视图', top: '俯视图', bottom: '仰视图',
+  parts: '部件', part: '部件', visible: '可见', axes: '模型坐标轴：X、Y、Z', bounds: '尺寸',
+  unknown: '未指定单位', meter: '米', millimeter: '预览单位：毫米',
+  invalid: '无法预览此模型，请尝试打开原文件。', limit: '模型过大，无法预览。请使用 CAD 应用打开。',
+  external: '模型引用了外部文件，请使用 CAD 应用打开。', unsupported: '预览暂不支持此模型格式。',
+  empty: '文件中没有可显示的模型。', timeout: '预览超时，请尝试较小的模型。',
+  worker: '无法打开预览，请重试。', webgl: '三维预览不可用，请重新打开文件或尝试其他浏览器。',
+  capacity: '预览正忙，请稍后重试。',
+} satisfies Record<keyof typeof en, string>;

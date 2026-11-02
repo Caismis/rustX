@@ -432,6 +432,12 @@ physical read to settle. Exact filesystem/native ownership observations drive
 default automatic refresh; next-page version checks are an additional consistency
 fence. See the [full behavior contract](dsh-preview-behavior-alignment.md).
 
+Geometry previews use the same authorized source and physical read barrier with
+an explicit fixed-copy policy: version changes revalidate authority without
+replacing a completed copy. Refresh reads a new copy; close, eviction and scope
+retirement end its lifetime. Original Download still reads the current source.
+See [geometry previews](geometry-previews.md) for format and browser limits.
+
 An existing pages owner accepts a new explicit line or saved-prefix demand even
 when its mode is unchanged. After authority/version validation it reads only
 the missing pages, behind the same physical-operation barrier; a sufficient
