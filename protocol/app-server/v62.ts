@@ -1053,6 +1053,14 @@ export type Request1 =
       };
     }
   | {
+      method: 'workflow/toolCatalog';
+      params: {
+        target: SourceTarget;
+        source?: string | null;
+        cursor?: WorkflowToolCatalogCursor | null;
+      };
+    }
+  | {
       method: 'workflow/analyze';
       params: {
         target: SourceTarget;
@@ -1764,24 +1772,12 @@ export type InteractionResponse =
       response:
         | {
             type: 'submitted';
-            value: QuestionnaireSubmission;
+            value: QuestionnaireSubmission1;
           }
         | {
             type: 'declined';
           };
       type: 'questionnaire';
-    };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ReviewDecision".
- */
-export type ReviewDecision =
-  | {
-      type: 'accepted';
-    }
-  | {
-      feedback: string;
-      type: 'rejected';
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -1887,100 +1883,77 @@ export type ModelRef = string;
  */
 export type WorkflowNodeDefinition =
   | {
+      type: 'start';
+    }
+  | {
       model?: WorkflowModelPolicy;
-      instruction: string;
-      input?: {
-        [k: string]: WorkflowValue;
-      };
+      /**
+       * The prompt: a system message, then user and assistant turns.
+       */
+      messages: WorkflowModelMessage[];
       output: WorkflowModelOutput;
+      /**
+       * Retry a failed call before its failure is handled.
+       */
+      retry?: WorkflowRetry | null;
+      /**
+       * What a call that still failed does.
+       */
+      on_error?:
+        | {
+            type: 'stop';
+          }
+        | {
+            text: string;
+            structured_output?: unknown;
+            type: 'default_value';
+          }
+        | {
+            type: 'fail_branch';
+          };
       type: 'model';
     }
   | {
-      input: WorkflowValue;
+      /**
+       * Variables the body reads and an Assigner node writes, under the
+       * Loop's own ID.
+       */
+      loop_variables?: WorkflowLoopVariable[];
+      /**
+       * Checked before the first round and after every round.
+       */
+      break_condition?: WorkflowPredicate | null;
+      loop_count: number;
       body: WorkflowBlock1;
-      until: WorkflowPredicate;
-      carry: WorkflowValue;
-      max_iterations: number;
       type: 'loop';
     }
   | {
-      subject: WorkflowReviewSubject;
-      context: WorkflowValue[];
-      type: 'review';
-    }
-  | {
-      selector: WorkflowToolSelector;
-      arguments: WorkflowValue;
-      result: WorkflowToolResult;
-      type: 'tool';
-    }
-  | {
       /**
-       * The native named profile to resolve at `AgentRun` admission.
+       * Closed, explicitly tagged value syntax; no evaluation of expression strings.
        */
-      profile: string;
-      /**
-       * The fixed task instruction for this `AgentRun`.
-       */
-      task: string;
-      /**
-       * Explicit input bindings from workflow-local values.
-       */
-      input?: {
-        [k: string]: WorkflowValue;
-      };
-      /**
-       * The frozen `AgentRun` output contract.
-       */
-      output: {
-        [k: string]: unknown;
-      };
-      override?: SubagentInvocationOverride;
-      type: 'agent';
-    }
-  | {
-      /**
-       * The sole boolean condition binding.
-       */
-      condition:
+      iterator:
         | {
-            value: WorkflowValue;
-            type: 'boolean';
+            path: string[];
+            type: 'reference';
           }
         | {
-            left: WorkflowValue;
-            right: WorkflowValue;
-            type: 'equal';
+            value: unknown;
+            type: 'literal';
           }
         | {
-            left: WorkflowValue;
-            right: WorkflowValue;
-            type: 'not_equal';
+            fields: {
+              [k: string]: WorkflowValue;
+            };
+            type: 'object';
           }
         | {
-            predicate: WorkflowPredicate;
-            type: 'not';
+            items: WorkflowValue[];
+            type: 'array';
           }
         | {
-            predicates: WorkflowPredicate[];
-            type: 'and';
-          }
-        | {
-            predicates: WorkflowPredicate[];
-            type: 'or';
+            parts: WorkflowValue[];
+            type: 'template';
           };
-      type: 'branch';
-    }
-  | {
-      /**
-       * Branches are keyed by definition identity, not completion order.
-       */
-      branches: {
-        [k: string]: WorkflowBranch;
-      };
-      type: 'parallel';
-    }
-  | {
       /**
        * Closed, explicitly tagged value syntax; no evaluation of expression strings.
        */
@@ -2002,7 +1975,117 @@ export type WorkflowNodeDefinition =
         | {
             items: WorkflowValue[];
             type: 'array';
+          }
+        | {
+            parts: WorkflowValue[];
+            type: 'template';
           };
+      is_parallel?: boolean;
+      /**
+       * Rounds run at once in parallel mode.
+       */
+      parallel_nums?: number;
+      error_handle_mode?: WorkflowIterationErrorMode;
+      /**
+       * Join the rounds' arrays into one array.
+       */
+      flatten_output?: boolean;
+      body: WorkflowBlock1;
+      type: 'iteration';
+    }
+  | {
+      type: 'loop_end';
+    }
+  | {
+      items: WorkflowAssignment[];
+      type: 'assigner';
+    }
+  | {
+      /**
+       * The Markdown shown to the person: fixed text and references, as
+       * an Agent's task.
+       */
+      content: WorkflowValue[];
+      actions: WorkflowReviewAction[];
+      timeout_ms: string;
+      type: 'review';
+    }
+  | {
+      selector: WorkflowToolSelector;
+      arguments: WorkflowValue;
+      result: WorkflowToolResult;
+      /**
+       * Call a failed Tool again before its failure is handled, as Dify's
+       * tool node does; each call is its own invocation.
+       */
+      retry?: WorkflowRetry | null;
+      /**
+       * What a call that still failed leaves behind.
+       */
+      on_error?:
+        | {
+            type: 'stop';
+          }
+        | {
+            value: unknown;
+            type: 'default_value';
+          }
+        | {
+            type: 'fail_branch';
+          };
+      type: 'tool';
+    }
+  | {
+      /**
+       * The native named profile to resolve at `AgentRun` admission.
+       */
+      profile: string;
+      /**
+       * The task instruction for this `AgentRun`: fixed text and explicit
+       * references, as a Model message's content.
+       */
+      task: WorkflowValue[];
+      /**
+       * What the `AgentRun` returns: its final reply text, or a
+       * structured value committed through `workflow_output`.
+       */
+      output:
+        | {
+            type: 'text';
+          }
+        | {
+            schema: unknown;
+            type: 'json_schema';
+          };
+      /**
+       * As Dify's Agent output routes: the child picks one of these
+       * exits through its required `switch` value.
+       */
+      routes?: WorkflowAgentRoute[];
+      /**
+       * What a failed or timed-out child run leaves behind. Agents are not
+       * retried: a workflow child writes the shared Session workspace
+       * directly, and termination must be proven before it is handled.
+       */
+      on_error?:
+        | {
+            type: 'stop';
+          }
+        | {
+            value: unknown;
+            type: 'default_value';
+          }
+        | {
+            type: 'fail_branch';
+          };
+      type: 'agent';
+    }
+  | {
+      cases: WorkflowBranchCase[];
+      type: 'branch';
+    }
+  | {
+      outputs: WorkflowReturnOutput[];
       type: 'return';
     };
 /**
@@ -2022,6 +2105,13 @@ export type WorkflowModelPolicy =
       max_output_tokens?: number | null;
       mode: 'explicit';
     };
+/**
+ * Who speaks a Model prompt message.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelRole".
+ */
+export type WorkflowModelRole = 'system' | 'user' | 'assistant';
 /**
  * Closed, explicitly tagged value syntax; no evaluation of expression strings.
  *
@@ -2046,6 +2136,10 @@ export type WorkflowValue =
   | {
       items: WorkflowValue[];
       type: 'array';
+    }
+  | {
+      parts: WorkflowValue[];
+      type: 'template';
     };
 /**
  * The single authored output contract of a Workflow Model node.
@@ -2062,10 +2156,20 @@ export type WorkflowModelOutput =
       type: 'json_schema';
     };
 /**
+ * The value types of a Loop variable, as Dify offers them.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowPort".
+ * via the `definition` "WorkflowVarType".
  */
-export type WorkflowPort = boolean | ('true' | 'false' | 'satisfied' | 'exhausted' | 'next');
+export type WorkflowVarType =
+  | 'string'
+  | 'number'
+  | 'boolean'
+  | 'object'
+  | 'array[string]'
+  | 'array[number]'
+  | 'array[boolean]'
+  | 'array[object]';
 /**
  * Typed predicates. Equality requires matching scalar types; no coercion.
  *
@@ -2088,6 +2192,34 @@ export type WorkflowPredicate =
       type: 'not_equal';
     }
   | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'contains';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'not_contains';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'starts_with';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'ends_with';
+    }
+  | {
+      value: WorkflowValue;
+      type: 'empty';
+    }
+  | {
+      value: WorkflowValue;
+      type: 'not_empty';
+    }
+  | {
       predicate: WorkflowPredicate;
       type: 'not';
     }
@@ -2101,12 +2233,36 @@ export type WorkflowPredicate =
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowReviewSubject".
+ * via the `definition` "WorkflowPort".
  */
-export type WorkflowReviewSubject = {
-  value: WorkflowValue;
-  type: 'plan';
-};
+export type WorkflowPort = boolean | string;
+/**
+ * How an Iteration treats a round that failed.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowIterationErrorMode".
+ */
+export type WorkflowIterationErrorMode =
+  'terminated' | 'continue_on_error' | 'remove_abnormal_output';
+/**
+ * Dify's write modes. `overwrite` writes a variable's value and `set` a
+ * constant; both assign.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowWriteMode".
+ */
+export type WorkflowWriteMode =
+  | 'overwrite'
+  | 'clear'
+  | 'set'
+  | 'append'
+  | 'extend'
+  | 'remove_first'
+  | 'remove_last'
+  | 'increment'
+  | 'decrement'
+  | 'multiply'
+  | 'divide';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowToolSelector".
@@ -2122,41 +2278,25 @@ export type WorkflowToolSelector =
       origin: 'source';
     };
 /**
- * Select exactly one native content part, never provider text or log heuristics.
+ * What a Tool node commits, fixed by the Tool: its declared structured
+ * result, or its text. Never provider text heuristics or a part index.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowToolResult".
  */
 export type WorkflowToolResult =
   | {
-      part: number;
       schema: unknown;
       type: 'json';
     }
   | {
-      part: number;
       type: 'text';
     };
-/**
- * Exactly two trust granularities for one source. This is also the authoring
- * boundary: only the literal "all" or an exact array is accepted. `All`
- * grants source-wide Tools and negotiated Resources; `Exact` grants only
- * the named ordinary Tools and never source-wide Resources access.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SourceToolSelection".
- */
-export type SourceToolSelection = AllTools | string[];
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AllTools".
- */
-export type AllTools = 'all';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowNoteTheme".
  */
-export type WorkflowNoteTheme = 'neutral' | 'blue' | 'green' | 'amber' | 'rose';
+export type WorkflowNoteTheme = 'blue' | 'cyan' | 'green' | 'yellow' | 'pink' | 'violet';
 /**
  * Presentation order targets a specific authored list. Schema `path` contains
  * property names (not JSON pointers); missing/new fields append in key order.
@@ -2171,22 +2311,9 @@ export type WorkflowOrderTarget =
       kind: 'block_input';
     }
   | {
-      block: WorkflowBlockStep[];
-      path: WorkflowSchemaStep[];
-      kind: 'block_output';
-    }
-  | {
       address: WorkflowNodeAddress;
       path: WorkflowSchemaStep[];
       kind: 'node_output';
-    }
-  | {
-      address: WorkflowNodeAddress;
-      kind: 'node_input';
-    }
-  | {
-      address: WorkflowNodeAddress;
-      kind: 'branches';
     };
 /**
  * An exact position in a schema, independent of value-reference semantics.
@@ -2208,37 +2335,48 @@ export type WorkflowSchemaStep =
  */
 export type WorkflowConsumerField =
   | {
-      binding: string;
-      kind: 'input';
+      index: number;
+      kind: 'message';
+    }
+  | {
+      kind: 'task';
     }
   | {
       kind: 'arguments';
     }
   | {
-      kind: 'review_subject';
+      kind: 'review_content';
     }
   | {
-      index: number;
-      kind: 'review_context';
-    }
-  | {
+      case_id: string;
       kind: 'condition';
+    }
+  | {
+      case_id: string;
+      kind: 'condition_variable';
     }
   | {
       kind: 'return_output';
     }
   | {
-      branch: string;
-      kind: 'branch_input';
+      index: number;
+      kind: 'loop_variable';
     }
   | {
-      kind: 'loop_input';
+      kind: 'break_condition';
     }
   | {
-      kind: 'loop_until';
+      kind: 'break_condition_variable';
     }
   | {
-      kind: 'loop_carry';
+      kind: 'iteration_iterator';
+    }
+  | {
+      kind: 'iteration_output';
+    }
+  | {
+      index: number;
+      kind: 'assigner_value';
     };
 /**
  * Exact authored position within a value construction or predicate.
@@ -2346,7 +2484,7 @@ export type ConfigMutation =
       unit: 'skills';
     }
   | {
-      authored?: TodoExtensionDocument1 | null;
+      authored?: TodoExtensionDocument | null;
       unit: 'todo';
     }
   | {
@@ -2354,7 +2492,7 @@ export type ConfigMutation =
       unit: 'goal';
     }
   | {
-      authored?: AgentStatusExtensionDocument1 | null;
+      authored?: AgentStatusExtensionDocument | null;
       unit: 'agent_status';
     }
   | {
@@ -2362,8 +2500,9 @@ export type ConfigMutation =
       unit: 'agents';
     }
   | {
-      authored?: WorkflowId[] | null;
-      unit: 'workflows';
+      id: WorkflowId;
+      enabled: boolean;
+      unit: 'workflow_enabled';
     }
   | {
       authored?: AgentId | null;
@@ -2543,6 +2682,21 @@ export type AuxiliaryModelAuthoring =
  */
 export type ToolSourceId = string;
 /**
+ * Exactly two trust granularities for one source. This is also the authoring
+ * boundary: only the literal "all" or an exact array is accepted. `All`
+ * grants source-wide Tools and negotiated Resources; `Exact` grants only
+ * the named ordinary Tools and never source-wide Resources access.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SourceToolSelection".
+ */
+export type SourceToolSelection = AllTools | string[];
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AllTools".
+ */
+export type AllTools = 'all';
+/**
  * Prompt visibility within a frozen Skill catalog; never filesystem authority.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -2617,6 +2771,7 @@ export type NativeTool = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash';
 export type WorkflowEdit =
   | {
       description: string;
+      display?: WorkflowDisplay | null;
       operation: 'create';
     }
   | {
@@ -3025,6 +3180,10 @@ export type MethodResult =
       type: 'workflow_model_choices';
     }
   | {
+      catalog: WorkflowToolCatalog;
+      type: 'workflow_tool_catalog';
+    }
+  | {
       report: WorkflowCheckReport;
       type: 'workflow_check';
     }
@@ -3141,6 +3300,11 @@ export type ToolInvocationId =
     }
   | {
       node: WorkflowNodeInstance;
+      /**
+       * Which call of the visit: 0, then one more per retry, so each call
+       * is its own invocation with its own approval and events.
+       */
+      retry?: number;
       caller: 'workflow';
     };
 /**
@@ -4313,14 +4477,6 @@ export type PublicationAuditBlock =
       kind: 'proposed_tool_call';
     };
 /**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ReviewSubject".
- */
-export type ReviewSubject = {
-  content: unknown;
-  type: 'plan';
-};
-/**
  * The bounded set of text shapes rustX can validate deterministically.
  *
  * Only formats rustX can prove are supported. A schema asking for a format
@@ -4493,14 +4649,25 @@ export type WorkflowExecutionOutcome =
  * via the `definition` "WorkflowNodeKind".
  */
 export type WorkflowNodeKind =
-  'block' | 'agent' | 'model' | 'tool' | 'branch' | 'parallel' | 'review' | 'loop' | 'return';
+  | 'block'
+  | 'agent'
+  | 'model'
+  | 'tool'
+  | 'branch'
+  | 'start'
+  | 'review'
+  | 'loop'
+  | 'iteration'
+  | 'loop_end'
+  | 'assigner'
+  | 'return';
 /**
- * Normal finite Loop completion; neither case claims business verification passed.
+ * Why a Loop finished, as Dify's `completed_reason`.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowLoopExit".
  */
-export type WorkflowLoopExit = 'satisfied' | 'exhausted';
+export type WorkflowLoopExit = 'loop_break' | 'loop_completed';
 /**
  * The canonical conversation message.
  *
@@ -5626,7 +5793,7 @@ export type RuntimeClientEvent =
                   response:
                     | {
                         type: 'submitted';
-                        value: QuestionnaireSubmission;
+                        value: QuestionnaireSubmission1;
                       }
                     | {
                         type: 'declined';
@@ -6314,6 +6481,28 @@ export type WorkflowModelChoices =
       type: 'profiles';
     };
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolSourceKind".
+ */
+export type WorkflowToolSourceKind = 'mcp' | 'python';
+/**
+ * Why a source lists no Tools, or that it listed them.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolSourceState".
+ */
+export type WorkflowToolSourceState =
+  | (
+      | 'listed'
+      | 'invalid'
+      | 'preparation_failed'
+      | 'connection_failed'
+      | 'list_failed'
+      | 'timed_out'
+      | 'cancelled'
+    )
+  | 'pending';
+/**
  * Whether the native compiler admits the candidate's structure.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -6324,7 +6513,6 @@ export type WorkflowStructure =
       outputs: {
         [k: string]: unknown;
       };
-      revision: string;
       status: 'valid';
     }
   | {
@@ -6915,6 +7103,11 @@ export type InteractionKind =
           }
         | {
             node: WorkflowNodeInstance;
+            /**
+             * Which call of the visit: 0, then one more per retry, so each call
+             * is its own invocation with its own approval and events.
+             */
+            retry?: number;
             caller: 'workflow';
           };
       /**
@@ -6967,7 +7160,7 @@ export type InteractionKind =
   | {
       invocation_id: ToolInvocationId;
       requester: InteractionRequester1;
-      questionnaire: QuestionnaireSpecification1;
+      questionnaire: QuestionnaireSpecification2;
       type: 'questionnaire';
     };
 /**
@@ -7053,37 +7246,6 @@ export type AnswerSpecification =
       type: 'multi_choice';
     };
 /**
- * The finite approval decision accepted from a client.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ApprovalDecision".
- */
-export type ApprovalDecision =
-  | {
-      type: 'allow';
-    }
-  | {
-      /**
-       * A bounded client-facing reason.
-       */
-      reason: string;
-      type: 'deny';
-    };
-/**
- * The two valid terminal responses to a questionnaire.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "QuestionnaireResponse".
- */
-export type QuestionnaireResponse =
-  | {
-      type: 'submitted';
-      value: QuestionnaireSubmission;
-    }
-  | {
-      type: 'declined';
-    };
-/**
  * A typed answer decision accepted from a Runtime Client.
  *
  * Which variants are legal for a given question is decided by that question's
@@ -7120,6 +7282,92 @@ export type QuestionnaireAnswer =
   | {
       type: 'custom';
       value: CustomAnswer;
+    };
+/**
+ * The finite approval decision accepted from a client.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ApprovalDecision".
+ */
+export type ApprovalDecision =
+  | {
+      type: 'allow';
+    }
+  | {
+      /**
+       * A bounded client-facing reason.
+       */
+      reason: string;
+      type: 'deny';
+    };
+/**
+ * The two valid terminal responses to a questionnaire.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "QuestionnaireResponse".
+ */
+export type QuestionnaireResponse =
+  | {
+      type: 'submitted';
+      value: QuestionnaireSubmission1;
+    }
+  | {
+      type: 'declined';
+    };
+/**
+ * As Dify's error handling, for a call that failed or timed out after its
+ * retries. Cancellation, an unknown outcome and authority errors still stop
+ * the run.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelErrorStrategy".
+ */
+export type WorkflowModelErrorStrategy =
+  | {
+      type: 'stop';
+    }
+  | {
+      text: string;
+      structured_output?: unknown;
+      type: 'default_value';
+    }
+  | {
+      type: 'fail_branch';
+    };
+/**
+ * As Dify's error handling on its Agent and tool nodes, for a call that
+ * failed or timed out once it is proven settled. Cancellation, an unknown
+ * outcome, unproven settlement and a refused start still stop the run.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowValueErrorStrategy".
+ */
+export type WorkflowValueErrorStrategy =
+  | {
+      type: 'stop';
+    }
+  | {
+      value: unknown;
+      type: 'default_value';
+    }
+  | {
+      type: 'fail_branch';
+    };
+/**
+ * The authored output contract of a Workflow Agent node, as Dify's Agent:
+ * the final reply is the `text` variable, or a declared schema adds the
+ * reserved `workflow_output` terminal and its fields are the variables.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAgentOutput".
+ */
+export type WorkflowAgentOutput =
+  | {
+      type: 'text';
+    }
+  | {
+      schema: unknown;
+      type: 'json_schema';
     };
 /**
  * The configurable execution-ownership policy of one tool.
@@ -7446,6 +7694,11 @@ export type RuntimeClientTranscriptItem =
                 }
               | {
                   node: WorkflowNodeInstance;
+                  /**
+                   * Which call of the visit: 0, then one more per retry, so each call
+                   * is its own invocation with its own approval and events.
+                   */
+                  retry?: number;
                   caller: 'workflow';
                 };
             /**
@@ -7469,7 +7722,7 @@ export type RuntimeClientTranscriptItem =
         | {
             invocation_id: ToolInvocationId;
             requester: InteractionRequester;
-            questionnaire: QuestionnaireSpecification;
+            questionnaire: QuestionnaireSpecification1;
             type: 'questionnaire';
           };
       type: 'interaction_requested';
@@ -7518,7 +7771,7 @@ export type RuntimeClientTranscriptItem =
             type: 'denied';
           }
         | {
-            submission: QuestionnaireSubmission1;
+            submission: QuestionnaireSubmission2;
             type: 'questionnaire_submitted';
           }
         | {
@@ -7574,6 +7827,11 @@ export type InteractionSubject =
           }
         | {
             node: WorkflowNodeInstance;
+            /**
+             * Which call of the visit: 0, then one more per retry, so each call
+             * is its own invocation with its own approval and events.
+             */
+            retry?: number;
             caller: 'workflow';
           };
       /**
@@ -7597,7 +7855,7 @@ export type InteractionSubject =
   | {
       invocation_id: ToolInvocationId;
       requester: InteractionRequester;
-      questionnaire: QuestionnaireSpecification;
+      questionnaire: QuestionnaireSpecification1;
       type: 'questionnaire';
     };
 /**
@@ -7626,7 +7884,7 @@ export type InteractionSettlement =
       type: 'denied';
     }
   | {
-      submission: QuestionnaireSubmission1;
+      submission: QuestionnaireSubmission2;
       type: 'questionnaire_submitted';
     }
   | {
@@ -8470,7 +8728,7 @@ export type InteractionOutcome =
             response:
               | {
                   type: 'submitted';
-                  value: QuestionnaireSubmission;
+                  value: QuestionnaireSubmission1;
                 }
               | {
                   type: 'declined';
@@ -8967,7 +9225,7 @@ export interface InteractionRef {
 export interface ReviewResponse {
   instance: WorkflowNodeInstance;
   subject_digest: string;
-  decision: ReviewDecision;
+  submission: QuestionnaireSubmission;
 }
 /**
  * One concrete node visit in an owning block instance.
@@ -8981,7 +9239,7 @@ export interface WorkflowNodeInstance {
   visit: number;
 }
 /**
- * A concrete block instance. Root/Parallel append zero; Loop appends its one-based iteration.
+ * A concrete block instance. Root starts at zero; each Loop appends its one-based iteration.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowBlockInstance".
@@ -9028,16 +9286,12 @@ export interface WorkflowRunId {
 export interface WorkflowDefinitionPath {
   workflow_id: WorkflowId;
   /**
-   * Pairs of owner node and child key (Parallel branch or Loop `body`); empty for root.
+   * Pairs of Loop owner node and the fixed child key `body`; empty for root.
    */
   blocks: string[];
 }
 /**
- * The submitted decisions for one questionnaire. Omitted questions are
- * intentionally allowed so a user may submit a partial questionnaire.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "QuestionnaireSubmission".
+ * Every question answered; the action is an option of the last one.
  */
 export interface QuestionnaireSubmission {
   /**
@@ -9185,6 +9439,19 @@ export interface CustomAnswer {
   answer: string;
 }
 /**
+ * The submitted decisions for one questionnaire. Omitted questions are
+ * intentionally allowed so a user may submit a partial questionnaire.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "QuestionnaireSubmission".
+ */
+export interface QuestionnaireSubmission1 {
+  /**
+   * At most one entry per answered question.
+   */
+  answers: QuestionnaireAnswerEntry[];
+}
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "EffectiveFieldRef".
  */
@@ -9203,6 +9470,16 @@ export interface SourceFieldRef {
   field: SourceFieldName;
   item_index?: number | null;
   byte_length: number;
+}
+/**
+ * A continuation is accepted only against the same complete catalog.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolCatalogCursor".
+ */
+export interface WorkflowToolCatalogCursor {
+  offset: number;
+  digest: string;
 }
 /**
  * Complete authored source, with the executable fields at their native YAML
@@ -9230,19 +9507,9 @@ export interface WorkflowBlock {
   /**
    * The workflow input JSON Schema.
    */
-  input: {
+  input?: {
     [k: string]: unknown;
   };
-  /**
-   * The workflow output JSON Schema.
-   */
-  output: {
-    [k: string]: unknown;
-  };
-  /**
-   * The one explicit entry node.
-   */
-  entry: string;
   /**
    * Stable node definitions keyed by explicit node id.
    */
@@ -9255,7 +9522,70 @@ export interface WorkflowBlock {
   edges?: WorkflowEdgeDefinition[];
 }
 /**
- * A fixed lexical graph shared by root, Parallel branches and Loop bodies.
+ * One prompt message of a Model node. The first message is the system
+ * prompt and every later one a user or assistant turn. Its content is fixed
+ * text (string literals) and explicit references, rendered in order: a
+ * string value as itself, any other value as its JSON text.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelMessage".
+ */
+export interface WorkflowModelMessage {
+  role: WorkflowModelRole;
+  content?: WorkflowValue[];
+}
+/**
+ * As Dify's retry on failure: a failed or timed-out Model or Tool call is
+ * made again, up to `max_retries` more times, `interval_ms` after the
+ * previous one ended.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowRetry".
+ */
+export interface WorkflowRetry {
+  max_retries: number;
+  interval_ms: number;
+}
+/**
+ * A Loop variable: Dify's `label`, `var_type` and constant or variable value.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowLoopVariable".
+ */
+export interface WorkflowLoopVariable {
+  label: string;
+  var_type: WorkflowVarType;
+  /**
+   * A literal, or a reference read once before the first round.
+   */
+  value:
+    | {
+        path: string[];
+        type: 'reference';
+      }
+    | {
+        value: unknown;
+        type: 'literal';
+      }
+    | {
+        fields: {
+          [k: string]: WorkflowValue;
+        };
+        type: 'object';
+      }
+    | {
+        items: WorkflowValue[];
+        type: 'array';
+      }
+    | {
+        parts: WorkflowValue[];
+        type: 'template';
+      };
+}
+/**
+ * A fixed graph: the root, or a Loop or Iteration body. A body declares no
+ * input or output: as in Dify, it reads the variables of the nodes around
+ * it, its container's variables and its own nodes.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowBlock".
@@ -9264,19 +9594,9 @@ export interface WorkflowBlock1 {
   /**
    * The workflow input JSON Schema.
    */
-  input: {
+  input?: {
     [k: string]: unknown;
   };
-  /**
-   * The workflow output JSON Schema.
-   */
-  output: {
-    [k: string]: unknown;
-  };
-  /**
-   * The one explicit entry node.
-   */
-  entry: string;
   /**
    * Stable node definitions keyed by explicit node id.
    */
@@ -9304,188 +9624,95 @@ export interface WorkflowEdgeDefinition {
    */
   to: string;
   /**
-   * Required Branch/Loop outcome port. Ordinary nodes must omit it.
+   * The Branch case, Agent route or fail port. Ordinary nodes omit it.
    */
   port?: WorkflowPort | null;
 }
 /**
- * The optional invocation-scoped capability override of this node
- * (Issue #258).
- *
- * This is **trusted static program data**: it is part of the
- * compiled Workflow, is validated against the Workflow's own
- * admitted generation, and is not reachable from model output, node
- * input values, or task text. It may therefore legitimately replace
- * the role's defaults with capabilities the invoking main model does
- * not itself hold — never with capabilities the generation does not
- * authorize.
- */
-export interface SubagentInvocationOverride {
-  tools?: ToolSelectionDocument;
-  /**
-   * The complete replacement Skill selection, when this dimension is
-   * overridden. Absent uses the definition's selection.
-   */
-  skills?: string[];
-  plugins?: NativeAgentExtensionSelection;
-}
-/**
- * The complete replacement Tool selection, when this dimension is
- * overridden. Absent uses the definition's selection.
- */
-export interface ToolSelectionDocument {
-  builtin?: string[];
-  sources?: {
-    [k: string]: SourceToolSelection;
-  };
-}
-/**
- * The complete replacement Plugin composition, when this
- * dimension is overridden. Absent uses the definition's composition.
- */
-export interface NativeAgentExtensionSelection {
-  agentStatus?: AgentStatusExtensionDocument;
-  todo?: TodoExtensionDocument;
-  goal?: GoalExtensionDocument;
-}
-/**
- * The requested Agent Status extension, when this selection composes it.
- *
- * `null` is not accepted: the field is either absent (not composed) or a
- * complete authored configuration. Collapsing an explicit `null` into
- * "absent" would give one wire spelling two meanings.
- */
-export interface AgentStatusExtensionDocument {
-  /**
-   * Whether this composition includes the Agent Status extension at all.
-   *
-   * With `false` the runtime composes no status engine: the Agent Loop
-   * emits no Agent Status and is otherwise a completely ordinary
-   * `ConversationRuntime`.
-   */
-  enabled?: boolean;
-  time?: TimeStatusConfig;
-  background?: BackgroundStatusConfig;
-}
-/**
- * The Time contributor configuration.
- */
-export interface TimeStatusConfig {
-  /**
-   * Whether Time participates in an available Agent Status opportunity.
-   */
-  enabled?: boolean;
-  /**
-   * The optional IANA timezone used only by Time presentation. Omitting it
-   * renders UTC.
-   */
-  timezone?: string | null;
-}
-/**
- * The Background contributor configuration.
- */
-export interface BackgroundStatusConfig {
-  /**
-   * Whether Background participates in an available Agent Status opportunity.
-   */
-  enabled?: boolean;
-}
-/**
- * The requested Todo extension, when this selection composes it
- * (Issue #259).
- *
- * Absent means the child composes no Todo at all — no list authority, no
- * `todo` Tool, no status contribution — never "whatever the role
- * authored". `null` is refused for the same reason `agentStatus` refuses
- * it: one wire spelling may not carry two meanings.
- */
-export interface TodoExtensionDocument {
-  /**
-   * Whether this composition includes the Todo extension at all.
-   */
-  enabled?: boolean;
-}
-/**
- * Authored opt-in Goal composition.
+ * One write of a Variable Assigner.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "GoalExtensionDocument".
+ * via the `definition` "WorkflowAssignment".
  */
-export interface GoalExtensionDocument {
-  enabled?: boolean;
+export interface WorkflowAssignment {
+  /**
+   * The written Loop variable: `[loop, label]`.
+   */
+  variable: string[];
+  operation: WorkflowWriteMode;
+  /**
+   * The operand; `clear`, `remove_first` and `remove_last` take none.
+   */
+  value?: WorkflowValue | null;
 }
 /**
- * One explicit input projection and fixed private Parallel block.
+ * One button the person may press, and the exit it takes.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowBranch".
+ * via the `definition` "WorkflowReviewAction".
  */
-export interface WorkflowBranch {
-  /**
-   * Closed, explicitly tagged value syntax; no evaluation of expression strings.
-   */
-  input:
-    | {
-        path: string[];
-        type: 'reference';
-      }
-    | {
-        value: unknown;
-        type: 'literal';
-      }
-    | {
-        fields: {
-          [k: string]: WorkflowValue;
-        };
-        type: 'object';
-      }
-    | {
-        items: WorkflowValue[];
-        type: 'array';
-      };
-  block: WorkflowBlock2;
+export interface WorkflowReviewAction {
+  id: string;
+  title: string;
 }
 /**
- * The child's private graph and contracts.
+ * One exit an Agent may choose, as Dify's Agent output route. The child
+ * sees every route's ID and description when it picks one.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAgentRoute".
  */
-export interface WorkflowBlock2 {
-  /**
-   * The workflow input JSON Schema.
-   */
-  input: {
-    [k: string]: unknown;
-  };
-  /**
-   * The workflow output JSON Schema.
-   */
-  output: {
-    [k: string]: unknown;
-  };
-  /**
-   * The one explicit entry node.
-   */
-  entry: string;
-  /**
-   * Stable node definitions keyed by explicit node id.
-   */
-  nodes: {
-    [k: string]: WorkflowNodeDefinition;
-  };
-  /**
-   * Ordinary sequential control-flow edges.
-   */
-  edges?: WorkflowEdgeDefinition[];
+export interface WorkflowAgentRoute {
+  id: string;
+  description: string;
+}
+/**
+ * A stable exit identity and its condition. The first matching case wins.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowBranchCase".
+ */
+export interface WorkflowBranchCase {
+  id: string;
+  condition: WorkflowPredicate;
+}
+/**
+ * As Dify's End output variable: a result field and the variable it reads.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowReturnOutput".
+ */
+export interface WorkflowReturnOutput {
+  variable: string;
+  value_selector: string[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowEditorMetadata".
  */
 export interface WorkflowEditorMetadata {
+  display?: WorkflowDisplay | null;
   nodes?: WorkflowNodePresentation[];
-  entries?: WorkflowEntryPresentation[];
-  branches?: WorkflowBranchPresentation[];
   notes?: WorkflowNote[];
   orders?: WorkflowFieldOrder[];
+}
+/**
+ * How people see the Workflow in the library and editor. Never part of the
+ * program: models only read the definition's own `description`.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDisplay".
+ */
+export interface WorkflowDisplay {
+  /**
+   * The human name; the file id remains the native identity.
+   */
+  title: string;
+  description?: string | null;
+  /**
+   * An Iconify icon name, `<prefix>:<name>` (e.g. `lucide:workflow`).
+   */
+  icon?: string | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9497,7 +9724,7 @@ export interface WorkflowNodePresentation {
   description?: string | null;
   position?: WorkflowPosition | null;
   /**
-   * Authored Loop/Parallel container geometry, never measured DOM state.
+   * Authored Loop container geometry, never measured DOM state.
    */
   dimensions?: WorkflowDimensions | null;
 }
@@ -9510,15 +9737,13 @@ export interface WorkflowNodeAddress {
   node: string;
 }
 /**
- * Structured lexical address. A missing branch means Loop body; an explicit
- * branch (including one named `body`) always means a Parallel branch.
+ * Structured lexical address of a Loop or Iteration body.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowBlockStep".
  */
 export interface WorkflowBlockStep {
   node: string;
-  branch?: string;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9538,29 +9763,14 @@ export interface WorkflowDimensions {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowEntryPresentation".
- */
-export interface WorkflowEntryPresentation {
-  block: WorkflowBlockStep[];
-  position: WorkflowPosition;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowBranchPresentation".
- */
-export interface WorkflowBranchPresentation {
-  address: WorkflowNodeAddress;
-  branch: string;
-  position: WorkflowPosition;
-  dimensions: WorkflowDimensions;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowNote".
  */
 export interface WorkflowNote {
   id: string;
   block: WorkflowBlockStep[];
+  /**
+   * As Dify, the note's Lexical editor state serialized as JSON.
+   */
   text: string;
   theme: WorkflowNoteTheme;
   position: WorkflowPosition;
@@ -9755,10 +9965,19 @@ export interface ModelLayer {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "TodoExtensionDocument".
  */
-export interface TodoExtensionDocument1 {
+export interface TodoExtensionDocument {
   /**
    * Whether this composition includes the Todo extension at all.
    */
+  enabled?: boolean;
+}
+/**
+ * Authored opt-in Goal composition.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "GoalExtensionDocument".
+ */
+export interface GoalExtensionDocument {
   enabled?: boolean;
 }
 /**
@@ -9771,7 +9990,7 @@ export interface TodoExtensionDocument1 {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "AgentStatusExtensionDocument".
  */
-export interface AgentStatusExtensionDocument1 {
+export interface AgentStatusExtensionDocument {
   /**
    * Whether this composition includes the Agent Status extension at all.
    *
@@ -9782,6 +10001,29 @@ export interface AgentStatusExtensionDocument1 {
   enabled?: boolean;
   time?: TimeStatusConfig;
   background?: BackgroundStatusConfig;
+}
+/**
+ * The Time contributor configuration.
+ */
+export interface TimeStatusConfig {
+  /**
+   * Whether Time participates in an available Agent Status opportunity.
+   */
+  enabled?: boolean;
+  /**
+   * The optional IANA timezone used only by Time presentation. Omitting it
+   * renders UTC.
+   */
+  timezone?: string | null;
+}
+/**
+ * The Background contributor configuration.
+ */
+export interface BackgroundStatusConfig {
+  /**
+   * Whether Background participates in an available Agent Status opportunity.
+   */
+  enabled?: boolean;
 }
 /**
  * Project-instruction selection from admitted workspace resources.
@@ -9919,7 +10161,7 @@ export interface AgentProfileDocument {
    * lifecycle, in milliseconds. The model cannot override or extend it.
    */
   timeout_ms?: string | null;
-  tools?: ToolSelectionDocument1;
+  tools?: ToolSelectionDocument;
   /**
    * Skill descriptions advertised in the prompt: "all", exact names, or [].
    */
@@ -9930,7 +10172,7 @@ export interface AgentProfileDocument {
 /**
  * The exact source-qualified capability selection.
  */
-export interface ToolSelectionDocument1 {
+export interface ToolSelectionDocument {
   builtin?: string[];
   sources?: {
     [k: string]: SourceToolSelection;
@@ -9958,8 +10200,8 @@ export interface AgentProjectInstructionsDocument1 {
  * independent of this complete document's semantics.
  */
 export interface NativeAgentExtensionsDocument {
-  agent_status?: AgentStatusExtensionDocument2;
-  todo?: TodoExtensionDocument2;
+  agent_status?: AgentStatusExtensionDocument1;
+  todo?: TodoExtensionDocument1;
   goal?: GoalExtensionDocument1;
 }
 /**
@@ -9969,7 +10211,7 @@ export interface NativeAgentExtensionsDocument {
  * `time` and `background` remain the two bounded status contributors, with
  * exactly the semantics they had before the migration.
  */
-export interface AgentStatusExtensionDocument2 {
+export interface AgentStatusExtensionDocument1 {
   /**
    * Whether this composition includes the Agent Status extension at all.
    *
@@ -10003,7 +10245,7 @@ export interface AgentStatusExtensionDocument2 {
  * [`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are
  * not launch configuration.
  */
-export interface TodoExtensionDocument2 {
+export interface TodoExtensionDocument1 {
   /**
    * Whether this composition includes the Todo extension at all.
    */
@@ -11471,6 +11713,11 @@ export interface RuntimeClientTranscriptEntry {
                   }
                 | {
                     node: WorkflowNodeInstance;
+                    /**
+                     * Which call of the visit: 0, then one more per retry, so each call
+                     * is its own invocation with its own approval and events.
+                     */
+                    retry?: number;
                     caller: 'workflow';
                   };
               /**
@@ -11494,7 +11741,7 @@ export interface RuntimeClientTranscriptEntry {
           | {
               invocation_id: ToolInvocationId;
               requester: InteractionRequester;
-              questionnaire: QuestionnaireSpecification;
+              questionnaire: QuestionnaireSpecification1;
               type: 'questionnaire';
             };
         type: 'interaction_requested';
@@ -11543,7 +11790,7 @@ export interface RuntimeClientTranscriptEntry {
               type: 'denied';
             }
           | {
-              submission: QuestionnaireSubmission1;
+              submission: QuestionnaireSubmission2;
               type: 'questionnaire_submitted';
             }
           | {
@@ -12502,43 +12749,10 @@ export interface PublicationAudit {
  */
 export interface ReviewSpecification {
   instance: WorkflowNodeInstance;
-  subject: ReviewSubject;
-  /**
-   * Bounded committed Workflow values presented beside the subject.
-   */
-  context: unknown[];
+  questionnaire: QuestionnaireSpecification;
 }
 /**
- * The canonical identity of the tool that asked. Durable evidence of
- * *who* asked, so an audit of an MCP elicitation names its server.
- */
-export interface InteractionRequester {
-  /**
-   * Identifies a tool definition in the capability set.
-   */
-  tool_id: string;
-  /**
-   * The safe model-facing tool name.
-   */
-  tool_name: string;
-  /**
-   * The registry-resolved tool origin, which carries MCP server identity.
-   */
-  origin:
-    | 'builtin'
-    | {
-        mcp: {
-          server_id: McpServerId;
-        };
-      }
-    | {
-        managed_python: {
-          package: string;
-        };
-      };
-}
-/**
- * The exact immutable facts projected to the Runtime Client.
+ * The node's content as the question and its actions as the options.
  */
 export interface QuestionnaireSpecification {
   /**
@@ -12662,10 +12876,48 @@ export interface OptionSpecification {
   preview?: string | null;
 }
 /**
+ * The canonical identity of the tool that asked. Durable evidence of
+ * *who* asked, so an audit of an MCP elicitation names its server.
+ */
+export interface InteractionRequester {
+  /**
+   * Identifies a tool definition in the capability set.
+   */
+  tool_id: string;
+  /**
+   * The safe model-facing tool name.
+   */
+  tool_name: string;
+  /**
+   * The registry-resolved tool origin, which carries MCP server identity.
+   */
+  origin:
+    | 'builtin'
+    | {
+        mcp: {
+          server_id: McpServerId;
+        };
+      }
+    | {
+        managed_python: {
+          package: string;
+        };
+      };
+}
+/**
+ * The exact immutable facts projected to the Runtime Client.
+ */
+export interface QuestionnaireSpecification1 {
+  /**
+   * One to four related blocking questions.
+   */
+  questions: QuestionSpecification[];
+}
+/**
  * The submitted decisions for one questionnaire. Omitted questions are
  * intentionally allowed so a user may submit a partial questionnaire.
  */
-export interface QuestionnaireSubmission1 {
+export interface QuestionnaireSubmission2 {
   /**
    * At most one entry per answered question.
    */
@@ -13128,7 +13380,6 @@ export interface WorkflowInstanceView {
   iterations_max?: number | null;
   loop_exit?: WorkflowLoopExit | null;
   checks_passed?: boolean | null;
-  review_accepted?: boolean | null;
 }
 /**
  * The client-visible durable-authority failure state of a conversation
@@ -14019,6 +14270,11 @@ export interface InteractionRequest {
             }
           | {
               node: WorkflowNodeInstance;
+              /**
+               * Which call of the visit: 0, then one more per retry, so each call
+               * is its own invocation with its own approval and events.
+               */
+              retry?: number;
               caller: 'workflow';
             };
         /**
@@ -14071,7 +14327,7 @@ export interface InteractionRequest {
     | {
         invocation_id: ToolInvocationId;
         requester: InteractionRequester1;
-        questionnaire: QuestionnaireSpecification1;
+        questionnaire: QuestionnaireSpecification2;
         type: 'questionnaire';
       };
 }
@@ -14109,7 +14365,7 @@ export interface InteractionRequester1 {
 /**
  * The complete immutable facts shown to the Runtime Client.
  */
-export interface QuestionnaireSpecification1 {
+export interface QuestionnaireSpecification2 {
   /**
    * One to four related blocking questions.
    */
@@ -15698,7 +15954,7 @@ export interface RuntimeClientProtocolEvent {
                     response:
                       | {
                           type: 'submitted';
-                          value: QuestionnaireSubmission;
+                          value: QuestionnaireSubmission1;
                         }
                       | {
                           type: 'declined';
@@ -16246,6 +16502,11 @@ export interface RuntimeClientTranscriptInteractionRequested {
             }
           | {
               node: WorkflowNodeInstance;
+              /**
+               * Which call of the visit: 0, then one more per retry, so each call
+               * is its own invocation with its own approval and events.
+               */
+              retry?: number;
               caller: 'workflow';
             };
         /**
@@ -16269,7 +16530,7 @@ export interface RuntimeClientTranscriptInteractionRequested {
     | {
         invocation_id: ToolInvocationId;
         requester: InteractionRequester;
-        questionnaire: QuestionnaireSpecification;
+        questionnaire: QuestionnaireSpecification1;
         type: 'questionnaire';
       };
 }
@@ -16327,7 +16588,7 @@ export interface RuntimeClientTranscriptInteractionSettled {
         type: 'denied';
       }
     | {
-        submission: QuestionnaireSubmission1;
+        submission: QuestionnaireSubmission2;
         type: 'questionnaire_submitted';
       }
     | {
@@ -17578,8 +17839,8 @@ export interface ToolsLayer {
  * via the `definition` "PluginsLayer".
  */
 export interface PluginsLayer {
-  agent_status?: AgentStatusExtensionDocument1 | null;
-  todo?: TodoExtensionDocument1 | null;
+  agent_status?: AgentStatusExtensionDocument | null;
+  todo?: TodoExtensionDocument | null;
   goal?: GoalExtensionDocument | null;
 }
 /**
@@ -18185,6 +18446,11 @@ export interface WorkflowLibrary {
    * A directory-level failure; `files` is then empty, never partial.
    */
   diagnostic?: WorkflowDiagnostic | null;
+  /**
+   * The revision of the scope's `rustx.toml`, the CAS token of enabling
+   * or disabling a file; absent while that document does not parse.
+   */
+  configuration_revision?: string | null;
 }
 /**
  * One file physically owned by the listed scope.
@@ -18220,6 +18486,10 @@ export interface WorkflowFileSummary {
    */
   description?: string | null;
   /**
+   * How people see a parseable document, its description bounded.
+   */
+  display?: WorkflowDisplay | null;
+  /**
    * Root-block node count of a parseable document.
    */
   nodes?: number | null;
@@ -18232,6 +18502,11 @@ export interface WorkflowFileSummary {
    * file, which it shadows in this Workspace. Edits never redirect.
    */
   shadows_global: boolean;
+  /**
+   * Enabled for this scope's Sessions: named by the scope's own
+   * `agent.workflows`. A file that fails its check is never admitted.
+   */
+  enabled: boolean;
 }
 /**
  * One bounded native diagnostic of a Workflow file or candidate.
@@ -18292,7 +18567,55 @@ export interface WorkflowSource {
  */
 export interface WorkflowVocabulary {
   profiles: SubagentName[];
-  builtin_tools: string[];
+  builtin_tools: WorkflowToolChoice[];
+}
+/**
+ * One builtin Tool an author can choose for a Tool node: its name and the
+ * tool-owned description and argument schema an authoring form is built from.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolChoice".
+ */
+export interface WorkflowToolChoice {
+  name: string;
+  description: string;
+  input_schema: unknown;
+  /**
+   * What a Tool node commits, fixed by the Tool: its declared structured
+   * result, or its text. Never provider text heuristics or a part index.
+   */
+  result:
+    | {
+        schema: unknown;
+        type: 'json';
+      }
+    | {
+        type: 'text';
+      };
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolCatalog".
+ */
+export interface WorkflowToolCatalog {
+  sources: WorkflowToolSource[];
+  next?: WorkflowToolCatalogCursor | null;
+}
+/**
+ * One MCP server or Managed Python package and the Tools it lists.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolSource".
+ */
+export interface WorkflowToolSource {
+  /**
+   * The selector's `source_id`: an MCP server ID or `python:<package>`.
+   */
+  source_id: string;
+  kind: WorkflowToolSourceKind;
+  scope: SourceScope;
+  state: WorkflowToolSourceState;
+  tools: WorkflowToolChoice[];
 }
 /**
  * One offline check of one exact candidate document.
@@ -18301,6 +18624,12 @@ export interface WorkflowVocabulary {
  * via the `definition` "WorkflowCheckReport".
  */
 export interface WorkflowCheckReport {
+  /**
+   * The file revision a `replace` with this candidate commits: the native
+   * identity of its canonical serialization, so a client recognizes its
+   * own normalized commit on reread. Absent when the file cannot hold it.
+   */
+  revision?: string | null;
   structure: WorkflowStructure;
   dependencies: WorkflowDependencies;
   /**
@@ -18364,36 +18693,10 @@ export interface NodeInspection {
    * Selector identities only; provider parameters may contain secrets.
    */
   model?: ModelPolicyInspection | null;
-  /**
-   * The node's invocation override, when it carries one.
-   */
-  invocation_override?: AgentOverrideInspection | null;
   selector?: ExactToolSelector | null;
   output_schema?: unknown;
-  result_part?: number | null;
   result_kind?: string | null;
-  branches: string[];
-  max_iterations?: number | null;
-  review_subject?: string | null;
-}
-/**
- * The bounded projection of one Agent node's trusted static invocation
- * override.
- *
- * Presence is the fact this projection has to carry, so each dimension stays
- * an `Option`: `None` is "this dimension keeps the role's default" and
- * `Some` is "this dimension is replaced by exactly this". Only identities
- * are exported — capability selectors, Skill names, and the composed
- * extension names — never a Skill body, a prompt, a credential, or a
- * materialization secret.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AgentOverrideInspection".
- */
-export interface AgentOverrideInspection {
-  tools?: AgentToolSelection[] | null;
-  skills?: string[] | null;
-  extensions?: string[] | null;
+  loop_count?: number | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -19031,6 +19334,11 @@ export interface InteractionRequest1 {
             }
           | {
               node: WorkflowNodeInstance;
+              /**
+               * Which call of the visit: 0, then one more per retry, so each call
+               * is its own invocation with its own approval and events.
+               */
+              retry?: number;
               caller: 'workflow';
             };
         /**
@@ -19083,9 +19391,21 @@ export interface InteractionRequest1 {
     | {
         invocation_id: ToolInvocationId;
         requester: InteractionRequester1;
-        questionnaire: QuestionnaireSpecification1;
+        questionnaire: QuestionnaireSpecification2;
         type: 'questionnaire';
       };
+}
+/**
+ * The complete immutable questionnaire shown to a client.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "QuestionnaireSpecification".
+ */
+export interface QuestionnaireSpecification3 {
+  /**
+   * One to four related blocking questions.
+   */
+  questions: QuestionSpecification[];
 }
 /**
  * The canonical, provider-independent identity of whoever asked the human.
@@ -19139,73 +19459,6 @@ export interface InteractionRequester2 {
       };
 }
 /**
- * The complete immutable questionnaire shown to a client.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "QuestionnaireSpecification".
- */
-export interface QuestionnaireSpecification2 {
-  /**
-   * One to four related blocking questions.
-   */
-  questions: QuestionSpecification[];
-}
-/**
- * One invocation-scoped replacement of selected child capability
- * dimensions.
- *
- * The same value is produced by model-generated `subagent` arguments and by
- * trusted static Workflow program data. The launch boundary determines
- * authority; both share this vocabulary and the `AgentProfile` resolver.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SubagentInvocationOverride".
- */
-export interface SubagentInvocationOverride1 {
-  tools?: ToolSelectionDocument;
-  /**
-   * The complete replacement Skill selection, when this dimension is
-   * overridden. Absent uses the definition's selection.
-   */
-  skills?: string[];
-  plugins?: NativeAgentExtensionSelection;
-}
-/**
- * Shared Agent and Workflow Agent override selection. Extensions are composed
- * by their native owner and never enter this ordinary capability vocabulary.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ToolSelectionDocument".
- */
-export interface ToolSelectionDocument2 {
-  builtin?: string[];
-  sources?: {
-    [k: string]: SourceToolSelection;
-  };
-}
-/**
- * The **presence-aware** closed selection an invocation override expresses.
- *
- * Complete profiles and invocation selections share omission semantics:
- * omitted members compose no extension. The outer invocation dimension is
- * presence-aware: absent retains the named default; present replaces it.
- * This wire record preserves the invocation protocol's camelCase spelling
- * and rejects explicit null members.
- *
- * The record stays closed exactly like the authored document: an unknown
- * extension name is rejected by `deny_unknown_fields`, so a misspelled or
- * not-yet-implemented extension fails deterministically instead of being
- * silently ignored.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "NativeAgentExtensionSelection".
- */
-export interface NativeAgentExtensionSelection1 {
-  agentStatus?: AgentStatusExtensionDocument;
-  todo?: TodoExtensionDocument;
-  goal?: GoalExtensionDocument;
-}
-/**
  * Configuration of the bounded Time status contributor.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -19235,6 +19488,19 @@ export interface BackgroundStatusConfig1 {
   enabled?: boolean;
 }
 /**
+ * Shared Agent and Workflow Agent override selection. Extensions are composed
+ * by their native owner and never enter this ordinary capability vocabulary.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ToolSelectionDocument".
+ */
+export interface ToolSelectionDocument1 {
+  builtin?: string[];
+  sources?: {
+    [k: string]: SourceToolSelection;
+  };
+}
+/**
  * The closed authored composition surface of native Agent Extensions.
  *
  * Every member is a concrete named extension in a closed record.
@@ -19246,8 +19512,8 @@ export interface BackgroundStatusConfig1 {
  * via the `definition` "NativeAgentExtensionsDocument".
  */
 export interface NativeAgentExtensionsDocument1 {
-  agent_status?: AgentStatusExtensionDocument2;
-  todo?: TodoExtensionDocument2;
+  agent_status?: AgentStatusExtensionDocument1;
+  todo?: TodoExtensionDocument1;
   goal?: GoalExtensionDocument1;
 }
 /**
@@ -19664,6 +19930,11 @@ export interface RuntimeClientTranscriptInteractionRequested1 {
             }
           | {
               node: WorkflowNodeInstance;
+              /**
+               * Which call of the visit: 0, then one more per retry, so each call
+               * is its own invocation with its own approval and events.
+               */
+              retry?: number;
               caller: 'workflow';
             };
         /**
@@ -19687,7 +19958,7 @@ export interface RuntimeClientTranscriptInteractionRequested1 {
     | {
         invocation_id: ToolInvocationId;
         requester: InteractionRequester;
-        questionnaire: QuestionnaireSpecification;
+        questionnaire: QuestionnaireSpecification1;
         type: 'questionnaire';
       };
 }
@@ -19748,7 +20019,7 @@ export interface RuntimeClientTranscriptInteractionSettled1 {
         type: 'denied';
       }
     | {
-        submission: QuestionnaireSubmission1;
+        submission: QuestionnaireSubmission2;
         type: 'questionnaire_submitted';
       }
     | {

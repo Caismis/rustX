@@ -89,56 +89,45 @@ fn program(input: &Inputs<'_>) -> WorkflowProgram {
     if matches!(input.kind, NodeKind::PureReturn) {
         return WorkflowProgram::compile(id(),serde_json::from_value(json!({"description":input.description,"block":{
             "input":{"type":"object","properties":{"task":{"type":"string"}},"required":["task"],"additionalProperties":false},
-            "output":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false},
-            "entry":"done","nodes":{"done":{"type":"return","output":{"type":"literal","value":{"answer":"durable"}}}},"edges":[]
-        }})).unwrap()).unwrap();
+            "nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[{"variable":"answer","value_selector":["args","task"]}]}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap()).unwrap();
     }
     let empty: Value = serde_json::from_str(EMPTY).unwrap();
     let work = match input.kind {
         NodeKind::PureReturn => unreachable!("pure definition returned above"),
         NodeKind::Model => {
-            json!({"type":"model", "model":{"mode":"session"}, "instruction":"Review the task",
-            "input":{}, "output":{"type":"text"}})
+            json!({"type":"model", "model":{"mode":"session"}, "messages":[{"role":"system","content":[{"type":"literal","value":"Review the task"}]},{"role":"user","content":[{"type":"literal","value":"Go."}]}],
+            "output":{"type":"text"}})
         }
         NodeKind::Agent => {
-            json!({"type":"agent", "profile":"reviewer", "task":"Review this", "output":empty})
+            json!({"type":"agent", "profile":"reviewer", "task":[{"type":"literal","value":"Review this"}], "output":{"type":"json_schema","schema":empty}})
         }
         NodeKind::Tool => {
             json!({"type":"tool", "selector":{"origin":"builtin","name":"check"},
             "arguments":{"type":"literal","value":{}},
-            "result":{"type":"json","part":0,"schema":empty}})
+            "result":{"type":"json","schema":empty}})
         }
     };
     let mut definition: WorkflowDefinition = serde_json::from_value(json!({
         "description":input.description,
         "block":{
             "input":{"type":"object","properties":{"task":{"type":"string"}},"required":["task"],"additionalProperties":false},
-            "output":empty,"entry":"work",
-            "nodes":{"work":work,"done":{"type":"return","output":{"type":"literal","value":{}}}},
-            "edges":[{"from":"work","to":"done"}]
-        }
+            "nodes": {"workflow_start":{"type":"start"},"work":work,"done":{"type":"return","outputs":[]}},"edges": [{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}],}
     })).unwrap();
     if input.nested {
-        let body = serde_json::to_value(&definition.block).unwrap();
-        let repeat = json!({
-            "input":body["input"], "output":empty, "entry":"repeat",
-            "nodes":{
-                "repeat":{"type":"loop","input":{"type":"literal","value":{"task":"Review this"}},
-                    "body":body,"until":{"type":"boolean","value":{"type":"literal","value":false}},
-                    "carry":{"type":"literal","value":{"task":"Review this"}},"max_iterations":2},
-                "done":{"type":"return","output":{"type":"literal","value":{}}}
-            },
-            "edges":[{"from":"repeat","to":"done","port":"satisfied"},{"from":"repeat","to":"done","port":"exhausted"}]
-        });
-        let branch =
-            json!({"input":{"type":"literal","value":{"task":"Review this"}},"block":repeat});
+        let body = json!({"nodes": {"inner_start":{"type":"start"},"work":work},
+            "edges": [{"from":"inner_start","to":"work"}]});
+        let repeat = json!({"nodes": {"outer_start":{"type":"start"},
+                "repeat":{"type":"loop","loop_count":2,"body":body}},
+            "edges": [{"from":"outer_start","to":"repeat"}]});
+        let branch = json!({"type":"loop","loop_count":1,"body":repeat});
         definition.block = serde_json::from_value(json!({
-            "input":definition.block.input,"output":empty,"entry":"fanout",
-            "nodes":{
-                "fanout":{"type":"parallel","branches":{"alpha":branch,"beta":branch}},
-                "done":{"type":"return","output":{"type":"literal","value":{}}}
-            },"edges":[{"from":"fanout","to":"done"}]
-        }))
+        "input":definition.block.input,"nodes": {
+            "workflow_start":{"type":"start"},"alpha":branch,"beta":branch,
+            "done":{"type":"return","outputs":[]}
+        },"edges": [
+            {"from":"workflow_start","to":"alpha"},{"from":"workflow_start","to":"beta"},
+            {"from":"alpha","to":"done"},{"from":"beta","to":"done"}
+        ]}))
         .unwrap();
     }
     WorkflowProgram::compile(id(), definition).unwrap()
@@ -655,7 +644,7 @@ fn scheduled_workflow_model_semantics_are_pinned_without_request_effects() {
 }
 
 #[test]
-fn scheduled_workflow_nested_loop_and_parallel_dependencies_keep_distinct_static_paths() {
+fn scheduled_workflow_sibling_loops_keep_distinct_static_dependency_paths() {
     let directory = tempfile::tempdir().unwrap();
     for kind in [NodeKind::Tool, NodeKind::Agent, NodeKind::Model] {
         let current = fixture(

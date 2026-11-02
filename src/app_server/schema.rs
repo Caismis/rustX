@@ -786,17 +786,11 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     use crate::runtime::workflow::{WorkflowId, WorkflowProgram};
     use crate::workflow_file::WorkflowFileDocument;
     use sha2::Digest;
-    const EXAMPLES: [(&str, &str); 8] = [
+    const EXAMPLES: [(&str, &str); 7] = [
         (
             "typed_agent",
             include_str!(
                 "../../examples/local-runtime/workflow-templates/.agents/workflows/typed_agent.yaml"
-            ),
-        ),
-        (
-            "specialized_agent",
-            include_str!(
-                "../../examples/local-runtime/workflow-templates/.agents/workflows/specialized_agent.yaml"
             ),
         ),
         (
@@ -894,6 +888,34 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             },
         },
     ));
+    fixtures.push(request(
+        "workflow-tool-catalog",
+        Method::WorkflowToolCatalog {
+            target: target.clone(),
+            source: Some("github".into()),
+            cursor: None,
+        },
+    ));
+    fixtures.push(success(
+        "workflow-tool-catalog",
+        MethodResult::WorkflowToolCatalog {
+            catalog: crate::local_runtime::workflow_tools::WorkflowToolCatalog {
+                next: None,
+                sources: vec![crate::local_runtime::workflow_tools::WorkflowToolSource {
+                    source_id: "github".into(),
+                    kind: crate::local_runtime::workflow_tools::WorkflowToolSourceKind::Mcp,
+                    scope: crate::runtime::resources::SourceScope::User,
+                    state: crate::local_runtime::workflow_tools::WorkflowToolSourceState::Listed,
+                    tools: vec![crate::runtime::workflow::WorkflowToolChoice {
+                        name: "search_issues".into(),
+                        description: "Search issues.".into(),
+                        input_schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}),
+                        result: crate::runtime::workflow::WorkflowToolResult::Text {},
+                    }],
+                }],
+            },
+        },
+    ));
     fixtures.push(success(
         "workflow-list",
         MethodResult::WorkflowLibrary {
@@ -911,12 +933,15 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
                         byte_length: *length as u64,
                         modified_ms: Some(1_790_000_000_000),
                         description: Some(definition.description.clone()),
+                        display: None,
                         nodes: Some(definition.block.nodes.len()),
                         diagnostic: None,
                         shadows_global: false,
+                        enabled: true,
                     })
                     .collect(),
                 diagnostic: None,
+                configuration_revision: Some("missing".into()),
             },
         },
     ));
@@ -945,7 +970,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             },
         ));
     }
-    let (id, definition, revision, _) = &examples[4];
+    let (id, definition, revision, _) = &examples[3];
     let program = WorkflowProgram::compile(id.clone(), definition.definition.clone())
         .expect("example compiles");
     fixtures.push(request(
@@ -994,7 +1019,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     ));
     // Partial output contracts cross the same generated protocol. In particular,
     // unknown is an explicit null schema, not a fabricated empty schema object.
-    let (incomplete_id, incomplete_base, _, _) = &examples[6];
+    let (incomplete_id, incomplete_base, _, _) = &examples[5];
     let mut incomplete = incomplete_base.clone();
     let crate::runtime::workflow::WorkflowNodeDefinition::Model { output, .. } = incomplete
         .block
@@ -1052,10 +1077,10 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         "workflow-check",
         MethodResult::WorkflowCheck {
             report: Box::new(WorkflowCheckReport {
+                revision: Some(revision.clone()),
                 presentation: Vec::new(),
                 structure: WorkflowStructure::Valid {
                     outputs: program.node_outputs(),
-                    revision: revision.clone(),
                 },
                 dependencies: WorkflowDependencies::Admitted {
                     context: "/workspace/fixture".into(),
@@ -1085,7 +1110,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             message: "invalid Workflow".into(),
             data: Some(super::protocol::ErrorData::WorkflowInvalid {
                 diagnostic: Box::new(WorkflowDiagnostic {
-                    path: "block.entry".into(),
+                    path: "block.nodes.start".into(),
                     category: "workflow_language".into(),
                     reason: "Workflow graph, control structure, or configured bound is invalid"
                         .into(),

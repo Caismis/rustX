@@ -298,12 +298,12 @@ fn workflow_spec(conversation: &ConversationId, task: &str) -> SubagentStartSpec
         },
         attachments: Vec::new(),
         terminal: SubagentTerminalMode::WorkflowOutput {
-            output_schema: serde_json::json!({
+            output_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {"summary": {"type": "string"}},
                 "required": ["summary"],
                 "additionalProperties": false
-            }),
+            })),
             workflow_id: crate::runtime::workflow::WorkflowId::parse("test_workflow")
                 .expect("workflow id"),
             run_id: node.block.run.clone(),

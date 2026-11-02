@@ -1,12 +1,11 @@
 //! Issue #462 Workflow regressions over the shared Session workspace.
 //!
 //! Workflow Agents and Tools act directly in the frozen Session execution
-//! binding: there is no Candidate, worktree, freeze or rollback. Review is a
-//! typed `{accepted, feedback}` value that gates later work only through an
-//! explicit Branch. Every proof uses the real registry, real native Bash and
+//! binding: there is no Candidate, worktree, freeze or rollback. A Human
+//! Input gates later work only through the exit of the action chosen. Every proof uses the real registry, real native Bash and
 //! the native Review owner; ordering is driven by IPC frames and interaction
 //! publications, never by elapsed time.
-use super::human::{answer, owner};
+use super::human::{answer, owner, review_node};
 use super::*;
 
 const IMPLEMENT_FILE: &str = "greeting.txt";
@@ -16,8 +15,8 @@ fn empty_object() -> Value {
 }
 
 fn implement_node() -> Value {
-    json!({"type":"agent","profile":"reviewer","task":"Implement the fixed greeting change.",
-        "input":{},"output":empty_object()})
+    json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Implement the fixed greeting change."}],
+        "output":{"type":"json_schema","schema":empty_object()}})
 }
 
 fn check_report() -> Value {
@@ -34,7 +33,7 @@ fn check_node() -> Value {
     json!({"type":"tool","selector":{"origin":"builtin","name":"bash"},
         "arguments":{"type":"literal","value":{"command":
             format!("if [ \"$(cat {IMPLEMENT_FILE})\" = ok ]; then printf passed; else printf failed; fi")}},
-        "result":{"type":"json","part":0,"schema":check_report()}})
+        "result":{"type":"json","schema":check_report()}})
 }
 
 fn files_named(root: &std::path::Path, name: &str) -> Vec<std::path::PathBuf> {
@@ -82,18 +81,23 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
     let context = bash_context(&plane, None);
     let passed = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
     let definition = serde_json::from_value(json!({"description":"shared implement/check","timeout_ms":600_000,"block":{
-        "input":passed,"output":passed,"entry":"implement","nodes":{
-            "implement":implement_node(),
-            "check":check_node(),
-            "verdict":{"type":"branch","condition":{"type":"equal",
-                "left":{"type":"reference","path":["check","stdout"]},
-                "right":{"type":"literal","value":"passed"}}},
-            "pass":{"type":"return","output":{"type":"literal","value":{"passed":true}}},
-            "fail":{"type":"return","output":{"type":"literal","value":{"passed":false}}}
-        },"edges":[{"from":"implement","to":"check"},{"from":"check","to":"verdict"},
-            {"from":"verdict","to":"pass","port":"true"},{"from":"verdict","to":"fail","port":"false"}]}}))
+        "input":passed,"nodes": {"workflow_start":{"type":"start"},
+            "repair":{"type":"loop","loop_count":3,
+                "loop_variables":[{"label":"passed","var_type":"boolean","value":{"type":"literal","value":false}}],
+                "break_condition":{"type":"boolean","value":{"type":"reference","path":["repair","passed"]}},
+                "body":{"nodes":{"start":{"type":"start"},
+                    "implement":implement_node(),
+                    "check":check_node(),
+                    "verdict":{"type":"branch","cases": [{"id":"true", "condition":{"type":"equal",
+                        "left":{"type":"reference","path":["check","stdout"]},
+                        "right":{"type":"literal","value":"passed"}}}]},
+                    "pass":{"type":"assigner","items":[{"variable":["repair","passed"],"operation":"set","value":{"type":"literal","value":true}}]}},
+                    "edges":[{"from":"start","to":"implement"},{"from":"implement","to":"check"},{"from":"check","to":"verdict"},
+                        {"from":"verdict","to":"pass","port":"true"}]}},
+            "done":returns("repair", &["passed"])
+        },"edges": [{"from":"workflow_start","to":"repair"},{"from":"repair","to":"done"}],}}))
     .unwrap();
-    let program = Arc::new(compile_test(super::loops::wrap_definition(definition, 3)).unwrap());
+    let program = Arc::new(compile_test(definition).unwrap());
     let runtime = workflow_runtime(&plane);
     let observations = runtime.observations.subscribe();
     let (_, cancellation) = workflow_cancellation();
@@ -138,8 +142,8 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
     let output = task.await.unwrap().unwrap();
     assert_eq!(
         output,
-        json!({"status":"satisfied","iterations":2,"result":{"passed":true}}),
-        "the outer result is exactly the declared output, never wrapped"
+        json!({"passed":true}),
+        "the outer result is exactly the Loop's variables"
     );
     assert_eq!(
         std::fs::read_to_string(workspace.join(IMPLEMENT_FILE)).unwrap(),
@@ -154,9 +158,9 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
     assert!(plane.registry.unsettled_snapshot().is_empty());
 }
 
-/// C03/C04/C17: Review is ordinary typed data. A rejected plan takes the
-/// explicit Branch's rejected Return and never admits the gated Agent; an
-/// accepted plan reaches it. Neither path grants unrelated Tool authority.
+/// C03/C04/C17: a rejected plan takes the Human Input's `no` exit to the
+/// rejected Return and never admits the gated Agent; an accepted plan
+/// reaches it. Neither path grants unrelated Tool authority.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn explicit_review_branch_gates_implementation() {
     for accepted in [false, true] {
@@ -164,24 +168,14 @@ async fn explicit_review_branch_gates_implementation() {
         let workspace = plane.dir.path().join("workspace");
         let (owner, _audit, mut published) = owner(&plane);
         let context = bash_context(&plane, Some(owner.clone()));
-        let output = schema(
-            json!({"status":{"type":"string","enum":["implemented","rejected"]},
-                "feedback":{"type":"string"}}),
-            &["status", "feedback"],
-        );
         let definition = serde_json::from_value(json!({"description":"gated implementation","timeout_ms":600_000,"block":{
-            "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),"output":output,"entry":"review","nodes":{
-                "review":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},
-                "gate":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["review","accepted"]}}},
+            "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),"nodes": {"workflow_start":{"type":"start"},
+                "review":review_node(3_600_000),
                 "implement":implement_node(),
-                "implemented":{"type":"return","output":{"type":"object","fields":{
-                    "status":{"type":"literal","value":"implemented"},
-                    "feedback":{"type":"reference","path":["review","feedback"]}}}},
-                "rejected":{"type":"return","output":{"type":"object","fields":{
-                    "status":{"type":"literal","value":"rejected"},
-                    "feedback":{"type":"reference","path":["review","feedback"]}}}}
-            },"edges":[{"from":"review","to":"gate"},{"from":"gate","to":"implement","port":"true"},
-                {"from":"gate","to":"rejected","port":"false"},{"from":"implement","to":"implemented"}]}}))
+                "implemented":returns("review", &["action"]),
+                "rejected":returns("review", &["action"])
+            },"edges": [{"from":"workflow_start","to":"review"},{"from":"review","to":"implement","port":"yes"},
+                {"from":"review","to":"rejected","port":"no"},{"from":"review","to":"rejected","port":"timeout"},{"from":"implement","to":"implemented"}],}}))
         .unwrap();
         let program = Arc::new(compile_test(definition).unwrap());
         let mut child = accepted.then(|| stage_workflow_child(&plane));
@@ -222,14 +216,14 @@ async fn explicit_review_branch_gates_implementation() {
         }
         let value = task.await.unwrap().unwrap();
         if accepted {
-            assert_eq!(value["status"], "implemented");
+            assert_eq!(value["action"], "yes");
             assert_eq!(plane.registry.all_snapshots().len(), 1);
             assert!(workspace.join(IMPLEMENT_FILE).exists());
         } else {
             assert_eq!(
                 value,
-                json!({"status":"rejected","feedback":"Revise scope"}),
-                "rejection is normal typed data routed by the explicit Branch"
+                json!({"action":"no"}),
+                "rejection is the action's own exit"
             );
             assert!(
                 plane.registry.all_snapshots().is_empty(),
@@ -252,11 +246,12 @@ async fn rejection_after_a_write_never_rolls_it_back() {
     let mut child = stage_workflow_child(&plane);
     let definition = serde_json::from_value(json!({"description":"post-write review","timeout_ms":600_000,"block":{
         "input":schema(json!({"changed":{"type":"string"}}), &["changed"]),
-        "output":crate::runtime::workflow::review::result_schema(),"entry":"implement","nodes":{
+        "nodes": {"workflow_start":{"type":"start"},
             "implement":implement_node(),
-            "review":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},
-            "done":{"type":"return","output":{"type":"reference","path":["review"]}}
-        },"edges":[{"from":"implement","to":"review"},{"from":"review","to":"done"}]}}))
+            "review":review_node(3_600_000),
+            "done":returns("review", &["action", "content"])
+        },"edges": [{"from":"workflow_start","to":"implement"},{"from":"implement","to":"review"},{"from":"review","to":"done","port":"yes"},
+            {"from":"review","to":"done","port":"no"},{"from":"review","to":"done","port":"timeout"}],}}))
     .unwrap();
     let program = Arc::new(compile_test(definition).unwrap());
     let runtime = workflow_runtime(&plane);
@@ -287,7 +282,7 @@ async fn rejection_after_a_write_never_rolls_it_back() {
         .unwrap();
     assert_eq!(
         task.await.unwrap().unwrap(),
-        json!({"accepted":false,"feedback":"Revise scope"})
+        json!({"action":"no","content":"Approve the plan?"})
     );
     assert_eq!(
         std::fs::read_to_string(workspace.join(IMPLEMENT_FILE)).unwrap(),
@@ -297,7 +292,7 @@ async fn rejection_after_a_write_never_rolls_it_back() {
 }
 
 /// C10/C18: a pending Review takes no filesystem lease, so an independent
-/// Parallel branch's native Bash write runs and settles while the human
+/// sibling's native Bash write runs and settles while the human
 /// decision is still outstanding.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn pending_review_does_not_block_an_independent_parallel_branch() {
@@ -305,28 +300,20 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
     let workspace = plane.dir.path().join("workspace");
     let (owner, _audit, mut published) = owner(&plane);
     let context = bash_context(&plane, Some(owner.clone()));
-    let review_output = crate::runtime::workflow::review::result_schema();
     let definition = serde_json::from_value(json!({"description":"parallel review","timeout_ms":600_000,"block":{
-        "input":empty_object(),
-        "output":schema(json!({"decision":review_output,"write":check_report()}), &["decision", "write"]),
-        "entry":"fanout","nodes":{
-            "fanout":{"type":"parallel","branches":{
-                "decision":{"input":{"type":"literal","value":{"summary":"ship"}},"block":{
-                    "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),
-                    "output":review_output,"entry":"review","nodes":{
-                        "review":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},
-                        "done":{"type":"return","output":{"type":"reference","path":["review"]}}},
-                    "edges":[{"from":"review","to":"done"}]}},
-                "write":{"input":{"type":"literal","value":{}},"block":{
-                    "input":empty_object(),"output":check_report(),"entry":"write","nodes":{
-                        "write":{"type":"tool","selector":{"origin":"builtin","name":"bash"},
-                            "arguments":{"type":"literal","value":{"command":format!("printf independent > {IMPLEMENT_FILE}")}},
-                            "result":{"type":"json","part":0,"schema":check_report()}},
-                        "done":{"type":"return","output":{"type":"reference","path":["write"]}}},
-                    "edges":[{"from":"write","to":"done"}]}}}},
-            "done":{"type":"return","output":{"type":"reference","path":["fanout"]}}
-        },"edges":[{"from":"fanout","to":"done"}]}}))
-    .unwrap();
+        "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),
+        "nodes": {
+            "workflow_start":{"type":"start"},
+            "review":review_node(3_600_000),
+            "write":{"type":"tool","selector":{"origin":"builtin","name":"bash"},
+                "arguments":{"type":"literal","value":{"command":format!("printf independent > {IMPLEMENT_FILE}")}},
+                "result":{"type":"json","schema":check_report()}},
+            "done":{"type":"return","outputs":[{"variable":"decision","value_selector":["review"]},{"variable":"write","value_selector":["write"]}]}
+        },"edges": [
+            {"from":"workflow_start","to":"review"},{"from":"workflow_start","to":"write"},
+            {"from":"review","to":"done","port":"yes"},{"from":"review","to":"done","port":"no"},
+            {"from":"review","to":"done","port":"timeout"},{"from":"write","to":"done"}
+        ]}})).unwrap();
     let program = Arc::new(compile_test(definition).unwrap());
     let runtime = workflow_runtime(&plane);
     let mut observations = runtime.observations.subscribe();
@@ -337,7 +324,7 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
                 program,
                 ToolCallId::new("parallel-review"),
                 context,
-                json!({}),
+                json!({"summary":"ship"}),
                 cancellation,
             )
             .await
@@ -364,7 +351,7 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
         .await
         .unwrap();
     let output = task.await.unwrap().unwrap();
-    assert_eq!(output["decision"]["accepted"], true);
+    assert_eq!(output["decision"]["action"], "yes");
     assert_eq!(output["write"]["exit_code"], 0);
 }
 

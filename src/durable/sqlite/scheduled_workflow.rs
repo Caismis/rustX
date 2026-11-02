@@ -794,11 +794,11 @@ pub(super) fn validate_interaction_owner(
     use crate::events::interaction::InteractionSubject;
     let node = match subject {
         InteractionSubject::Approval {
-            invocation_id: crate::tools::types::ToolInvocationId::Workflow { node },
+            invocation_id: crate::tools::types::ToolInvocationId::Workflow { node, .. },
             ..
         }
         | InteractionSubject::Questionnaire {
-            invocation_id: crate::tools::types::ToolInvocationId::Workflow { node },
+            invocation_id: crate::tools::types::ToolInvocationId::Workflow { node, .. },
             ..
         } => node.as_ref(),
         InteractionSubject::Review { review } => review.instance.as_ref(),

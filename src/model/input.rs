@@ -119,6 +119,9 @@ pub enum RequestOnlyModelContext {
     UnresolvedOutputCarryover(RenderedUnresolvedOutputCarryover),
     /// Temporary input of a native auxiliary Call, never historical provenance.
     AuxiliaryQuestion { text: String },
+    /// A temporary assistant turn authored into a native auxiliary Call's
+    /// prompt (a Workflow Model's assistant message), never model output.
+    AuxiliaryAnswer { text: String },
 }
 
 impl RequestOnlyModelContext {
@@ -127,8 +130,15 @@ impl RequestOnlyModelContext {
     pub fn render(&self) -> String {
         match self {
             Self::UnresolvedOutputCarryover(carryover) => carryover.render(),
-            Self::AuxiliaryQuestion { text } => text.clone(),
+            Self::AuxiliaryQuestion { text } | Self::AuxiliaryAnswer { text } => text.clone(),
         }
+    }
+
+    /// Whether the provider receives this context as an assistant turn;
+    /// every other request-only context is sent as a user turn.
+    #[must_use]
+    pub const fn is_assistant(&self) -> bool {
+        matches!(self, Self::AuxiliaryAnswer { .. })
     }
 }
 

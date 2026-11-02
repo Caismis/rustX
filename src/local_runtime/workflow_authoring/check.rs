@@ -26,14 +26,8 @@ use std::path::{Path, PathBuf};
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkflowStructure {
     /// Compiled. `outputs` are the compiled output contracts of every node
-    /// by authored path, including derived Parallel and Loop results.
-    /// `revision` is the file revision a `replace` with this candidate
-    /// commits: the native identity of its canonical serialization, so a
-    /// client recognizes its own normalized commit on reread.
-    Valid {
-        outputs: BTreeMap<String, Value>,
-        revision: String,
-    },
+    /// by authored path, including derived Loop results.
+    Valid { outputs: BTreeMap<String, Value> },
     /// The first native compiler rejection.
     Invalid { diagnostic: WorkflowDiagnostic },
 }
@@ -67,6 +61,10 @@ pub enum WorkflowDependencies {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowCheckReport {
+    /// The file revision a `replace` with this candidate commits: the native
+    /// identity of its canonical serialization, so a client recognizes its
+    /// own normalized commit on reread. Absent when the file cannot hold it.
+    pub revision: Option<String>,
     pub structure: WorkflowStructure,
     pub dependencies: WorkflowDependencies,
     /// The redacted static explanation, when requested of a valid candidate.
@@ -108,7 +106,8 @@ impl UserConfigManager {
         }
         let path = file_path(self, target, id);
         let presentation = document.presentation_diagnostics();
-        let invalid = |diagnostic| WorkflowCheckReport {
+        let invalid = |revision, diagnostic| WorkflowCheckReport {
+            revision,
             structure: WorkflowStructure::Invalid { diagnostic },
             dependencies: WorkflowDependencies::NotChecked,
             explanation: None,
@@ -116,11 +115,13 @@ impl UserConfigManager {
         };
         // The same number contract a `replace` of this candidate enforces.
         if let Some(diagnostic) = super::unrepresentable_number(&document) {
-            return Ok(invalid(diagnostic));
+            return Ok(invalid(None, diagnostic));
         }
-        let bytes = match super::candidate::encode(id, &path, &document) {
-            Ok(bytes) => bytes,
-            Err(SettingsError::InvalidWorkflow(diagnostic)) => return Ok(invalid(*diagnostic)),
+        let revision = match super::candidate::encode(&document) {
+            Ok(bytes) => crate::local_runtime::settings::revision(Some(&bytes)),
+            Err(SettingsError::InvalidWorkflow(diagnostic)) => {
+                return Ok(invalid(None, *diagnostic));
+            }
             Err(error) => return Err(error),
         };
         let program = match crate::local_runtime::workflow_resources::compile_definition(
@@ -129,13 +130,18 @@ impl UserConfigManager {
             document.definition,
         ) {
             Ok(program) => program,
-            Err(error) => return Ok(invalid(WorkflowDiagnostic::from_resource(&error))),
+            Err(error) => {
+                return Ok(invalid(
+                    Some(revision),
+                    WorkflowDiagnostic::from_resource(&error),
+                ));
+            }
         };
         Ok(WorkflowCheckReport {
+            revision: Some(revision),
             presentation,
             structure: WorkflowStructure::Valid {
                 outputs: program.node_outputs(),
-                revision: crate::local_runtime::settings::revision(Some(&bytes)),
             },
             explanation: explain.then(|| Box::new(program.inspect())),
             dependencies: context.map_or(WorkflowDependencies::NotChecked, |context| {

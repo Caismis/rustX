@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import type { RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v62';
+import type { QuestionnaireAnswerEntry, QuestionSpecification, RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v62';
 import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconQuestionOutline14 } from '../../presentation/primitives/icons';
-import { ReviewContent, ReviewValue } from '../../presentation/agent/ReviewContent';
+import { ReviewValue } from '../../presentation/agent/ReviewContent';
 import { finiteNumberFromWire } from '../../../../protocol/app-server/number';
 
 type Item = RuntimeClientTranscriptEntry['item'];
@@ -20,22 +20,28 @@ export function InteractionAudit({ item, settlement }: { item: Requested | Settl
       : subject?.type === 'questionnaire' ? `${tx('interactions:audit.questionnaire')} · ${subject.requester.tool_name}`
         : outcome?.type === 'reviewed' ? `${tx('interactions:review.title')} · ${outcome.response.instance.node}`
           : tx('interactions:audit.interaction');
-  const summary = outcome?.type === 'reviewed' ? tx(outcome.response.decision.type === 'accepted' ? 'interactions:audit.accepted' : 'interactions:audit.rejected')
-    : outcome ? tx(`interactions:audit.${outcome.type}`) : tx('interactions:audit.requested');
+  // A Human Input's answer is the label of the action chosen, when its question is at hand.
+  const questions = subject?.type === 'review' ? subject.review.questionnaire.questions : subject?.type === 'questionnaire' ? subject.questionnaire.questions : undefined;
+  const answers = outcome?.type === 'reviewed' ? outcome.response.submission.answers : outcome?.type === 'questionnaire_submitted' ? outcome.submission.answers : undefined;
+  const action = outcome?.type === 'reviewed' ? label(questions, answers?.[0]) : undefined;
+  const summary = typeof action === 'string' ? action : outcome ? tx(`interactions:audit.${outcome.type}`) : tx('interactions:audit.requested');
   return <div data-interaction-audit><DisclosureRow icon={<IconQuestionOutline14/>} title={title} open={open} expandable expandOnRowClick onToggle={() => setOpen(value => !value)} collapsedContent={<span> · {summary}</span>}>
-    {subject?.type === 'review' && <ReviewContent content={subject.review.subject.content} context={subject.review.context}/>}
     {subject?.type === 'approval' && <><p>{subject.reason}</p></>}
-    {subject?.type === 'questionnaire' && subject.questionnaire.questions.map((question, index) => {
-      const answer = outcome?.type === 'questionnaire_submitted' ? outcome.submission.answers.find(item => item.question_index === index)?.answer : undefined;
-      const options = question.answer.type === 'single_choice' || question.answer.type === 'multi_choice' ? question.answer.options : undefined;
-      const value = answer?.type === 'option' ? options?.[answer.value.option_index]?.label ?? answer.value
-        : answer?.type === 'options' ? answer.value.option_indices.map(index => options?.[index]?.label ?? index)
-          : answer?.type === 'custom' ? answer.value.answer : answer?.type === 'number' ? finiteNumberFromWire(answer.value.value) : answer?.value.value;
-      return <div key={index}><p>{question.question}</p>{answer && <ReviewValue value={value}/>}</div>;
+    {questions?.map((question, index) => {
+      const answer = answers?.find(item => item.question_index === index);
+      return <div key={index}><ReviewValue value={question.question}/>{answer && <ReviewValue value={label(questions, answer)}/>}</div>;
     })}
-    {!subject && outcome?.type === 'questionnaire_submitted' && <ReviewValue value={outcome.submission.answers}/>}
+    {!questions && answers && <ReviewValue value={answers}/>}
     <p>{summary}</p>
-    {outcome?.type === 'reviewed' && outcome.response.decision.type === 'rejected' && <ReviewValue value={outcome.response.decision.feedback}/>}
     {outcome?.type === 'denied' && <p>{outcome.reason}</p>}
   </DisclosureRow></div>;
+}
+/** An answer as the person saw it: option labels rather than indices. */
+function label(questions: QuestionSpecification[] | undefined, entry: QuestionnaireAnswerEntry | undefined): unknown {
+  if (!entry) return undefined;
+  const { answer } = entry, shape = questions?.[entry.question_index]?.answer;
+  const options = shape?.type === 'single_choice' || shape?.type === 'multi_choice' ? shape.options : undefined;
+  return answer.type === 'option' ? options?.[answer.value.option_index]?.label ?? answer.value
+    : answer.type === 'options' ? answer.value.option_indices.map(index => options?.[index]?.label ?? index)
+      : answer.type === 'custom' ? answer.value.answer : answer.type === 'number' ? finiteNumberFromWire(answer.value.value) : answer.value.value;
 }

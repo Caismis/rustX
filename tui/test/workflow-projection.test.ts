@@ -61,20 +61,20 @@ it("a replacement Workflow snapshot folds without touching canonical history", (
   });
   assert.deepEqual(state.workflows, workflows);
   assert.equal(state.workflows.runs[0]!.instances[0]!.checks_passed, null);
-  assert.deepEqual(state.workflows.runs[0]!.instances[0]!.block.invocations, [0, 0]);
+  assert.deepEqual(state.workflows.runs[0]!.instances[0]!.block.invocations, [0, 1]);
   // The revision survives above the safe-integer range, which is the whole
   // reason it crosses the wire as text.
   assert.equal(state.workflows.revision, "9007199254740993");
 });
-function row(node: string, branch: string): WorkflowInstanceView {
-  return { block: { run: id, definition: { workflow_id: "review", blocks: ["parallel", branch] }, invocations: [0, 0] },
+function row(node: string, scope: string): WorkflowInstanceView {
+  return { block: { run: id, definition: { workflow_id: "review", blocks: [scope, "body"] }, invocations: [0, 1] },
     node, visit: 0, kind: "review", state: { type: "waiting", reason: "review" }, child: null, invocation: null, tool_id: null,
     interaction: { conversation_id: "conv_01900000-0000-7000-8000-000000000002", interaction_id: node }, iteration: null, iterations_max: null,
-    loop_exit: null, checks_passed: null, review_accepted: true };
+    loop_exit: null, checks_passed: null };
 }
 function run(): WorkflowRunView {
   return { id, workflow_id: "review", program_digest: "a".repeat(64), resource_revision: "1", tool_call_id: "outer",
-    state: { type: "running" }, instances: [row("human", "left"), { ...row("worker", "right"), state: { type: "running" }, child: "child-right", interaction: null, review_accepted: null }],
+    state: { type: "running" }, instances: [row("human", "left"), { ...row("worker", "right"), state: { type: "running" }, child: "child-right", interaction: null }],
     omitted_instances: 0, steps_consumed: 4, steps_max: 20, agents_consumed: 1, model_calls_consumed: 0 };
 }
 
@@ -90,42 +90,41 @@ it("native replacement event and reconnect snapshot converge without canonical w
   assert.equal(JSON.stringify(after), frozen, "expand/focus formatting cannot mutate any native fact");
 });
 
-it("Parallel human wait and child coexist without Candidate or handoff rows", () => {
+it("Concurrent human wait and child coexist without Candidate or handoff rows", () => {
   const text = workflowDetails(run()).join("\n");
   assert.match(text, /human · waiting for review/);
   assert.match(text, /worker · running.*child-right/);
-  assert.match(text, /Review accepted/);
   assert.doesNotMatch(text, /candidate|handoff/i);
   assert.match(text, /root HITL/);
 });
 
-it("draining is not terminal cancellation and Loop exhaustion is not business acceptance", () => {
+it("draining is not terminal cancellation and a completed Loop is not business acceptance", () => {
   assert.match(workflowStatus({ type: "draining" }), /requested.*draining/);
   assert.doesNotMatch(workflowStatus({ type: "draining" }), /cancelled/);
   assert.equal(workflowStatus({ type: "settled", outcome: "cancelled" }), "execution cancelled");
   const value = run();
   value.state = { type: "settled", outcome: "completed" };
   value.instances = [{ ...row("repair", "body"), kind: "loop", state: { type: "settled", outcome: "completed" }, interaction: null,
-    review_accepted: null, checks_passed: false, iteration: 3, iterations_max: 3, loop_exit: "exhausted" }];
+    checks_passed: false, iteration: 3, iterations_max: 3, loop_exit: "loop_completed" }];
   const text = workflowDetails(value).join("\n");
   assert.match(text, /execution completed/);
-  assert.match(text, /iteration 3\/3 · exhausted.*business checks failed/);
+  assert.match(text, /iteration 3\/3 · loop_completed.*business checks failed/);
   assert.doesNotMatch(text, /task accepted|✓/);
 });
 
 it("nested concrete blocks render under their owner and truncated orphans stay visible", () => {
   const value = run();
   const root = { run: id, definition: { workflow_id: "review", blocks: [] }, invocations: [0] };
-  const fork = { ...row("parallel", "unused"), block: root, kind: "parallel" as const };
-  const human = row("human", "left");
-  const repair = { ...row("repair", "right"), kind: "loop" as const };
+  const owner = { ...row("outer", "unused"), block: root, kind: "loop" as const };
+  const human = row("human", "outer");
+  const repair = { ...row("repair", "outer"), kind: "loop" as const };
   const iteration = { ...row("fix", "unused"), block: {
-    ...root, definition: { workflow_id: "review", blocks: ["parallel", "right", "repair", "body"] }, invocations: [0, 0, 2],
+    ...root, definition: { workflow_id: "review", blocks: ["outer", "body", "repair", "body"] }, invocations: [0, 1, 2],
   } };
   // Deliberately store children after an unrelated successor, like native admission order.
-  value.instances = [fork, { ...fork, node: "final", kind: "return" }, human, repair, iteration];
+  value.instances = [owner, { ...owner, node: "final", kind: "return" }, human, repair, iteration];
   const text = workflowDetails(value).join("\n");
-  assert.ok(text.indexOf("parallel ·") < text.indexOf("human ·"));
+  assert.ok(text.indexOf("outer ·") < text.indexOf("human ·"));
   assert.ok(text.indexOf("repair ·") < text.indexOf("fix ·"));
   assert.ok(text.indexOf("fix ·") < text.indexOf("final ·"));
   assert.match(text, /\n {12}fix ·/);

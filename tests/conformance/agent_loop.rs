@@ -210,20 +210,20 @@ impl Driver {
                 "description": "Delegate a text review to an independently frozen child.",
                 "block": {
                     "input": {"type":"object", "properties":{"task":{"type":"string"}}, "required":["task"], "additionalProperties":false},
-                    "output": {"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false},
-                    "entry":"review",
-                    "nodes": {
-                        "review": {"type":"agent", "profile":"image_reviewer", "task":"Review the delegated text.",
-                            "input":{"task":{"type":"reference","path":["args","task"]}},
-                            "output":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}},
-                        "done": {"type":"return","output":{"type":"reference","path":["review"]}}
-                    },
-                    "edges":[{"from":"review","to":"done"}]
-                }
+                    "nodes": {"workflow_start":{"type":"start"},
+                        "review": {"type":"agent", "profile":"image_reviewer", "task":[{"type":"literal","value":"Review the delegated text.\n\n"},{"type":"reference","path":["args","task"]}],
+                            "output":{"type":"json_schema","schema":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}}},
+                        "done": {"type":"return","outputs":[{"variable":"summary","value_selector":["review","summary"]}]}
+                    },"edges": [{"from":"workflow_start","to":"review"},{"from":"review","to":"done"}],}
             });
             std::fs::write(
                 workspace.join(".agents/workflows/image_review.yaml"),
                 serde_yaml::to_string(&workflow).unwrap(),
+            )
+            .unwrap();
+            std::fs::write(
+                workspace.join("rustx.toml"),
+                "[agent]\nworkflows = [\"image_review\"]\n",
             )
             .unwrap();
         }
@@ -844,7 +844,7 @@ fn session_json(setup: &Setup) -> String {
     }
     let mut document = serde_json::json!({
         "agent_id": "agent-issue47",
-        "agent": {"model": model, "skills": "all", "workflows": if setup.images { vec!["image_review"] } else { vec![] }, "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
+        "agent": {"model": model, "skills": "all", "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
         "context": {
             "reserve_tokens": setup.reserve_tokens,
             "keep_recent_tokens": setup.keep_recent_tokens,

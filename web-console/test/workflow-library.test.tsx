@@ -26,16 +26,20 @@ interface Authority {
   replaced: boolean;
   lists: ReturnType<typeof deferred<WorkflowLibrary>>[];
   writes: { id: string; expected: string; edit: WorkflowEdit; result: ReturnType<typeof deferred<WorkflowCommit>> }[];
+  enables: { id: string; expected: string; enabled: boolean; result: ReturnType<typeof deferred<void>> }[];
+  /** What `read` returns; reads stay pending without it. */
+  source?: Awaited<ReturnType<WorkflowScopePort['read']>>;
 }
 function authorityNamed(name: string): Authority {
-  return { name, replaced: false, lists: [], writes: [] };
+  return { name, replaced: false, lists: [], writes: [], enables: [] };
 }
 function portOf(authority: Authority, scope: WorkflowScope): WorkflowScopePort {
   const refuse = () => Promise.reject(new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_replaced' }));
   return {
     endpoint: `ws://${authority.name}/`, scope,
-    analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), list: () => { if (authority.replaced) return refuse(); const result = deferred<WorkflowLibrary>(); authority.lists.push(result); return result.promise; },
-    read: () => new Promise(() => {}),
+    enable: (id, expected, enabled) => { const result = deferred<void>(); authority.enables.push({ id, expected, enabled, result }); return result.promise; },
+    analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => { if (authority.replaced) return refuse(); const result = deferred<WorkflowLibrary>(); authority.lists.push(result); return result.promise; },
+    read: () => authority.source ? Promise.resolve(authority.source) : new Promise(() => {}),
     check: () => new Promise(() => {}),
     write: (id, expected, edit) => {
       if (authority.replaced) return refuse();
@@ -47,7 +51,7 @@ function portOf(authority: Authority, scope: WorkflowScope): WorkflowScopePort {
 }
 const listing = (authority: Authority): WorkflowLibrary => ({
   target: { kind: 'user' }, directory: `/home/${authority.name}/.agents/workflows`, absent_revision: `missing-${authority.name}`, diagnostic: null,
-  files: [{ file_name: 'flow.yaml', id: 'flow', relative_path: '.agents/workflows/flow.yaml', revision: `sha256:${authority.name}`, byte_length: '1', modified_ms: null, description: `${authority.name} flow`, nodes: 1, diagnostic: null, shadows_global: false }],
+  files: [{ file_name: 'flow.yaml', id: 'flow', relative_path: '.agents/workflows/flow.yaml', revision: `sha256:${authority.name}`, byte_length: '1', modified_ms: null, description: `${authority.name} flow`, nodes: 1, diagnostic: null, shadows_global: false, enabled: false }],
 });
 const host = { subscribe: () => () => {}, getCatalog: () => undefined, observe: () => new Promise(() => {}) } as unknown as WorkspaceAuthority;
 
@@ -69,6 +73,42 @@ it('keeps retained presentation warnings distinct from invalid executables and p
   expect(a.writes[0]).toMatchObject({ id: 'copied', edit: { operation: 'copy', source: 'flow', source_revision: 'sha256:a' } });
 });
 
+describe('enabling in Sessions', () => {
+  const sessions = () => screen.getByRole('switch', { name: 'Enable flow in Sessions' }) as HTMLButtonElement;
+  it('switches a file on against its scope configuration revision, then lists again', async () => {
+    const { a, show } = mount(); show();
+    a.lists[0].resolve({ ...listing(a), configuration_revision: 'cfg-1' }); await flush();
+    expect(sessions().getAttribute('aria-checked')).toBe('false');
+    expect(sessions().title).toBe('Enabled in the Sessions of every Workspace');
+    fireEvent.click(sessions());
+    expect(a.enables.map(({ id, expected, enabled }) => ({ id, expected, enabled }))).toEqual([{ id: 'flow', expected: 'cfg-1', enabled: true }]);
+    expect(sessions().disabled).toBe(true);
+    a.enables[0].result.resolve(); await flush();
+    const after = listing(a);
+    after.files[0].enabled = true;
+    a.lists[1].resolve({ ...after, configuration_revision: 'cfg-2' }); await flush();
+    expect(sessions().getAttribute('aria-checked')).toBe('true');
+    expect(sessions().disabled).toBe(false);
+  });
+
+  it('forces a file that fails its check off and gray, even when its scope enables it', async () => {
+    const { a, show } = mount(); show();
+    const observed = listing(a);
+    observed.files[0] = { ...observed.files[0], enabled: true, diagnostic: { path: 'block.edges.0.to', category: 'compile', reason: 'unknown node', correction: null, detail: null, line: null, column: null } };
+    a.lists[0].resolve({ ...observed, configuration_revision: 'cfg-1' }); await flush();
+    expect(sessions().getAttribute('aria-checked')).toBe('false');
+    expect(sessions().disabled).toBe(true);
+    expect(sessions().title).toMatch(/fails its check/);
+  });
+
+  it('cannot switch while the scope configuration does not parse', async () => {
+    const { a, show } = mount(); show();
+    a.lists[0].resolve({ ...listing(a), configuration_revision: null }); await flush();
+    expect(sessions().disabled).toBe(true);
+    expect(sessions().title).toMatch(/rustx\.toml cannot be read/);
+  });
+});
+
 function mount() {
   const a = authorityNamed('a'), b = authorityNamed('b');
   let current = a;
@@ -84,9 +124,89 @@ afterEach(cleanup);
 const dialog = () => within(screen.getByRole('dialog'));
 const newButton = () => screen.getByRole('button', { name: 'New Workflow' }) as HTMLButtonElement;
 function fill(id: string, description: string) {
+  fireEvent.change(dialog().getByLabelText(/^Name/), { target: { value: `${id} name` } });
   fireEvent.change(dialog().getByLabelText(/^Workflow ID/), { target: { value: id } });
-  fireEvent.change(dialog().getByLabelText(/^Description/), { target: { value: description } });
+  fireEvent.change(dialog().getByLabelText(/^Model description/), { target: { value: description } });
 }
+
+describe('new Workflow display', () => {
+  it('names the Workflow for people, suggests its ID, and sends the display with the model description', async () => {
+    const { a, show } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    fireEvent.click(newButton());
+    const create = dialog().getByRole('button', { name: 'Create' }) as HTMLButtonElement;
+    fireEvent.change(dialog().getByLabelText(/^Name/), { target: { value: 'Weekly Report' } });
+    expect((dialog().getByLabelText(/^Workflow ID/) as HTMLInputElement).value).toBe('weekly-report');
+    fireEvent.change(dialog().getByLabelText(/^Description \(optional\)/), { target: { value: 'Collects the week into a report' } });
+    // The model description stays required and separate.
+    expect(create.disabled).toBe(true);
+    fireEvent.change(dialog().getByLabelText(/^Model description/), { target: { value: 'Summarize weekly notes' } });
+    fireEvent.click(create);
+    expect(a.writes[0]).toMatchObject({ id: 'weekly-report', edit: { operation: 'create', description: 'Summarize weekly notes',
+      display: { title: 'Weekly Report', description: 'Collects the week into a report', icon: 'lucide:workflow' } } });
+  });
+
+  it('chooses the icon from a floating, categorized panel that Escape closes before the dialog', async () => {
+    const { a, show } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    fireEvent.click(newButton());
+    fireEvent.click(dialog().getByRole('button', { name: 'Choose icon' }));
+    await screen.findAllByRole('option');
+    fireEvent.click(dialog().getByRole('button', { name: 'Security' }));
+    expect(dialog().getByRole('option', { name: 'shield-check' })).toBeTruthy();
+    fireEvent.keyDown(dialog().getByLabelText('Search icons'), { key: 'Escape' });
+    expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.click(dialog().getByRole('button', { name: 'Choose icon' }));
+    fireEvent.click(await dialog().findByRole('option', { name: 'shield-check' }));
+    expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.change(dialog().getByLabelText(/^Name/), { target: { value: 'Audit' } });
+    fireEvent.change(dialog().getByLabelText(/^Model description/), { target: { value: 'Audit the repository' } });
+    fireEvent.click(dialog().getByRole('button', { name: 'Create' }));
+    expect(a.writes[0]).toMatchObject({ edit: { display: { title: 'Audit', icon: 'lucide:shield-check' } } });
+  });
+});
+
+describe('Workflow cards', () => {
+  it('opens the editor from anywhere on the card', async () => {
+    const { a, surface, show } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    const card = screen.getByRole('button', { name: 'flow' }).closest('li')!;
+    expect(card.textContent).toContain('a flow');
+    fireEvent.click(screen.getByRole('button', { name: 'flow' }));
+    await flush();
+    expect(surface.getSnapshot().context.editor).toBeTruthy();
+  });
+
+  it('edits a file\'s info from its full document and replaces it at the revision it read', async () => {
+    const { a, show } = mount();
+    const long = 'x'.repeat(600);
+    a.source = { revision: 'sha256:read', document: { description: long, block: { input: { type: 'object' }, nodes: {workflow_start:{type:'start'}, ...{}}, edges: [{from:'workflow_start',to:'done'}, ...[]] },
+      editor: { display: { title: 'Flow', icon: 'lucide:rocket' }, nodes: [], entries: [], branches: [], notes: [], orders: [] } } } as never;
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for flow.yaml' }));
+    await flush();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit info' }));
+    await flush();
+    const edit = within(screen.getByRole('dialog', { name: 'Edit Workflow info' }));
+    // The full description, not the listing's bounded one.
+    expect((edit.getByLabelText(/^Model description/) as HTMLTextAreaElement).value).toBe(long);
+    expect((edit.getByLabelText(/^Workflow ID/) as HTMLInputElement).readOnly).toBe(true);
+    fireEvent.change(edit.getByLabelText(/^Name/), { target: { value: 'Weekly flow' } });
+    fireEvent.change(edit.getByLabelText(/^Description \(optional\)/), { target: { value: 'For Fridays' } });
+    fireEvent.click(edit.getByRole('button', { name: 'Save' }));
+    expect(a.writes).toHaveLength(1);
+    expect(a.writes[0]).toMatchObject({ id: 'flow', expected: 'sha256:read', edit: { operation: 'replace', document: { description: long,
+      editor: { display: { title: 'Weekly flow', description: 'For Fridays', icon: 'lucide:rocket' } } } } });
+  });
+});
 
 describe('accepted listing observations (F2)', () => {
   it('keeps a confirmation opened before a refresh bound to its own observation, and never writes to the replacement', async () => {

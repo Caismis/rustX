@@ -29,12 +29,16 @@ use super::subagent::SubagentName;
 mod admission;
 pub mod authoring;
 pub use authoring::{WorkflowModelPolicy, WorkflowToolSelector};
+mod defaults;
+pub(crate) use defaults::apply_schema_defaults;
 mod execution;
+mod flow;
 pub mod inspection;
 pub mod read_model;
+mod references;
 mod review;
 pub mod scheduled;
-pub use review::WorkflowReviewSubject;
+pub use review::{MAX_REVIEW_ACTIONS, REVIEW_TIMEOUT_PORT, WorkflowReviewAction};
 mod expressions;
 pub(crate) mod model;
 mod tool;
@@ -42,7 +46,7 @@ use expressions::{
     evaluate_predicate, evaluate_value, valid_local_key, validate_predicate, value_schema,
 };
 pub(crate) use tool::default_workflow_timeout_ms;
-pub use tool::{WorkflowToolResult, selectable_builtin_tools};
+pub use tool::{WorkflowToolChoice, WorkflowToolResult, selectable_builtin_tools};
 
 /// Runtime-owned identity, independent of model `ToolCall` text.
 /// Retained with the canonical outer result, not with an execution owner.
@@ -109,11 +113,11 @@ pub struct WorkflowRunId {
 )]
 pub struct WorkflowDefinitionPath {
     pub workflow_id: WorkflowId,
-    /// Pairs of owner node and child key (Parallel branch or Loop `body`); empty for root.
+    /// Pairs of Loop owner node and the fixed child key `body`; empty for root.
     pub blocks: Vec<String>,
 }
 
-/// A concrete block instance. Root/Parallel append zero; Loop appends its one-based iteration.
+/// A concrete block instance. Root starts at zero; each Loop appends its one-based iteration.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -146,13 +150,15 @@ pub enum WorkflowExecutionOutcome {
     OutcomeUnknown,
 }
 
-/// Normal finite Loop completion; neither case claims business verification passed.
+/// Why a Loop finished, as Dify's `completed_reason`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowLoopExit {
-    Satisfied,
-    Exhausted,
+    /// The break condition held or an Exit Loop node ran.
+    LoopBreak,
+    /// It ran `loop_count` rounds.
+    LoopCompleted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,6 +206,43 @@ pub(crate) fn test_instance(workflow: &str, node: &str) -> WorkflowNodeInstance 
     }
 }
 
+/// A root block as a Loop or Iteration body: no input or output, no Return,
+/// and its Start renamed `loop_start` so it hides no root node.
+#[cfg(test)]
+pub(crate) fn test_body(block: &Value) -> Value {
+    let rename = |id: &str, start: &str| {
+        if id == start {
+            "loop_start".to_owned()
+        } else {
+            id.to_owned()
+        }
+    };
+    let nodes = block["nodes"].as_object().expect("nodes");
+    let start = nodes
+        .iter()
+        .find(|(_, node)| node["type"] == "start")
+        .expect("Start")
+        .0
+        .clone();
+    let kept = nodes
+        .iter()
+        .filter(|(_, node)| node["type"] != "return")
+        .map(|(id, node)| (rename(id, &start), node.clone()))
+        .collect::<serde_json::Map<_, _>>();
+    let edges = block["edges"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|edge| kept.contains_key(&rename(edge["to"].as_str().unwrap_or_default(), &start)))
+        .map(|edge| {
+            let mut edge = edge.clone();
+            edge["from"] = rename(edge["from"].as_str().unwrap_or_default(), &start).into();
+            edge
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({"nodes": kept, "edges": edges})
+}
+
 /// The maximum serialized executable definition, excluding file presentation.
 pub const MAX_WORKFLOW_BYTES: usize = 512 * 1024;
 /// The maximum number of nodes in one workflow program.
@@ -210,16 +253,18 @@ pub const MAX_WORKFLOW_STEPS: usize = 4096;
 pub const MAX_WORKFLOW_AGENTS: usize = 256;
 /// Logical Auxiliary Model Calls across the entire run, separate from Agents.
 pub const MAX_WORKFLOW_MODEL_CALLS: usize = 256;
-/// Fixed instruction bytes accepted by a Model node.
-pub const MAX_MODEL_INSTRUCTION_BYTES: usize = 32 * 1024;
-/// Bound intermediate named input materialization before its total byte check.
-pub const MAX_MODEL_INPUT_BINDINGS: usize = 32;
-/// Trusted ceiling for a single Loop's finite allowance.
-pub const MAX_LOOP_ITERATIONS: u32 = 256;
+/// Prompt messages accepted by a Model node, the system message included.
+pub const MAX_MODEL_MESSAGES: usize = 32;
+/// Fixed text bytes accepted in one Model prompt message.
+pub const MAX_MODEL_MESSAGE_BYTES: usize = 32 * 1024;
+/// Text and reference parts accepted in one Model prompt message.
+pub const MAX_MODEL_MESSAGE_PARTS: usize = 64;
+/// Dify's `LOOP_NODE_MAX_COUNT`: the most rounds one Loop may run.
+pub const LOOP_NODE_MAX_COUNT: u32 = 100;
+/// Dify's `MAX_PARALLEL_LIMIT`: the most Iteration rounds run at once.
+pub const MAX_PARALLEL_LIMIT: u32 = 10;
 /// The maximum number of discovered workflow definitions in one generation.
 pub const MAX_WORKFLOW_DEFINITIONS: usize = 64;
-/// The maximum number of explicit parallel branches in one node.
-pub const MAX_PARALLEL_BRANCHES: usize = 32;
 /// The maximum number of path components in one explicit reference.
 pub const MAX_REFERENCE_COMPONENTS: usize = 32;
 /// Aggregate nested block depth, with root at zero.
@@ -349,17 +394,16 @@ pub struct WorkflowDefinition {
     pub block: WorkflowBlock,
 }
 
-/// A fixed lexical graph shared by root, Parallel branches and Loop bodies.
+/// A fixed graph: the root, or a Loop or Iteration body. A body declares no
+/// input or output: as in Dify, it reads the variables of the nodes around
+/// it, its container's variables and its own nodes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct WorkflowBlock {
     /// The workflow input JSON Schema.
+    #[serde(default = "empty_object_schema")]
     pub input: Value,
-    /// The workflow output JSON Schema.
-    pub output: Value,
-    /// The one explicit entry node.
-    pub entry: String,
     /// Stable node definitions keyed by explicit node id.
     #[serde(deserialize_with = "deserialize_unique_map")]
     pub nodes: BTreeMap<String, WorkflowNodeDefinition>,
@@ -373,80 +417,322 @@ pub struct WorkflowBlock {
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowNodeDefinition {
+    /// The block's real Start node. Its input is the block input contract.
+    Start {},
     /// One tool-free logical Auxiliary Call using the invoking Attempt's authority.
     Model {
         #[serde(default)]
         model: WorkflowModelPolicy,
-        instruction: String,
-        #[serde(default, deserialize_with = "deserialize_unique_map")]
-        input: BTreeMap<String, WorkflowValue>,
+        /// The prompt: a system message, then user and assistant turns.
+        messages: Vec<WorkflowModelMessage>,
         output: WorkflowModelOutput,
+        /// Retry a failed call before its failure is handled.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry: Option<WorkflowRetry>,
+        /// What a call that still failed does.
+        #[serde(default, skip_serializing_if = "WorkflowModelErrorStrategy::is_stop")]
+        on_error: WorkflowModelErrorStrategy,
     },
-    /// Repeat one fixed typed body until its committed result satisfies `until`.
+    /// As Dify's Loop: run the body again and again, until its break
+    /// condition holds after a round, an Exit Loop node ran, or `loop_count`
+    /// rounds are done. Its value is its loop variables.
     Loop {
-        input: WorkflowValue,
+        /// Variables the body reads and an Assigner node writes, under the
+        /// Loop's own ID.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        loop_variables: Vec<WorkflowLoopVariable>,
+        /// Checked before the first round and after every round.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        break_condition: Option<WorkflowPredicate>,
+        loop_count: u32,
         body: Box<WorkflowBlock>,
-        until: Box<WorkflowPredicate>,
-        carry: WorkflowValue,
-        max_iterations: u32,
     },
+    /// As Dify's Iteration: run the body once for each item of an array,
+    /// which the body reads as `item` and `index` under the Iteration's ID.
+    /// Its value is `output`, the body's chosen value of every round.
+    Iteration {
+        /// The array to iterate.
+        iterator: WorkflowValue,
+        /// What each round contributes, read after the round.
+        output: WorkflowValue,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        is_parallel: bool,
+        /// Rounds run at once in parallel mode.
+        #[serde(default = "default_parallel_nums")]
+        parallel_nums: u32,
+        #[serde(
+            default,
+            skip_serializing_if = "WorkflowIterationErrorMode::is_terminated"
+        )]
+        error_handle_mode: WorkflowIterationErrorMode,
+        /// Join the rounds' arrays into one array.
+        #[serde(default = "flatten_by_default", skip_serializing_if = "is_flattened")]
+        flatten_output: bool,
+        body: Box<WorkflowBlock>,
+    },
+    /// As Dify's Exit Loop: ends its Loop once this round settles.
+    #[serde(rename = "loop_end")]
+    LoopEnd {},
+    /// As Dify's Variable Assigner: writes variables of the Loop it is in.
+    Assigner { items: Vec<WorkflowAssignment> },
+    /// As Dify's Human Input: asks the person in the conversation which of
+    /// its actions to take. Each action leaves through its own port, and
+    /// `timeout` is taken when nobody answers within `timeout_ms`.
     Review {
-        subject: WorkflowReviewSubject,
-        context: Vec<WorkflowValue>,
+        /// The Markdown shown to the person: fixed text and references, as
+        /// an Agent's task.
+        content: Vec<WorkflowValue>,
+        actions: Vec<WorkflowReviewAction>,
+        timeout_ms: u64,
     },
-
     /// One statically selected, explicitly admitted foreground capability.
     Tool {
         selector: WorkflowToolSelector,
         arguments: WorkflowValue,
         result: WorkflowToolResult,
+        /// Call a failed Tool again before its failure is handled, as Dify's
+        /// tool node does; each call is its own invocation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry: Option<WorkflowRetry>,
+        /// What a call that still failed leaves behind.
+        #[serde(default, skip_serializing_if = "WorkflowValueErrorStrategy::is_stop")]
+        on_error: WorkflowValueErrorStrategy,
     },
     /// One execution of an admitted named Subagent profile.
     Agent {
         /// The native named profile to resolve at `AgentRun` admission.
         profile: String,
-        /// The fixed task instruction for this `AgentRun`.
-        task: String,
-        /// Explicit input bindings from workflow-local values.
-        #[serde(default)]
-        input: BTreeMap<String, WorkflowValue>,
-        /// The frozen `AgentRun` output contract.
-        output: Value,
-        /// The optional invocation-scoped capability override of this node
-        /// (Issue #258).
-        ///
-        /// This is **trusted static program data**: it is part of the
-        /// compiled Workflow, is validated against the Workflow's own
-        /// admitted generation, and is not reachable from model output, node
-        /// input values, or task text. It may therefore legitimately replace
-        /// the role's defaults with capabilities the invoking main model does
-        /// not itself hold — never with capabilities the generation does not
-        /// authorize.
-        #[serde(
-            rename = "override",
-            default,
-            deserialize_with = "crate::extensions::present_and_not_null",
-            skip_serializing_if = "Option::is_none"
-        )]
-        #[schemars(with = "crate::runtime::subagent::SubagentInvocationOverride")]
-        invocation_override: Option<crate::runtime::subagent::SubagentInvocationOverride>,
+        /// The task instruction for this `AgentRun`: fixed text and explicit
+        /// references, as a Model message's content.
+        task: Vec<WorkflowValue>,
+        /// What the `AgentRun` returns: its final reply text, or a
+        /// structured value committed through `workflow_output`.
+        output: WorkflowAgentOutput,
+        /// As Dify's Agent output routes: the child picks one of these
+        /// exits through its required `switch` value.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        routes: Vec<WorkflowAgentRoute>,
+        /// What a failed or timed-out child run leaves behind. Agents are not
+        /// retried: a workflow child writes the shared Session workspace
+        /// directly, and termination must be proven before it is handled.
+        #[serde(default, skip_serializing_if = "WorkflowValueErrorStrategy::is_stop")]
+        on_error: WorkflowValueErrorStrategy,
     },
-    /// Deterministic selection from one committed boolean value.
-    Branch {
-        /// The sole boolean condition binding.
-        condition: WorkflowPredicate,
-    },
-    /// A finite keyed set of private lexical blocks.
-    Parallel {
-        /// Branches are keyed by definition identity, not completion order.
-        #[serde(deserialize_with = "deserialize_unique_map")]
-        branches: BTreeMap<String, WorkflowBranch>,
-    },
-    /// Constructs a value and completes exactly this owning block.
-    Return {
-        /// The owning block's declared result.
-        output: WorkflowValue,
-    },
+    /// Ordered IF / ELIF cases, followed by the false (ELSE) port.
+    Branch { cases: Vec<WorkflowBranchCase> },
+    /// As Dify's End: the workflow's result, one field per output variable.
+    /// It is the last node; nothing follows it.
+    Return { outputs: Vec<WorkflowReturnOutput> },
+}
+
+/// As Dify's End output variable: a result field and the variable it reads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
+pub struct WorkflowReturnOutput {
+    pub variable: String,
+    pub value_selector: Vec<String>,
+}
+
+fn empty_object_schema() -> Value {
+    serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false})
+}
+
+/// Exactly what an omitted schema reads back as.
+/// A closed object with no fields, however its empty `required` is spelled.
+fn is_empty_object_schema(schema: &Value) -> bool {
+    let mut schema = schema.clone();
+    if schema
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        schema
+            .as_object_mut()
+            .map(|object| object.remove("required"));
+    }
+    schema == empty_object_schema()
+}
+
+const fn default_parallel_nums() -> u32 {
+    10
+}
+
+const fn flatten_by_default() -> bool {
+    true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's `skip_serializing_if` passes a reference.
+const fn is_flattened(flatten: &bool) -> bool {
+    *flatten
+}
+
+/// A Loop variable: Dify's `label`, `var_type` and constant or variable value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowLoopVariable {
+    pub label: String,
+    pub var_type: WorkflowVarType,
+    /// A literal, or a reference read once before the first round.
+    pub value: WorkflowValue,
+}
+
+/// The value types of a Loop variable, as Dify offers them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub enum WorkflowVarType {
+    #[serde(rename = "string")]
+    String,
+    #[serde(rename = "number")]
+    Number,
+    #[serde(rename = "boolean")]
+    Boolean,
+    #[serde(rename = "object")]
+    Object,
+    #[serde(rename = "array[string]")]
+    ArrayString,
+    #[serde(rename = "array[number]")]
+    ArrayNumber,
+    #[serde(rename = "array[boolean]")]
+    ArrayBoolean,
+    #[serde(rename = "array[object]")]
+    ArrayObject,
+}
+
+impl WorkflowVarType {
+    #[must_use]
+    pub fn schema(self) -> Value {
+        let scalar = |kind: &str| serde_json::json!({"type": kind});
+        let array = |kind: &str| serde_json::json!({"type": "array", "items": {"type": kind}});
+        match self {
+            Self::String => scalar("string"),
+            Self::Number => scalar("number"),
+            Self::Boolean => scalar("boolean"),
+            Self::Object => scalar("object"),
+            Self::ArrayString => array("string"),
+            Self::ArrayNumber => array("number"),
+            Self::ArrayBoolean => array("boolean"),
+            Self::ArrayObject => array("object"),
+        }
+    }
+
+    /// What `clear` leaves.
+    #[must_use]
+    pub fn empty(self) -> Value {
+        match self {
+            Self::String => Value::String(String::new()),
+            Self::Number => serde_json::json!(0),
+            Self::Boolean => Value::Bool(false),
+            Self::Object => serde_json::json!({}),
+            _ => serde_json::json!([]),
+        }
+    }
+
+    const fn is_array(self) -> bool {
+        matches!(
+            self,
+            Self::ArrayString | Self::ArrayNumber | Self::ArrayBoolean | Self::ArrayObject
+        )
+    }
+}
+
+/// The value of a Loop: each of its variables by label.
+fn loop_variables_schema(variables: &[WorkflowLoopVariable]) -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": variables.iter().map(|variable| (variable.label.clone(), variable.var_type.schema())).collect::<serde_json::Map<_, _>>(),
+        "required": variables.iter().map(|variable| variable.label.clone()).collect::<Vec<_>>(),
+        "additionalProperties": false,
+    })
+}
+
+/// How an Iteration treats a round that failed.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowIterationErrorMode {
+    /// The Iteration fails.
+    #[default]
+    Terminated,
+    /// The round contributes `null`.
+    ContinueOnError,
+    /// The round contributes nothing.
+    RemoveAbnormalOutput,
+}
+
+impl WorkflowIterationErrorMode {
+    #[must_use]
+    pub const fn is_terminated(&self) -> bool {
+        matches!(self, Self::Terminated)
+    }
+}
+
+/// One write of a Variable Assigner.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowAssignment {
+    /// The written Loop variable: `[loop, label]`.
+    pub variable: Vec<String>,
+    pub operation: WorkflowWriteMode,
+    /// The operand; `clear`, `remove_first` and `remove_last` take none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<WorkflowValue>,
+}
+
+/// Dify's write modes. `overwrite` writes a variable's value and `set` a
+/// constant; both assign.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowWriteMode {
+    Overwrite,
+    Clear,
+    Set,
+    Append,
+    Extend,
+    RemoveFirst,
+    RemoveLast,
+    Increment,
+    Decrement,
+    Multiply,
+    Divide,
+}
+
+impl WorkflowWriteMode {
+    /// Whether a variable of `var_type` accepts this mode, as Dify lists them.
+    #[must_use]
+    pub const fn applies_to(self, var_type: WorkflowVarType) -> bool {
+        match self {
+            Self::Overwrite | Self::Clear => true,
+            Self::Set => !var_type.is_array(),
+            Self::Append | Self::Extend | Self::RemoveFirst | Self::RemoveLast => {
+                var_type.is_array()
+            }
+            Self::Increment | Self::Decrement | Self::Multiply | Self::Divide => {
+                matches!(var_type, WorkflowVarType::Number)
+            }
+        }
+    }
+
+    /// The operand's schema, or `None` when the mode takes none.
+    #[must_use]
+    pub fn operand(self, var_type: WorkflowVarType) -> Option<Value> {
+        match self {
+            Self::Clear | Self::RemoveFirst | Self::RemoveLast => None,
+            Self::Append => var_type.schema().get("items").cloned(),
+            Self::Increment | Self::Decrement | Self::Multiply | Self::Divide => {
+                Some(serde_json::json!({"type": "number"}))
+            }
+            Self::Overwrite | Self::Set | Self::Extend => Some(var_type.schema()),
+        }
+    }
+}
+
+/// A stable exit identity and its condition. The first matching case wins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowBranchCase {
+    pub id: String,
+    pub condition: WorkflowPredicate,
 }
 
 /// The single authored output contract of a Workflow Model node.
@@ -461,13 +747,216 @@ pub enum WorkflowModelOutput {
 
 impl WorkflowModelOutput {
     /// The derived static node value contract; never separately authored.
+    /// As Dify's LLM node: `text`, `reasoning_content` and `usage`, plus
+    /// `structured_output` when a schema is declared.
     #[must_use]
     pub fn schema(&self) -> Value {
+        let tokens = serde_json::json!({"type": "integer"});
+        let mut properties = serde_json::json!({
+            "text": {"type": "string"},
+            "reasoning_content": {"type": "string"},
+            "usage": {
+                "type": "object",
+                "properties": {"input_tokens": tokens, "output_tokens": tokens, "total_tokens": tokens},
+                "required": ["input_tokens", "output_tokens", "total_tokens"],
+                "additionalProperties": false,
+            },
+        });
+        let mut required = vec!["text", "reasoning_content", "usage"];
+        if let Self::JsonSchema { schema } = self {
+            properties["structured_output"] = schema.clone();
+            required.push("structured_output");
+        }
+        serde_json::json!({
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": false,
+        })
+    }
+}
+
+/// The authored output contract of a Workflow Agent node, as Dify's Agent:
+/// the final reply is the `text` variable, or a declared schema adds the
+/// reserved `workflow_output` terminal and its fields are the variables.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowAgentOutput {
+    /// The child's final reply is the result.
+    Text {},
+    /// The child commits one value matching this schema.
+    JsonSchema { schema: Value },
+}
+
+impl WorkflowAgentOutput {
+    /// The declared schema, when structured output is on.
+    #[must_use]
+    pub fn structured(&self) -> Option<&Value> {
         match self {
-            Self::Text {} => serde_json::json!({"type": "string"}),
-            Self::JsonSchema { schema } => schema.clone(),
+            Self::Text {} => None,
+            Self::JsonSchema { schema } => Some(schema),
         }
     }
+}
+
+/// One exit an Agent may choose, as Dify's Agent output route. The child
+/// sees every route's ID and description when it picks one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowAgentRoute {
+    pub id: String,
+    pub description: String,
+}
+
+/// The reserved field through which a routed child picks its exit.
+pub const AGENT_ROUTE_FIELD: &str = "switch";
+pub const MAX_AGENT_ROUTES: usize = 32;
+pub const MAX_AGENT_ROUTE_DESCRIPTION_BYTES: usize = 1024;
+
+/// As Dify's error handling on its Agent and tool nodes, for a call that
+/// failed or timed out once it is proven settled. Cancellation, an unknown
+/// outcome, unproven settlement and a refused start still stop the run.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowValueErrorStrategy {
+    /// The run stops with the node's failure.
+    #[default]
+    Stop,
+    /// The node succeeds with this value, which satisfies the node's own
+    /// value contract; a routed Agent leaves through its `switch`.
+    DefaultValue { value: Value },
+    /// The node leaves through its `fail` port with `error_type` and
+    /// `error_message`; only nodes reached through that port see them.
+    FailBranch,
+}
+
+impl WorkflowValueErrorStrategy {
+    #[must_use]
+    pub const fn is_stop(&self) -> bool {
+        matches!(self, Self::Stop)
+    }
+}
+
+fn agent_text_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
+        "additionalProperties": false,
+    })
+}
+
+/// The schema the child's `workflow_output` terminal must satisfy, when it
+/// has one: the declared schema, or `{text}` once routes need a commit,
+/// plus the required `switch` naming one route.
+#[must_use]
+pub fn agent_terminal_schema(
+    output: &WorkflowAgentOutput,
+    routes: &[WorkflowAgentRoute],
+) -> Option<Value> {
+    let mut schema = match (output.structured(), routes.is_empty()) {
+        (None, true) => return None,
+        (None, false) => agent_text_schema(),
+        (Some(schema), _) => schema.clone(),
+    };
+    if !routes.is_empty() {
+        let choices = routes
+            .iter()
+            .map(|route| format!("- {}: {}", route.id, route.description))
+            .collect::<Vec<_>>()
+            .join("\n");
+        schema["properties"][AGENT_ROUTE_FIELD] = serde_json::json!({
+            "type": "string",
+            "enum": routes.iter().map(|route| route.id.as_str()).collect::<Vec<_>>(),
+            "description": format!("Select exactly one route ID based on the task result:\n{choices}"),
+        });
+        match schema.get_mut("required").and_then(Value::as_array_mut) {
+            Some(required) => required.push(AGENT_ROUTE_FIELD.into()),
+            None => schema["required"] = serde_json::json!([AGENT_ROUTE_FIELD]),
+        }
+    }
+    Some(schema)
+}
+
+/// The derived static node value contract: the terminal schema, or `{text}`
+/// for a plain final reply.
+#[must_use]
+pub fn agent_value_schema(output: &WorkflowAgentOutput, routes: &[WorkflowAgentRoute]) -> Value {
+    agent_terminal_schema(output, routes).unwrap_or_else(agent_text_schema)
+}
+
+/// As Dify's retry on failure: a failed or timed-out Model or Tool call is
+/// made again, up to `max_retries` more times, `interval_ms` after the
+/// previous one ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowRetry {
+    pub max_retries: u32,
+    pub interval_ms: u32,
+}
+
+/// As Dify's error handling, for a call that failed or timed out after its
+/// retries. Cancellation, an unknown outcome and authority errors still stop
+/// the run.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowModelErrorStrategy {
+    /// The run stops with the node's failure.
+    #[default]
+    Stop,
+    /// The node succeeds with this `text` (and `structured_output`, which a
+    /// declared schema requires), empty reasoning and zero usage.
+    DefaultValue {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        structured_output: Option<Value>,
+    },
+    /// The node leaves through its `fail` port with `error_type` and
+    /// `error_message`; only nodes reached through that port see them.
+    FailBranch,
+}
+
+impl WorkflowModelErrorStrategy {
+    #[must_use]
+    pub const fn is_stop(&self) -> bool {
+        matches!(self, Self::Stop)
+    }
+
+    /// The node value a consumer on the `fail` path sees.
+    #[must_use]
+    pub fn error_schema() -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {"error_type": {"type": "string"}, "error_message": {"type": "string"}},
+            "required": ["error_type", "error_message"],
+            "additionalProperties": false,
+        })
+    }
+}
+
+/// The Dify retry bounds.
+pub const MAX_RETRIES: u32 = 10;
+pub const RETRY_INTERVAL_MS: std::ops::RangeInclusive<u32> = 100..=5000;
+
+/// One prompt message of a Model node. The first message is the system
+/// prompt and every later one a user or assistant turn. Its content is fixed
+/// text (string literals) and explicit references, rendered in order: a
+/// string value as itself, any other value as its JSON text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowModelMessage {
+    pub role: WorkflowModelRole,
+    #[serde(default)]
+    pub content: Vec<WorkflowValue>,
+}
+
+/// Who speaks a Model prompt message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkflowModelRole {
+    System,
+    User,
+    Assistant,
 }
 
 /// Closed, explicitly tagged value syntax; no evaluation of expression strings.
@@ -486,6 +975,9 @@ pub enum WorkflowValue {
     },
     /// Construct an array atomically.
     Array { items: Vec<WorkflowValue> },
+    /// One string from fixed text and references, rendered as prompt parts
+    /// are: a non-string referenced value is inserted as its JSON text.
+    Template { parts: Vec<WorkflowValue> },
 }
 
 /// Typed predicates. Equality requires matching scalar types; no coercion.
@@ -494,7 +986,9 @@ pub enum WorkflowValue {
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowPredicate {
     /// A boolean value.
-    Boolean { value: WorkflowValue },
+    Boolean {
+        value: WorkflowValue,
+    },
     /// Equal scalar operands of the same static type.
     Equal {
         left: WorkflowValue,
@@ -505,12 +999,42 @@ pub enum WorkflowPredicate {
         left: WorkflowValue,
         right: WorkflowValue,
     },
+    /// String containment, without coercion.
+    Contains {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    NotContains {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    StartsWith {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    EndsWith {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    /// Whether a string is empty.
+    Empty {
+        value: WorkflowValue,
+    },
+    NotEmpty {
+        value: WorkflowValue,
+    },
     /// Boolean negation.
-    Not { predicate: Box<WorkflowPredicate> },
+    Not {
+        predicate: Box<WorkflowPredicate>,
+    },
     /// Conjunction of a nonempty fixed list.
-    And { predicates: Vec<WorkflowPredicate> },
+    And {
+        predicates: Vec<WorkflowPredicate>,
+    },
     /// Disjunction of a nonempty fixed list.
-    Or { predicates: Vec<WorkflowPredicate> },
+    Or {
+        predicates: Vec<WorkflowPredicate>,
+    },
 }
 
 /// One explicit edge in the workflow graph.
@@ -522,24 +1046,35 @@ pub struct WorkflowEdgeDefinition {
     pub from: String,
     /// Destination node id.
     pub to: String,
-    /// Required Branch/Loop outcome port. Ordinary nodes must omit it.
+    /// The Branch case, Agent route or fail port. Ordinary nodes omit it.
     #[serde(default)]
     pub port: Option<WorkflowPort>,
 }
 
 /// A control-flow port of a fixed Workflow node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WorkflowPort {
     /// The true successor.
     True,
     /// The false successor.
     False,
-    /// The Loop predicate was satisfied.
-    Satisfied,
-    /// The Loop consumed its finite allowance without satisfaction.
-    Exhausted,
-    /// The ordinary single-successor port.
+    /// An additional named ELIF exit.
+    Case(String),
+    /// The ordinary outgoing port.
     Next,
+    /// A Model's failure exit under its fail-branch strategy.
+    Fail,
+}
+
+impl WorkflowPort {
+    #[must_use]
+    pub fn case(id: &str) -> Self {
+        if id == "true" {
+            Self::True
+        } else {
+            Self::Case(id.to_owned())
+        }
+    }
 }
 
 impl Serialize for WorkflowPort {
@@ -547,9 +1082,9 @@ impl Serialize for WorkflowPort {
         serializer.serialize_str(match self {
             Self::True => "true",
             Self::False => "false",
-            Self::Satisfied => "satisfied",
-            Self::Exhausted => "exhausted",
             Self::Next => "next",
+            Self::Fail => "fail",
+            Self::Case(id) => id,
         })
     }
 }
@@ -559,17 +1094,7 @@ impl schemars::JsonSchema for WorkflowPort {
         "WorkflowPort".into()
     }
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        let names: Vec<_> = [
-            Self::True,
-            Self::False,
-            Self::Satisfied,
-            Self::Exhausted,
-            Self::Next,
-        ]
-        .iter()
-        .map(|port| serde_json::to_value(port).expect("port serializes"))
-        .collect();
-        serde_json::json!({"anyOf":[{"type":"boolean"},{"type":"string","enum":names}]})
+        serde_json::json!({"anyOf":[{"type":"boolean"},{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_-]+$"}]})
             .try_into()
             .expect("schema object")
     }
@@ -589,26 +1114,13 @@ impl<'de> Deserialize<'de> for WorkflowPort {
             RawPort::Text(text) => match text.as_str() {
                 "true" => Ok(Self::True),
                 "false" => Ok(Self::False),
-                "satisfied" => Ok(Self::Satisfied),
-                "exhausted" => Ok(Self::Exhausted),
                 "next" => Ok(Self::Next),
-                _ => Err(serde::de::Error::custom(format!(
-                    "unknown workflow edge port {text:?}"
-                ))),
+                "fail" => Ok(Self::Fail),
+                _ if valid_local_key(&text) => Ok(Self::Case(text)),
+                _ => Err(serde::de::Error::custom("invalid workflow edge port")),
             },
         }
     }
-}
-
-/// One explicit input projection and fixed private Parallel block.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct WorkflowBranch {
-    /// Evaluated in the parent scope and checked against the child input schema.
-    pub input: WorkflowValue,
-    /// The child's private graph and contracts.
-    pub block: WorkflowBlock,
 }
 
 /// A compiled, immutable executable workflow.
@@ -630,7 +1142,7 @@ pub struct WorkflowProgram {
     >,
 }
 
-/// Immutable compiled graph shared by root, Parallel branches and Loop bodies.
+/// Immutable compiled graph of the root or of a body; a body's path is not empty.
 #[derive(Debug, Clone)]
 pub struct WorkflowBlockProgram {
     path: Vec<String>,
@@ -710,12 +1222,8 @@ impl WorkflowProgram {
             for node in block.nodes.values() {
                 match node {
                     WorkflowNodeProgram::Agent(agent) => found.push(agent),
-                    WorkflowNodeProgram::Loop { body, .. } => walk(body, found),
-                    WorkflowNodeProgram::Parallel { branches, .. } => {
-                        for branch in branches.values() {
-                            walk(&branch.block, found);
-                        }
-                    }
+                    WorkflowNodeProgram::Loop { body, .. }
+                    | WorkflowNodeProgram::Iteration { body, .. } => walk(body, found),
                     _ => {}
                 }
             }
@@ -735,46 +1243,64 @@ impl WorkflowProgram {
 /// A compiled node whose references and schemas have been admitted.
 #[derive(Debug, Clone)]
 pub enum WorkflowNodeProgram {
+    Start,
     /// One immutable, tool-free Auxiliary Call template.
     Model(WorkflowModelProgram),
     Loop {
-        input: WorkflowValue,
+        loop_variables: Vec<WorkflowLoopVariable>,
+        break_condition: Option<WorkflowPredicate>,
+        loop_count: u32,
         body: Box<WorkflowBlockProgram>,
-        until: Box<WorkflowPredicate>,
-        carry: WorkflowValue,
-        max_iterations: u32,
         output_schema: Value,
     },
-    Review {
-        subject: WorkflowReviewSubject,
-        context: Vec<WorkflowValue>,
+    Iteration {
+        iterator: WorkflowValue,
+        output: WorkflowValue,
+        /// Rounds run at once; one when sequential.
+        parallel: u32,
+        error_handle_mode: WorkflowIterationErrorMode,
+        flatten_output: bool,
+        body: Box<WorkflowBlockProgram>,
+        output_schema: Value,
     },
-
+    LoopEnd,
+    Assigner {
+        items: Vec<WorkflowAssignment>,
+        /// Each written variable's type.
+        types: Vec<WorkflowVarType>,
+    },
+    Review {
+        content: Vec<WorkflowValue>,
+        actions: Vec<WorkflowReviewAction>,
+        timeout_ms: u64,
+    },
     Tool {
         selector: crate::capabilities::selection::ExactToolSelector,
         arguments: WorkflowValue,
         result: WorkflowToolResult,
+        retry: Option<WorkflowRetry>,
+        on_error: WorkflowValueErrorStrategy,
     },
     /// One admitted `AgentRun` template.
     Agent(WorkflowAgentProgram),
-    /// One boolean Branch.
-    Branch { condition: WorkflowPredicate },
-    /// One keyed finite fan-out of compiled private blocks.
-    Parallel {
-        branches: BTreeMap<String, WorkflowBranchProgram>,
-        output_schema: Value,
+    /// The first matching IF / ELIF case, or ELSE.
+    Branch {
+        cases: Vec<WorkflowBranchCase>,
     },
     /// The terminal Return operation.
-    Return { output: WorkflowValue },
+    Return {
+        output: WorkflowValue,
+    },
 }
 
 /// Static Model intent; actual invocation resolution uses frozen Attempt resources.
 #[derive(Debug, Clone)]
 pub struct WorkflowModelProgram {
     pub model: crate::model::session::AuxiliaryModelPolicy,
-    pub instruction: String,
-    pub input: BTreeMap<String, WorkflowValue>,
+    pub messages: Vec<WorkflowModelMessage>,
     pub output: WorkflowModelOutput,
+    pub retry: Option<WorkflowRetry>,
+    pub on_error: WorkflowModelErrorStrategy,
 }
 
 /// A compiled `AgentRun` template.
@@ -783,24 +1309,42 @@ pub struct WorkflowAgentProgram {
     pub(crate) resolved: Option<Arc<crate::runtime::subagent::resolver::FrozenAgentComposition>>,
     /// The admitted native profile.
     pub profile: SubagentName,
-    /// The fixed task string.
-    pub task: String,
-    /// Explicit input bindings.
-    pub input: BTreeMap<String, WorkflowValue>,
+    /// The task's fixed text and references.
+    pub task: Vec<WorkflowValue>,
     /// Frozen output contract.
-    pub output_schema: Value,
-    /// The compiled trusted static invocation override of this node.
-    ///
-    /// It is fixed at compilation: no expression, interpolation, node input
-    /// value, or model output can replace it at run time.
-    pub invocation_override: Option<crate::runtime::subagent::SubagentInvocationOverride>,
+    pub output: WorkflowAgentOutput,
+    /// The exits the child chooses among; empty for one `next` exit.
+    pub routes: Vec<WorkflowAgentRoute>,
+    pub on_error: WorkflowValueErrorStrategy,
 }
 
-/// Compiled explicit child input projection and private block.
-#[derive(Debug, Clone)]
-pub struct WorkflowBranchProgram {
-    input: WorkflowValue,
-    block: WorkflowBlockProgram,
+impl WorkflowAgentProgram {
+    /// The schema of the child's `workflow_output` terminal, when it has one.
+    #[must_use]
+    pub fn terminal_schema(&self) -> Option<Value> {
+        agent_terminal_schema(&self.output, &self.routes)
+    }
+
+    /// The node's value contract on its success exits.
+    #[must_use]
+    pub fn value_schema(&self) -> Value {
+        agent_value_schema(&self.output, &self.routes)
+    }
+
+    /// The node value of one settled child: its reply text, or its
+    /// committed value.
+    fn value(&self, settled: Value) -> Option<Value> {
+        match (self.terminal_schema(), settled) {
+            (None, Value::String(text)) => Some(serde_json::json!({"text": text})),
+            (Some(_), value) if value.is_object() => Some(value),
+            _ => None,
+        }
+    }
+
+    /// The route a validated routed value chose.
+    pub(super) fn chosen_route(value: &Value) -> WorkflowPort {
+        WorkflowPort::case(value[AGENT_ROUTE_FIELD].as_str().unwrap_or_default())
+    }
 }
 
 /// A compiled edge.
@@ -1015,7 +1559,7 @@ pub enum WorkflowCompileError {
     Unreachable(String),
     /// A path can leave a node without a deterministic successor/terminal.
     Unterminated(String),
-    /// A Branch does not provide exactly one true and false successor.
+    /// A Branch has invalid cases or an incomplete set of exit connections.
     InvalidBranch(String),
     /// A workflow reference cannot be resolved on every relevant path.
     InvalidReference(String),
@@ -1112,7 +1656,7 @@ fn compile_program(
         Sha256::digest(serde_json::to_vec(&definition).expect("validated definition"))
     );
     let mut total_nodes = 0;
-    let block = compile_block(definition.block, Vec::new(), &mut total_nodes)
+    let (block, _) = compile_block(definition.block, Vec::new(), &mut total_nodes, None)
         .map_err(|error| error.at("block"))?;
     let retained_bound = execution::static_retained_bound(&block);
     let (execution_bound, agent_bound, model_call_bound) =
@@ -1147,13 +1691,9 @@ fn collect_tool_selectors(
             WorkflowNodeProgram::Tool { selector, .. } => {
                 selectors.insert(selector.clone());
             }
-            WorkflowNodeProgram::Loop { body, .. } => {
+            WorkflowNodeProgram::Loop { body, .. }
+            | WorkflowNodeProgram::Iteration { body, .. } => {
                 selectors.extend(collect_tool_selectors(body));
-            }
-            WorkflowNodeProgram::Parallel { branches, .. } => {
-                for branch in branches.values() {
-                    selectors.extend(collect_tool_selectors(&branch.block));
-                }
             }
             _ => {}
         }
@@ -1161,12 +1701,42 @@ fn collect_tool_selectors(
     selectors
 }
 
+/// What a Loop or Iteration body sees around it.
+struct Container {
+    /// The variables in scope at the container, plus its own.
+    base: SchemaMap,
+    owner: String,
+    /// A Loop's variables by label; `None` in an Iteration.
+    loop_variables: Option<BTreeMap<String, WorkflowVarType>>,
+}
+
+/// A body and the variables available whenever a round completes,
+/// for the Loop's break condition and the Iteration's output.
+fn compile_body(
+    body: &WorkflowBlock,
+    path: &[String],
+    owner: &str,
+    total_nodes: &mut usize,
+    container: &Container,
+) -> Result<(WorkflowBlockProgram, SchemaMap), WorkflowCompileError> {
+    if !is_empty_object_schema(&body.input) {
+        return Err(WorkflowCompileError::InvalidField(
+            "a body declares no input; it reads the variables around it".into(),
+        )
+        .at("body"));
+    }
+    let mut child_path = path.to_vec();
+    child_path.extend([owner.to_owned(), "body".into()]);
+    compile_block(body.clone(), child_path, total_nodes, Some(container)).map_err(|e| e.at("body"))
+}
+
 #[allow(clippy::too_many_lines)]
 fn compile_block(
     definition: WorkflowBlock,
     path: Vec<String>,
     total_nodes: &mut usize,
-) -> Result<WorkflowBlockProgram, WorkflowCompileError> {
+    container: Option<&Container>,
+) -> Result<(WorkflowBlockProgram, SchemaMap), WorkflowCompileError> {
     *total_nodes += definition.nodes.len();
     if path.len() / 2 > MAX_BLOCK_DEPTH || *total_nodes > MAX_WORKFLOW_NODES {
         return Err(WorkflowCompileError::InvalidField(
@@ -1174,138 +1744,290 @@ fn compile_block(
         ));
     }
     validate_root_schema(&definition.input, "input").map_err(|e| e.at("input"))?;
-    validate_root_schema(&definition.output, "output").map_err(|e| e.at("output"))?;
+    let base = container.map_or_else(
+        || SchemaMap::from_schema(&definition.input),
+        |container| container.base.clone(),
+    );
+    // As Dify's node IDs, a body's IDs never hide a variable around it.
+    if let Some(shadowed) = definition.nodes.keys().find(|id| base.0.contains_key(*id)) {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "node id {shadowed:?} is already used around this body"
+        ))
+        .at(format!("nodes.{shadowed}")));
+    }
     let ControlFlow {
         outgoing,
         topological,
+        entry,
+        scopes,
     } = control_flow(&definition)?;
+
+    let writers = definition
+        .nodes
+        .iter()
+        .filter_map(|(id, node)| match node {
+            WorkflowNodeDefinition::Assigner { items } => Some((id, items)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for (index, (left, items)) in writers.iter().enumerate() {
+        for (right, other) in &writers[index + 1..] {
+            if scopes.unordered_together(left, right)
+                && items
+                    .iter()
+                    .any(|item| other.iter().any(|other| item.variable == other.variable))
+            {
+                return Err(WorkflowCompileError::InvalidField(format!(
+                    "Assigners {left:?} and {right:?} write the same variable without an execution order"
+                )).at(format!("nodes.{right}.items")));
+            }
+        }
+    }
+
+    let reads = definition
+        .nodes
+        .iter()
+        .map(|(id, node)| (id, references::node(node)))
+        .collect::<Vec<_>>();
+    for (writer, items) in &writers {
+        for (reader, paths) in &reads {
+            if writer != reader
+                && scopes.unordered_together(writer, reader)
+                && items.iter().any(|item| {
+                    paths.iter().any(|path| {
+                        path.first() == item.variable.first()
+                            && (path.len() == 1 || path.get(1) == item.variable.get(1))
+                    })
+                })
+            {
+                return Err(WorkflowCompileError::InvalidField(format!(
+                    "nodes {writer:?} and {reader:?} read and write the same Loop variable without an execution order"
+                )).at(format!("nodes.{reader}")));
+            }
+        }
+    }
 
     let mut nodes = BTreeMap::new();
     let mut available_after: BTreeMap<String, SchemaMap> = BTreeMap::new();
+    let mut returned = Vec::new();
     for node_id in topological {
         let node = definition
             .nodes
             .get(&node_id)
             .expect("topological node exists");
-        let available_before = node_entry_scope(
-            &definition,
-            &outgoing,
-            &available_after,
-            &node_id,
-            &definition.input,
-        );
+        let available_before = scopes.scope(&node_id, &available_after, &base);
         let compiled = (|| { Ok(match node {
-            WorkflowNodeDefinition::Model { model, instruction, input, output } => {
+            WorkflowNodeDefinition::Start {} => {
+                available_after.insert(node_id.clone(), available_before.clone());
+                WorkflowNodeProgram::Start
+            }
+            WorkflowNodeDefinition::Model { model, messages, output, retry, on_error } => {
                 let model = model.lower().map_err(|error| error.at("model"))?;
-                validate_model(&model, instruction, input, output, &available_before, &node_id)?;
+                validate_model(&model, messages, output, &available_before, &node_id)?;
+                validate_model_failure(retry.as_ref(), on_error, output, &node_id)?;
                 available_after.insert(
                     node_id.clone(),
                     available_before.with_prefix(&node_id, &output.schema()),
                 );
                 WorkflowNodeProgram::Model(WorkflowModelProgram {
                     model,
-                    instruction: instruction.clone(),
-                    input: input.clone(),
+                    messages: messages.clone(),
                     output: output.clone(),
+                    retry: *retry,
+                    on_error: on_error.clone(),
                 })
             }
             WorkflowNodeDefinition::Loop {
-                input,
+                loop_variables,
+                break_condition,
+                loop_count,
                 body,
-                until,
-                carry,
-                max_iterations,
             } => {
-                let edges = &outgoing[&node_id];
-                if edges.len() != 2
-                    || !edges
-                        .iter()
-                        .any(|edge| edge.port == WorkflowPort::Satisfied)
-                    || !edges
-                        .iter()
-                        .any(|edge| edge.port == WorkflowPort::Exhausted)
-                {
+                if *loop_count == 0 || *loop_count > LOOP_NODE_MAX_COUNT {
                     return Err(WorkflowCompileError::InvalidField(format!(
-                        "Loop {node_id:?} must have exactly satisfied and exhausted successors"
-                    )));
+                        "Loop {node_id:?} loop_count must be 1..={LOOP_NODE_MAX_COUNT}"
+                    )).at("loop_count"));
                 }
-                if *max_iterations == 0 || *max_iterations > MAX_LOOP_ITERATIONS {
-                    return Err(WorkflowCompileError::InvalidField(format!(
-                        "Loop {node_id:?} max_iterations must be 1..={MAX_LOOP_ITERATIONS}"
-                    )).at("max_iterations"));
+                let mut labels = BTreeSet::new();
+                for (index, variable) in loop_variables.iter().enumerate() {
+                    if !valid_local_key(&variable.label) || !labels.insert(&variable.label) {
+                        return Err(WorkflowCompileError::InvalidField(format!(
+                            "Loop {node_id:?} variable labels must be unique valid keys"
+                        )).at(format!("loop_variables.{index}.label")));
+                    }
+                    let actual = value_schema(&variable.value, &available_before, &node_id, 0)
+                        .map_err(|e| e.at(format!("loop_variables.{index}.value")))?;
+                    if !schemas_compatible(&actual, &variable.var_type.schema()) {
+                        return Err(WorkflowCompileError::IncompatibleReference(format!(
+                            "Loop variable {:?} value is not a {:?}", variable.label, variable.var_type
+                        )).at(format!("loop_variables.{index}.value")));
+                    }
                 }
-                let initial = value_schema(input, &available_before, &node_id, 0).map_err(|e| e.at("input"))?;
-                if !schemas_compatible(&initial, &body.input) {
-                    return Err(WorkflowCompileError::IncompatibleReference(
-                        "Loop input contract mismatch".into(),
-                    ).at("input"));
+                let output_schema = loop_variables_schema(loop_variables);
+                let container = Container {
+                    base: available_before.with_prefix(&node_id, &output_schema),
+                    owner: node_id.clone(),
+                    loop_variables: Some(loop_variables.iter().map(|variable| (variable.label.clone(), variable.var_type)).collect()),
+                };
+                let (body, end) = compile_body(body, &path, &node_id, total_nodes, &container)?;
+                if let Some(condition) = break_condition {
+                    validate_predicate(condition, &end, &node_id, 0).map_err(|e| e.at("break_condition"))?;
                 }
-                // A separate lexical projection scope exposes only committed body output.
-                let result_scope =
-                    SchemaMap(BTreeMap::from([("result".into(), body.output.clone())]));
-                validate_predicate(until, &result_scope, &node_id, 0).map_err(|e| e.at("until"))?;
-                let next = value_schema(carry, &result_scope, &node_id, 0).map_err(|e| e.at("carry"))?;
-                if !schemas_compatible(&next, &body.input) {
-                    return Err(WorkflowCompileError::IncompatibleReference(
-                        "Loop carry contract mismatch".into(),
-                    ).at("carry"));
-                }
-                let mut child_path = path.clone();
-                child_path.extend([node_id.clone(), "body".into()]);
-                let body = compile_block(
-                    *body.clone(),
-                                child_path,
-                    total_nodes,
-                ).map_err(|e| e.at("body"))?;
-                let output_schema = execution::loop_result_schema(&body.output_schema);
                 available_after.insert(
                     node_id.clone(),
                     available_before.with_prefix(&node_id, &output_schema),
                 );
                 WorkflowNodeProgram::Loop {
-                    input: input.clone(),
+                    loop_variables: loop_variables.clone(),
+                    break_condition: break_condition.clone(),
+                    loop_count: *loop_count,
                     body: Box::new(body),
-                    until: until.clone(),
-                    carry: carry.clone(),
-                    max_iterations: *max_iterations,
                     output_schema,
                 }
             }
-            WorkflowNodeDefinition::Review { subject, context } => {
-                if !matches!(subject.value(), WorkflowValue::Reference { .. }) {
+            WorkflowNodeDefinition::Iteration {
+                iterator,
+                output,
+                is_parallel,
+                parallel_nums,
+                error_handle_mode,
+                flatten_output,
+                body,
+            } => {
+                if !matches!(iterator, WorkflowValue::Reference { .. }) {
                     return Err(WorkflowCompileError::InvalidField(
-                        "Review subject must reference a committed value".into(),
-                    ).at("subject"));
+                        "Iteration input must reference an array".into(),
+                    ).at("iterator"));
                 }
-                let schema = value_schema(subject.value(), &available_before, &node_id, 0).map_err(|e| e.at("subject"))?;
-                if matches!(subject, WorkflowReviewSubject::Plan { .. })
-                    && schema_type(&schema) != Some("object")
-                {
+                let array = value_schema(iterator, &available_before, &node_id, 0).map_err(|e| e.at("iterator"))?;
+                let Some(item) = array.get("items").filter(|_| schema_type(&array) == Some("array")) else {
+                    return Err(WorkflowCompileError::IncompatibleReference(
+                        "Iteration input must be an array with declared items".into(),
+                    ).at("iterator"));
+                };
+                if *is_parallel && (*parallel_nums == 0 || *parallel_nums > MAX_PARALLEL_LIMIT) {
+                    return Err(WorkflowCompileError::InvalidField(format!(
+                        "Iteration {node_id:?} parallel_nums must be 1..={MAX_PARALLEL_LIMIT}"
+                    )).at("parallel_nums"));
+                }
+                if !matches!(output, WorkflowValue::Reference { .. }) {
                     return Err(WorkflowCompileError::InvalidField(
-                        "Review plan must be structured".into(),
-                    ).at("subject"));
+                        "Iteration output must reference a variable of its body".into(),
+                    ).at("output"));
                 }
-                if context.len() > 8 {
+                let entry = serde_json::json!({
+                    "type": "object",
+                    "properties": {"item": item, "index": {"type": "integer"}},
+                    "required": ["item", "index"],
+                    "additionalProperties": false,
+                });
+                let container = Container {
+                    base: available_before.with_prefix(&node_id, &entry),
+                    owner: node_id.clone(),
+                    loop_variables: None,
+                };
+                let (body, end) = compile_body(body, &path, &node_id, total_nodes, &container)?;
+                let produced = value_schema(output, &end, &node_id, 0).map_err(|e| e.at("output"))?;
+                let output_schema = execution::iteration_result_schema(Some(&produced), *error_handle_mode, *flatten_output);
+                available_after.insert(
+                    node_id.clone(),
+                    available_before.with_prefix(&node_id, &output_schema),
+                );
+                WorkflowNodeProgram::Iteration {
+                    iterator: iterator.clone(),
+                    output: output.clone(),
+                    parallel: if *is_parallel { *parallel_nums } else { 1 },
+                    error_handle_mode: *error_handle_mode,
+                    flatten_output: *flatten_output,
+                    body: Box::new(body),
+                    output_schema,
+                }
+            }
+            WorkflowNodeDefinition::LoopEnd {} => {
+                if container.is_none_or(|container| container.loop_variables.is_none()) {
                     return Err(WorkflowCompileError::InvalidField(
-                        "Review context exceeds eight entries".into(),
-                    ).at("context"));
+                        "Exit Loop belongs directly in a Loop body".into(),
+                    ));
                 }
-                for (index, value) in context.iter().enumerate() {
-                    value_schema(value, &available_before, &node_id, 0).map_err(|e| e.at(format!("context.{index}")))?;
+                if !outgoing[&node_id].is_empty() {
+                    return Err(WorkflowCompileError::Unterminated(format!(
+                        "Exit Loop {node_id:?} cannot have outgoing edges"
+                    )));
+                }
+                available_after.insert(node_id.clone(), available_before.clone());
+                WorkflowNodeProgram::LoopEnd
+            }
+            WorkflowNodeDefinition::Assigner { items } => {
+                let Some((owner, variables)) = container.and_then(|container| Some((&container.owner, container.loop_variables.as_ref()?))) else {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "a Variable Assigner writes Loop variables, so it belongs directly in a Loop body".into(),
+                    ));
+                };
+                if items.is_empty() || items.len() > 32 {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "a Variable Assigner makes 1..=32 writes".into(),
+                    ).at("items"));
+                }
+                let mut types = Vec::new();
+                for (index, item) in items.iter().enumerate() {
+                    let var_type = match item.variable.as_slice() {
+                        [loop_id, label] if loop_id == owner => variables.get(label).copied(),
+                        _ => None,
+                    }.ok_or_else(|| WorkflowCompileError::DanglingReference(
+                        "an assigned variable must be a variable of the Loop the Assigner is in".into(),
+                    ).at(format!("items.{index}.variable")))?;
+                    if !item.operation.applies_to(var_type) {
+                        return Err(WorkflowCompileError::InvalidField(format!(
+                            "{:?} cannot write a {var_type:?} variable", item.operation
+                        )).at(format!("items.{index}.operation")));
+                    }
+                    match (item.operation.operand(var_type), &item.value) {
+                        (None, None) => {}
+                        (Some(expected), Some(value)) => {
+                            let actual = value_schema(value, &available_before, &node_id, 0).map_err(|e| e.at(format!("items.{index}.value")))?;
+                            if !schemas_compatible(&actual, &expected) {
+                                return Err(WorkflowCompileError::IncompatibleReference(format!(
+                                    "{:?} needs a value of {expected}", item.operation
+                                )).at(format!("items.{index}.value")));
+                            }
+                        }
+                        (Some(_), None) => return Err(WorkflowCompileError::InvalidField(
+                            "this write needs a value".into(),
+                        ).at(format!("items.{index}.value"))),
+                        (None, Some(_)) => return Err(WorkflowCompileError::InvalidField(
+                            "this write takes no value".into(),
+                        ).at(format!("items.{index}.value"))),
+                    }
+                    types.push(var_type);
+                }
+                available_after.insert(node_id.clone(), available_before.clone());
+                WorkflowNodeProgram::Assigner { items: items.clone(), types }
+            }
+            WorkflowNodeDefinition::Review { content, actions, timeout_ms } => {
+                validate_review(content, actions, *timeout_ms, &available_before, &node_id)?;
+                let exits = actions.iter().map(|action| WorkflowPort::case(&action.id))
+                    .chain(std::iter::once(WorkflowPort::case(REVIEW_TIMEOUT_PORT)));
+                if container.is_none() && exits.into_iter().any(|port| !outgoing[&node_id].iter().any(|edge| edge.port == port)) {
+                    return Err(WorkflowCompileError::InvalidBranch(format!(
+                        "Human Input {node_id:?} requires a successor for every action and its timeout"
+                    )));
                 }
                 available_after.insert(
                     node_id.clone(),
-                    available_before.with_prefix(&node_id, &review::result_schema()),
+                    available_before.with_prefix(&node_id, &review::result_schema(actions)),
                 );
                 WorkflowNodeProgram::Review {
-                    subject: subject.clone(),
-                    context: context.clone(),
+                    content: content.clone(),
+                    actions: actions.clone(),
+                    timeout_ms: *timeout_ms,
                 }
             }
             WorkflowNodeDefinition::Tool {
                 selector,
                 arguments,
                 result,
+                retry,
+                on_error,
             } => {
                 let selector = selector.lower().map_err(|error| error.at("selector"))?;
                 if let crate::capabilities::selection::ExactToolSelector::Builtin { name } = &selector
@@ -1319,6 +2041,15 @@ fn compile_block(
                 validate_tool_arguments_root(&input).map_err(|e| e.at("arguments"))?;
                 let output = result.schema();
                 validate_workflow_schema(&output, "Tool result").map_err(|e| e.at("result.schema"))?;
+                validate_retry(retry.as_ref(), "Tool", &node_id)?;
+                if let WorkflowValueErrorStrategy::DefaultValue { value } = on_error
+                    && !jsonschema::Validator::new(&output).is_ok_and(|validator| validator.is_valid(value))
+                {
+                    return Err(WorkflowCompileError::InvalidField(format!(
+                        "Tool {node_id:?} default value must satisfy its result schema"
+                    ))
+                    .at("on_error.value"));
+                }
                 available_after.insert(
                     node_id.clone(),
                     available_before.with_prefix(&node_id, &output),
@@ -1327,130 +2058,86 @@ fn compile_block(
                     selector,
                     arguments: arguments.clone(),
                     result: result.clone(),
+                    retry: *retry,
+                    on_error: on_error.clone(),
                 }
             }
             WorkflowNodeDefinition::Agent {
                 profile,
                 task,
-                input,
                 output,
-                invocation_override,
+                routes,
+                on_error,
             } => {
                 let profile = SubagentName::parse(profile).map_err(|_| WorkflowCompileError::InvalidField("Agent selection requires a valid named profile".into()).at("profile"))?;
-                validate_agent(
-                    task,
-                    input,
-                    output,
-                    invocation_override.as_ref(),
-                                &available_before,
-                    &node_id,
-                )?;
+                validate_agent(task, output, routes, on_error, &available_before, &node_id)?;
+                let exits = routes.iter().map(|route| WorkflowPort::case(&route.id))
+                    .chain(on_error.eq(&WorkflowValueErrorStrategy::FailBranch).then_some(WorkflowPort::Fail));
+                if container.is_none() && exits.into_iter().any(|port| !outgoing[&node_id].iter().any(|edge| edge.port == port)) {
+                    return Err(WorkflowCompileError::InvalidBranch(format!(
+                        "Agent {node_id:?} requires a successor for every route and its fail branch"
+                    )));
+                }
                 let agent = WorkflowAgentProgram {
                     resolved: None,
                     profile,
                     task: task.clone(),
-                    input: input.clone(),
-                    output_schema: output.clone(),
-                    invocation_override: invocation_override.clone(),
+                    output: output.clone(),
+                    routes: routes.clone(),
+                    on_error: on_error.clone(),
                 };
                 available_after.insert(
                     node_id.clone(),
-                    available_before.with_prefix(&node_id, output),
+                    available_before.with_prefix(&node_id, &agent.value_schema()),
                 );
                 WorkflowNodeProgram::Agent(agent)
             }
-            WorkflowNodeDefinition::Branch { condition } => {
-                validate_predicate(condition, &available_before, &node_id, 0).map_err(|e| e.at("condition"))?;
-                if outgoing[&node_id].len() != 2
-                    || !outgoing[&node_id]
-                        .iter()
-                        .any(|edge| edge.port == WorkflowPort::True)
-                    || !outgoing[&node_id]
-                        .iter()
-                        .any(|edge| edge.port == WorkflowPort::False)
-                {
+            WorkflowNodeDefinition::Branch { cases } => {
+                for (index, case) in cases.iter().enumerate() {
+                    validate_predicate(&case.condition, &available_before, &node_id, 0)
+                        .map_err(|e| e.at(format!("cases.{index}.condition")))?;
+                }
+                let ports = cases.iter().map(|case| WorkflowPort::case(&case.id))
+                    .chain(std::iter::once(WorkflowPort::False));
+                // A body's path may end at any port, as Dify's.
+                if container.is_none() && ports.into_iter().any(|port| !outgoing[&node_id].iter().any(|edge| edge.port == port)) {
                     return Err(WorkflowCompileError::InvalidBranch(format!(
-                        "Branch {node_id:?} must have exactly true and false successors"
+                        "Branch {node_id:?} requires a successor for every case and ELSE"
                     )));
                 }
                 available_after.insert(node_id.clone(), available_before.clone());
-                WorkflowNodeProgram::Branch {
-                    condition: condition.clone(),
-                }
+                WorkflowNodeProgram::Branch { cases: cases.clone() }
             }
-            WorkflowNodeDefinition::Parallel { branches } => {
-                if branches.is_empty() || branches.len() > MAX_PARALLEL_BRANCHES {
-                    return Err(WorkflowCompileError::InvalidField(format!(
-                        "Parallel {node_id:?} must contain between one and {MAX_PARALLEL_BRANCHES} branches"
-                    )).at("branches"));
+            WorkflowNodeDefinition::Return { outputs } => {
+                if container.is_some() {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "Return ends the workflow; a body ends where its nodes do".into(),
+                    ));
                 }
-                let mut compiled_branches = BTreeMap::new();
-                let mut output_properties = serde_json::Map::new();
-                for (key, branch) in branches {
-                    if !valid_local_key(key) {
-                        return Err(WorkflowCompileError::InvalidField(format!(
-                            "Parallel {node_id:?} branch key {key:?} must be non-empty, at most 64 bytes, and contain no dots"
-                        )).at(format!("branches.{key}")));
-                    }
-                    let actual = value_schema(&branch.input, &available_before, &node_id, 0).map_err(|e| e.at(format!("branches.{key}.input")))?;
-                    if !schemas_compatible(&actual, &branch.block.input) {
-                        return Err(WorkflowCompileError::IncompatibleReference(format!(
-                            "branch {key} input contract mismatch"
-                        )).at(format!("branches.{key}.input")));
-                    }
-                    let mut child_path = path.clone();
-                    child_path.extend([node_id.clone(), key.clone()]);
-                    let block = compile_block(
-                        branch.block.clone(),
-                                            child_path,
-                        total_nodes,
-                    ).map_err(|e| e.at(format!("branches.{key}.block")))?;
-                    output_properties.insert(key.clone(), block.output_schema.clone());
-                    compiled_branches.insert(
-                        key.clone(),
-                        WorkflowBranchProgram {
-                            input: branch.input.clone(),
-                            block,
-                        },
-                    );
-                }
-                let output_schema = authoring::parallel_output(output_properties);
-                available_after.insert(
-                    node_id.clone(),
-                    available_before.with_prefix(&node_id, &output_schema),
-                );
-                WorkflowNodeProgram::Parallel {
-                    branches: compiled_branches,
-                    output_schema,
-                }
-            }
-            WorkflowNodeDefinition::Return { output } => {
                 if !outgoing[&node_id].is_empty() {
                     return Err(WorkflowCompileError::Unterminated(format!(
                         "Return node {node_id:?} cannot have outgoing edges"
                     )));
                 }
-                let actual = value_schema(output, &available_before, &node_id, 0).map_err(|e| e.at("output"))?;
-                if !schemas_compatible(&actual, &definition.output) {
-                    return Err(WorkflowCompileError::IncompatibleReference(format!(
-                        "Return {node_id} output contract mismatch"
-                    )).at("output"));
-                }
+                let (output, schema) = return_output(outputs, &available_before, &node_id)?;
+                returned.push(schema);
                 available_after.insert(node_id.clone(), available_before.clone());
-                WorkflowNodeProgram::Return {
-                    output: output.clone(),
-                }
+                WorkflowNodeProgram::Return { output }
             }
         }) })().map_err(|e: WorkflowCompileError| e.at(format!("nodes.{node_id}")))?;
         let edges = &outgoing[&node_id];
         match &compiled {
-            // Return, Branch and both Loop ports were validated above.
+            // Return and Branch ports were validated above. A body's path
+            // may end at any node.
             WorkflowNodeProgram::Return { .. }
-            | WorkflowNodeProgram::Loop { .. }
-            | WorkflowNodeProgram::Branch { .. } => {}
-            _ if edges.len() != 1 => {
+            | WorkflowNodeProgram::Branch { .. }
+            | WorkflowNodeProgram::Review { .. } => {}
+            WorkflowNodeProgram::Agent(agent) if !agent.routes.is_empty() => {}
+            _ if container.is_none()
+                && !edges.iter().any(|edge| edge.port == WorkflowPort::Next) =>
+            {
                 return Err(WorkflowCompileError::Unterminated(format!(
-                    "node {node_id:?} must have exactly one successor"
+                    "node {node_id:?} requires a successor on its success (next) exit"
                 ))
                 .at(format!("nodes.{node_id}")));
             }
@@ -1458,9 +2145,10 @@ fn compile_block(
         }
         nodes.insert(node_id, compiled);
     }
-    if !nodes
-        .values()
-        .any(|node| matches!(node, WorkflowNodeProgram::Return { .. }))
+    if container.is_none()
+        && !nodes
+            .values()
+            .any(|node| matches!(node, WorkflowNodeProgram::Return { .. }))
     {
         return Err(WorkflowCompileError::Unterminated(
             "every workflow must contain a reachable Return node".to_owned(),
@@ -1468,17 +2156,29 @@ fn compile_block(
     }
     // A finite DAG whose only zero-outdegree nodes are Returns necessarily
     // terminates on every path. Do not enumerate exponentially many paths.
-    Ok(WorkflowBlockProgram {
-        path,
-        input_schema: definition.input,
-        output_schema: definition.output,
-        entry: definition.entry,
-        nodes,
-        outgoing,
-    })
+    let declarations = SchemaMap(
+        available_after
+            .iter()
+            .filter_map(|(id, scope)| scope.0.get(id).map(|schema| (id.clone(), schema.clone())))
+            .collect(),
+    );
+    let completed = scopes.completion_scope(&declarations, &base);
+    Ok((
+        WorkflowBlockProgram {
+            path,
+            input_schema: definition.input,
+            output_schema: merge_return_schemas(&returned)?,
+            entry,
+            nodes,
+            outgoing,
+        },
+        completed,
+    ))
 }
 
 struct ControlFlow {
+    entry: String,
+    scopes: flow::ActivationScopes,
     outgoing: BTreeMap<String, Vec<WorkflowEdgeProgram>>,
     topological: Vec<String>,
 }
@@ -1491,12 +2191,18 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
             "block must contain between one and {MAX_WORKFLOW_NODES} nodes"
         )));
     }
-    if definition.entry.trim().is_empty() {
+    let starts = definition
+        .nodes
+        .iter()
+        .filter_map(|(id, node)| matches!(node, WorkflowNodeDefinition::Start {}).then_some(id))
+        .collect::<Vec<_>>();
+    if starts.len() != 1 {
         return Err(WorkflowCompileError::InvalidEntry(
-            "workflow entry must be explicit and non-empty".to_owned(),
+            "block must contain exactly one Start node".into(),
         )
-        .at("entry"));
+        .at("nodes"));
     }
+    let entry = starts[0].clone();
     for node_id in definition.nodes.keys() {
         if node_id == "args" || !valid_local_key(node_id) {
             return Err(WorkflowCompileError::InvalidField(format!(
@@ -1504,14 +2210,27 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
             )).at(format!("nodes.{node_id}")));
         }
     }
-    if !definition.nodes.contains_key(&definition.entry) {
-        return Err(WorkflowCompileError::InvalidEntry(format!(
-            "workflow entry {:?} does not name a node",
-            definition.entry
-        ))
-        .at("entry"));
+    for (id, node) in &definition.nodes {
+        if let WorkflowNodeDefinition::Branch { cases } = node {
+            if cases.is_empty() || cases.len() > 32 {
+                return Err(WorkflowCompileError::InvalidBranch(
+                    "Branch requires 1..=32 cases".into(),
+                )
+                .at(format!("nodes.{id}.cases")));
+            }
+            let mut ids = BTreeSet::new();
+            for (index, case) in cases.iter().enumerate() {
+                if !valid_local_key(&case.id) || is_reserved_port(&case.id) || !ids.insert(&case.id)
+                {
+                    return Err(WorkflowCompileError::InvalidBranch(
+                        "case IDs must be unique valid local keys and cannot name a reserved port"
+                            .into(),
+                    )
+                    .at(format!("nodes.{id}.cases.{index}.id")));
+                }
+            }
+        }
     }
-
     let mut outgoing: BTreeMap<String, Vec<WorkflowEdgeProgram>> = definition
         .nodes
         .keys()
@@ -1540,25 +2259,62 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
             .at(format!("edges.{edge_index}.to")));
         }
         let node = definition.nodes.get(&edge.from).expect("checked above");
-        let port = match (node, edge.port) {
-            (WorkflowNodeDefinition::Branch { .. }, Some(WorkflowPort::True)) => WorkflowPort::True,
-            (WorkflowNodeDefinition::Branch { .. }, Some(WorkflowPort::False)) => {
-                WorkflowPort::False
+        let port = match (node, edge.port.clone()) {
+            (WorkflowNodeDefinition::Branch { cases }, Some(port))
+                if port == WorkflowPort::False
+                    || cases
+                        .iter()
+                        .any(|case| WorkflowPort::case(&case.id) == port) =>
+            {
+                port
             }
             (WorkflowNodeDefinition::Branch { .. }, _) => {
                 return Err(WorkflowCompileError::InvalidBranch(format!(
-                    "Branch node {:?} must use true and false ports",
+                    "Branch node {:?} must use an authored case ID or false (ELSE)",
                     edge.from
                 ))
                 .at(format!("edges.{edge_index}.port")));
             }
             (
-                WorkflowNodeDefinition::Loop { .. },
-                Some(port @ (WorkflowPort::Satisfied | WorkflowPort::Exhausted)),
-            ) => port,
-            (WorkflowNodeDefinition::Loop { .. }, _) => {
-                return Err(WorkflowCompileError::InvalidField(format!(
-                    "Loop node {:?} must use satisfied and exhausted ports",
+                WorkflowNodeDefinition::Model {
+                    on_error: WorkflowModelErrorStrategy::FailBranch,
+                    ..
+                }
+                | WorkflowNodeDefinition::Agent {
+                    on_error: WorkflowValueErrorStrategy::FailBranch,
+                    ..
+                }
+                | WorkflowNodeDefinition::Tool {
+                    on_error: WorkflowValueErrorStrategy::FailBranch,
+                    ..
+                },
+                Some(WorkflowPort::Fail),
+            ) => WorkflowPort::Fail,
+            (WorkflowNodeDefinition::Agent { routes, .. }, Some(port))
+                if routes
+                    .iter()
+                    .any(|route| WorkflowPort::case(&route.id) == port) =>
+            {
+                port
+            }
+            (WorkflowNodeDefinition::Review { actions, .. }, Some(port))
+                if port == WorkflowPort::case(REVIEW_TIMEOUT_PORT)
+                    || actions
+                        .iter()
+                        .any(|action| WorkflowPort::case(&action.id) == port) =>
+            {
+                port
+            }
+            (WorkflowNodeDefinition::Review { .. }, _) => {
+                return Err(WorkflowCompileError::InvalidBranch(format!(
+                    "Human Input node {:?} must use one of its action IDs or timeout",
+                    edge.from
+                ))
+                .at(format!("edges.{edge_index}.port")));
+            }
+            (WorkflowNodeDefinition::Agent { routes, .. }, _) if !routes.is_empty() => {
+                return Err(WorkflowCompileError::InvalidBranch(format!(
+                    "routed Agent node {:?} must use one of its route IDs",
                     edge.from
                 ))
                 .at(format!("edges.{edge_index}.port")));
@@ -1574,10 +2330,13 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
         };
         let successors = outgoing.get_mut(&edge.from).expect("node exists");
         // Validate in authored order before sorting the immutable runtime edges.
-        // The later conflicting edge owns the duplicate-port diagnostic.
-        if successors.iter().any(|successor| successor.port == port) {
+        // The later identical connection owns the duplicate-edge diagnostic.
+        if successors
+            .iter()
+            .any(|successor| successor.port == port && successor.to == edge.to)
+        {
             return Err(WorkflowCompileError::InvalidBranch(format!(
-                "node {:?} already has a {port:?} successor; this edge duplicates that control port",
+                "node {:?} already has this {port:?} connection",
                 edge.from
             ))
             .at(format!("edges.{edge_index}.port")));
@@ -1591,15 +2350,38 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
     for edges in outgoing.values_mut() {
         edges.sort_by(|left, right| left.port.cmp(&right.port).then(left.to.cmp(&right.to)));
     }
-    if incoming[&definition.entry] != 0 {
+    // A fail branch is a path of its own, so it must lead somewhere.
+    for (id, node) in &definition.nodes {
+        if matches!(
+            node,
+            WorkflowNodeDefinition::Model {
+                on_error: WorkflowModelErrorStrategy::FailBranch,
+                ..
+            } | WorkflowNodeDefinition::Agent {
+                on_error: WorkflowValueErrorStrategy::FailBranch,
+                ..
+            } | WorkflowNodeDefinition::Tool {
+                on_error: WorkflowValueErrorStrategy::FailBranch,
+                ..
+            }
+        ) && !outgoing[id]
+            .iter()
+            .any(|edge| edge.port == WorkflowPort::Fail)
+        {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "node {id:?} handles errors with a fail branch but has no fail connection"
+            ))
+            .at(format!("nodes.{id}.on_error")));
+        }
+    }
+    if incoming[&entry] != 0 {
         return Err(WorkflowCompileError::InvalidEntry(format!(
-            "entry node {:?} must not have an incoming edge",
-            definition.entry
+            "entry node {entry:?} must not have an incoming edge"
         ))
-        .at("entry"));
+        .at(format!("nodes.{entry}")));
     }
     let topological = topological_order(&outgoing, &incoming)?;
-    let reachable = reachable_nodes(&definition.entry, &outgoing);
+    let reachable = reachable_nodes(&entry, &outgoing);
     if let Some(unreachable) = definition
         .nodes
         .keys()
@@ -1609,38 +2391,17 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
             .at(format!("nodes.{unreachable}")));
     }
 
+    let scopes = flow::ActivationScopes::new(definition, &entry, &outgoing, &topological)?;
     Ok(ControlFlow {
+        entry,
+        scopes,
         outgoing,
         topological,
     })
 }
 
-/// The lexical entry environment is an intersection, never an ancestor union.
-fn node_entry_scope(
-    definition: &WorkflowBlock,
-    outgoing: &BTreeMap<String, Vec<WorkflowEdgeProgram>>,
-    available_after: &BTreeMap<String, SchemaMap>,
-    node: &str,
-    input_schema: &Value,
-) -> SchemaMap {
-    if node == definition.entry {
-        return SchemaMap::from_schema(input_schema);
-    }
-    let predecessors = definition
-        .nodes
-        .keys()
-        .filter(|candidate| {
-            outgoing[candidate.as_str()]
-                .iter()
-                .any(|edge| edge.to == node)
-        })
-        .filter_map(|candidate| available_after.get(candidate))
-        .collect::<Vec<_>>();
-    intersect_schema_maps(&predecessors)
-}
-
 /// Deserializes a bounded keyed map without allowing a later YAML/JSON key to
-/// silently replace an earlier one. Stable node and parallel-branch identity
+/// silently replace an earlier one. Stable node identity
 /// is part of the `WorkflowDefinition` contract, so duplicate keys are a
 /// definition error rather than a parser-specific last-write-wins detail.
 fn deserialize_unique_map<'de, D, K, V>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
@@ -1707,12 +2468,16 @@ fn validate_root_schema(schema: &Value, label: &str) -> Result<(), WorkflowCompi
 /// proof is sound because every value-constraining keyword it admits is handled
 /// recursively by [`schemas_compatible`]. A new keyword must be added here and
 /// to that proof together, otherwise it is rejected as an unsupported schema.
+/// `description` and `default` are annotations; a property's `default` is
+/// filled in at block entry (see [`apply_schema_defaults`]).
 const WORKFLOW_SCHEMA_KEYWORDS: &[&str] = &[
     "additionalProperties",
     "const",
+    "default",
     "description",
     "enum",
     "items",
+    "maxLength",
     "properties",
     "required",
     "type",
@@ -1804,13 +2569,46 @@ fn validate_workflow_schema_at(
             "workflow schema {path:?} const must be included in enum"
         )));
     }
-    for value in object.get("const").into_iter().chain(
-        object
-            .get("enum")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten(),
-    ) {
+    if let Some(max_length) = object.get("maxLength") {
+        if kind != "string" {
+            return Err(WorkflowCompileError::InvalidSchema(format!(
+                "workflow schema {path:?} maxLength is only valid for string schemas"
+            )));
+        }
+        if !max_length
+            .as_u64()
+            .is_some_and(|max| (1..=MAX_VALUE_BYTES as u64).contains(&max))
+        {
+            return Err(WorkflowCompileError::InvalidSchema(format!(
+                "workflow schema {path:?} maxLength must be an integer from 1 to {MAX_VALUE_BYTES}"
+            ))
+            .at("maxLength"));
+        }
+    }
+    if let Some(default) = object.get("default") {
+        let mut constraint = object.clone();
+        constraint.remove("default");
+        let valid = jsonschema::Validator::new(&Value::Object(constraint))
+            .is_ok_and(|validator| validator.is_valid(default));
+        if !valid {
+            return Err(WorkflowCompileError::InvalidSchema(format!(
+                "workflow schema {path:?} default does not satisfy its own schema"
+            ))
+            .at("default"));
+        }
+    }
+    for value in object
+        .get("const")
+        .into_iter()
+        .chain(object.get("default"))
+        .chain(
+            object
+                .get("enum")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten(),
+        )
+    {
         expressions::bounded_value_bytes(value).map_err(|error| {
             WorkflowCompileError::InvalidSchema(format!("schema {path:?} finite value: {error}"))
         })?;
@@ -1907,96 +2705,386 @@ fn validate_workflow_schema_at(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)] // one Agent node's complete static contract
-fn validate_agent(
-    task: &str,
-    input: &BTreeMap<String, WorkflowValue>,
-    output: &Value,
-    invocation_override: Option<&crate::runtime::subagent::SubagentInvocationOverride>,
-    available: &SchemaMap,
+fn validate_agent_output(
+    output: &WorkflowAgentOutput,
+    routes: &[WorkflowAgentRoute],
     node: &str,
 ) -> Result<(), WorkflowCompileError> {
-    if let Some(invocation_override) = invocation_override {
-        // Structural validity is decided at compilation, with the authored
-        // path of the offending dimension. Reference *authority* is a
-        // question about a concrete resource generation and belongs to
-        // resource-generation preparation, not to the compiler.
-        invocation_override.validate_spelling().map_err(|error| {
-            WorkflowCompileError::InvalidField(format!(
-                "Agent {node:?} invocation override is invalid: {error}"
-            ))
-            .at(crate::runtime::subagent::SubagentInvocationOverride::dimension_path(&error))
-        })?;
-    }
-    if task.trim().is_empty() || task.len() > 32 * 1024 {
-        return Err(WorkflowCompileError::InvalidField(format!(
-            "Agent {node:?} task must be a fixed non-empty string within its bound"
-        ))
-        .at("task"));
-    }
-    if task.contains("${") || task.contains("{{") {
-        return Err(WorkflowCompileError::InvalidField(format!(
-            "Agent {node:?} task cannot contain interpolation syntax"
-        ))
-        .at("task"));
-    }
-    validate_root_schema(output, &format!("Agent {node} output")).map_err(|e| e.at("output"))?;
-    for (name, binding) in input {
-        if name.trim().is_empty() {
-            return Err(WorkflowCompileError::InvalidField(format!(
-                "Agent {node:?} has an empty input binding name"
-            ))
-            .at(format!("input.{name}")));
+    if let Some(schema) = output.structured() {
+        if !routes.is_empty() && (schema.get("const").is_some() || schema.get("enum").is_some()) {
+            return Err(WorkflowCompileError::InvalidSchema(
+                "Agent routes cannot add switch to a root const or enum output contract".into(),
+            )
+            .at("output.schema"));
         }
-        if name.len() > 64 || name.contains('.') {
-            return Err(WorkflowCompileError::InvalidField(format!(
-                "Agent {node:?} input binding name {name:?} must be at most 64 bytes and contain no dots"
-            )).at(format!("input.{name}")));
+        validate_root_schema(schema, &format!("Agent {node} output"))
+            .map_err(|e| e.at("output.schema"))?;
+        if !routes.is_empty()
+            && schema
+                .pointer(&format!("/properties/{AGENT_ROUTE_FIELD}"))
+                .is_some()
+        {
+            return Err(WorkflowCompileError::InvalidSchema(format!(
+                "Agent {node:?} routes reserve the {AGENT_ROUTE_FIELD:?} output field"
+            ))
+            .at("output.schema"));
         }
-        value_schema(binding, available, node, 0).map_err(|e| e.at(format!("input.{name}")))?;
     }
     Ok(())
 }
 
+fn validate_agent(
+    task: &[WorkflowValue],
+    output: &WorkflowAgentOutput,
+    routes: &[WorkflowAgentRoute],
+    on_error: &WorkflowValueErrorStrategy,
+    available: &SchemaMap,
+    node: &str,
+) -> Result<(), WorkflowCompileError> {
+    if validate_prompt(
+        task,
+        available,
+        node,
+        &format!("Agent {node:?} task"),
+        "task",
+    )? {
+        return Err(
+            WorkflowCompileError::InvalidField(format!("Agent {node:?} task is empty")).at("task"),
+        );
+    }
+    validate_agent_output(output, routes, node)?;
+    if routes.len() > MAX_AGENT_ROUTES {
+        return Err(WorkflowCompileError::InvalidBranch(format!(
+            "Agent {node:?} has at most {MAX_AGENT_ROUTES} routes"
+        ))
+        .at("routes"));
+    }
+    let mut ids = BTreeSet::new();
+    for (index, route) in routes.iter().enumerate() {
+        if !valid_local_key(&route.id) || is_reserved_port(&route.id) || !ids.insert(&route.id) {
+            return Err(WorkflowCompileError::InvalidBranch(
+                "route IDs must be unique valid local keys and cannot name a reserved port".into(),
+            )
+            .at(format!("routes.{index}.id")));
+        }
+        if route.description.trim().is_empty()
+            || route.description.len() > MAX_AGENT_ROUTE_DESCRIPTION_BYTES
+        {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "Agent {node:?} route descriptions tell the child when to choose them, within {MAX_AGENT_ROUTE_DESCRIPTION_BYTES} bytes"
+            ))
+            .at(format!("routes.{index}.description")));
+        }
+    }
+    if let WorkflowValueErrorStrategy::DefaultValue { value } = on_error {
+        let schema = agent_value_schema(output, routes);
+        if !jsonschema::Validator::new(&schema).is_ok_and(|validator| validator.is_valid(value)) {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "Agent {node:?} default value must satisfy the node's own value contract"
+            ))
+            .at("on_error.value"));
+        }
+    }
+    Ok(())
+}
+
+/// Ports a Branch case or an Agent route cannot be named after.
+/// As Dify's End: each output variable a unique field read from a variable.
+/// The value is the object those fields make, and its schema.
+fn return_output(
+    outputs: &[WorkflowReturnOutput],
+    available: &SchemaMap,
+    node: &str,
+) -> Result<(WorkflowValue, Value), WorkflowCompileError> {
+    let (mut fields, mut properties) = (BTreeMap::new(), serde_json::Map::new());
+    for (index, output) in outputs.iter().enumerate() {
+        if !valid_local_key(&output.variable) || fields.contains_key(&output.variable) {
+            return Err(WorkflowCompileError::InvalidField(
+                "output variables must be unique valid local keys".into(),
+            )
+            .at(format!("outputs.{index}.variable")));
+        }
+        let value = WorkflowValue::Reference {
+            path: output.value_selector.clone(),
+        };
+        let schema = value_schema(&value, available, node, 0)
+            .map_err(|e| e.at(format!("outputs.{index}.value_selector")))?;
+        properties.insert(output.variable.clone(), schema);
+        fields.insert(output.variable.clone(), value);
+    }
+    let required = fields.keys().cloned().collect::<Vec<_>>();
+    Ok((
+        WorkflowValue::Object { fields },
+        serde_json::json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false}),
+    ))
+}
+
+/// The workflow's output: every Return's fields, required when every Return
+/// has it. A field two Returns share must have one type.
+fn merge_return_schemas(returned: &[Value]) -> Result<Value, WorkflowCompileError> {
+    let Some((first, rest)) = returned.split_first() else {
+        return Ok(empty_object_schema());
+    };
+    let mut merged = first.clone();
+    for schema in rest {
+        for (key, property) in schema["properties"].as_object().into_iter().flatten() {
+            let properties = merged["properties"].as_object_mut().expect("object schema");
+            // The wider of the two, when one admits every value of the other.
+            match properties.get(key) {
+                Some(existing) if schemas_compatible(property, existing) => {}
+                Some(existing) if !schemas_compatible(existing, property) => {
+                    return Err(WorkflowCompileError::IncompatibleReference(format!(
+                        "Return nodes give output {key:?} different types"
+                    )));
+                }
+                _ => {
+                    properties.insert(key.clone(), property.clone());
+                }
+            }
+        }
+        let required = merged["required"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|key| {
+                schema["required"]
+                    .as_array()
+                    .is_some_and(|keys| keys.contains(key))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        merged["required"] = Value::Array(required);
+    }
+    Ok(merged)
+}
+
+fn validate_review(
+    content: &[WorkflowValue],
+    actions: &[WorkflowReviewAction],
+    timeout_ms: u64,
+    available: &SchemaMap,
+    node: &str,
+) -> Result<(), WorkflowCompileError> {
+    let fixed_chars = content
+        .iter()
+        .filter_map(|part| match part {
+            WorkflowValue::Literal {
+                value: Value::String(text),
+            } => Some(text.chars().count()),
+            _ => None,
+        })
+        .sum::<usize>();
+    let limit = crate::events::interaction::MAX_QUESTION_TEXT_CHARS;
+    if fixed_chars > limit {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "Human Input {node:?} content exceeds {limit} Unicode characters"
+        ))
+        .at("content"));
+    }
+    if validate_prompt(
+        content,
+        available,
+        node,
+        &format!("Human Input {node:?} content"),
+        "content",
+    )? {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "Human Input {node:?} content is empty"
+        ))
+        .at("content"));
+    }
+    if actions.is_empty() || actions.len() > MAX_REVIEW_ACTIONS {
+        return Err(WorkflowCompileError::InvalidBranch(format!(
+            "Human Input {node:?} has 1..={MAX_REVIEW_ACTIONS} actions"
+        ))
+        .at("actions"));
+    }
+    let (mut ids, mut titles) = (BTreeSet::new(), BTreeSet::new());
+    for (index, action) in actions.iter().enumerate() {
+        if !valid_local_key(&action.id)
+            || is_reserved_port(&action.id)
+            || action.id == REVIEW_TIMEOUT_PORT
+            || !ids.insert(&action.id)
+        {
+            return Err(WorkflowCompileError::InvalidBranch(
+                "action IDs must be unique valid local keys and cannot name a reserved port".into(),
+            )
+            .at(format!("actions.{index}.id")));
+        }
+        let title = action.title.trim();
+        if title.is_empty()
+            || action.title.chars().count() > crate::events::interaction::MAX_OPTION_LABEL_CHARS
+            || !titles.insert(title)
+        {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "action titles must be unique non-empty text of at most {} characters",
+                crate::events::interaction::MAX_OPTION_LABEL_CHARS
+            ))
+            .at(format!("actions.{index}.title")));
+        }
+    }
+    if timeout_ms == 0 || timeout_ms > 86_400_000 {
+        return Err(
+            WorkflowCompileError::InvalidField("timeout_ms must be 1..=86400000".into())
+                .at("timeout_ms"),
+        );
+    }
+    Ok(())
+}
+
+fn is_reserved_port(id: &str) -> bool {
+    matches!(id, "false" | "next" | "fail")
+}
+
+/// Check one prompt's parts, fixed text or references, against its bounds and
+/// the available scope. Returns whether it has no text and no variable.
+fn validate_prompt(
+    parts: &[WorkflowValue],
+    available: &SchemaMap,
+    node: &str,
+    what: &str,
+    at: &str,
+) -> Result<bool, WorkflowCompileError> {
+    if parts.len() > MAX_MODEL_MESSAGE_PARTS {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "{what} exceeds {MAX_MODEL_MESSAGE_PARTS} parts"
+        ))
+        .at(at));
+    }
+    let mut text = 0usize;
+    for (position, part) in parts.iter().enumerate() {
+        match part {
+            WorkflowValue::Literal {
+                value: Value::String(fixed),
+            } => text += fixed.len(),
+            WorkflowValue::Reference { .. } => {
+                value_schema(part, available, node, 0)
+                    .map_err(|e| e.at(format!("{at}.{position}")))?;
+            }
+            _ => {
+                return Err(WorkflowCompileError::InvalidField(format!(
+                    "{what} content is text or references only"
+                ))
+                .at(format!("{at}.{position}")));
+            }
+        }
+    }
+    if text > MAX_MODEL_MESSAGE_BYTES {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "{what} text exceeds {MAX_MODEL_MESSAGE_BYTES} bytes"
+        ))
+        .at(at));
+    }
+    Ok(parts.iter().all(|part| {
+        matches!(part, WorkflowValue::Literal { value: Value::String(fixed) } if fixed.trim().is_empty())
+    }))
+}
+
 fn validate_model(
     model: &crate::model::session::AuxiliaryModelPolicy,
-    instruction: &str,
-    input: &BTreeMap<String, WorkflowValue>,
+    messages: &[WorkflowModelMessage],
     output: &WorkflowModelOutput,
     available: &SchemaMap,
     node: &str,
 ) -> Result<(), WorkflowCompileError> {
     validate_model_policy(model).map_err(|error| error.at("model"))?;
-    if instruction.trim().is_empty() || instruction.len() > MAX_MODEL_INSTRUCTION_BYTES {
+    if messages.is_empty() || messages.len() > MAX_MODEL_MESSAGES {
         return Err(WorkflowCompileError::InvalidField(format!(
-            "Model {node:?} instruction must be a fixed non-empty string of at most {MAX_MODEL_INSTRUCTION_BYTES} bytes"
-        )).at("instruction"));
-    }
-    if instruction.contains("${") || instruction.contains("{{") {
-        return Err(WorkflowCompileError::InvalidField(format!(
-            "Model {node:?} instruction cannot contain interpolation syntax"
+            "Model {node:?} needs a system message and at most {MAX_MODEL_MESSAGES} messages"
         ))
-        .at("instruction"));
+        .at("messages"));
     }
-    if input.len() > MAX_MODEL_INPUT_BINDINGS {
-        return Err(WorkflowCompileError::InvalidField(format!(
-            "Model {node:?} input exceeds {MAX_MODEL_INPUT_BINDINGS} named bindings"
-        ))
-        .at("input"));
-    }
-    for (name, binding) in input {
-        if !valid_local_key(name) {
+    for (index, message) in messages.iter().enumerate() {
+        let at = format!("messages.{index}");
+        if (index == 0) != (message.role == WorkflowModelRole::System) {
             return Err(WorkflowCompileError::InvalidField(format!(
-                "Model {node:?} input binding name {name:?} must be a non-empty bounded local key"
+                "Model {node:?} message {index} must be {}",
+                if index == 0 {
+                    "the system message"
+                } else {
+                    "a user or assistant message"
+                }
             ))
-            .at(format!("input.{name}")));
+            .at(format!("{at}.role")));
         }
-        value_schema(binding, available, node, 0).map_err(|e| e.at(format!("input.{name}")))?;
+        let empty = validate_prompt(
+            &message.content,
+            available,
+            node,
+            &format!("Model {node:?} message {index}"),
+            &format!("{at}.content"),
+        )?;
+        if index > 0 && empty {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "Model {node:?} message {index} is empty"
+            ))
+            .at(format!("{at}.content")));
+        }
+    }
+    if !messages
+        .iter()
+        .any(|message| message.role == WorkflowModelRole::User)
+    {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "Model {node:?} needs at least one user message"
+        ))
+        .at("messages"));
     }
     validate_model_output(output, node)
 }
 
-/// Shared output-contract proof, independent of unfinished instruction/bindings.
+fn validate_retry(
+    retry: Option<&WorkflowRetry>,
+    kind: &str,
+    node: &str,
+) -> Result<(), WorkflowCompileError> {
+    if let Some(retry) = retry
+        && (!(1..=MAX_RETRIES).contains(&retry.max_retries)
+            || !RETRY_INTERVAL_MS.contains(&retry.interval_ms))
+    {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "{kind} {node:?} retries 1..={MAX_RETRIES} times, 100..=5000 ms apart"
+        ))
+        .at("retry"));
+    }
+    Ok(())
+}
+
+fn validate_model_failure(
+    retry: Option<&WorkflowRetry>,
+    on_error: &WorkflowModelErrorStrategy,
+    output: &WorkflowModelOutput,
+    node: &str,
+) -> Result<(), WorkflowCompileError> {
+    validate_retry(retry, "Model", node)?;
+    let WorkflowModelErrorStrategy::DefaultValue {
+        text,
+        structured_output,
+    } = on_error
+    else {
+        return Ok(());
+    };
+    if text.len() > MAX_MODEL_MESSAGE_BYTES {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "Model {node:?} default text exceeds {MAX_MODEL_MESSAGE_BYTES} bytes"
+        ))
+        .at("on_error.text"));
+    }
+    match (output, structured_output) {
+        (WorkflowModelOutput::Text {}, None) => Ok(()),
+        (WorkflowModelOutput::JsonSchema { schema }, Some(value))
+            if jsonschema::Validator::new(schema).is_ok_and(|validator| validator.is_valid(value)) =>
+        {
+            Ok(())
+        }
+        _ => Err(WorkflowCompileError::InvalidField(format!(
+            "Model {node:?} default structured_output must satisfy its declared schema, and only a declared schema has one"
+        ))
+        .at("on_error.structured_output")),
+    }
+}
+
+/// Shared output-contract proof, independent of unfinished messages.
 fn validate_model_output(
     output: &WorkflowModelOutput,
     node: &str,
@@ -2124,8 +3212,12 @@ fn reachable_nodes(
 struct SchemaMap(BTreeMap<String, Value>);
 
 impl SchemaMap {
+    /// A block's entry environment: `args` after defaults are filled in.
     fn from_schema(schema: &Value) -> Self {
-        Self(BTreeMap::from([("args".into(), schema.clone())]))
+        Self(BTreeMap::from([(
+            "args".into(),
+            schema_with_defaults_required(schema),
+        )]))
     }
 
     fn with_prefix(&self, prefix: &str, schema: &Value) -> Self {
@@ -2136,21 +3228,6 @@ impl SchemaMap {
         result.0.insert(prefix.to_owned(), schema.clone());
         result
     }
-}
-
-fn intersect_schema_maps(maps: &[&SchemaMap]) -> SchemaMap {
-    let Some(first) = maps.first() else {
-        return SchemaMap::default();
-    };
-    let mut result = (*first).clone();
-    for map in &maps[1..] {
-        // A producer has one identity and one frozen declaration within this
-        // Block. A join proves its presence on every incoming path; it does
-        // not create a new declaration or require schema self-assignability.
-        // Consumer binding checks separately prove destination compatibility.
-        result.0.retain(|key, _| map.0.contains_key(key));
-    }
-    result
 }
 
 fn schema_type(schema: &Value) -> Option<&str> {
@@ -2165,6 +3242,44 @@ fn schema_required(schema: &Value) -> BTreeSet<&str> {
         .flatten()
         .filter_map(Value::as_str)
         .collect()
+}
+
+/// The schema of a block input after [`apply_schema_defaults`]: every
+/// property with a `default` is present, so it is required.
+fn schema_with_defaults_required(schema: &Value) -> Value {
+    let Some(object) = schema.as_object() else {
+        return schema.clone();
+    };
+    let mut result = object.clone();
+    if let Some(Value::Object(properties)) = result.get_mut("properties") {
+        let defaulted = properties
+            .iter()
+            .filter(|(_, property)| property.get("default").is_some())
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        for property in properties.values_mut() {
+            *property = schema_with_defaults_required(property);
+        }
+        if !defaulted.is_empty() {
+            let mut required = schema_required(schema)
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            for name in defaulted {
+                if !required.contains(&name) {
+                    required.push(name);
+                }
+            }
+            result.insert(
+                "required".into(),
+                Value::Array(required.into_iter().map(Value::String).collect()),
+            );
+        }
+    }
+    if let Some(items) = result.get_mut("items") {
+        *items = schema_with_defaults_required(items);
+    }
+    Value::Object(result)
 }
 
 fn finite_schema_values(schema: &Value) -> Option<&[Value]> {
@@ -2240,6 +3355,14 @@ fn schemas_compatible_with<E>(
         return Ok(false);
     };
     if actual_type != expected_type && !(actual_type == "integer" && expected_type == "number") {
+        return Ok(false);
+    }
+    if let Some(expected_max) = expected.get("maxLength").and_then(Value::as_u64)
+        && actual
+            .get("maxLength")
+            .and_then(Value::as_u64)
+            .is_none_or(|actual_max| actual_max > expected_max)
+    {
         return Ok(false);
     }
     if expected_type == "object" {
@@ -2338,6 +3461,23 @@ enum WorkflowOutputState {
     Pending,
     Committed(Value),
     Cancelled(crate::runtime::types::CancellationReason),
+}
+
+/// How one Workflow-owned child `AgentRun` settles: its final reply is the
+/// result, or its committed `workflow_output` value is.
+#[derive(Clone)]
+pub(crate) enum WorkflowChildTerminal {
+    Text,
+    Output(Arc<WorkflowOutputLatch>),
+}
+
+impl WorkflowChildTerminal {
+    pub(crate) fn latch(&self) -> Option<&Arc<WorkflowOutputLatch>> {
+        match self {
+            Self::Text => None,
+            Self::Output(latch) => Some(latch),
+        }
+    }
 }
 
 /// A thread-safe, frozen-schema terminal latch used by one child `AgentRun`.
@@ -2803,7 +3943,7 @@ impl WorkflowRuntime {
                         run_id: run.run_id.clone(),
                     },
                 );
-                // The semantic output is exactly the declared Return value.
+                // The semantic output is the validated output of all active Returns.
                 Ok(value)
             }
             Err(error) => {
@@ -2881,7 +4021,7 @@ impl WorkflowRuntime {
         run: &WorkflowRun,
         context: &crate::runtime::subagent::NativeExecutionContext,
         input: &Value,
-        values: &BTreeMap<String, Value>,
+        values: &imbl::OrdMap<String, Value>,
         node_id: &WorkflowNodeInstance,
         agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
@@ -2897,20 +4037,7 @@ impl WorkflowRuntime {
                 node: node_id.to_string(),
                 detail: bound_workflow_diagnostic(error.to_string()),
             })?;
-        let mut bound = serde_json::Map::new();
-        for (key, binding) in &agent.input {
-            bound.insert(key.clone(), evaluate_value(binding, input, values)?);
-        }
-        let context_package = serde_json::json!({
-            "workflow_node": node_id.node,
-            "input": Value::Object(bound),
-        });
-        let context_package = serde_json::to_string(&context_package).map_err(|error| {
-            WorkflowRunError::ChildStart {
-                node: node_id.to_string(),
-                detail: format!("cannot encode typed Agent input: {error}"),
-            }
-        })?;
+        let task = model::render_parts(&agent.task, |part| evaluate_value(part, input, values))?;
         let spec = crate::runtime::subagent::SubagentStartSpec {
             authority: crate::runtime::subagent::DurableAgentAuthority {
                 title: node_id.node.clone().into(),
@@ -2920,13 +4047,13 @@ impl WorkflowRuntime {
             },
             admission: crate::runtime::subagent::ActivationAdmission {
                 attachments: Vec::new(),
-                task: agent.task.clone(),
-                context: Some(context_package),
+                task,
+                context: None,
                 origin: crate::runtime::subagent::AgentActivationOrigin::Workflow {
                     node_id: Box::new(node_id.clone()),
                 },
                 terminal: crate::runtime::subagent::SubagentTerminalMode::WorkflowOutput {
-                    output_schema: agent.output_schema.clone(),
+                    output_schema: agent.terminal_schema(),
                     workflow_id: run.program.id().clone(),
                     run_id: run.run_id.clone(),
                     node_id: Box::new(node_id.clone()),
@@ -3034,7 +4161,7 @@ impl WorkflowRuntime {
         run: &WorkflowRun,
         subagent_id: crate::runtime::identity::SubagentId,
         node_id: &WorkflowNodeInstance,
-        output_schema: &Value,
+        agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
         let mut wait = Box::pin(self.subagents.wait_until_settled(&subagent_id));
@@ -3059,7 +4186,7 @@ impl WorkflowRuntime {
                             run, snapshot,
                             &subagent_id,
                             node_id,
-                            output_schema,
+                            agent,
                             cancellation,
                         );
                 }
@@ -3073,14 +4200,7 @@ impl WorkflowRuntime {
                 detail: "the native SubagentRegistry lost the child record".to_owned(),
             },
         })?;
-        self.settled_agent_value(
-            run,
-            snapshot,
-            &subagent_id,
-            node_id,
-            output_schema,
-            cancellation,
-        )
+        self.settled_agent_value(run, snapshot, &subagent_id, node_id, agent, cancellation)
     }
 
     fn settled_agent_value(
@@ -3089,7 +4209,7 @@ impl WorkflowRuntime {
         snapshot: crate::runtime::subagent::SubagentSnapshot,
         subagent_id: &crate::runtime::identity::SubagentId,
         node_id: &WorkflowNodeInstance,
-        output_schema: &Value,
+        agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
         use crate::runtime::subagent::{SubagentPhysicalSettlement, SubagentPublication};
@@ -3141,22 +4261,30 @@ impl WorkflowRuntime {
                 // `validate_workflow_candidate` in the registry: the registry
                 // revalidates the untrusted cross-process child wire frame
                 // before its durable commit, while this validates the run's
-                // result against the node's own frozen `output_schema`
-                // authority at consumption time. The two checks guard
-                // different trust boundaries; both stay.
-                let validator = jsonschema::Validator::new(output_schema).map_err(|error| {
-                    WorkflowRunError::ChildFailed {
-                        node: node_id.to_string(),
-                        detail: format!("workflow Agent output schema became invalid: {error}"),
+                // result against the node's own frozen output authority at
+                // consumption time. The two checks guard different trust
+                // boundaries; both stay.
+                if let Some(schema) = agent.terminal_schema() {
+                    let validator = jsonschema::Validator::new(&schema).map_err(|error| {
+                        WorkflowRunError::ChildFailed {
+                            node: node_id.to_string(),
+                            detail: format!("workflow Agent output schema became invalid: {error}"),
+                        }
+                    })?;
+                    if !validator.is_valid(&value) {
+                        return Err(WorkflowRunError::ChildFailed {
+                            node: node_id.to_string(),
+                            detail: "workflow Agent output violated its frozen output schema"
+                                .to_owned(),
+                        });
                     }
-                })?;
-                if !validator.is_valid(&value) {
-                    return Err(WorkflowRunError::ChildFailed {
-                        node: node_id.to_string(),
-                        detail: "workflow Agent output violated its frozen output schema"
-                            .to_owned(),
-                    });
                 }
+                let value = agent
+                    .value(value)
+                    .ok_or_else(|| WorkflowRunError::ChildFailed {
+                        node: node_id.to_string(),
+                        detail: "workflow Agent output does not match its output mode".to_owned(),
+                    })?;
                 // The native SubagentRegistry already committed the value
                 // fact atomically with the child's terminal lifecycle fact.
                 // Do not append a second observability event here: the
@@ -3264,7 +4392,9 @@ pub enum WorkflowRunError {
     InvalidOutput(String),
     /// The immutable program was internally inconsistent.
     InvalidProgram(String),
-    /// A committed reference could not be resolved at runtime.
+    /// A producer has not committed a value in this scope.
+    UncommittedReference(Vec<String>),
+    /// A value could not be constructed or resolved at runtime.
     InvalidValue(String),
     /// A child could not be admitted.
     ChildStart {
@@ -3276,9 +4406,8 @@ pub enum WorkflowRunError {
         node: String,
         detail: String,
     },
-    /// One or more keyed parallel branches failed, in key order.
-    ParallelFailed {
-        node: String,
+    /// Multiple admitted nodes failed, in node ID order.
+    NodesFailed {
         failures: BTreeMap<String, WorkflowRunError>,
     },
     /// Cancellation won terminal settlement.
@@ -3316,7 +4445,7 @@ impl WorkflowRunError {
                 reason: *reason,
                 phase: ToolCancellationPhase::DuringExecution,
             },
-            Self::ParallelFailed { failures, .. } => {
+            Self::NodesFailed { failures, .. } => {
                 let statuses = failures
                     .values()
                     .map(Self::execution_status)
@@ -3386,6 +4515,7 @@ impl fmt::Display for WorkflowRunError {
             Self::InvalidInput(detail) => write!(formatter, "invalid workflow input: {detail}"),
             Self::InvalidOutput(detail) => write!(formatter, "invalid workflow output: {detail}"),
             Self::InvalidProgram(detail) => write!(formatter, "invalid workflow program: {detail}"),
+            Self::UncommittedReference(path) => write!(formatter, "uncommitted reference {path:?}"),
             Self::InvalidValue(detail) => write!(formatter, "invalid workflow value: {detail}"),
             Self::ChildStart { node, detail } => {
                 write!(
@@ -3396,8 +4526,8 @@ impl fmt::Display for WorkflowRunError {
             Self::ChildFailed { node, detail } => {
                 write!(formatter, "Workflow Agent {node:?} failed: {detail}")
             }
-            Self::ParallelFailed { node, failures } => {
-                write!(formatter, "Parallel {node:?} failed: ")?;
+            Self::NodesFailed { failures } => {
+                write!(formatter, "Workflow nodes failed: ")?;
                 for (key, failure) in failures {
                     write!(formatter, "{key}: {failure}; ")?;
                 }
@@ -3430,24 +4560,13 @@ fn bound_workflow_diagnostic(value: impl AsRef<str>) -> String {
     value[..end].to_owned()
 }
 
-fn single_successor(
-    program: &WorkflowBlockProgram,
-    node: &str,
-) -> Result<String, WorkflowRunError> {
-    let edges = program.outgoing.get(node).map_or(&[][..], Vec::as_slice);
-    if edges.len() != 1 || edges[0].port != WorkflowPort::Next {
-        return Err(WorkflowRunError::InvalidProgram(format!(
-            "node {node:?} does not have one Next successor"
-        )));
-    }
-    Ok(edges[0].to.clone())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::durable::{CanonicalStore, JournalStore};
+    mod agents;
     mod authored_paths;
     mod compiler_models;
+    mod graph;
     #[cfg(unix)]
     #[path = "model.rs"]
     mod model_tests;
@@ -3494,6 +4613,15 @@ mod tests {
     #[cfg(unix)]
     use crate::tools::mcp::McpRuntimeLeaseAuthority;
 
+    /// An End returning these fields of `node`, each under its own name.
+    fn returns(node: &str, fields: &[&str]) -> Value {
+        let outputs = fields
+            .iter()
+            .map(|field| json!({"variable":field,"value_selector":[node,field]}))
+            .collect::<Vec<_>>();
+        json!({"type":"return","outputs":outputs})
+    }
+
     #[allow(clippy::needless_pass_by_value)]
     fn schema(properties: Value, required: &[&str]) -> Value {
         json!({
@@ -3514,50 +4642,50 @@ mod tests {
         }
     }
 
-    fn agent_branch(task: String, output: Value) -> WorkflowBranch {
-        WorkflowBranch {
-            input: WorkflowValue::Literal { value: json!({}) },
-            block: WorkflowBlock {
-                input: schema(json!({}), &[]),
-                output: output.clone(),
-                entry: "work".into(),
-                nodes: BTreeMap::from([
-                    (
-                        "work".into(),
-                        WorkflowNodeDefinition::Agent {
-                            profile: "reviewer".into(),
-                            task,
-                            input: BTreeMap::new(),
-                            output,
-                            invocation_override: None,
-                        },
-                    ),
-                    (
-                        "done".into(),
-                        WorkflowNodeDefinition::Return {
-                            output: reference("work"),
-                        },
-                    ),
-                ]),
-                edges: vec![edge("work", "done")],
+    /// A Model prompt: one fixed system message, then one user turn.
+    fn prompt(system: &str, user: Vec<WorkflowValue>) -> Vec<WorkflowModelMessage> {
+        vec![
+            WorkflowModelMessage {
+                role: WorkflowModelRole::System,
+                content: vec![text(system)],
             },
+            WorkflowModelMessage {
+                role: WorkflowModelRole::User,
+                content: user,
+            },
+        ]
+    }
+
+    fn text(fixed: &str) -> WorkflowValue {
+        WorkflowValue::Literal {
+            value: Value::String(fixed.to_owned()),
         }
     }
 
     fn agent(output: Value) -> WorkflowNodeDefinition {
         WorkflowNodeDefinition::Agent {
             profile: "reviewer".into(),
-            task: "Review the input.".to_owned(),
-            input: BTreeMap::from([("task".to_owned(), reference("args.task"))]),
-            output,
-            invocation_override: None,
+            task: vec![text("Review the input."), reference("args.task")],
+            output: WorkflowAgentOutput::JsonSchema { schema: output },
+            routes: Vec::new(),
+            on_error: WorkflowValueErrorStrategy::default(),
         }
     }
 
     fn return_node(output: BTreeMap<String, WorkflowValue>) -> WorkflowNodeDefinition {
-        WorkflowNodeDefinition::Return {
-            output: WorkflowValue::Object { fields: output },
-        }
+        let outputs = output
+            .into_iter()
+            .map(|(variable, value)| {
+                let WorkflowValue::Reference { path } = value else {
+                    panic!("an End output reads a variable")
+                };
+                WorkflowReturnOutput {
+                    variable,
+                    value_selector: path,
+                }
+            })
+            .collect();
+        WorkflowNodeDefinition::Return { outputs }
     }
 
     fn edge(from: &str, to: &str) -> WorkflowEdgeDefinition {
@@ -3580,17 +4708,35 @@ mod tests {
         entry: &str,
         nodes: BTreeMap<String, WorkflowNodeDefinition>,
         edges: Vec<WorkflowEdgeDefinition>,
-        output: Value,
     ) -> WorkflowDefinition {
         WorkflowDefinition {
             timeout_ms: 600_000,
             description: "Test workflow".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"task": {"type": "string"}}), &["task"]),
-                output,
-                entry: entry.to_owned(),
-                nodes,
-                edges,
+                nodes: {
+                    let mut nodes: std::collections::BTreeMap<
+                        String,
+                        crate::runtime::workflow::WorkflowNodeDefinition,
+                    > = nodes;
+                    nodes.insert(
+                        "workflow_start".into(),
+                        crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                    );
+                    nodes
+                },
+                edges: {
+                    let mut edges = edges;
+                    edges.insert(
+                        0,
+                        crate::runtime::workflow::WorkflowEdgeDefinition {
+                            from: "workflow_start".into(),
+                            to: entry.to_owned(),
+                            port: None,
+                        },
+                    );
+                    edges
+                },
             },
         }
     }
@@ -3862,79 +5008,74 @@ chat_reasoning_replay = "omit"
 
     #[cfg(unix)]
     fn parallel_test_program(keys: &[&str]) -> Arc<WorkflowProgram> {
-        let branch_output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
-        let mut branches = BTreeMap::new();
-        let mut returned = BTreeMap::new();
-        let mut output_properties = serde_json::Map::new();
+        let output = schema(json!({"summary":{"type":"string"}}), &["summary"]);
+        let mut nodes =
+            BTreeMap::from([("workflow_start".into(), WorkflowNodeDefinition::Start {})]);
+        let mut edges = Vec::new();
+        let mut fields = BTreeMap::new();
+        let mut properties = serde_json::Map::new();
         for key in keys {
-            branches.insert(
-                (*key).to_owned(),
-                agent_branch(
-                    format!("Run the {key} workflow branch."),
-                    branch_output.clone(),
-                ),
+            nodes.insert(
+                (*key).into(),
+                WorkflowNodeDefinition::Agent {
+                    profile: "reviewer".into(),
+                    task: vec![text(&format!("Run the {key} workflow branch."))],
+                    output: WorkflowAgentOutput::JsonSchema {
+                        schema: output.clone(),
+                    },
+                    routes: Vec::new(),
+                    on_error: WorkflowValueErrorStrategy::default(),
+                },
             );
-            returned.insert((*key).to_owned(), reference(&(format!("fanout.{key}"))));
-            output_properties.insert((*key).to_owned(), branch_output.clone());
+            edges.extend([edge("workflow_start", key), edge(key, "done")]);
+            fields.insert((*key).into(), reference(key));
+            properties.insert((*key).into(), output.clone());
         }
-        let definition = base_definition(
-            "fanout",
-            BTreeMap::from([
-                (
-                    "fanout".to_owned(),
-                    WorkflowNodeDefinition::Parallel { branches },
-                ),
-                ("done".to_owned(), return_node(returned)),
-            ]),
-            vec![edge("fanout", "done")],
-            schema(Value::Object(output_properties), keys),
-        );
-        Arc::new(compile_test(definition).expect("parallel runtime program"))
+        nodes.insert("done".into(), return_node(fields));
+        Arc::new(
+            compile_test(WorkflowDefinition {
+                description: "Sibling fanout".into(),
+                timeout_ms: 600_000,
+                block: WorkflowBlock {
+                    input: schema(json!({"task":{"type":"string"}}), &["task"]),
+                    nodes,
+                    edges,
+                },
+            })
+            .unwrap(),
+        )
     }
 
     #[cfg(unix)]
     fn snapshot_test_program(result_field: &str, description: &str) -> Arc<WorkflowProgram> {
-        let branch_output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
-        let definition = WorkflowDefinition {
-            timeout_ms: 600_000,
-            description: description.to_owned(),
-            block: WorkflowBlock {
-                input: schema(json!({}), &[]),
-                output: schema(
-                    json!({result_field: branch_output.clone()}),
-                    &[result_field],
-                ),
-                entry: "fanout".to_owned(),
-                nodes: BTreeMap::from([
-                    (
-                        "fanout".to_owned(),
-                        WorkflowNodeDefinition::Parallel {
-                            branches: BTreeMap::from([(
-                                "alpha".to_owned(),
-                                agent_branch(
-                                    format!("Run the {description} branch."),
-                                    branch_output,
-                                ),
-                            )]),
+        let output = schema(json!({"summary":{"type":"string"}}), &["summary"]);
+        let mut definition = base_definition(
+            "work",
+            BTreeMap::from([
+                (
+                    "work".into(),
+                    WorkflowNodeDefinition::Agent {
+                        profile: "reviewer".into(),
+                        task: vec![text(&format!("Run the {description} branch."))],
+                        output: WorkflowAgentOutput::JsonSchema {
+                            schema: output.clone(),
                         },
-                    ),
-                    (
-                        "done".to_owned(),
-                        return_node(BTreeMap::from([(
-                            result_field.to_owned(),
-                            reference("fanout.alpha"),
-                        )])),
-                    ),
-                ]),
-                edges: vec![edge("fanout", "done")],
-            },
-        };
+                        routes: Vec::new(),
+                        on_error: WorkflowValueErrorStrategy::default(),
+                    },
+                ),
+                (
+                    "done".into(),
+                    return_node(BTreeMap::from([(result_field.into(), reference("work"))])),
+                ),
+            ]),
+            vec![edge("work", "done")],
+        );
+        definition.description = description.into();
+        definition.block.input = schema(json!({}), &[]);
         Arc::new(
-            WorkflowProgram::compile(
-                WorkflowId::parse("snapshot_workflow").expect("snapshot workflow id"),
-                definition,
-            )
-            .expect("snapshot workflow program"),
+            WorkflowProgram::compile(WorkflowId::parse("snapshot_workflow").unwrap(), definition)
+                .unwrap(),
         )
     }
 
@@ -3949,16 +5090,35 @@ chat_reasoning_replay = "omit"
                     description: "Event journal test workflow".to_owned(),
                     block: WorkflowBlock {
                         input: output.clone(),
-                        output: output.clone(),
-                        entry: "done".to_owned(),
-                        nodes: BTreeMap::from([(
-                            "done".to_owned(),
-                            return_node(BTreeMap::from([(
-                                "value".to_owned(),
-                                reference("args.value"),
-                            )])),
-                        )]),
-                        edges: Vec::new(),
+                        nodes: {
+                            let mut nodes: std::collections::BTreeMap<
+                                String,
+                                crate::runtime::workflow::WorkflowNodeDefinition,
+                            > = BTreeMap::from([(
+                                "done".to_owned(),
+                                return_node(BTreeMap::from([(
+                                    "value".to_owned(),
+                                    reference("args.value"),
+                                )])),
+                            )]);
+                            nodes.insert(
+                                "workflow_start".into(),
+                                crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                            );
+                            nodes
+                        },
+                        edges: {
+                            let mut edges = Vec::new();
+                            edges.insert(
+                                0,
+                                crate::runtime::workflow::WorkflowEdgeDefinition {
+                                    from: "workflow_start".into(),
+                                    to: "done".to_owned(),
+                                    port: None,
+                                },
+                            );
+                            edges
+                        },
                     },
                 },
             )
@@ -3989,13 +5149,13 @@ chat_reasoning_replay = "omit"
                         ("work".into(), agent(output.clone())),
                         (
                             "done".into(),
-                            WorkflowNodeDefinition::Return {
-                                output: reference("work"),
-                            },
+                            return_node(BTreeMap::from([(
+                                "summary".to_owned(),
+                                reference("work.summary"),
+                            )])),
                         ),
                     ]),
                     vec![edge("work", "done")],
-                    output,
                 ))
                 .unwrap(),
             );
@@ -4161,7 +5321,7 @@ chat_reasoning_replay = "omit"
             .instances
             .iter()
             .filter(|row| row.child.is_some())
-            .map(|row| row.block.clone())
+            .map(|row| (row.block.clone(), row.node.clone()))
             .collect();
         assert_eq!(
             branches.len(),
@@ -4270,12 +5430,12 @@ chat_reasoning_replay = "omit"
             .expect("workflow task")
             .expect_err("parallel failure");
         let detail = error.to_string();
-        let WorkflowRunError::ParallelFailed { .. } = error else {
+        let WorkflowRunError::NodesFailed { .. } = error else {
             panic!("expected keyed parallel failure");
         };
         assert!(
-            detail.find("fanout.alpha").expect("alpha diagnostic")
-                < detail.find("fanout.zulu").expect("zulu diagnostic")
+            detail.find("alpha").expect("alpha diagnostic")
+                < detail.find("zulu").expect("zulu diagnostic")
         );
         assert!(plane.registry.unsettled_snapshot().is_empty());
         assert!(!alpha.root.exists());
@@ -4600,21 +5760,22 @@ chat_reasoning_replay = "omit"
         let document: crate::workflow_file::WorkflowFileDocument =
             serde_json::from_str(source).expect("editor file document");
         document.canonical_bytes().expect("bounded native metadata");
-        for satisfied in [true, false] {
+        for broken in [true, false] {
             let plane = workflow_test_plane(1);
             let runtime = workflow_runtime(&plane);
             let native = runtime.read_model.clone();
             let mut definition = document.definition.clone();
-            let WorkflowNodeDefinition::Loop { until, .. } =
-                definition.block.nodes.get_mut("repeat").expect("Loop")
+            let WorkflowNodeDefinition::Loop {
+                break_condition, ..
+            } = definition.block.nodes.get_mut("repeat").expect("Loop")
             else {
                 panic!("editor fixture owns a Loop");
             };
-            **until = WorkflowPredicate::Boolean {
+            *break_condition = Some(WorkflowPredicate::Boolean {
                 value: WorkflowValue::Literal {
-                    value: json!(satisfied),
+                    value: json!(broken),
                 },
-            };
+            });
             let program = Arc::new(compile_test(definition).expect("editor-authored program"));
             let (_, cancellation) = workflow_cancellation();
             let result = runtime
@@ -4630,9 +5791,8 @@ chat_reasoning_replay = "omit"
             assert_eq!(
                 result,
                 json!({
-                    "parallel": {"left": {"echo": "verified"}, "right": {"echo": "verified"}},
-                    "loop": {"status": if satisfied {"satisfied"} else {"exhausted"},
-                        "iterations": if satisfied {1} else {3}, "result": {"echo": "verified"}}
+                    "left": {"echo": "verified"}, "right": {"echo": "verified"},
+                    "loop": {"count": if broken {0} else {3}, "echo": "verified"}
                 })
             );
             assert!(plane.registry.all_snapshots().is_empty());
@@ -4659,11 +5819,8 @@ chat_reasoning_replay = "omit"
         ))
         .unwrap();
         for case in cases.as_array().unwrap() {
-            let empty =
-                json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
             let definition: WorkflowDefinition = serde_json::from_value(json!({"description":"Renamed finite contract","block":{
-                "input":case["after"],"output":empty,"entry":"done","nodes":{"done":{"type":"return","output":{"type":"object","fields":{}}}},"edges":[]
-            }})).unwrap();
+                "input":case["after"],"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[]}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap();
             let program = Arc::new(compile_test(definition).expect("renamed contract compiles"));
             let plane = workflow_test_plane(1);
             let runtime = workflow_runtime(&plane);
@@ -4709,11 +5866,8 @@ chat_reasoning_replay = "omit"
         ))
         .unwrap();
         for case in cases.as_array().unwrap() {
-            let empty =
-                json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
             let definition: WorkflowDefinition = serde_json::from_value(json!({"description":"Preserved finite contract","block":{
-                "input":case["schema"],"output":empty,"entry":"done","nodes":{"done":{"type":"return","output":{"type":"object","fields":{}}}},"edges":[]
-            }})).unwrap();
+                "input":case["schema"],"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[]}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap();
             let program = Arc::new(compile_test(definition).expect("preserved contract compiles"));
             let plane = workflow_test_plane(1);
             let runtime = workflow_runtime(&plane);
@@ -4736,83 +5890,103 @@ chat_reasoning_replay = "omit"
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
+    fn defaulted_definition(tone: Value) -> WorkflowDefinition {
+        let mut definition = base_definition(
+            "done",
+            BTreeMap::from([(
+                "done".into(),
+                return_node(BTreeMap::from([("tone".into(), reference("args.tone"))])),
+            )]),
+            Vec::new(),
+        );
+        definition.block.input = schema(json!({"tone": tone}), &[]);
+        definition
+    }
+
+    #[test]
+    fn optional_input_with_default_is_referenceable_and_bounded() {
+        compile_test(defaulted_definition(
+            json!({"type": "string", "maxLength": 8, "default": "formal"}),
+        ))
+        .expect("a defaulted optional field is always present");
+        for (tone, rejected) in [
+            (
+                json!({"type": "string", "maxLength": 8}),
+                "unavailable field",
+            ),
+            (
+                json!({"type": "string", "maxLength": 4, "default": "formal"}),
+                "default does not satisfy",
+            ),
+            (
+                json!({"type": "string", "maxLength": 0, "default": ""}),
+                "maxLength must be",
+            ),
+            (
+                json!({"type": "integer", "maxLength": 4, "default": 1}),
+                "only valid for string",
+            ),
+        ] {
+            let error = compile_test(defaulted_definition(tone.clone()))
+                .expect_err(&format!("{tone} must be rejected"))
+                .to_string();
+            assert!(error.contains(rejected), "{tone}: {error}");
+        }
+    }
+
+    #[test]
+    fn schema_defaults_fill_absent_properties_recursively() {
+        let schema = json!({"type": "object", "properties": {
+            "tone": {"type": "string", "default": "formal"},
+            "rows": {"type": "array", "items": {"type": "object", "properties": {"n": {"type": "integer", "default": 1}}}},
+            "kept": {"type": "string", "default": "unused"}
+        }});
+        let mut value = json!({"rows": [{}, {"n": 2}], "kept": "given"});
+        apply_schema_defaults(&schema, &mut value).unwrap();
+        assert_eq!(
+            value,
+            json!({"tone": "formal", "rows": [{"n": 1}, {"n": 2}], "kept": "given"})
+        );
+    }
+
+    #[test]
+    fn inserted_default_containers_are_normalized_recursively() {
+        let schema = json!({"type":"object","properties": {
+            "opts":{"type":"object","properties":{"n":{"type":"integer","default":1}},"additionalProperties":false,"default":{}},
+            "rows":{"type":"array","items":{"type":"object","properties":{"n":{"type":"integer","default":2}}},"default":[{}]}
+        }});
+        for mut input in [json!({}), json!({"opts":{},"rows":[{}]})] {
+            apply_schema_defaults(&schema, &mut input).unwrap();
+            assert_eq!(input, json!({"opts":{"n":1},"rows":[{"n":2}]}));
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
-    async fn editor_construction_collision_fixture_keeps_data_and_legal_args_branches() {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/workflow/schema-construction-collision.json"
-        ))
-        .unwrap();
-        for form in ["object", "literal", "reference"] {
-            for branch in ["main", "args"] {
-                for rebound in [false, true] {
-                    let mut file = fixture.clone();
-                    let branches = file["block"]["nodes"]["fork"]["branches"]
-                        .as_object_mut()
-                        .unwrap();
-                    let mut owned = branches.remove("main").unwrap();
-                    if form == "literal" {
-                        owned["block"]["nodes"]["done"]["output"] = json!({"type":"literal","value":{"before":"wanted","after":"unrelated"}});
-                    } else if form == "reference" {
-                        owned["input"] = owned["block"]["nodes"]["done"]["output"].clone();
-                        owned["block"]["input"] = json!({"type":"object","properties":{"before":{"type":"string"},"after":{"type":"string"}},"required":["before","after"],"additionalProperties":false});
-                        owned["block"]["nodes"]["done"]["output"] =
-                            json!({"type":"reference","path":["args"]});
-                    }
-                    if rebound {
-                        let contract = &mut owned["block"]["output"];
-                        let properties = contract["properties"].as_object_mut().unwrap();
-                        let schema = properties.remove("before").unwrap();
-                        properties.insert("after".into(), schema);
-                        contract["required"] = json!(["after"]);
-                    }
-                    branches.insert(branch.into(), owned);
-                    file["block"]["nodes"]["done"]["output"]["fields"]["value"]["path"] =
-                        json!(["fork", branch, if rebound { "after" } else { "before" }]);
-                    // Presentation addresses retain orphan local keys, including
-                    // args; only actual executable node IDs reserve that word.
-                    let private_block = json!([{"node":"fork","branch":branch}]);
-                    let orphan_block =
-                        json!([{"node":"fork","branch":branch},{"node":"args","branch":"args"}]);
-                    file["editor"] = json!({
-                        "nodes":[{"address":{"block":private_block,"node":"args"},"title":"Retained orphan"}],
-                        "entries":[{"block":orphan_block,"position":{"x":24,"y":80}}],
-                        "branches":[{"address":{"block":private_block,"node":"args"},"branch":"args","position":{"x":24,"y":72},"dimensions":{"width":640,"height":256}}],
-                        "notes":[{"id":"orphan","block":orphan_block,"text":"Retained","theme":"blue","position":{"x":24,"y":80},"dimensions":{"width":200,"height":100}}],
-                        "orders":[{"target":{"kind":"block_output","block":orphan_block,"path":[]},"fields":["keep"]}]
-                    });
-                    let document: crate::workflow_file::WorkflowFileDocument =
-                        serde_json::from_value(file).unwrap();
-                    document
-                        .canonical_bytes()
-                        .expect("legal args branch and orphan metadata");
-                    // Both programs pass native Check: open output contracts
-                    // cannot detect rebinding to unrelated extra data. The UI
-                    // must preserve the wanted program by rejecting that edit.
-                    let program = Arc::new(
-                        compile_test(document.definition).expect("valid open object contract"),
-                    );
-                    let plane = workflow_test_plane(1);
-                    let runtime = workflow_runtime(&plane);
-                    let (_, cancellation) = workflow_cancellation();
-                    assert_eq!(
-                        runtime
-                            .run_test_foreground(
-                                program,
-                                ToolCallId::new("construction-collision"),
-                                workflow_test_context(&plane),
-                                json!({}),
-                                cancellation,
-                            )
-                            .await
-                            .unwrap(),
-                        json!({"value": if rebound {"unrelated"} else {"wanted"}}),
-                        "form {form}, branch {branch}, rebound {rebound}"
-                    );
-                    assert!(plane.registry.all_snapshots().is_empty());
-                }
-            }
-        }
+    async fn runtime_fills_input_defaults_before_validation() {
+        let program = Arc::new(
+            compile_test(defaulted_definition(
+                json!({"type": "string", "maxLength": 8, "default": "formal"}),
+            ))
+            .expect("program"),
+        );
+        let plane = workflow_test_plane(1);
+        let runtime = workflow_runtime(&plane);
+        let (_, cancellation) = workflow_cancellation();
+        assert_eq!(
+            runtime
+                .run_test_foreground(
+                    program,
+                    ToolCallId::new("input-default"),
+                    workflow_test_context(&plane),
+                    json!({}),
+                    cancellation,
+                )
+                .await
+                .unwrap(),
+            json!({"tone": "formal"})
+        );
     }
 
     #[cfg(unix)]
@@ -4846,34 +6020,49 @@ chat_reasoning_replay = "omit"
             description: "Review".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"task": {"type": "string"}}), &["task"]),
-                output: schema(json!({"summary": {"type": "string"}}), &["summary"]),
-                entry: "review".to_owned(),
-                nodes: BTreeMap::from([
-                    ("review".to_owned(), agent(output)),
-                    (
-                        "done".to_owned(),
-                        WorkflowNodeDefinition::Return {
-                            output: WorkflowValue::Object {
-                                fields: BTreeMap::from([(
-                                    "summary".to_owned(),
-                                    reference("review.summary"),
-                                )]),
-                            },
+                nodes: {
+                    let mut nodes: std::collections::BTreeMap<
+                        String,
+                        crate::runtime::workflow::WorkflowNodeDefinition,
+                    > = BTreeMap::from([
+                        ("review".to_owned(), agent(output)),
+                        (
+                            "done".to_owned(),
+                            return_node(BTreeMap::from([(
+                                "summary".to_owned(),
+                                reference("review.summary"),
+                            )])),
+                        ),
+                    ]);
+                    nodes.insert(
+                        "workflow_start".into(),
+                        crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                    );
+                    nodes
+                },
+                edges: {
+                    let mut edges = vec![WorkflowEdgeDefinition {
+                        from: "review".to_owned(),
+                        to: "done".to_owned(),
+                        port: None,
+                    }];
+                    edges.insert(
+                        0,
+                        crate::runtime::workflow::WorkflowEdgeDefinition {
+                            from: "workflow_start".into(),
+                            to: "review".to_owned(),
+                            port: None,
                         },
-                    ),
-                ]),
-                edges: vec![WorkflowEdgeDefinition {
-                    from: "review".to_owned(),
-                    to: "done".to_owned(),
-                    port: None,
-                }],
+                    );
+                    edges
+                },
             },
         };
         let program =
             WorkflowProgram::compile(WorkflowId::parse("review_pr").expect("id"), definition)
                 .expect("program");
-        assert_eq!(program.entry(), "review");
-        assert_eq!(program.nodes().len(), 2);
+        assert_eq!(program.entry(), "workflow_start");
+        assert_eq!(program.nodes().len(), 3);
     }
 
     #[test]
@@ -4891,17 +6080,39 @@ chat_reasoning_replay = "omit"
             description: "Branch".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"flag": {"type": "string"}}), &["flag"]),
-                output: schema(json!({"value": {"type": "string"}}), &["value"]),
-                entry: "decision".to_owned(),
-                nodes: BTreeMap::from([(
-                    "decision".to_owned(),
-                    WorkflowNodeDefinition::Branch {
-                        condition: WorkflowPredicate::Boolean {
-                            value: reference("args.flag"),
+                nodes: {
+                    let mut nodes: std::collections::BTreeMap<
+                        String,
+                        crate::runtime::workflow::WorkflowNodeDefinition,
+                    > = BTreeMap::from([(
+                        "decision".to_owned(),
+                        WorkflowNodeDefinition::Branch {
+                            cases: vec![crate::runtime::workflow::WorkflowBranchCase {
+                                id: "true".into(),
+                                condition: WorkflowPredicate::Boolean {
+                                    value: reference("args.flag"),
+                                },
+                            }],
                         },
-                    },
-                )]),
-                edges: Vec::new(),
+                    )]);
+                    nodes.insert(
+                        "workflow_start".into(),
+                        crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                    );
+                    nodes
+                },
+                edges: {
+                    let mut edges = Vec::new();
+                    edges.insert(
+                        0,
+                        crate::runtime::workflow::WorkflowEdgeDefinition {
+                            from: "workflow_start".into(),
+                            to: "decision".to_owned(),
+                            port: None,
+                        },
+                    );
+                    edges
+                },
             },
         };
         let error = WorkflowProgram::compile(WorkflowId::parse("branch").expect("id"), definition)
@@ -4914,11 +6125,17 @@ chat_reasoning_replay = "omit"
 
     #[test]
     fn yaml_is_serialization_and_does_not_supply_identity() {
-        let yaml = "description: Review\nblock:\n  input: {type: object, properties: {task: {type: string}}, required: [task]}\n  output: {type: object, properties: {summary: {type: string}}, required: [summary]}\n  entry: done\n  nodes:\n    done:\n      type: return\n      output:\n        type: object\n        fields:\n          summary: {type: reference, path: [args, task]}\n  edges: []\n";
+        let yaml = "description: Review\nblock:\n  input: {type: object, properties: {task: {type: string}}, required: [task]}\n  nodes:\n    workflow_start:\n      type: start\n    done:\n      type: return\n      outputs: [{variable: summary, value_selector: [args, task]}]\n  edges:\n  - from: workflow_start\n    to: done\n";
         let definition: WorkflowDefinition = serde_yaml::from_str(yaml).expect("yaml");
         assert!(WorkflowId::parse("review_pr").is_ok());
         assert!(!yaml.contains("name:"));
-        assert_eq!(definition.block.entry, "done");
+        assert!(
+            definition
+                .block
+                .nodes
+                .values()
+                .any(|node| matches!(node, WorkflowNodeDefinition::Start {}))
+        );
     }
 
     #[test]
@@ -4927,24 +6144,24 @@ chat_reasoning_replay = "omit"
 description: Duplicate
 block:
   input: {type: object}
-  output: {type: object}
-  entry: done
   nodes:
-    done: {type: return, output: {type: literal, value: {}}}
-    done: {type: return, output: {type: literal, value: {}}}
-  edges: []
+    workflow_start:
+      type: start
+    done: {type: return, outputs: []}
+    done: {type: return, outputs: []}
+  edges:
+  - from: workflow_start
+    to: done
 ";
         assert!(serde_yaml::from_str::<WorkflowDefinition>(yaml).is_err());
     }
 
     #[test]
     fn rejects_dangling_unreachable_cyclic_and_unterminated_graphs() {
-        let empty_output = schema(json!({}), &[]);
         let dangling = base_definition(
             "done",
             BTreeMap::from([("done".to_owned(), return_node(BTreeMap::new()))]),
             vec![edge("done", "missing")],
-            empty_output.clone(),
         );
         assert!(matches!(
             compile_test(dangling),
@@ -4958,7 +6175,6 @@ block:
                 ("orphan".to_owned(), return_node(BTreeMap::new())),
             ]),
             Vec::new(),
-            empty_output.clone(),
         );
         assert!(matches!(
             compile_test(unreachable),
@@ -4974,7 +6190,6 @@ block:
                 ("b".to_owned(), agent(output)),
             ]),
             vec![edge("entry", "a"), edge("a", "b"), edge("b", "a")],
-            empty_output.clone(),
         );
         assert!(matches!(
             compile_test(cyclic),
@@ -4988,7 +6203,6 @@ block:
                 agent(schema(json!({"ok": {"type": "boolean"}}), &["ok"])),
             )]),
             Vec::new(),
-            empty_output,
         );
         assert!(matches!(
             compile_test(unterminated),
@@ -4999,19 +6213,41 @@ block:
     #[test]
     fn rejects_branch_without_complete_ports() {
         let branch = WorkflowNodeDefinition::Branch {
-            condition: WorkflowPredicate::Boolean {
-                value: reference("args.flag"),
-            },
+            cases: vec![crate::runtime::workflow::WorkflowBranchCase {
+                id: "true".into(),
+                condition: WorkflowPredicate::Boolean {
+                    value: reference("args.flag"),
+                },
+            }],
         };
         let missing_ports = WorkflowDefinition {
             timeout_ms: 600_000,
             description: "Branch".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"flag": {"type": "boolean"}}), &["flag"]),
-                output: schema(json!({}), &[]),
-                entry: "decision".to_owned(),
-                nodes: BTreeMap::from([("decision".to_owned(), branch)]),
-                edges: Vec::new(),
+                nodes: {
+                    let mut nodes: std::collections::BTreeMap<
+                        String,
+                        crate::runtime::workflow::WorkflowNodeDefinition,
+                    > = BTreeMap::from([("decision".to_owned(), branch)]);
+                    nodes.insert(
+                        "workflow_start".into(),
+                        crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                    );
+                    nodes
+                },
+                edges: {
+                    let mut edges = Vec::new();
+                    edges.insert(
+                        0,
+                        crate::runtime::workflow::WorkflowEdgeDefinition {
+                            from: "workflow_start".into(),
+                            to: "decision".to_owned(),
+                            port: None,
+                        },
+                    );
+                    edges
+                },
             },
         };
         assert!(matches!(
@@ -5030,16 +6266,17 @@ block:
                     "review".to_owned(),
                     WorkflowNodeDefinition::Agent {
                         profile: "reviewer".into(),
-                        task: "Review the input.".to_owned(),
-                        input: BTreeMap::from([("later".to_owned(), reference("later.summary"))]),
-                        output: output.clone(),
-                        invocation_override: None,
+                        task: vec![text("Review the input."), reference("later.summary")],
+                        output: WorkflowAgentOutput::JsonSchema {
+                            schema: output.clone(),
+                        },
+                        routes: Vec::new(),
+                        on_error: WorkflowValueErrorStrategy::default(),
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),
             ]),
             vec![edge("review", "done")],
-            schema(json!({}), &[]),
         );
         assert!(matches!(
             compile_test(use_before),
@@ -5060,7 +6297,6 @@ block:
                 ),
             ]),
             vec![edge("review", "done")],
-            schema(json!({"summary": {"type": "string"}}), &["summary"]),
         );
         assert!(matches!(
             compile_test(optional),
@@ -5072,9 +6308,12 @@ block:
     fn rejects_path_dependent_values_and_return_schema_mismatches() {
         let review_output = schema(json!({"passed": {"type": "boolean"}}), &["passed"]);
         let branch = WorkflowNodeDefinition::Branch {
-            condition: WorkflowPredicate::Boolean {
-                value: reference("review.passed"),
-            },
+            cases: vec![crate::runtime::workflow::WorkflowBranchCase {
+                id: "true".into(),
+                condition: WorkflowPredicate::Boolean {
+                    value: reference("review.passed"),
+                },
+            }],
         };
         let path_dependent = base_definition(
             "review",
@@ -5093,10 +6332,12 @@ block:
                     "join".to_owned(),
                     WorkflowNodeDefinition::Agent {
                         profile: "reviewer".into(),
-                        task: "Join the committed facts.".to_owned(),
-                        input: BTreeMap::from([("summary".to_owned(), reference("yes.summary"))]),
-                        output: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
-                        invocation_override: None,
+                        task: vec![text("Join the committed facts."), reference("yes.summary")],
+                        output: WorkflowAgentOutput::JsonSchema {
+                            schema: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
+                        },
+                        routes: Vec::new(),
+                        on_error: WorkflowValueErrorStrategy::default(),
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),
@@ -5109,80 +6350,16 @@ block:
                 edge("no", "join"),
                 edge("join", "done"),
             ],
-            schema(json!({}), &[]),
         );
         assert!(matches!(
             compile_test(path_dependent),
             Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidReference(_))
         ));
-
-        let mismatch = base_definition(
-            "review",
-            BTreeMap::from([
-                (
-                    "review".to_owned(),
-                    agent(schema(json!({"passed": {"type": "boolean"}}), &["passed"])),
-                ),
-                (
-                    "done".to_owned(),
-                    return_node(BTreeMap::from([(
-                        "summary".to_owned(),
-                        reference("review.passed"),
-                    )])),
-                ),
-            ]),
-            vec![edge("review", "done")],
-            schema(json!({"summary": {"type": "string"}}), &["summary"]),
-        );
-        assert!(matches!(
-            compile_test(mismatch),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::IncompatibleReference(_))
-        ));
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one nested-schema rejection table
     fn rejects_nested_schema_mismatches_and_optional_nested_references() {
-        let nested_boolean = schema(
-            json!({
-                "result": {
-                    "type": "object",
-                    "properties": {"passed": {"type": "boolean"}},
-                    "required": ["passed"],
-                    "additionalProperties": false
-                }
-            }),
-            &["result"],
-        );
-        let nested_string_return = base_definition(
-            "review",
-            BTreeMap::from([
-                ("review".to_owned(), agent(nested_boolean)),
-                (
-                    "done".to_owned(),
-                    return_node(BTreeMap::from([(
-                        "result".to_owned(),
-                        reference("review.result"),
-                    )])),
-                ),
-            ]),
-            vec![edge("review", "done")],
-            schema(
-                json!({
-                    "result": {
-                        "type": "object",
-                        "properties": {"passed": {"type": "string"}},
-                        "required": ["passed"],
-                        "additionalProperties": false
-                    }
-                }),
-                &["result"],
-            ),
-        );
-        assert!(matches!(
-            compile_test(nested_string_return),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::IncompatibleReference(_))
-        ));
-
         let optional_input = WorkflowDefinition {
             timeout_ms: 600_000,
             description: "Optional nested input".to_owned(),
@@ -5197,25 +6374,46 @@ block:
                     }),
                     &["task"],
                 ),
-                output: schema(json!({}), &[]),
-                entry: "review".to_owned(),
-                nodes: BTreeMap::from([
-                    (
-                        "review".to_owned(),
-                        WorkflowNodeDefinition::Agent {
-                            profile: "reviewer".into(),
-                            task: "Review the input.".to_owned(),
-                            input: BTreeMap::from([(
-                                "detail".to_owned(),
-                                reference("args.task.detail"),
-                            )]),
-                            output: schema(json!({}), &[]),
-                            invocation_override: None,
+                nodes: {
+                    let mut nodes: std::collections::BTreeMap<
+                        String,
+                        crate::runtime::workflow::WorkflowNodeDefinition,
+                    > = BTreeMap::from([
+                        (
+                            "review".to_owned(),
+                            WorkflowNodeDefinition::Agent {
+                                profile: "reviewer".into(),
+                                task: vec![
+                                    text("Review the input."),
+                                    reference("args.task.detail"),
+                                ],
+                                output: WorkflowAgentOutput::JsonSchema {
+                                    schema: schema(json!({}), &[]),
+                                },
+                                routes: Vec::new(),
+                                on_error: WorkflowValueErrorStrategy::default(),
+                            },
+                        ),
+                        ("done".to_owned(), return_node(BTreeMap::new())),
+                    ]);
+                    nodes.insert(
+                        "workflow_start".into(),
+                        crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                    );
+                    nodes
+                },
+                edges: {
+                    let mut edges = vec![edge("review", "done")];
+                    edges.insert(
+                        0,
+                        crate::runtime::workflow::WorkflowEdgeDefinition {
+                            from: "workflow_start".into(),
+                            to: "review".to_owned(),
+                            port: None,
                         },
-                    ),
-                    ("done".to_owned(), return_node(BTreeMap::new())),
-                ]),
-                edges: vec![edge("review", "done")],
+                    );
+                    edges
+                },
             },
         };
         assert!(matches!(
@@ -5224,10 +6422,7 @@ block:
         ));
     }
 
-    fn single_agent_return_definition(
-        agent_output: Value,
-        workflow_output: Value,
-    ) -> WorkflowDefinition {
+    fn single_agent_return_definition(agent_output: Value) -> WorkflowDefinition {
         base_definition(
             "review",
             BTreeMap::from([
@@ -5241,185 +6436,29 @@ block:
                 ),
             ]),
             vec![edge("review", "done")],
-            workflow_output,
         )
     }
 
     #[test]
-    fn workflow_v1_schema_language_rejects_unsupported_constraints_recursively() {
-        let root = |nested: Value| schema(json!({"result": nested}), &["result"]);
-        let unsupported = [
-            ("minLength", json!({"type": "string", "minLength": 5})),
-            ("minimum", json!({"type": "number", "minimum": 1})),
+    fn workflow_schema_compilation_rejects_unsupported_narrowing_and_accepts_safe_subset_values() {
+        for (result, keyword) in [
+            (json!({"type": "string", "minLength": 5}), "minLength"),
+            (json!({"type": "number", "minimum": 1}), "minimum"),
             (
+                json!({"type": "array", "items": {"type": "string"}, "minItems": 1}),
                 "minItems",
-                json!({
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "minItems": 1
-                }),
             ),
-            (
-                "oneOf",
-                json!({
-                    "type": "string",
-                    "oneOf": [{"type": "string"}, {"type": "null"}]
-                }),
-            ),
-            (
-                "anyOf",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "nested": {
-                            "type": "string",
-                            "anyOf": [{"type": "string"}]
-                        }
-                    },
-                    "required": ["nested"]
-                }),
-            ),
-        ];
-        for (keyword, nested) in unsupported {
-            let error = compile_test(single_agent_return_definition(
-                root(nested.clone()),
-                root(json!({"type": "string"})),
-            ))
-            .expect_err("unsupported Workflow schema constraint");
+        ] {
+            let narrowed =
+                single_agent_return_definition(schema(json!({"result": result}), &["result"]));
             assert!(
-                matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains(keyword)),
-                "{keyword} should be named in the schema rejection: {error:?}"
+                matches!(
+                    compile_test(narrowed),
+                    Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains(keyword))
+                ),
+                "{keyword}"
             );
         }
-
-        let mut input_constraint = single_agent_return_definition(
-            root(json!({"type": "string"})),
-            root(json!({"type": "string"})),
-        );
-        input_constraint.block.input = root(json!({"type": "string", "pattern": "x"}));
-        assert!(matches!(
-            compile_test(input_constraint),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("pattern"))
-        ));
-
-        let output_constraint = single_agent_return_definition(
-            root(json!({"type": "string"})),
-            root(json!({"type": "string", "maximum": 2})),
-        );
-        assert!(matches!(
-            compile_test(output_constraint),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("maximum"))
-        ));
-
-        let branch_output = root(json!({"type": "string", "maxLength": 8}));
-        let parallel = base_definition(
-            "fanout",
-            BTreeMap::from([
-                (
-                    "fanout".to_owned(),
-                    WorkflowNodeDefinition::Parallel {
-                        branches: BTreeMap::from([(
-                            "alpha".to_owned(),
-                            agent_branch("Review alpha.".to_owned(), branch_output),
-                        )]),
-                    },
-                ),
-                ("done".to_owned(), return_node(BTreeMap::new())),
-            ]),
-            vec![edge("fanout", "done")],
-            schema(json!({}), &[]),
-        );
-        assert!(matches!(
-            compile_test(parallel),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("maxLength"))
-        ));
-        assert!(
-            WorkflowOutputLatch::new(root(json!({
-                "type": "string",
-                "minLength": 1
-            })))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn workflow_schema_compilation_rejects_unsupported_narrowing_and_accepts_safe_subset_values() {
-        let plain_string = single_agent_return_definition(
-            schema(json!({"result": {"type": "string"}}), &["result"]),
-            schema(
-                json!({"result": {"type": "string", "minLength": 5}}),
-                &["result"],
-            ),
-        );
-        assert!(matches!(
-            compile_test(plain_string),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("minLength"))
-        ));
-
-        let plain_number = single_agent_return_definition(
-            schema(json!({"result": {"type": "number"}}), &["result"]),
-            schema(
-                json!({"result": {"type": "number", "minimum": 1}}),
-                &["result"],
-            ),
-        );
-        assert!(matches!(
-            compile_test(plain_number),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("minimum"))
-        ));
-
-        let plain_array = single_agent_return_definition(
-            schema(
-                json!({
-                    "result": {"type": "array", "items": {"type": "string"}}
-                }),
-                &["result"],
-            ),
-            schema(
-                json!({
-                    "result": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "minItems": 1
-                    }
-                }),
-                &["result"],
-            ),
-        );
-        assert!(matches!(
-            compile_test(plain_array),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("minItems"))
-        ));
-
-        let enum_producer = schema(
-            json!({"result": {"type": "string", "enum": ["a", "b"]}}),
-            &["result"],
-        );
-        let enum_consumer = schema(
-            json!({"result": {"type": "string", "enum": ["a"]}}),
-            &["result"],
-        );
-        assert!(matches!(
-            compile_test(single_agent_return_definition(enum_producer, enum_consumer)),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::IncompatibleReference(_))
-        ));
-
-        let const_producer = schema(
-            json!({"result": {"type": "string", "const": "a"}}),
-            &["result"],
-        );
-        let const_consumer = schema(
-            json!({"result": {"type": "string", "const": "b"}}),
-            &["result"],
-        );
-        assert!(matches!(
-            compile_test(single_agent_return_definition(
-                const_producer,
-                const_consumer
-            )),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::IncompatibleReference(_))
-        ));
-
         let nested = json!({
             "type": "object",
             "properties": {
@@ -5432,77 +6471,8 @@ block:
             "required": ["mode", "tags"],
             "additionalProperties": false
         });
-        let safe = single_agent_return_definition(
-            schema(json!({"result": nested.clone()}), &["result"]),
-            schema(json!({"result": nested}), &["result"]),
-        );
+        let safe = single_agent_return_definition(schema(json!({"result": nested}), &["result"]));
         compile_test(safe).expect("supported object/array/enum/const schemas are compatible");
-    }
-
-    #[test]
-    fn parallel_keys_are_compiled_in_definition_order_and_tasks_are_static() {
-        let branch_output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
-        let parallel = base_definition(
-            "fanout",
-            BTreeMap::from([
-                (
-                    "fanout".to_owned(),
-                    WorkflowNodeDefinition::Parallel {
-                        branches: BTreeMap::from([
-                            (
-                                "zulu".to_owned(),
-                                agent_branch("Review zulu.".to_owned(), branch_output.clone()),
-                            ),
-                            (
-                                "alpha".to_owned(),
-                                agent_branch("Review alpha.".to_owned(), branch_output),
-                            ),
-                        ]),
-                    },
-                ),
-                (
-                    "done".to_owned(),
-                    return_node(BTreeMap::from([(
-                        "all".to_owned(),
-                        reference("fanout.alpha"),
-                    )])),
-                ),
-            ]),
-            vec![edge("fanout", "done")],
-            schema(json!({"all": {"type": "object"}}), &["all"]),
-        );
-        let program = compile_test(parallel).expect("parallel program");
-        let WorkflowNodeProgram::Parallel { branches, .. } = program.nodes()["fanout"].clone()
-        else {
-            panic!("parallel node");
-        };
-        assert_eq!(
-            branches.keys().cloned().collect::<Vec<_>>(),
-            vec!["alpha", "zulu"]
-        );
-
-        let interpolated = base_definition(
-            "review",
-            BTreeMap::from([
-                (
-                    "review".to_owned(),
-                    WorkflowNodeDefinition::Agent {
-                        profile: "reviewer".into(),
-                        task: "Review ${args.task}.".to_owned(),
-                        input: BTreeMap::new(),
-                        output: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
-                        invocation_override: None,
-                    },
-                ),
-                ("done".to_owned(), return_node(BTreeMap::new())),
-            ]),
-            vec![edge("review", "done")],
-            schema(json!({}), &[]),
-        );
-        assert!(matches!(
-            compile_test(interpolated),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidField(_))
-        ));
     }
 
     #[test]
@@ -5511,7 +6481,6 @@ block:
             "done",
             BTreeMap::from([("done".to_owned(), return_node(BTreeMap::new()))]),
             Vec::new(),
-            schema(json!({}), &[]),
         );
         let program = compile_test(definition).expect("program");
         let catalog = WorkflowCatalog::new([program.clone()]).unwrap();
@@ -5528,7 +6497,7 @@ block:
         let input = json!({"task": "read this"});
         let binding = reference("args.task");
         assert_eq!(
-            evaluate_value(&binding, &input, &BTreeMap::new()).expect("reference"),
+            evaluate_value(&binding, &input, &imbl::OrdMap::new()).expect("reference"),
             json!("read this")
         );
     }

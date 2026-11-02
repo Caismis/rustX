@@ -2,11 +2,10 @@
 //! No executor, runtime owner, discovery service, or authority is accepted here.
 
 use super::{
-    BTreeMap, BTreeSet, MAX_BLOCK_DEPTH, MAX_LOCAL_BYTES, MAX_LOOP_ITERATIONS,
-    MAX_PARALLEL_BRANCHES, MAX_VALUE_BYTES, MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_MODEL_CALLS,
-    MAX_WORKFLOW_NODES, MAX_WORKFLOW_STEPS, Serialize, SubagentName, Value, WorkflowBlockProgram,
-    WorkflowNodeProgram, WorkflowPort, WorkflowPredicate, WorkflowProgram, WorkflowReviewSubject,
-    WorkflowToolIdentity, WorkflowValue,
+    BTreeMap, BTreeSet, LOOP_NODE_MAX_COUNT, MAX_BLOCK_DEPTH, MAX_LOCAL_BYTES, MAX_VALUE_BYTES,
+    MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_MODEL_CALLS, MAX_WORKFLOW_NODES, MAX_WORKFLOW_STEPS,
+    Serialize, SubagentName, Value, WorkflowBlockProgram, WorkflowNodeProgram, WorkflowPort,
+    WorkflowPredicate, WorkflowProgram, WorkflowToolIdentity, WorkflowValue,
 };
 use serde_json::json;
 use std::borrow::Cow;
@@ -28,63 +27,9 @@ impl WorkflowProgram {
                         path: format!("{path}.model"),
                         policy: &model.model,
                     }),
-                    WorkflowNodeProgram::Loop { body, .. } => {
+                    WorkflowNodeProgram::Loop { body, .. }
+                    | WorkflowNodeProgram::Iteration { body, .. } => {
                         walk(body, &format!("{path}.body"), found);
-                    }
-                    WorkflowNodeProgram::Parallel { branches, .. } => {
-                        for (key, branch) in branches {
-                            walk(
-                                &branch.block,
-                                &format!("{path}.branches.{key}.block"),
-                                found,
-                            );
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let mut found = Vec::new();
-        walk(&self.block, "block", &mut found);
-        found
-    }
-
-    /// Every Agent node that carries a trusted static invocation override,
-    /// with its precise authored path.
-    ///
-    /// The walk descends into Loop bodies and Parallel branches, so a nested
-    /// Agent node's override receives the same static validation and the same
-    /// precise diagnostic path as a root-level one.
-    #[must_use]
-    pub fn agent_override_nodes(&self) -> Vec<AgentOverrideNode<'_>> {
-        fn walk<'a>(
-            block: &'a WorkflowBlockProgram,
-            path: &str,
-            found: &mut Vec<AgentOverrideNode<'a>>,
-        ) {
-            for (id, node) in &block.nodes {
-                let path = format!("{path}.nodes.{id}");
-                match node {
-                    WorkflowNodeProgram::Agent(agent) => {
-                        if let Some(invocation_override) = &agent.invocation_override {
-                            found.push(AgentOverrideNode {
-                                path: format!("{path}.override"),
-                                profile: &agent.profile,
-                                invocation_override,
-                            });
-                        }
-                    }
-                    WorkflowNodeProgram::Loop { body, .. } => {
-                        walk(body, &format!("{path}.body"), found);
-                    }
-                    WorkflowNodeProgram::Parallel { branches, .. } => {
-                        for (key, branch) in branches {
-                            walk(
-                                &branch.block,
-                                &format!("{path}.branches.{key}.block"),
-                                found,
-                            );
-                        }
                     }
                     _ => {}
                 }
@@ -98,7 +43,7 @@ impl WorkflowProgram {
 
 impl WorkflowProgram {
     /// Every node's compiled output contract keyed by its authored path
-    /// (`block.nodes.<id>`, nested blocks included). Parallel and Loop
+    /// (`block.nodes.<id>`, nested blocks included). Loop
     /// outputs are the compiler's derived results, never authored schemas.
     ///
     /// This is an authoring fact of the owner's own program, so schemas are
@@ -111,10 +56,17 @@ impl WorkflowProgram {
                 let path = format!("{path}.nodes.{id}");
                 let output = match node {
                     WorkflowNodeProgram::Model(model) => Some(model.output.schema()),
-                    WorkflowNodeProgram::Agent(agent) => Some(agent.output_schema.clone()),
+                    WorkflowNodeProgram::Agent(agent) => Some(agent.value_schema()),
                     WorkflowNodeProgram::Tool { result, .. } => Some(result.schema()),
-                    WorkflowNodeProgram::Review { .. } => Some(super::review::result_schema()),
+                    WorkflowNodeProgram::Review { actions, .. } => {
+                        Some(super::review::result_schema(actions))
+                    }
                     WorkflowNodeProgram::Loop {
+                        body,
+                        output_schema,
+                        ..
+                    }
+                    | WorkflowNodeProgram::Iteration {
                         body,
                         output_schema,
                         ..
@@ -122,20 +74,11 @@ impl WorkflowProgram {
                         walk(body, &format!("{path}.body"), found);
                         Some(output_schema.clone())
                     }
-                    WorkflowNodeProgram::Parallel {
-                        branches,
-                        output_schema,
-                    } => {
-                        for (key, branch) in branches {
-                            walk(
-                                &branch.block,
-                                &format!("{path}.branches.{key}.block"),
-                                found,
-                            );
-                        }
-                        Some(output_schema.clone())
-                    }
-                    WorkflowNodeProgram::Branch { .. } | WorkflowNodeProgram::Return { .. } => None,
+                    WorkflowNodeProgram::Start
+                    | WorkflowNodeProgram::Branch { .. }
+                    | WorkflowNodeProgram::Return { .. }
+                    | WorkflowNodeProgram::LoopEnd
+                    | WorkflowNodeProgram::Assigner { .. } => None,
                 };
                 if let Some(output) = output {
                     found.insert(path, output);
@@ -153,18 +96,6 @@ impl WorkflowProgram {
 pub struct ModelPolicyNode<'a> {
     pub path: String,
     pub policy: &'a crate::model::session::AuxiliaryModelPolicy,
-}
-
-/// One Agent node's trusted static invocation override, with the authored
-/// path a diagnostic must name.
-#[derive(Debug, Clone)]
-pub struct AgentOverrideNode<'a> {
-    /// The precise authored path of the override, including nesting.
-    pub path: String,
-    /// The role the override specializes.
-    pub profile: &'a SubagentName,
-    /// The compiled override itself.
-    pub invocation_override: &'a crate::runtime::subagent::SubagentInvocationOverride,
 }
 
 /// Static program facts. Literals and task text are deliberately not exported.
@@ -196,22 +127,6 @@ pub struct BlockInspection {
     pub nodes: BTreeMap<String, NodeInspection>,
 }
 
-/// The bounded projection of one Agent node's trusted static invocation
-/// override.
-///
-/// Presence is the fact this projection has to carry, so each dimension stays
-/// an `Option`: `None` is "this dimension keeps the role's default" and
-/// `Some` is "this dimension is replaced by exactly this". Only identities
-/// are exported — capability selectors, Skill names, and the composed
-/// extension names — never a Skill body, a prompt, a credential, or a
-/// materialization secret.
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct AgentOverrideInspection {
-    pub tools: Option<Vec<crate::capabilities::selection::AgentToolSelection>>,
-    pub skills: Option<Vec<String>>,
-    pub extensions: Option<Vec<Cow<'static, str>>>,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct NodeInspection {
     pub kind: Cow<'static, str>,
@@ -220,15 +135,10 @@ pub struct NodeInspection {
     pub profile: Option<SubagentName>,
     /// Selector identities only; provider parameters may contain secrets.
     pub model: Option<ModelPolicyInspection>,
-    /// The node's invocation override, when it carries one.
-    pub invocation_override: Option<AgentOverrideInspection>,
     pub selector: Option<crate::capabilities::selection::ExactToolSelector>,
     pub output_schema: Option<Value>,
-    pub result_part: Option<usize>,
     pub result_kind: Option<Cow<'static, str>>,
-    pub branches: Vec<String>,
-    pub max_iterations: Option<u32>,
-    pub review_subject: Option<Cow<'static, str>>,
+    pub loop_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -262,17 +172,11 @@ impl WorkflowProgram {
                 ("steps".into(), MAX_WORKFLOW_STEPS),
                 ("agent_runs".into(), MAX_WORKFLOW_AGENTS),
                 ("model_calls".into(), MAX_WORKFLOW_MODEL_CALLS),
-                (
-                    "model_input_bindings".into(),
-                    super::MAX_MODEL_INPUT_BINDINGS,
-                ),
-                (
-                    "model_instruction_bytes".into(),
-                    super::MAX_MODEL_INSTRUCTION_BYTES,
-                ),
+                ("model_messages".into(), super::MAX_MODEL_MESSAGES),
+                ("model_message_bytes".into(), super::MAX_MODEL_MESSAGE_BYTES),
+                ("model_message_parts".into(), super::MAX_MODEL_MESSAGE_PARTS),
                 ("nodes".into(), MAX_WORKFLOW_NODES),
-                ("parallel_branches".into(), MAX_PARALLEL_BRANCHES),
-                ("loop_iterations".into(), MAX_LOOP_ITERATIONS as usize),
+                ("loop_count".into(), LOOP_NODE_MAX_COUNT as usize),
                 ("block_depth".into(), MAX_BLOCK_DEPTH),
                 ("value_bytes".into(), MAX_VALUE_BYTES),
                 ("retained_bytes".into(), MAX_LOCAL_BYTES),
@@ -345,6 +249,9 @@ fn binding(value: &WorkflowValue) -> Value {
         WorkflowValue::Array { items } => {
             json!({"type":"array", "items":items.iter().map(binding).collect::<Vec<_>>()})
         }
+        WorkflowValue::Template { parts } => {
+            json!({"type":"template", "parts":parts.iter().map(binding).collect::<Vec<_>>()})
+        }
     }
 }
 
@@ -356,6 +263,22 @@ fn predicate(value: &WorkflowPredicate) -> Value {
         }
         WorkflowPredicate::NotEqual { left, right } => {
             json!({"type":"not_equal", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::Contains { left, right } => {
+            json!({"type":"contains", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::NotContains { left, right } => {
+            json!({"type":"not_contains", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::StartsWith { left, right } => {
+            json!({"type":"starts_with", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::EndsWith { left, right } => {
+            json!({"type":"ends_with", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::Empty { value } => json!({"type":"empty", "value":binding(value)}),
+        WorkflowPredicate::NotEmpty { value } => {
+            json!({"type":"not_empty", "value":binding(value)})
         }
         WorkflowPredicate::Not { predicate: p } => json!({"type":"not", "predicate":predicate(p)}),
         WorkflowPredicate::And { predicates } => {
@@ -375,19 +298,15 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             kind: "return".into(),
             edges: program.outgoing[id]
                 .iter()
-                .map(|edge| (edge.port, edge.to.clone()))
+                .map(|edge| (edge.port.clone(), edge.to.clone()))
                 .collect(),
             bindings: BTreeMap::new(),
             profile: None,
             model: None,
-            invocation_override: None,
             selector: None,
             output_schema: None,
-            result_part: None,
             result_kind: None,
-            branches: Vec::new(),
-            max_iterations: None,
-            review_subject: None,
+            loop_count: None,
         };
         match node {
             WorkflowNodeProgram::Model(model) => {
@@ -416,51 +335,49 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                     super::WorkflowModelOutput::Text {} => "text".into(),
                     super::WorkflowModelOutput::JsonSchema { .. } => "json_schema".into(),
                 });
-                view.bindings.extend(
-                    model
-                        .input
-                        .iter()
-                        .map(|(key, value)| (format!("input.{key}"), binding(value))),
-                );
+                view.bindings
+                    .extend(
+                        model
+                            .messages
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(index, message)| {
+                                message
+                                    .content
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, part)| {
+                                        matches!(part, super::WorkflowValue::Reference { .. })
+                                    })
+                                    .map(move |(position, part)| {
+                                        (
+                                            format!("messages.{index}.content.{position}"),
+                                            binding(part),
+                                        )
+                                    })
+                            }),
+                    );
             }
             WorkflowNodeProgram::Agent(agent) => {
                 result.runtime_requirements.insert("provider_execution");
                 view.kind = "agent".into();
                 view.profile = Some(agent.profile.clone());
                 result.profiles.insert(agent.profile.clone());
-                if let Some(invocation_override) = &agent.invocation_override {
-                    result
-                        .runtime_requirements
-                        .insert("agent_override_reference_resolution_and_source_availability");
-                    view.invocation_override = Some(AgentOverrideInspection {
-                        tools: invocation_override
-                            .tools
-                            .as_ref()
-                            .map(super::super::subagent::invocation::SubagentInvocationOverride::canonical_selectors_of),
-                        skills: invocation_override.skills.clone(),
-                        extensions: invocation_override
-                            .extensions
-                            .as_ref()
-                            .map(|selection| {
-                                crate::extensions::composed_extension_names(&selection.resolve())
-                                    .into_iter()
-                                    .map(Cow::Borrowed)
-                                    .collect()
-                            }),
-                    });
-                }
-                view.output_schema = Some(schema(&agent.output_schema));
+                view.output_schema = Some(schema(&agent.value_schema()));
                 view.bindings.extend(
                     agent
-                        .input
+                        .task
                         .iter()
-                        .map(|(key, value)| (format!("input.{key}"), binding(value))),
+                        .enumerate()
+                        .filter(|(_, part)| matches!(part, super::WorkflowValue::Reference { .. }))
+                        .map(|(position, part)| (format!("task.{position}"), binding(part))),
                 );
             }
             WorkflowNodeProgram::Tool {
                 selector,
                 arguments,
                 result: tool_result,
+                ..
             } => {
                 result.runtime_requirements.extend([
                     "native_argument_normalization_and_validation",
@@ -471,72 +388,96 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 view.selector = Some(selector.clone());
                 view.bindings.insert("arguments".into(), binding(arguments));
                 view.output_schema = Some(schema(&tool_result.schema()));
-                let (part, kind) = match tool_result {
-                    super::WorkflowToolResult::Json { part, .. } => (*part, "json"),
-                    super::WorkflowToolResult::Text { part } => (*part, "text"),
-                };
-                view.result_part = Some(part);
-                view.result_kind = Some(kind.into());
+                view.result_kind = Some(
+                    match tool_result {
+                        super::WorkflowToolResult::Json { .. } => "json",
+                        super::WorkflowToolResult::Text {} => "text",
+                    }
+                    .into(),
+                );
+            }
+            WorkflowNodeProgram::Start => {
+                view.kind = "start".into();
             }
             WorkflowNodeProgram::Return { output } => {
                 view.bindings.insert("output".into(), binding(output));
             }
-            WorkflowNodeProgram::Branch { condition } => {
+            WorkflowNodeProgram::Branch { cases } => {
                 result.runtime_requirements.insert("branch_outcome");
                 view.kind = "branch".into();
-                view.bindings
-                    .insert("condition".into(), predicate(condition));
+                for case in cases {
+                    view.bindings.insert(
+                        format!("cases.{}.condition", case.id),
+                        predicate(&case.condition),
+                    );
+                }
             }
             WorkflowNodeProgram::Loop {
-                input,
+                loop_variables,
+                break_condition,
+                loop_count,
                 body,
-                until,
-                carry,
-                max_iterations,
                 output_schema,
             } => {
                 result.runtime_requirements.insert("actual_loop_iterations");
                 view.kind = "loop".into();
-                view.max_iterations = Some(*max_iterations);
+                view.loop_count = Some(*loop_count);
+                view.output_schema = Some(schema(output_schema));
+                for variable in loop_variables {
+                    view.bindings.insert(
+                        format!("loop_variables.{}", variable.label),
+                        binding(&variable.value),
+                    );
+                }
+                if let Some(condition) = break_condition {
+                    view.bindings
+                        .insert("break_condition".into(), predicate(condition));
+                }
+                block(body, &format!("{path}.nodes.{id}.body"), result);
+            }
+            WorkflowNodeProgram::Iteration {
+                iterator,
+                output,
+                body,
+                output_schema,
+                ..
+            } => {
+                result.runtime_requirements.insert("actual_loop_iterations");
+                view.kind = "iteration".into();
                 view.output_schema = Some(schema(output_schema));
                 view.bindings.extend([
-                    ("input".into(), binding(input)),
-                    ("carry".into(), binding(carry)),
-                    ("until".into(), predicate(until)),
+                    ("iterator".into(), binding(iterator)),
+                    ("output".into(), binding(output)),
                 ]);
                 block(body, &format!("{path}.nodes.{id}.body"), result);
             }
-            WorkflowNodeProgram::Parallel {
-                branches,
-                output_schema,
-            } => {
-                view.kind = "parallel".into();
-                view.branches = branches.keys().cloned().collect();
-                view.output_schema = Some(schema(output_schema));
-                for (key, branch) in branches {
-                    view.bindings
-                        .insert(format!("branches.{key}.input"), binding(&branch.input));
-                    block(
-                        &branch.block,
-                        &format!("{path}.nodes.{id}.branches.{key}.block"),
-                        result,
-                    );
+            WorkflowNodeProgram::LoopEnd => {
+                view.kind = "loop_end".into();
+            }
+            WorkflowNodeProgram::Assigner { items, .. } => {
+                view.kind = "assigner".into();
+                for (index, item) in items.iter().enumerate() {
+                    if let Some(value) = &item.value {
+                        view.bindings
+                            .insert(format!("items.{index}.value"), binding(value));
+                    }
                 }
             }
-            WorkflowNodeProgram::Review { subject, context } => {
+            WorkflowNodeProgram::Review {
+                content, actions, ..
+            } => {
                 result
                     .runtime_requirements
-                    .insert("human_review_decision_and_interaction_availability");
+                    .insert("human_input_and_interaction_availability");
                 view.kind = "review".into();
-                view.review_subject = Some(match subject {
-                    WorkflowReviewSubject::Plan { .. } => "plan".into(),
-                });
-                view.bindings
-                    .insert("subject".into(), binding(subject.value()));
-                for (index, value) in context.iter().enumerate() {
-                    view.bindings
-                        .insert(format!("context.{index}"), binding(value));
-                }
+                view.output_schema = Some(schema(&super::review::result_schema(actions)));
+                view.bindings.extend(
+                    content
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, part)| matches!(part, super::WorkflowValue::Reference { .. }))
+                        .map(|(position, part)| (format!("content.{position}"), binding(part))),
+                );
             }
         }
         nodes.insert(id.clone(), view);

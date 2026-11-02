@@ -864,72 +864,43 @@ describe("human-input surface", () => {
 });
 
 
-describe("plan Review in the unified queue", () => {
+describe("Workflow Human Input in the unified queue", () => {
   function reviewInteraction(id = "review"): RoutedInteraction {
     const base = approvalInteraction();
     const instance = { block: { run: { conversation_id: base.request.conversation_id, origin: {type:'tool' as const,attempt_id:base.request.execution.type==="attempt"?base.request.execution.attempt_id:"unexpected-scheduled"}, invocation: "1" }, definition: { workflow_id: "review-plan", blocks: [] }, invocations: [0] }, node: "review", visit: 0 };
-    return { ...base, interaction: { ...base.interaction, interaction_id: id }, request: { ...base.request, id, kind: { type: "review", subject_digest: "a".repeat(64), review: { instance, subject: { type: "plan", content: { plan: "bounded immutable plan" } }, context: [] } } } };
+    const questionnaire = { questions: [{ question: "Ship the bounded plan?", header: "review", answer: { type: "single_choice" as const, options: [{ label: "Approve", description: "" }, { label: "Revise", description: "" }], allow_custom: false } }] };
+    return { ...base, interaction: { ...base.interaction, interaction_id: id }, request: { ...base.request, id, kind: { type: "review", subject_digest: "a".repeat(64), review: { instance, questionnaire } } } };
   }
-  it("discloses the complete plan context without changing decisions", () => {
+  it("asks the content and actions on the questionnaire surface", () => {
     const review = reviewInteraction();
-    if (review.request.kind.type !== "review") throw new Error("review");
-    review.request.kind.review.context = [{ passed: true, source: "b".repeat(64), version: "7" }];
-    const { overlay, recorded } = surface({ interactions: [review], focused: review.interaction });
-    let disclosure = rendered(overlay, 100);
-    for (let page = 0; page < 20; page++) {
-      overlay.handleInput(PAGE_DOWN);
-      disclosure += rendered(overlay, 100);
-    }
-    assert.ok(disclosure.includes('"version": "7"'));
-    assert.ok(disclosure.includes("b".repeat(64)));
-    assert.ok(disclosure.includes('"passed": true'));
-    assert.equal(recorded.reviews.length, 0);
-    overlay.handleInput(ENTER);
-    assert.equal(recorded.reviews[0]!.response.decision.type, "rejected");
+    const { overlay } = surface({ interactions: [review], focused: review.interaction });
+    const text = rendered(overlay, 100);
+    assert.ok(text.includes("Ship the bounded plan?"));
+    assert.ok(text.includes("Approve") && text.includes("Revise"));
   });
-  it("defaults to Reject and sends only the original subject and instance once", () => {
+  it("sends the chosen action with the original instance and subject once", () => {
     const review = reviewInteraction();
     const { overlay, recorded } = surface({ interactions: [review], focused: review.interaction });
-    overlay.handleInput("\r");
-    overlay.handleInput("\r");
+    overlay.handleInput("\x1b[B"); // Revise
+    overlay.handleInput(ENTER);
+    overlay.handleInput("\t"); // review tab
+    overlay.handleInput(ENTER); // submit
     assert.equal(recorded.reviews.length, 1);
-    assert.equal(recorded.reviews[0]!.response.decision.type, "rejected");
+    const response = recorded.reviews[0]!.response;
+    if (review.request.kind.type !== "review") throw new Error("review");
+    assert.deepEqual(response, { instance: review.request.kind.review.instance, subject_digest: "a".repeat(64),
+      submission: { answers: [{ question_index: 0, answer: { type: "option", value: { option_index: 1 } } }] } });
     assert.deepEqual(recorded.reviews[0]!.interaction, review.interaction);
+    assert.equal(recorded.submissions.length, 0);
     assert.equal(recorded.decisions.length, 0);
   });
-  it("feedback and scrolling are presentation-only and focus cannot carry an armed Accept", () => {
-    const first = reviewInteraction("first");
-    const second = reviewInteraction("second");
-    const { overlay, recorded } = surface({ interactions: [first, second], focused: first.interaction });
-    overlay.handleInput("\x06"); // Ctrl+F: bounded feedback input
-    overlay.handleInput("x".repeat(2500));
-    overlay.handleInput("\r"); // exit editing, not a decision
-    overlay.render(60);
-    overlay.handleInput("\x1b[6~"); // PgDn changes only disclosure
-    assert.equal(recorded.reviews.length, 0);
-    overlay.handleInput("\x1b[B"); // explicit affirmative choice for first
-    overlay.update([first, second], second.interaction, defaultPreferences());
-    overlay.handleInput("\r");
-    assert.equal(recorded.reviews[0]!.response.decision.type, "rejected");
-    overlay.update([first], first.interaction, defaultPreferences());
-    overlay.handleInput("\r");
-    const decision = recorded.reviews[1]!.response.decision;
-    assert.equal(decision.type, "rejected");
-    if (decision.type === "rejected") assert.equal(decision.feedback.length, 2000);
-  });
-  it("explicit navigation accepts and queue removal preserves an unrelated questionnaire", () => {
+  it("Esc only closes the surface: a Human Input cannot be declined", () => {
     const review = reviewInteraction();
-    const question = questionnaireInteraction();
-    const { overlay, recorded } = surface({ interactions: [review, question], focused: review.interaction });
-    overlay.handleInput("\x1b[B");
-    overlay.handleInput("\r");
-    assert.equal(recorded.reviews[0]!.response.decision.type, "accepted");
-    overlay.update([question], question.interaction, defaultPreferences());
-    const focused=overlay.focusedInteraction;
-    assert.ok(focused && hasInteractionBody(focused));
-    assert.equal(focused.request.kind.type,"questionnaire");
-    assert.equal(recorded.submissions.length, 0);
+    const { overlay, recorded } = surface({ interactions: [review], focused: review.interaction });
+    overlay.escape();
+    assert.deepEqual(recorded.dismissals, [review.interaction]);
     assert.equal(recorded.declines.length, 0);
+    assert.equal(recorded.reviews.length, 0);
   });
 });
 

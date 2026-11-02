@@ -725,8 +725,8 @@ Root/enabled-Workflow demand closure starts work, under the shared four-source
 preparation bound. A fresh Conversation owns its physical connections and waits
 for negotiated, complete, canonically validated live catalogs before freezing
 its first executable Attempt. Metadata from another Conversation cannot satisfy
-that gate. Optional Root failures are isolated; required Workflow and frozen
-child contracts remain strict.
+that gate. Root source failures preserve healthy siblings; affected Workflows are
+disabled with diagnostics. Frozen child contracts remain strict.
 
 Preparation without accepted executable intent has no elapsed-time startup deadline.
 Native captures the first submission intent's monotonic receipt before any
@@ -7097,9 +7097,9 @@ SQLite development schema 30 retains its schema-29 audit payloads and adds Loop
 facts. Event envelope framing remains version 1. No pending recovery or
 compatibility protocol is introduced.
 
-WF-04 Review decisions/feedback are immutable `{accepted, feedback}` business
-data. They gate later work only through an explicit Branch on `accepted`;
-acceptance grants no Tool authority and certifies no file state.
+WF-04 A Human Input's chosen action is the exit the run takes, and its value is
+`{action, content}`; a choice grants no Tool authority and certifies no file
+state.
 ## CFG3 external source demand and credential authority
 
 Definitions and discovery are inert. Both canonical `.agents` roots contribute

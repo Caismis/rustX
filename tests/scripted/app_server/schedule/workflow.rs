@@ -92,7 +92,7 @@ async fn scheduler85_review_metadata_preserves_v1_after_v2_composition_and_on_co
             let path = f.workspaces[0].join(".agents/workflows/scheduled.yaml");
             let mut document: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            document["block"]["nodes"]["done"]["output"]["value"]["answer"] =
+            document["block"]["input"]["properties"]["answer"]["default"] =
                 serde_json::json!("Version two output");
             std::fs::write(&path, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
             let resident = f.load(0).await.unwrap().unwrap();
@@ -316,8 +316,7 @@ async fn scheduler85_cold_recovery_reads_and_cancellation_do_not_activate_or_ref
 }
 
 fn review_definition(timeout: u64) -> serde_json::Value {
-    let result = serde_json::json!({"type":"object","properties":{"accepted":{"type":"boolean"},"feedback":{"type":"string"}},"required":["accepted","feedback"],"additionalProperties":false});
-    serde_json::json!({"description":"Native Scheduled Review","timeout_ms":timeout,"block":{"input":{"type":"object","properties":{},"additionalProperties":false},"output":result,"entry":"human","nodes":{"human":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},"done":{"type":"return","output":{"type":"reference","path":["human"]}}},"edges":[{"from":"human","to":"done"}]}})
+    serde_json::json!({"description":"Native Scheduled Review","timeout_ms":timeout,"block":{"input":{"type":"object","properties":{},"additionalProperties":false},"nodes": {"workflow_start":{"type":"start"},"human":{"type":"review","content":[{"type":"literal","value":"Approve?"}],"actions":[{"id":"approve","title":"Approve"}],"timeout_ms":3_600_000},"done":{"type":"return","outputs":[{"variable":"action","value_selector":["human","action"]},{"variable":"content","value_selector":["human","content"]}]}},"edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"done","port":"approve"},{"from":"human","to":"done","port":"timeout"}],}})
 }
 async fn scheduled_review(mode: u8) {
     bounded(async {
@@ -335,8 +334,8 @@ async fn scheduled_review(mode: u8) {
         assert!(request.id.as_str().starts_with(&format!("scheduled:{}:",start.id)));
         assert!(!runtime.is_quiescent());
         if mode==0 {
-            let crate::runtime::interaction::InteractionKind::Review{review,subject_digest}=&request.kind else {panic!("native Review")};
-            owner.respond_async(&request.id,crate::runtime::interaction::InteractionResponse::Review{response:crate::events::review::ReviewResponse{instance:review.instance.clone(),subject_digest:subject_digest.clone(),decision:crate::events::review::ReviewDecision::Accepted}}).await.unwrap();
+            let crate::runtime::interaction::InteractionKind::Review{review,..}=&request.kind else {panic!("native Review")};
+            owner.respond_async(&request.id,crate::runtime::interaction::InteractionResponse::Review{response:review.choose(0)}).await.unwrap();
         } else if mode==1 {
             let cancelled=f.manager.cancel_scheduled_workflow(&f.sessions[0].id,&f.sessions[0].active_node,start.id.clone()).await.unwrap().unwrap();
             assert!(cancelled.start.cancellation_requested_at.is_some());
@@ -500,15 +499,14 @@ async fn scheduled_native_effect(kind: ScheduledEffectKind) {
         let mut f=Fixture::with_session_count(if kind==ScheduledEffectKind::Agent {Some("review")} else {None},1).await;
         f.gates[0].release();
         let empty=serde_json::json!({"type":"object","properties":{},"additionalProperties":false});
-        let (node,output)=match kind {
-            ScheduledEffectKind::Tool=>(serde_json::json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":{"type":"literal","value":{"path":"rustx.toml"}},"result":{"type":"text","part":0}}),serde_json::json!({"type":"string"})),
-            ScheduledEffectKind::Model=>(serde_json::json!({"type":"model","model":{"mode":"session"},"instruction":"Return done","input":{},"output":{"type":"text"}}),serde_json::json!({"type":"string"})),
-            ScheduledEffectKind::Agent=>(serde_json::json!({"type":"agent","profile":"reviewer","task":"Return the Workflow output","output":empty}),empty.clone()),
+        let (node,_)=match kind {
+            ScheduledEffectKind::Tool=>(serde_json::json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":{"type":"literal","value":{"path":"rustx.toml"}},"result":{"type":"text"}}),serde_json::json!({"type":"string"})),
+            ScheduledEffectKind::Model=>(serde_json::json!({"type":"model","model":{"mode":"session"},"messages":[{"role":"system","content":[{"type":"literal","value":"Return done"}]},{"role":"user","content":[{"type":"literal","value":"Go."}]}],"output":{"type":"text"}}),serde_json::json!({"type":"string"})),
+            ScheduledEffectKind::Agent=>(serde_json::json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Return the Workflow output"}],"output":{"type":"json_schema","schema":empty}}),empty.clone()),
             ScheduledEffectKind::Review=>unreachable!("Review has dedicated response/cancel/deadline tests"),
         };
-        let returned=if kind==ScheduledEffectKind::Agent {serde_json::json!({"type":"reference","path":["work"]})}else{serde_json::json!({"type":"object","fields":{"value":{"type":"reference","path":["work"]}}})};
-        let output=if kind==ScheduledEffectKind::Agent {output}else{serde_json::json!({"type":"object","properties":{"value":output},"required":["value"],"additionalProperties":false})};
-        f.install_scheduled_workflow_definition(&serde_json::json!({"description":"Native scheduled effect","block":{"input":empty,"output":output,"entry":"work","nodes":{"work":node,"done":{"type":"return","output":returned}},"edges":[{"from":"work","to":"done"}]}}));
+        let returned=if kind==ScheduledEffectKind::Agent {serde_json::json!([])} else {serde_json::json!([{"variable":"value","value_selector":["work","text"]}])};
+        f.install_scheduled_workflow_definition(&serde_json::json!({"description":"Native scheduled effect","block":{"input":empty,"nodes": {"workflow_start":{"type":"start"},"work":node,"done":{"type":"return","outputs":returned}},"edges": [{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}],}}));
         if kind==ScheduledEffectKind::Agent {
             let path=f.workspaces[0].join(".agents/agents/reviewer.toml");std::fs::create_dir_all(path.parent().unwrap()).unwrap();std::fs::write(path,"description='Review'\ninstructions='Return the Workflow output'\n").unwrap();
             let path=f.workspaces[0].join("rustx.toml");let mut config:toml::Value=toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();config["agent"].as_table_mut().unwrap().insert("agents".into(),vec![toml::Value::from("reviewer")].into());std::fs::write(path,toml::to_string(&config).unwrap()).unwrap();

@@ -93,7 +93,7 @@ test('Workspace revocation after the first-Send receipt preserves creation and r
     renameSync(fixture.workspaceA, moved);
     symlinkSync(moved, fixture.workspaceA);
     wire.releaseHeld();
-    await expect(page.getByRole('tabpanel', { name: 'Chat', exact: true }).getByRole('alert')).toContainText('not authorized by this Product Host');
+    await expect(page.getByRole('tabpanel', { name: 'Chat', exact: true }).getByRole('alert').filter({ hasText: 'not authorized by this Product Host' })).toContainText('not authorized by this Product Host');
     expect(wire.requests.filter(row => ['session/submissionIntent', 'session/attach', 'turn/start'].includes(row.method))).toHaveLength(0);
     const sessions = await activeNative.listSessions();
     expect(sessions.sessions).toHaveLength(1);

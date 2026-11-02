@@ -17,9 +17,76 @@ use crate::runtime::subagent::NativeExecutionContext;
 use crate::tools::types::ToolExecutionStatus;
 
 use super::{
-    MAX_VALUE_BYTES, Value, WorkflowModelOutput, WorkflowModelProgram, WorkflowNodeInstance,
-    WorkflowRun, WorkflowRunError, WorkflowRuntime,
+    MAX_VALUE_BYTES, Value, WorkflowModelMessage, WorkflowModelOutput, WorkflowModelProgram,
+    WorkflowModelRole, WorkflowNodeInstance, WorkflowRun, WorkflowRunError, WorkflowRuntime,
+    WorkflowValue,
 };
+
+const MAX_RENDERED_PROMPT_BYTES: usize = 256 * 1024;
+
+/// A Model prompt with its references resolved: the system text, then the
+/// user and assistant turns in authored order.
+#[derive(Clone)]
+pub(super) struct RenderedPrompt {
+    system: String,
+    turns: Vec<(WorkflowModelRole, String)>,
+}
+
+/// Render one prompt's parts in order. Fixed text stays as written; a
+/// referenced string is inserted as itself and any other value as JSON text.
+pub(super) fn render_parts(
+    parts: &[WorkflowValue],
+    resolve: impl FnMut(&WorkflowValue) -> Result<Value, WorkflowRunError>,
+) -> Result<String, WorkflowRunError> {
+    let mut remaining = MAX_VALUE_BYTES;
+    render_parts_budget(parts, resolve, &mut remaining)
+}
+
+fn render_parts_budget(
+    parts: &[WorkflowValue],
+    mut resolve: impl FnMut(&WorkflowValue) -> Result<Value, WorkflowRunError>,
+    remaining: &mut usize,
+) -> Result<String, WorkflowRunError> {
+    let mut text = String::new();
+    for part in parts {
+        let part = rendered_value(resolve(part)?);
+        *remaining = remaining.checked_sub(part.len()).ok_or_else(|| {
+            WorkflowRunError::InvalidValue("rendered text byte budget exceeded".into())
+        })?;
+        text.push_str(&part);
+    }
+    Ok(text)
+}
+
+pub(super) fn rendered_value(value: Value) -> String {
+    match value {
+        Value::String(value) => value,
+        value => serde_json::to_string(&value).expect("JSON value serializes"),
+    }
+}
+
+/// Render each message with [`render_parts`].
+pub(super) fn render_prompt(
+    messages: &[WorkflowModelMessage],
+    mut resolve: impl FnMut(&WorkflowValue) -> Result<Value, WorkflowRunError>,
+) -> Result<RenderedPrompt, WorkflowRunError> {
+    let mut remaining = MAX_RENDERED_PROMPT_BYTES;
+    let mut rendered = messages
+        .iter()
+        .map(|message| {
+            Ok((
+                message.role,
+                render_parts_budget(&message.content, &mut resolve, &mut remaining)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, WorkflowRunError>>()?;
+    // The compiler admits exactly one leading system message.
+    let (_, system) = rendered.remove(0);
+    Ok(RenderedPrompt {
+        system,
+        turns: rendered,
+    })
+}
 
 /// Only Workflow knows how to turn trusted compiled intent into a model Call.
 /// This capability retains the Conversation's existing owner, never a new one.
@@ -102,7 +169,7 @@ impl Drop for CloseScope {
 }
 
 /// Resolve every static policy before graph progression, including unselected
-/// branches. This generation never consults runtime-current configuration.
+/// paths. This generation never consults runtime-current configuration.
 pub(super) fn freeze_models(
     block: &super::WorkflowBlockProgram,
     context: &NativeExecutionContext,
@@ -129,12 +196,8 @@ pub(super) fn freeze_models(
                     })?;
                 frozen.insert(key, invocation);
             }
-            super::WorkflowNodeProgram::Parallel { branches, .. } => {
-                for branch in branches.values() {
-                    frozen.extend(freeze_models(&branch.block, context)?);
-                }
-            }
-            super::WorkflowNodeProgram::Loop { body, .. } => {
+            super::WorkflowNodeProgram::Loop { body, .. }
+            | super::WorkflowNodeProgram::Iteration { body, .. } => {
                 frozen.extend(freeze_models(body, context)?);
             }
             _ => {}
@@ -174,7 +237,7 @@ impl WorkflowRuntime {
         context: &NativeExecutionContext,
         node: &WorkflowNodeInstance,
         program: &WorkflowModelProgram,
-        input: Value,
+        prompt: RenderedPrompt,
         cancellation: &ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
         let capability = context.workflow_model.as_ref().ok_or_else(|| {
@@ -187,7 +250,6 @@ impl WorkflowRuntime {
                 "Model invocation was not frozen at Workflow admission".into(),
             )
         })?;
-        super::expressions::bounded_value_bytes(&input)?;
         let format = match &program.output {
             WorkflowModelOutput::Text {} => AuxiliaryOutputFormat::Text,
             WorkflowModelOutput::JsonSchema { schema } => AuxiliaryOutputFormat::JsonSchema(
@@ -207,27 +269,37 @@ impl WorkflowRuntime {
                 ),
                 images: super::BTreeMap::default(),
                 invocation: invocation.invocation_config(),
-                messages: vec![crate::model::ModelInputMessage::RequestOnly(
-                    crate::model::RequestOnlyModelContext::AuxiliaryQuestion {
-                        text: serde_json::to_string(&input).expect("bounded JSON bindings"),
-                    },
-                )]
-                .into(),
+                messages: prompt
+                    .turns
+                    .into_iter()
+                    .map(|(role, text)| {
+                        crate::model::ModelInputMessage::RequestOnly(match role {
+                            WorkflowModelRole::Assistant => {
+                                crate::model::RequestOnlyModelContext::AuxiliaryAnswer { text }
+                            }
+                            _ => crate::model::RequestOnlyModelContext::AuxiliaryQuestion { text },
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
                 tools: Vec::new(),
-                effective_system_prompt: program.instruction.clone(),
+                effective_system_prompt: prompt.system,
                 continuation: None,
                 continuation_source: None,
             })
             .map_err(|_| failure(node, failed("cannot prepare frozen Model output contract")))?;
         // Bound the fully prepared request (including Prompt schema fallback)
         // before a permit, worker or durable start can exist.
-        crate::model::adapter::validation::validate_bounded_prepared_request(&request, 256 * 1024)
-            .map_err(|_| {
-                failure(
-                    node,
-                    failed("prepared Model input exceeds its request bound"),
-                )
-            })?;
+        crate::model::adapter::validation::validate_bounded_prepared_request(
+            &request,
+            MAX_RENDERED_PROMPT_BYTES,
+        )
+        .map_err(|_| {
+            failure(
+                node,
+                failed("prepared Model input exceeds its request bound"),
+            )
+        })?;
         let input_limit = crate::context::ContextConfig {
             context_window_tokens: invocation.context_window(),
             reserve_tokens: context.execution_policy().context.reserve_tokens,
@@ -406,22 +478,36 @@ impl WorkflowRuntime {
         if cancellation.is_cancelled() {
             return Err(WorkflowRunError::from_cancellation(cancellation));
         }
-        match (&program.output, output) {
+        // Tokens a provider did not report count as zero.
+        let usage = serde_json::json!({
+            "input_tokens": completed.usage.input_tokens.unwrap_or(0),
+            "output_tokens": completed.usage.output_tokens.unwrap_or(0),
+            "total_tokens": completed.usage.total_tokens.unwrap_or(0),
+        });
+        let (text, structured) = match (&program.output, output) {
             (WorkflowModelOutput::Text {}, AuxiliaryOutput::Text(output))
                 if !output.refused
                     && output.finish_reason == ModelFinishReason::Stop
                     && !output.text.is_empty() =>
             {
-                Ok(Value::String(output.text))
+                (output.text, None)
             }
-            (WorkflowModelOutput::JsonSchema { .. }, AuxiliaryOutput::JsonSchema(value)) => {
-                Ok(value)
+            (WorkflowModelOutput::JsonSchema { .. }, AuxiliaryOutput::JsonSchema(value)) => (
+                serde_json::to_string(&value).expect("JSON value serializes"),
+                Some(value),
+            ),
+            _ => {
+                return Err(failure(
+                    node,
+                    failed("Model produced no usable final output"),
+                ));
             }
-            _ => Err(failure(
-                node,
-                failed("Model produced no usable final output"),
-            )),
+        };
+        let mut value = serde_json::json!({"text": text, "reasoning_content": completed.reasoning, "usage": usage});
+        if let Some(structured) = structured {
+            value["structured_output"] = structured;
         }
+        Ok(value)
     }
 }
 
@@ -457,5 +543,73 @@ fn context_failure(
             node,
             failed("Auxiliary Model Call could not be admitted or settled"),
         ),
+    }
+}
+
+#[cfg(test)]
+mod rendering_tests {
+    use super::*;
+
+    #[test]
+    fn all_messages_share_a_budget_that_stops_before_large_prompt_construction() {
+        let messages = (0..32)
+            .map(|index| WorkflowModelMessage {
+                role: if index == 0 {
+                    WorkflowModelRole::System
+                } else {
+                    WorkflowModelRole::User
+                },
+                content: vec![
+                    WorkflowValue::Reference {
+                        path: vec!["args".into(), "report".into()]
+                    };
+                    64
+                ],
+            })
+            .collect::<Vec<_>>();
+        let mut resolved = 0;
+        let result = render_prompt(&messages, |_| {
+            resolved += 1;
+            Ok(Value::String("x".repeat(60_000)))
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            resolved, 5,
+            "stop within the first message, not after constructing 2048 parts"
+        );
+    }
+
+    #[test]
+    fn rendered_prompt_counts_utf8_bytes_across_message_boundaries() {
+        let part = WorkflowValue::Reference {
+            path: vec!["args".into(), "report".into()],
+        };
+        let messages = vec![
+            WorkflowModelMessage {
+                role: WorkflowModelRole::System,
+                content: vec![part.clone(); 3],
+            },
+            WorkflowModelMessage {
+                role: WorkflowModelRole::User,
+                content: vec![part; 2],
+            },
+        ];
+        for extra in [0, 1] {
+            let mut index = 0;
+            let result = render_prompt(&messages, |_| {
+                index += 1;
+                Ok(Value::String(if index < 5 {
+                    "界".repeat(20_000)
+                } else {
+                    "x".repeat(MAX_RENDERED_PROMPT_BYTES - 240_000 + extra)
+                }))
+            });
+            assert_eq!(result.is_ok(), extra == 0);
+        }
+        let result = render_prompt(&messages, |_| Ok(Value::String("界".repeat(20_000))));
+        assert!(
+            result.is_err(),
+            "five 60KB parts exceed the one shared byte budget"
+        );
     }
 }

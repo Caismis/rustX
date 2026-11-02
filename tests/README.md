@@ -585,7 +585,7 @@ fixture cases (about 7 s). Fixture-based matrices (`trajectory`, `agent`,
 
 `examples/check_test_lanes.rs` keeps CI selection honest without becoming a
 second copy of it. Each Rust test lane ends with
-`cargo run --all-features --example check_test_lanes -- --job <job id>`, which reads the
+`cargo run --profile test --all-features --example check_test_lanes -- --job <job id>`, which reads the
 workflow's executing `cargo test` steps and asks libtest, through `--list`,
 what each one selects — so filters, `--skip`, features and `cfg` are
 Cargo's and libtest's own semantics. Every test job declares its profiles
@@ -864,8 +864,8 @@ RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features -- \
 
 # Lane coverage for one CI job on its own platform, or every target here
 # (--all-features reuses the library the test targets already compiled):
-cargo run --all-features --example check_test_lanes -- --job rust-contracts
-cargo run --all-features --example check_test_lanes
+cargo run --profile test --all-features --example check_test_lanes -- --job rust-contracts
+cargo run --profile test --all-features --example check_test_lanes
 
 # Everything, the safety net (it does not prove the CI lanes' selection):
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
@@ -882,18 +882,18 @@ cargo test --lib --all-features local_runtime::session_runtime_manager::tests::
 
 ## Visual Workflow authoring
 
-`web-console/test/e2e/workflow-visual.spec.ts` drives create, typed binding,
-structured output, in-place private Blocks, notes, one-step layout history,
-clean-profile reopen and native file copy against the real App Server and
+`web-console/test/e2e/workflow-visual.spec.ts` drives create, typed bindings,
+structured output, concurrent next steps, real Start reconnection, nested Loop
+copy/paste and one-step layout history against the real App Server and
 Product Host. It records a reproducible trace and full-shell PNG evidence;
 its 256-node fixture records render/layout durations against declared budgets.
 `workflow-editor.spec.ts` retains scope/join/unknown-contract, conflict, keyboard
 and number-fidelity browser regressions. The full browser inventory discovers
 both specs automatically; targeted runs do not replace the FULL profile.
 
-The frontend command test authors `tests/fixtures/workflow/visual-authoring.json`
-exactly. `runtime::workflow::tests::editor_authored_nested_file_executes_keyed_results_and_both_loop_exits`
+`tests/fixtures/workflow/visual-authoring.json` contains a real Start, concurrent
+one-round Loops, their join, a counting Loop with a Variable Assigner and author metadata. `runtime::workflow::tests::editor_authored_nested_file_executes_keyed_results_and_both_loop_exits`
 executes that shared fixture using native runtime owners and checks actual
-Parallel/Loop values and author-metadata isolation. It is a source-module unit
+concurrent graph/Loop values and author-metadata isolation. It is a source-module unit
 test, not another runtime API. Existing native file-authoring tests own complete
-revision/CAS/digest and lost-ACK guarantees. See [the invariant/evidence map](../docs/workflow-visual-editor.md#acceptance-and-invariant-traceability).
+revision/CAS/digest and lost-ACK guarantees. See [the invariant/evidence map](../docs/workflow-visual-editor.md#verification).

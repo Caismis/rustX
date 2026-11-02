@@ -57,6 +57,14 @@ fn validate_workflow_candidate(
     if candidate.state != TerminalState::Succeeded {
         return candidate;
     }
+    // Without a schema the child's final reply is the value.
+    let Some(output_schema) = output_schema else {
+        let workflow_value = candidate.content.clone().map(serde_json::Value::String);
+        return TerminalCandidate {
+            workflow_value,
+            ..candidate
+        };
+    };
     let value = candidate
         .content
         .as_deref()

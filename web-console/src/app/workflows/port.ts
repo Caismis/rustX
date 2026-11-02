@@ -1,6 +1,6 @@
 import type {
   ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowDiagnostic, WorkflowEdit, WorkflowLibrary,
-  WorkflowSource, WorkflowModelChoices, WorkflowModelChoicesQuery,
+  WorkflowSource, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor,
 } from '../../../../protocol/app-server/v62';
 import { analysisMatches } from '../../../../protocol/app-server/workflow-analysis';
 import type { AppServerClient } from '../../client/app-server';
@@ -92,12 +92,19 @@ export interface WorkflowScopePort {
   /** Bounded registered Model/Profile choices from this exact source scope.
    * A continuation is bound to the first page's native source revision. */
   modelChoices(query: WorkflowModelChoicesQuery, expectedRevision?: string): Promise<WorkflowModelChoices>;
-  /** Check the exact candidate. A Global file's dependencies are checked
-   * only in an explicitly chosen registered Workspace. */
-  check(id: string, document: WorkflowFileDocument, explain: boolean, context?: string): Promise<WorkflowCheckReport>;
+  /** The scope's MCP servers and Managed Python packages, unlisted; or one
+   * `source` connected, listed and closed. Global sees User sources, a
+   * Workspace also its own. */
+  toolCatalog(source?: string, cursor?: WorkflowToolCatalogCursor | null): Promise<WorkflowToolCatalog>;
+  /** Check the exact candidate. A Workspace file's dependencies are
+   * checked in its own Workspace; a Global file's are not checked. */
+  check(id: string, document: WorkflowFileDocument): Promise<WorkflowCheckReport>;
   analyze(id: string, document: WorkflowFileDocument, generation: string, query?: WorkflowAnalysisQuery): Promise<WorkflowAnalysisReport>;
   /** One whole-file write. Its acknowledgement and its reread are separate. */
   write(id: string, expectedRevision: string, edit: WorkflowEdit): Promise<WorkflowCommit>;
+  /** Enable or disable one file for this scope's Sessions, against the
+   * revision of the scope's `rustx.toml` its listing was read at. */
+  enable(id: string, expectedRevision: string, enabled: boolean): Promise<void>;
 }
 
 const replaced = (write: boolean) => new WorkflowOperationError(write ? { kind: 'uncertain', message: 'server_replaced' } : { kind: 'unavailable', message: 'server_replaced' });
@@ -107,8 +114,7 @@ const replaced = (write: boolean) => new WorkflowOperationError(write ? { kind: 
  * A port is bound to two authorities, both observed when it is created:
  * the App Server (endpoint and authority revision) and the Product Host
  * that maps Workspace registrations (`hostAuthority`). A Workspace
- * operation, and a Global file's dependency check routed through a
- * Workspace, carries that Product Host scope, which the Host validates in
+ * operation carries that Product Host scope, which the Host validates in
  * the registration lane immediately before native dispatch. A replaced
  * authority therefore refuses the transaction even when it reuses the
  * registration ID; it is never retargeted.
@@ -162,9 +168,13 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
       list: () => read(async () => (await viaHost(workspaceId, { kind: 'list' })).library),
       read: id => read(async () => (await viaHost(workspaceId, { kind: 'read', id })).source),
       modelChoices: (query, expected_revision) => read(async () => (await viaHost(workspaceId, { kind: 'model_choices', query, expected_revision })).choices),
+      toolCatalog: (source, cursor) => read(async () => (await viaHost(workspaceId, { kind: 'tool_catalog', source, cursor })).catalog),
       analyze: (id, document, generation, query) => read(async () => (await viaHost(workspaceId, { kind: 'analyze', id, document, generation, query })).report),
-      check: (id, document, explain) => read(async () => (await viaHost(workspaceId, { kind: 'check', scope: 'workspace', id, document, explain })).report),
+      check: (id, document) => read(async () => (await viaHost(workspaceId, { kind: 'check', id, document })).report),
       write: (id, expected_revision, edit) => write(async () => (await viaHost(workspaceId, { kind: 'write', id, expected_revision, edit })).commit),
+      enable: (id, expected_revision, enabled) => attempt(true, async () => {
+        await viaHost(workspaceId, { kind: 'enable', id, expected_revision, enabled });
+      }),
     };
   }
   const target = { kind: 'user' as const };
@@ -173,14 +183,13 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
     list: () => read(async () => (await client.request({ method: 'workflow/list', params: { target } }, 'workflow_library')).library),
     read: id => read(async () => (await client.request({ method: 'workflow/read', params: { target, id } }, 'workflow_source')).source),
     modelChoices: (query, expected_revision) => read(async () => (await client.request({ method: 'workflow/modelChoices', params: { target, query, expected_revision } }, 'workflow_model_choices')).choices),
+    toolCatalog: (source, cursor) => read(async () => (await client.request({ method: 'workflow/toolCatalog', params: { target, source, cursor } }, 'workflow_tool_catalog')).catalog),
     analyze: (id, document, generation, query) => read(async () => {
       const { report } = await client.request({ method: 'workflow/analyze', params: { target, id, document, generation, query } }, 'workflow_analysis');
       if (!analysisMatches(report, target, id, generation, query)) throw new Error('Mismatched Workflow analysis target or query');
       return report;
     }),
-    check: (id, document, explain, context) => read(async () => context === undefined
-      ? (await client.request({ method: 'workflow/check', params: { target, id, document, explain } }, 'workflow_check')).report
-      : (await viaHost(context, { kind: 'check', scope: 'user', id, document, explain })).report),
+    check: (id, document) => read(async () => (await client.request({ method: 'workflow/check', params: { target, id, document, explain: false } }, 'workflow_check')).report),
     write: (id, expected_revision, edit) => write(async () => {
       const acknowledgement = await client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision, mutation: { kind: 'workflow', id, edit } } }, 'sources_written');
       // The commit is a fact from here on; its reread may fail independently.
@@ -189,5 +198,10 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
       catch (error) { reread = { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
       return { acknowledgement: { revision: acknowledgement.revision, configuration_revision: acknowledgement.configuration_revision ?? null }, reread };
     }),
+    enable: (id, expected_revision, enabled) => attempt(true, async () => {
+      await client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision, mutation: enabling(id, enabled) } }, 'sources_written');
+    }),
   };
 }
+
+const enabling = (id: string, enabled: boolean) => ({ kind: 'config' as const, mutation: { unit: 'workflow_enabled' as const, id, enabled } });

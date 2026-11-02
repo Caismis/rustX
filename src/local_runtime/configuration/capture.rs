@@ -312,6 +312,13 @@ impl UserConfigManager {
         };
         let mut provenance = BTreeMap::new();
         let mut project_resources = Vec::new();
+        let scoped_workflows = [&user, &project].map(|layer| {
+            layer
+                .agent
+                .as_ref()
+                .and_then(|agent| agent.workflows.clone())
+                .unwrap_or_default()
+        });
         for (mut layer, origin) in [
             (
                 user,
@@ -344,6 +351,7 @@ impl UserConfigManager {
                 merged,
                 provenance,
                 project_resources,
+                scoped_workflows,
             },
             documents,
         ))
@@ -389,6 +397,7 @@ impl UserConfigManager {
             merged,
             mut provenance,
             project_resources,
+            scoped_workflows,
         } = capture;
         for root in [
             self.sources.home_directory.join("rustx/.agents"),
@@ -540,6 +549,7 @@ impl UserConfigManager {
             models,
             provenance,
             project_resources,
+            scoped_workflows,
         })
     }
 
@@ -555,10 +565,11 @@ impl UserConfigManager {
             effective,
             locations,
             identity,
-            config,
+            mut config,
             models,
             provenance,
             project_resources,
+            scoped_workflows,
         } = resolved;
         let host = &self.sources;
         for path in &project_resources {
@@ -592,6 +603,8 @@ impl UserConfigManager {
                 revisions.insert(path.clone(), revision.clone());
             }
         }
+        // An enabled Workflow that fails its check stays off: it is never
+        // admitted, and never keeps a Session from starting.
         let mut workflows = {
             super::super::workflow_resources::load(
                 Some(&locations.workspace),
@@ -599,11 +612,13 @@ impl UserConfigManager {
             )
             .map_err(LaunchFailure::resource)?
         };
-        for id in &config.agent.workflows {
-            if let Some(error) = workflows.invalid().get(id) {
-                return Err(LaunchFailure::resource(error.clone()));
-            }
-        }
+        // A scope enables only the files it owns: a Global entry never
+        // enables the Workspace file that shadows it, nor the reverse.
+        config.agent.workflows.retain(|id| {
+            workflows.locations.get(id).is_some_and(|location| {
+                scoped_workflows[usize::from(location.scope == SourceScope::Workspace)].contains(id)
+            })
+        });
         let workspace = crate::tools::workspace::Workspace::new(&locations.workspace)
             .map_err(|e| e.to_string())?;
         let skill_discovery = {

@@ -29,6 +29,7 @@ fn cfg237_templates_use_native_loader_compiler_and_editor_schema() {
     let validator = jsonschema::Validator::new(&editor).unwrap();
     for id in [
         "typed_agent",
+        "agent_text",
         "parallel_checks",
         "human_plan",
         "model_text",
@@ -58,7 +59,7 @@ fn cfg237_templates_use_native_loader_compiler_and_editor_schema() {
         assert!(!view.runtime_requirements.contains("actual_loop_iterations"));
         assert_eq!(
             view.runtime_requirements
-                .contains("human_review_decision_and_interaction_availability"),
+                .contains("human_input_and_interaction_availability"),
             id == "human_plan"
         );
     }
@@ -73,14 +74,11 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
     .unwrap();
     let body: WorkflowDefinition = serde_yaml::from_str(&text).unwrap();
     let original = json!({"description":"Bounded review loop", "block":{
-        "input":body.block.input, "output":body.block.output, "entry":"revise",
-        "nodes":{
-            "revise":{"type":"loop", "input":{"type":"reference","path":["args"]}, "body":body.block,
-                "until":{"type":"boolean","value":{"type":"reference","path":["result","accepted"]}},
-                "carry":{"type":"literal","value":{"plan":{"summary":"Retry"}}}, "max_iterations":2},
-            "done":{"type":"return","output":{"type":"reference","path":["revise","result"]}}
-        }, "edges":[{"from":"revise","to":"done","port":"satisfied"},{"from":"revise","to":"done","port":"exhausted"}]
-    }});
+        "input":body.block.input, "nodes": {"workflow_start":{"type":"start"},
+            "revise":{"type":"loop", "loop_count":2, "body":test_body(&serde_json::to_value(&body.block).unwrap()),
+                "break_condition":{"type":"equal","left":{"type":"reference","path":["review_plan","action"]},"right":{"type":"literal","value":"approve"}}},
+            "done":{"type":"return","outputs":[]}
+        },"edges": [{"from":"workflow_start","to":"revise"},{"from":"revise","to":"done"}],}});
     let compile = |value| {
         WorkflowProgram::compile(
             WorkflowId::parse("review_loop").unwrap(),
@@ -89,7 +87,7 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
     };
     let valid = compile(original.clone()).unwrap();
     assert_eq!(
-        valid.inspect().blocks["block"].nodes["revise"].max_iterations,
+        valid.inspect().blocks["block"].nodes["revise"].loop_count,
         Some(2)
     );
     assert!(
@@ -100,24 +98,24 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
     );
     for (pointer, value, expected) in [
         (
-            "/block/nodes/revise/max_iterations",
-            json!(257),
-            "block.nodes.revise.max_iterations",
+            "/block/nodes/revise/loop_count",
+            json!(LOOP_NODE_MAX_COUNT + 1),
+            "block.nodes.revise.loop_count",
         ),
         (
-            "/block/nodes/revise/body/nodes/review_plan/subject/value/path",
+            "/block/nodes/revise/body/nodes/review_plan/content/1/path",
             json!(["revise", "result"]),
-            "block.nodes.revise.body.nodes.review_plan.subject",
+            "block.nodes.revise.body.nodes.review_plan.content.1",
         ),
         (
-            "/block/nodes/revise/carry",
-            json!({"type":"literal","value":{"wrong":true}}),
-            "block.nodes.revise.carry",
+            "/block/nodes/revise/break_condition/left/path",
+            json!(["nowhere"]),
+            "block.nodes.revise.break_condition",
         ),
         (
             "/block/nodes/revise/body/edges",
             json!([]),
-            "block.nodes.revise.body.nodes.return_decision",
+            "block.nodes.revise.body.nodes.review_plan",
         ),
     ] {
         let mut broken = original.clone();
@@ -140,16 +138,6 @@ fn cfg237_compiled_explanation_ignores_yaml_map_insertion_order() {
         .into_iter()
         .rev()
         .collect();
-    let branches = reordered["block"]["nodes"]["check_text"]["branches"]
-        .as_mapping_mut()
-        .unwrap();
-    *branches = branches
-        .clone()
-        .into_iter()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
     let reordered = serde_yaml::to_string(&reordered).unwrap();
     assert_ne!(text, reordered);
     let compile = |text: &str| {
@@ -165,7 +153,47 @@ fn cfg237_compiled_explanation_ignores_yaml_map_insertion_order() {
         serde_json::to_value(first.inspect()).unwrap(),
         serde_json::to_value(second.inspect()).unwrap()
     );
-    assert_eq!(first.outgoing("check_text"), second.outgoing("check_text"));
+    assert_eq!(first.outgoing("start"), second.outgoing("start"));
+}
+
+/// As Dify's Agent: without a declared schema the child's final reply is
+/// the node's `text` variable, and later nodes read it like any value.
+#[cfg(unix)]
+#[tokio::test]
+async fn agent_text_template_returns_the_final_reply_as_text() {
+    let plane = workflow_test_plane(1);
+    let mut child = stage_workflow_child(&plane);
+    let runtime = workflow_runtime(&plane);
+    let context = workflow_test_context(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let program = template("agent_text");
+    assert_eq!(
+        program.node_outputs()["block.nodes.answer"],
+        json!({"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false})
+    );
+    let task = tokio::spawn(async move {
+        runtime
+            .run_test_foreground(
+                program,
+                ToolCallId::new("template-agent-text"),
+                context,
+                json!({"question":"What owns the workflow?"}),
+                cancellation,
+            )
+            .await
+    });
+    child.expect_delegate().await;
+    // A reply that merely looks like JSON stays text.
+    child
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some(r#"{"owner":"the runtime"}"#),
+        )
+        .await;
+    assert_eq!(
+        task.await.unwrap().unwrap(),
+        json!({"answer":r#"{"owner":"the runtime"}"#})
+    );
 }
 
 #[cfg(unix)]
@@ -264,8 +292,8 @@ async fn cfg237_parallel_template_preserves_keys_under_reverse_completion() {
         let first_key = if reverse { "clarity" } else { "brevity" };
         loop {
             if observations.borrow().iter().any(|event| matches!(event,
-                RuntimeEvent::WorkflowBlockSettled { instance, outcome: WorkflowExecutionOutcome::Completed }
-                    if instance.definition.blocks == ["check_text", first_key])) { break; }
+                RuntimeEvent::WorkflowNodeSettled { instance, outcome: WorkflowExecutionOutcome::Completed }
+                    if instance.node == format!("check_text_{first_key}_assess_{first_key}"))) { break; }
             observations.changed().await.unwrap();
         }
         second

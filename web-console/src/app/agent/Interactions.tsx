@@ -6,7 +6,6 @@ import { interactionKey } from '../../client/contracts';
 import { json } from '../../bindings/projection';
 import { ApprovalTakeover } from '../../presentation/agent/ApprovalTakeover';
 import { Questionnaire } from './Questionnaire';
-import { Review } from './Review';
 import { Button } from '../../presentation/primitives/Button';
 export function Interactions({ client, state, view }: {
   client: AppServerClient; state: ClientView; view: SessionView;
@@ -86,9 +85,12 @@ export function Interactions({ client, state, view }: {
           status={operation || disabled ? status : undefined} submitting={operation === 'in-flight'}
           onSubmit={value => response({ type: 'questionnaire', response: { type: 'submitted', value } })}
           onDecline={() => response({ type: 'questionnaire', response: { type: 'declined' } })} />
-          : <Review key={key} title={status} review={kind.review} disabled={disabled} submitting={operation === 'in-flight'} cancel={() => run(key, () => client.answer(view.id, item.interaction))}
-            accept={() => response({ type: 'review', response: { instance: kind.review.instance, subject_digest: kind.subject_digest, decision: { type: 'accepted' } } })}
-            reject={feedback => response({ type: 'review', response: { instance: kind.review.instance, subject_digest: kind.subject_digest, decision: { type: 'rejected', feedback } } })} />}
+          // A Workflow Human Input: its actions are the options; dismissing it cancels.
+          : <Questionnaire key={key} questions={kind.review.questionnaire.questions} disabled={disabled}
+            form={{ eyebrow: `${kind.review.instance.block.definition.workflow_id} · ${kind.review.instance.node}`, title: tx('interactions:review.title') }}
+            status={operation || disabled ? status : undefined} submitting={operation === 'in-flight'}
+            onSubmit={submission => response({ type: 'review', response: { instance: kind.review.instance, subject_digest: kind.subject_digest, submission } })}
+            onDecline={() => run(key, () => client.answer(view.id, item.interaction))} />}
       {/* A questionnaire's own dismiss action is its decline. */}
       {kind.type === 'approval' && <Button size="sm" disabled={disabled} onClick={() => run(key, () => client.answer(view.id, item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>}
     </div>;

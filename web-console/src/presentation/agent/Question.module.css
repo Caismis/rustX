@@ -93,8 +93,10 @@
   font-weight: 500;
 }
 
+/* A Workflow Human Input's content, aligned with the heading above it. */
 .detail {
-  margin: 0 2px 8px;
+  padding: 4px 24px 0;
+  overflow-wrap: anywhere;
 }
 
 .waitStatus {

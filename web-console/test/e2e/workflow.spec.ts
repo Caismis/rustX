@@ -126,10 +126,6 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await settings.screenshot({ path: test.info().outputPath('native-workflow-inventory.png') });
     await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
     await expect(settings.getByRole('button', { name: 'Skill acceptance', exact: true })).toBeVisible();
-    await openSettingsPage(page, 'Tools & Permissions');
-    await settings.getByRole('button', { name: 'Remove workflows 1', exact: true }).click();
-    await settings.getByRole('button', { name: 'Save Workflow allowlist', exact: true }).click();
-    await expect(settings.getByText('Workflow allowlist saved.')).toBeVisible();
     expect(readFileSync(workflowPath, 'utf8')).toBe(workflow);
     expect(readFileSync(agentPath, 'utf8')).toBe(agent);
     expect((await fixture.control('requests')).requests).toHaveLength(4);

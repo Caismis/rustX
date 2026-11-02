@@ -96,6 +96,7 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'workflow/list': { effect: 'read' },
   'workflow/read': { effect: 'read' },
   'workflow/modelChoices': { effect: 'read' },
+  'workflow/toolCatalog': { effect: 'read', unbounded: true },
   'workflow/check': { effect: 'read' },
   'workflow/analyze': { effect: 'read' },
   'session/model': { effect: 'read' },

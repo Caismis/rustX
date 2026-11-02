@@ -173,7 +173,7 @@ describe("working status", () => {
     const review = approvalInteraction();
     review.request.kind = { type: "review", subject_digest: "a".repeat(64), review: {
       instance: { block: { run: { conversation_id: "conv_413055e0-cb3a-7c6d-b9b6-b446a98e0ad1", origin: {type:'tool' as const,attempt_id:"attempt-1"}, invocation: "1" }, definition: { workflow_id: "example", blocks: [] }, invocations: [0] }, node: "review", visit: 0 },
-      subject: { type: "plan", content: { plan: "fixed" } }, context: [],
+      questionnaire: { questions: [{ question: "Ship it?", header: "review", answer: { type: "single_choice", options: [{ label: "Approve", description: "" }], allow_custom: false } }] },
     } };
     assert.equal(workingStatus(stateOf({ pending_interactions: [review] })), "Waiting for human review…");
     for (const other of [approvalInteraction(), questionnaireInteraction()]) {

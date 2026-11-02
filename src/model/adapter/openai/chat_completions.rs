@@ -1618,7 +1618,10 @@ fn translate_messages(
                 None,
             ),
             ModelMessageView::RequestOnly(carryover) => (
-                ChatMessage::Standard(translate_runtime_context(&carryover.render())),
+                ChatMessage::Standard(translate_runtime_context(
+                    &carryover.render(),
+                    carryover.is_assistant(),
+                )),
                 None,
             ),
         };
@@ -1645,7 +1648,17 @@ fn translate_messages(
     Ok(messages)
 }
 
-fn translate_runtime_context(text: &str) -> ChatCompletionRequestMessage {
+fn translate_runtime_context(text: &str, assistant: bool) -> ChatCompletionRequestMessage {
+    if assistant {
+        return ChatCompletionRequestMessage::Assistant(
+            async_openai::types::chat::ChatCompletionRequestAssistantMessage {
+                content: Some(ChatCompletionRequestAssistantMessageContent::Text(
+                    text.to_owned(),
+                )),
+                ..Default::default()
+            },
+        );
+    }
     ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
         content: ChatCompletionRequestUserMessageContent::Array(vec![
             ChatCompletionRequestUserMessageContentPart::Text(

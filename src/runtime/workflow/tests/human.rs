@@ -1,7 +1,6 @@
 //! Native human waits: channel publication, manual deadlines, exact typed responses.
 use super::*;
 use crate::durable::JournalStore;
-use crate::events::review::{ReviewDecision, ReviewResponse};
 use crate::runtime::interaction::*;
 
 #[tokio::test]
@@ -34,8 +33,8 @@ async fn cfg237_human_plan_template_uses_native_review_and_settlement() {
         .await
         .unwrap();
     let output = task.await.unwrap().unwrap();
-    assert_eq!(output["accepted"], true);
-    assert!(output["feedback"].is_string());
+    assert_eq!(output["action"], "approve");
+    assert!(output["content"].is_string());
     assert_eq!(audit.events().len(), 2);
     assert!(owner.pending_snapshot().is_empty());
     assert!(plane.registry.all_snapshots().is_empty());
@@ -90,23 +89,26 @@ fn human_program(question: bool) -> Arc<WorkflowProgram> {
     Arc::new(compile_test(human_definition(question)).unwrap())
 }
 fn human_definition(question: bool) -> WorkflowDefinition {
-    let result = if question {
-        schema(
-            json!({"cancelled":{"type":"boolean"},"answers":{"type":"array","items":{"type":"object"}}}),
-            &["cancelled", "answers"],
-        )
-    } else {
-        crate::runtime::workflow::review::result_schema()
-    };
-    let node = if question {
-        json!({"type":"tool","selector":{"origin":"builtin","name":"ask_user"},"arguments":{"type":"literal","value":{"questions":[{"question":"Choose target","header":"Target","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}},"result":{"type":"json","part":0,"schema":result}})
-    } else {
-        json!({"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]})
-    };
+    if !question {
+        // Each action is its own exit, as Dify's Human Input.
+        return serde_json::from_value(json!({"description":"Human business decision","timeout_ms":100,"block":{
+            "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
+            "nodes": {"workflow_start":{"type":"start"},"human":review_node(3_600_000),
+                "yes":returns("human", &["action", "content"]),"no":returns("human", &["action", "content"])},
+            "edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"yes","port":"yes"},
+                {"from":"human","to":"no","port":"no"},{"from":"human","to":"no","port":"timeout"}]}})).unwrap();
+    }
+    let result = schema(
+        json!({"cancelled":{"type":"boolean"},"answers":{"type":"array","items":{"type":"object"}}}),
+        &["cancelled", "answers"],
+    );
+    let node = json!({"type":"tool","selector":{"origin":"builtin","name":"ask_user"},"arguments":{"type":"literal","value":{"questions":[{"question":"Choose target","header":"Target","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}},"result":{"type":"json","schema":result}});
     serde_json::from_value(json!({"description":"Human business decision","timeout_ms":100,"block":{
-        "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"output":result,"entry":"human",
-        "nodes":{"human":node,"branch":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["human",if question {"cancelled"} else {"accepted"}]}}},"yes":{"type":"return","output":{"type":"reference","path":["human"]}},"no":{"type":"return","output":{"type":"reference","path":["human"]}}},
-        "edges":[{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}]}})).unwrap()
+        "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"nodes": {"workflow_start":{"type":"start"},"human":node,"branch":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["human","cancelled"]}}}]},"yes":returns("human", &["cancelled", "answers"]),"no":returns("human", &["cancelled", "answers"])},"edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}})).unwrap()
+}
+pub(super) fn review_node(timeout_ms: u64) -> Value {
+    json!({"type":"review","content":[{"type":"literal","value":"Approve the plan?"}],
+        "actions":[{"id":"yes","title":"Approve"},{"id":"no","title":"Revise"}],"timeout_ms":timeout_ms})
 }
 fn human_context(
     plane: &WorkflowTestPlane,
@@ -123,31 +125,38 @@ fn human_context(
     )
 }
 
+/// A Loop asking again until the answer is accepted (Review) or answered
+/// (questionnaire), which an Assigner records in its `done` variable.
 fn feedback_definition(question: bool) -> WorkflowDefinition {
-    let mut definition = super::loops::wrap_definition(human_definition(question), 3);
-    let WorkflowNodeDefinition::Loop { until, carry, .. } =
-        definition.block.nodes.get_mut("feedback").unwrap()
-    else {
-        unreachable!()
-    };
-    let boolean = WorkflowPredicate::Boolean {
-        value: reference(if question {
-            "result.cancelled"
-        } else {
-            "result.accepted"
-        }),
-    };
-    **until = if question {
-        WorkflowPredicate::Not {
-            predicate: Box::new(boolean),
-        }
+    let human = serde_json::to_value(&human_definition(question).block.nodes["human"]).unwrap();
+    // The questionnaire's answer goes through a Branch; a Human Input's
+    // `yes` action is its own exit.
+    let (nodes, edges) = if question {
+        let condition = json!({"type":"not","predicate":{"type":"boolean","value":{"type":"reference","path":["human","cancelled"]}}});
+        (
+            json!({"start":{"type":"start"},"human":human,
+            "branch":{"type":"branch","cases":[{"id":"true","condition":condition}]},"save":save()}),
+            json!([{"from":"start","to":"human"},{"from":"human","to":"branch"},{"from":"branch","to":"save","port":"true"}]),
+        )
     } else {
-        boolean
+        (
+            json!({"start":{"type":"start"},"human":human,"save":save()}),
+            json!([{"from":"start","to":"human"},{"from":"human","to":"save","port":"yes"}]),
+        )
     };
-    *carry = WorkflowValue::Literal {
-        value: json!({"passed":false}),
-    };
-    definition
+    serde_json::from_value(json!({"description":"Human feedback loop","timeout_ms":100,"block":{
+        "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
+        "nodes":{"workflow_start":{"type":"start"},
+            "feedback":{"type":"loop","loop_count":3,
+                "loop_variables":[{"label":"done","var_type":"boolean","value":{"type":"literal","value":false}}],
+                "break_condition":{"type":"boolean","value":{"type":"reference","path":["feedback","done"]}},
+                "body":{"nodes":nodes,"edges":edges}},
+            "done":{"type":"return","outputs":[{"variable":"done","value_selector":["feedback","done"]}]}},
+        "edges":[{"from":"workflow_start","to":"feedback"},{"from":"feedback","to":"done"}]}}))
+    .unwrap()
+}
+fn save() -> Value {
+    json!({"type":"assigner","items":[{"variable":["feedback","done"],"operation":"set","value":{"type":"literal","value":true}}]})
 }
 
 #[tokio::test]
@@ -215,8 +224,7 @@ async fn loop_review_and_questionnaire_reject_old_responses_and_allocate_fresh_i
             .await
             .unwrap();
         let output = task.await.unwrap().unwrap();
-        assert_eq!(output["status"], "satisfied");
-        assert_eq!(output["iterations"], 2);
+        assert_eq!(output, json!({"done":true}));
         assert_eq!(audit.events().len(), 4);
         assert!(owner.pending_snapshot().is_empty());
         assert!(plane.registry.all_snapshots().is_empty());
@@ -262,21 +270,8 @@ async fn unavailable_loop_human_step_fails_without_exhaustion_or_reprompt() {
 }
 pub(super) fn answer(request: &InteractionRequest, affirmative: bool) -> InteractionResponse {
     match &request.kind {
-        InteractionKind::Review {
-            review,
-            subject_digest,
-        } => InteractionResponse::Review {
-            response: ReviewResponse {
-                instance: review.instance.clone(),
-                subject_digest: subject_digest.clone(),
-                decision: if affirmative {
-                    ReviewDecision::Accepted
-                } else {
-                    ReviewDecision::Rejected {
-                        feedback: "Revise scope".into(),
-                    }
-                },
-            },
+        InteractionKind::Review { review, .. } => InteractionResponse::Review {
+            response: review.choose(usize::from(!affirmative)),
         },
         InteractionKind::Questionnaire { .. } => InteractionResponse::Questionnaire {
             response: if affirmative {
@@ -337,12 +332,11 @@ async fn fixed_native_questions_and_plan_review_branch_without_model_or_history_
             let value = task.await.unwrap().unwrap();
             assert_eq!(audit.events().len(), 2);
             let expected = if question { !affirmative } else { affirmative };
-            assert_eq!(
-                value[if question { "cancelled" } else { "accepted" }],
-                expected
-            );
-            if !question && !affirmative {
-                assert_eq!(value["feedback"], "Revise scope");
+            if question {
+                assert_eq!(value["cancelled"], expected);
+            } else {
+                assert_eq!(value["action"], if affirmative { "yes" } else { "no" });
+                assert_eq!(value["content"], "Approve the plan?");
             }
             let events = plane.store.read_events(None, 128).unwrap().events;
             assert!(events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowBranchSelected { successor, .. } if successor == if expected { "yes" } else { "no" })));
@@ -388,7 +382,7 @@ async fn human_wait_uses_outer_manual_deadline_and_never_synthesizes_business_re
                 .await
                 .is_err()
         );
-        assert!(!plane.store.read_events(None, 128).unwrap().events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node != "human")));
+        assert!(!plane.store.read_events(None, 128).unwrap().events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if !matches!(instance.node.as_str(), "workflow_start" | "human"))));
     }
 }
 #[tokio::test]
@@ -499,7 +493,7 @@ async fn review_provider_absence_audit_failures_and_cancel_before_response_are_n
                 ..
             }
         )));
-        assert!(!plane.store.read_events(None, 128).unwrap().events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node != "human")));
+        assert!(!plane.store.read_events(None, 128).unwrap().events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if !matches!(instance.node.as_str(), "workflow_start" | "human"))));
     }
 }
 
@@ -549,4 +543,207 @@ async fn simultaneous_workflow_review_and_questionnaire_settle_only_their_origin
         task.await.unwrap().unwrap();
     }
     assert_eq!(audit.events().len(), 4);
+}
+
+/// As Dify's Human Input, an unanswered question leaves through `timeout`,
+/// and the late answer is refused.
+#[tokio::test]
+async fn unanswered_review_takes_its_timeout_exit() {
+    let plane = workflow_test_plane(1);
+    let (owner, audit, mut published) = owner(&plane);
+    let context = human_context(&plane, owner.clone());
+    let runtime = workflow_runtime(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let mut definition = human_definition(false);
+    definition.block.nodes.insert(
+        "human".into(),
+        serde_json::from_value(review_node(1)).unwrap(),
+    );
+    let task = tokio::spawn(async move {
+        runtime
+            .run_test_foreground(
+                Arc::new(compile_test(definition).unwrap()),
+                ToolCallId::new("outer"),
+                context,
+                json!({"passed":false}),
+                cancellation,
+            )
+            .await
+    });
+    let request = published.recv().await.unwrap();
+    let value = task.await.unwrap().unwrap();
+    assert_eq!(value["action"], "timeout");
+    assert!(matches!(
+        audit.events().last(),
+        Some(RuntimeEvent::InteractionSettled {
+            settlement: crate::events::interaction::InteractionSettlement::DeadlineExpired { .. },
+            ..
+        })
+    ));
+    assert!(
+        owner
+            .respond_async(&request.id, answer(&request, true))
+            .await
+            .is_err()
+    );
+    let events = plane.store.read_events(None, 128).unwrap().events;
+    assert!(events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowBranchSelected { successor, .. } if successor == "no")));
+}
+
+#[tokio::test]
+async fn human_content_uses_the_questionnaire_unicode_limit_for_fixed_and_dynamic_text() {
+    let limit = crate::events::interaction::MAX_QUESTION_TEXT_CHARS;
+    for glyph in ["a", "界", "😀"] {
+        for count in [limit, limit + 1] {
+            let text = glyph.repeat(count);
+            let mut fixed = human_definition(false);
+            if let WorkflowNodeDefinition::Review { content, .. } =
+                fixed.block.nodes.get_mut("human").unwrap()
+            {
+                *content = vec![WorkflowValue::Literal { value: json!(text) }];
+            }
+            assert_eq!(
+                compile_test(fixed).is_ok(),
+                count == limit,
+                "fixed {glyph:?} count {count}"
+            );
+            let mut definition = human_definition(false);
+            definition.timeout_ms = 600_000;
+            definition.block.input = schema(json!({"report":{"type":"string"}}), &["report"]);
+            if let WorkflowNodeDefinition::Review { content, .. } =
+                definition.block.nodes.get_mut("human").unwrap()
+            {
+                *content = vec![WorkflowValue::Reference {
+                    path: vec!["args".into(), "report".into()],
+                }];
+            }
+            let plane = workflow_test_plane(1);
+            let (owner, audit, mut published) = owner(&plane);
+            let context = human_context(&plane, owner.clone());
+            let runtime = workflow_runtime(&plane);
+            let (_, cancellation) = workflow_cancellation();
+            let program = Arc::new(compile_test(definition).unwrap());
+            let mut task = tokio::spawn(async move {
+                runtime
+                    .run_test_foreground(
+                        program,
+                        ToolCallId::new("bounded-human"),
+                        context,
+                        json!({"report":text}),
+                        cancellation,
+                    )
+                    .await
+            });
+            if count == limit {
+                let request = tokio::select! { request=published.recv()=>request.unwrap(), result=&mut task=>panic!("settled before publication: {result:?}") };
+                owner
+                    .respond_async(&request.id, answer(&request, true))
+                    .await
+                    .unwrap();
+                assert!(task.await.unwrap().is_ok());
+                assert_eq!(audit.events().len(), 2);
+            } else {
+                let error = task.await.unwrap().unwrap_err();
+                assert!(error.to_string().contains("4096"), "{error:?}");
+                assert!(published.try_recv().is_err());
+                assert!(audit.events().is_empty());
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn iteration_error_modes_never_swallow_interaction_authority_failures() {
+    for mode in ["continue_on_error", "remove_abnormal_output"] {
+        for parallel in [false, true] {
+            let plane = workflow_test_plane(1);
+            let (owner, audit, mut published) = owner(&plane);
+            audit.fail_next_requested();
+            let mut executor = Probe::new(ToolExecutionStatus::Success);
+            let release_native = Arc::new(tokio::sync::Notify::new());
+            if parallel {
+                Arc::get_mut(&mut executor).unwrap().release = Some(release_native.clone());
+            }
+            let mut native_started = executor.started.subscribe();
+            let context = context(
+                &plane,
+                executor.clone(),
+                crate::agent::AttemptLifecycle::default()
+                    .with_pre_tool_policy(Arc::new(
+                        crate::agent::lifecycle::ConfiguredApprovalPolicy::new(
+                            ApprovalMode::FullAccess,
+                        ),
+                    ))
+                    .with_native_interaction(owner.clone()),
+            );
+            let tool = |label: &str| json!({"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":{"type":"literal","value":{"passed":true,"label":label}},"result":{"type":"text"}});
+            let mut nodes = json!({"start":{"type":"start"},"z_human":review_node(3_600_000)});
+            let mut edges = vec![json!({"from":"start","to":"z_human"})];
+            if parallel {
+                nodes["a_inflight"] = tool("drain");
+                edges.push(json!({"from":"start","to":"a_inflight"}));
+            }
+            let definition = serde_json::from_value(json!({"description":"Never ignore interaction authority failure","block":{
+                "input":schema(json!({"items":{"type":"array","items":{"type":"boolean"}}}), &["items"]),"nodes":{"workflow_start":{"type":"start"},
+                    "each":{"type":"iteration","iterator":{"type":"reference","path":["args","items"]},"output":{"type":"reference","path":["each","item"]},"error_handle_mode":mode,
+                        "body":{"nodes":nodes,"edges":edges}},"z_effect":tool("effect"),"done":{"type":"return","outputs":[]}},
+                "edges":[{"from":"workflow_start","to":"each"},{"from":"each","to":"z_effect"},{"from":"z_effect","to":"done"}]}})).unwrap();
+            let program = Arc::new(compile_test(definition).unwrap());
+            let runtime = workflow_runtime(&plane);
+            let mut observations = runtime.observations.subscribe();
+            let (entered, held) = tokio::sync::oneshot::channel();
+            let (release, gate) = tokio::sync::oneshot::channel();
+            if parallel {
+                *runtime.node_frontier.lock().unwrap() = Some(execution::NodeFrontierHook {
+                    node: "z_human".into(),
+                    entered,
+                    release: gate,
+                });
+            }
+            let (_, cancellation) = workflow_cancellation();
+            let task = tokio::spawn(async move {
+                runtime
+                    .run_test_foreground(
+                        program,
+                        ToolCallId::new("authority"),
+                        context,
+                        json!({"items":[true]}),
+                        cancellation,
+                    )
+                    .await
+            });
+            if parallel {
+                held.await.unwrap();
+                while *native_started.borrow() == 0 {
+                    native_started.changed().await.unwrap();
+                }
+                release.send(()).unwrap();
+                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    while !observations.borrow().iter().any(|event| matches!(event,RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node=="z_human")) { observations.changed().await.unwrap(); }
+                }).await.unwrap();
+                assert!(
+                    !task.is_finished(),
+                    "admitted native work still owns settlement"
+                );
+                release_native.notify_one();
+            }
+            let error = tokio::time::timeout(std::time::Duration::from_secs(10), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert!(
+                matches!(error, WorkflowRunError::InvocationAuthority(_)),
+                "{mode}/{parallel}: {error:?}"
+            );
+            assert_eq!(
+                executor.starts.load(Ordering::SeqCst),
+                usize::from(parallel)
+            );
+            assert_eq!(owner.pending_count(), 0);
+            assert!(audit.events().is_empty());
+            assert!(published.try_recv().is_err());
+            assert!(!observations.borrow().iter().any(|event| matches!(event, RuntimeEvent::WorkflowCompleted { .. }) || matches!(event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node == "z_effect")));
+        }
+    }
 }

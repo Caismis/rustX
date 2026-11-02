@@ -235,6 +235,7 @@ mod tests {
         };
         *invocation_id = crate::tools::types::ToolInvocationId::Workflow {
             node: Box::new(native),
+            retry: 0,
         };
         let source = PendingInteractionSource::new(request);
         assert!(

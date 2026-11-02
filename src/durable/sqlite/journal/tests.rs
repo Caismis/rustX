@@ -1694,12 +1694,12 @@ fn loop_lifecycle_facts_round_trip_without_executable_state() {
         RuntimeEvent::WorkflowLoopExited {
             node: node.clone(),
             iterations: 3,
-            status: WorkflowLoopExit::Satisfied,
+            status: WorkflowLoopExit::LoopBreak,
         },
         RuntimeEvent::WorkflowLoopExited {
             node,
             iterations: 3,
-            status: WorkflowLoopExit::Exhausted,
+            status: WorkflowLoopExit::LoopCompleted,
         },
     ];
     {

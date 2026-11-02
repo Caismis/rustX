@@ -226,7 +226,7 @@ jobs:
         run: cargo test --all-features --test process
 
       - name: Check test lane coverage
-        run: cargo run --all-features --example check_test_lanes -- --job rust-fast
+        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-fast
 
   # FAST documentation contracts: a low-risk documentation change merges on
   # FAST, but the `contracts` target reads the top-level, docs/, Web and TUI
@@ -342,7 +342,7 @@ jobs:
       # deterministic tests ran above as part of `--examples`.
       # Reuse the all-feature library already compiled by the tested targets.
       - name: Check test lane coverage
-        run: cargo run --all-features --example check_test_lanes -- --job rust-contracts
+        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-contracts
 
   # Real boundaries: SQLite durability/recovery, the spawned rustx process
   # and stdio/IPC transport, the subagent child-process boundary, the tool
@@ -446,7 +446,7 @@ jobs:
       # targets already compiled (dev-dependency features included); without
       # it Cargo builds one more complete rustX library just for the checker.
       - name: Check test lane coverage
-        run: cargo run --all-features --example check_test_lanes -- --job rust-boundaries
+        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-boundaries
 
   # Rust platform coverage is intentional, not duplicated by habit. macOS
   # runs only platform-sensitive classes, natively; desktop-macos separately
@@ -578,7 +578,7 @@ jobs:
       # Native macOS discovery: every required external target (see
       # REQUIREMENTS in the checker) must execute here.
       - name: Check test lane coverage
-        run: cargo run --all-features --example check_test_lanes -- --job rust-platform-core
+        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-platform-core
 
       - name: Native Cargo timing reports
         if: always()
@@ -711,7 +711,7 @@ jobs:
       # tests, and `boundary_suites::` and every external target (see
       # REQUIREMENTS in the checker) must execute here entirely.
       - name: Check test lane coverage
-        run: cargo run --all-features --example check_test_lanes -- --job rust-platform-boundaries
+        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-platform-boundaries
 
       - name: Native Cargo timing reports
         if: always()

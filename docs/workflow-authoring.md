@@ -99,16 +99,14 @@ Commit, publication, observed reread and runtime adoption remain separate facts.
 
 | Collection | Authored content and identity |
 | --- | --- |
-| `nodes` | Structured `{block, node}` address; optional display `title`, author `description`, `position`, Loop/Parallel container `dimensions` |
-| `entries` | Synthetic Block-input/entry-anchor `position`, addressed by its owning `block` |
-| `branches` | Parallel owner address, branch key, lane position and dimensions |
-| `notes` | Globally unique stable note ID, owning Block, Markdown text, one of `neutral/blue/green/amber/rose`, position and dimensions |
-| `orders` | Ordered field names at a typed Block-input/output, node-output, node-input binding or Parallel-branch-list target |
+| `nodes` | Structured `{block, node}` address; optional display `title`, author `description`, `position`, Loop container `dimensions` |
+| `notes` | Globally unique stable note ID, owning Block, text as Dify's note editor state (Lexical JSON; empty for a blank note), one of `blue/cyan/green/yellow/pink/violet`, position and dimensions |
+| `orders` | Ordered field names at a typed Block-input/output or node-output target |
 
-A Block address is an array of `{node}` (Loop body) or `{node, branch}`
-(Parallel branch). Explicit null branches are rejected. A Parallel branch named
-`body` is distinct from a Loop body. Different child Blocks may reuse local node
-IDs; executable nodes, entry anchors and notes have separate identity domains.
+A Block address is an array of `{node}` steps, each naming a Loop body.
+Different child Blocks may reuse local node IDs. Start is a real node and stores
+its title and position in `nodes`, like every other node. Notes retain their own
+identity domain.
 Schema order paths use `{kind: "property", name}` and `{kind: "items"}` steps,
 so array-item property lists and properties literally named `items` are distinct.
 Ordering affects display only; newly declared fields follow in deterministic key
@@ -119,20 +117,20 @@ For example, an executable file can include:
 ```yaml
 editor:
   nodes:
-    - address: {block: [], node: reviews}
-      title: Review lanes
+    - address: {block: [], node: repeat}
+      title: Review loop
       position: {x: 200, y: 80}
       dimensions: {width: 900, height: 600}
   notes:
     - id: review_note
-      block: [{node: reviews, branch: quality}]
-      text: "## Review guidance\n\nKeep the result concise."
+      block: [{node: repeat}]
+      text: '{"root":{"children":[{"children":[{"detail":0,"format":0,"mode":"normal","style":"","text":"Keep the result concise.","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":""}],"direction":null,"format":"","indent":0,"type":"root","version":1}}'
       theme: blue
       position: {x: 0, y: 100}
       dimensions: {width: 240, height: 180}
   orders:
-    - target: {kind: branches, address: {block: [], node: reviews}}
-      fields: [security, quality]
+    - target: {kind: block_input, block: [{node: repeat}], path: []}
+      fields: [summary, feedback]
 ```
 
 Missing metadata is ordinary valid input. The current canvas derives the same
@@ -149,7 +147,7 @@ are never file metadata. See the [visual authoring guide and acceptance record](
 | Expanded authoring document in JSON | 768 KiB, leaving space in the existing 1 MiB transport envelope |
 | Executable definition | 512 KiB; existing 256-node, depth-8 Block and value/run budgets remain separate |
 | Editor metadata | 256 KiB and 1024 total collection entries; at most 128 notes |
-| Node title / author description / note Markdown | 256 / 4096 / 16384 UTF-8 bytes per entry |
+| Node title / author description / note editor state | 256 / 4096 / 65536 UTF-8 bytes per entry |
 | Coordinates / dimensions | finite x/y in ±1000000; finite width/height in 16..8192 |
 | Addresses / field order | Block depth 8; schema path depth 32; at most 256 unique ordered fields, each 1..64 UTF-8 bytes |
 | Presentation diagnostics | At most 64; static reasons and bounded collection-index paths |
@@ -169,7 +167,7 @@ compiled program. Repair/remove the indicated entry explicitly, or restore its
 target. Bounded orphaned entries may be saved/copied intact, allowing legitimate
 external executable edits without requiring coordinated metadata surgery.
 
-Node and branch rename commands move the addressed metadata and private Block
+Node rename commands move the addressed metadata and private Block
 subtree atomically with executable references. Deletion removes only the deleted
 node/subtree's metadata: a note owned by a still-existing parent Block remains.
 Node copy clones its owned presentation and assigns deterministic fresh note IDs;
@@ -177,9 +175,8 @@ file copy carries the exact selected saved source revision's complete document.
 A rename/copy that collides with an authored orphan entry is refused visibly,
 never resolved by discarding authored content. The original destination identity
 and its private Block subtree are checked before the edit, even when the source
-has no presentation entry to move or copy. This includes a branch rename
-that would duplicate a retained field inside either branch order or root
-Parallel-output order. The entire executable/metadata transaction is rejected.
+has no presentation entry to move or copy. The entire executable/metadata
+transaction is rejected when any destination identity collides.
 
 ### Scope and identity
 
@@ -194,8 +191,7 @@ Product Host's registration, and the browser never sends a Workspace path.
 A transaction is bound to the authorities it started under, not only to IDs.
 Each browser port captures the App Server endpoint and authority revision and
 the Product Host authority (`WorkspaceAuthorityScope`) current when it is
-created. Every Workspace operation, and a Global file's dependency check routed
-through a Workspace, carries that Product Host scope; the Host validates it in
+created. Every Workspace operation carries that Product Host scope; the Host validates it in
 the registration lane immediately before native dispatch. A replaced Host is
 refused (`authority_replaced`) even when it reuses the registration ID with a
 different directory, so revision equality never stands in for resource
@@ -204,8 +200,7 @@ identity.
 The native App Server is a separate constraint. A port also captures the
 native authority identity (the `authority_id` of the `initialize` the browser
 already observed) and every Host-routed Workflow operation carries it as
-`native`: Workspace list, read, analysis, check and write, and a Global file's dependency
-check routed through a Workspace. The Host opens its own connection per
+`native`: Workspace list, read, analysis, check and write. The Host opens its own connection per
 operation; after initializing it and before dispatching any Workflow request,
 it compares the server's identity with `native` and refuses a mismatch
 (`native_replaced`). Another App Server process at the same endpoint therefore
@@ -251,6 +246,16 @@ or complete. Refresh observes only: a file appearing or disappearing does not
 prove that this transaction committed. The author can close the confirmation,
 inspect the current file and explicitly start a new operation; the old operation
 is never replayed.
+
+Each card carries a switch that enables the file for Sessions. The listing
+reports `enabled` per file (named by the scope's own `agent.workflows`) and the
+scope's `rustx.toml` revision (`configuration_revision`); the switch sends one
+`workflow_enabled` configuration mutation against that revision, directly for
+Global and through the Product Host for a Workspace, then lists again. A Global
+file is enabled in every Workspace, a Workspace file in its own. A file that
+fails its check shows off and cannot be switched; the runtime never admits it,
+so a file that fails after it was enabled is off until it is fixed. While the
+scope's `rustx.toml` does not parse there is no revision and no switch works.
 
 IDs follow the native `WorkflowId` rule. Paths are resolved by native code
 relative to the scope's admitted directory handle: traversal, absolute paths,
@@ -308,14 +313,14 @@ applied, so no rounded, retyped or re-signed value is ever sent.
 
 ### Checking
 
-`workflow/check` validates a candidate document without writing it. The report
-keeps two facts apart:
+`workflow/check` validates a candidate document without writing it. Its
+`revision` is the one a `replace` with this candidate commits as (the revision of
+its canonical serialization), absent only when the file could not hold it. The
+report keeps two facts apart:
 
 - **Structure** — the result of `WorkflowProgram::compile` (graph, lexical scope,
-  schemas, bindings, bounds): `valid` with every node's output contract and the
-  `revision` a `replace` with this candidate commits as (the revision of its
-  canonical serialization), or `invalid` with one bounded diagnostic at its
-  authored path.
+  schemas, bindings, bounds): `valid` with every node's output contract, or
+  `invalid` with one bounded diagnostic at its authored path.
 - **Dependencies** — `not_checked`, `admitted`, `blocked` with typed diagnostics,
   or `unavailable` with a reason, computed by the same metadata admission as
   `rustx workflow check` (`MetadataAdmission::compose`).
@@ -324,15 +329,22 @@ With `explain`, a structurally valid candidate also returns the compiled
 explanation described below. Checking executes no node, contacts no provider or
 MCP endpoint, reads no credential and writes nothing.
 
+The Web editor checks as Dify's checklist does: the current document is checked
+again shortly after every edit, and the header's checklist lists each node with
+problems — its first empty required field (each a field the compiler also
+rejects), whether it is connected, then the native check's own diagnostic where
+no message names one already. Choosing a problem selects its node and focuses the
+field. A Global file's dependencies are not checked; a Workspace file's are
+checked in its own Workspace.
+
 ### Candidate output catalogs and variable picking
 
 `workflow/analyze` accepts `{target, id, document, generation, query?}`. It performs
 no dependency discovery/preparation and constructs no `WorkflowProgram`. A
 candidate with an unfinished instruction, binding or graph can expose its output
-contracts before it could pass Save/Check. `outputs` distinguish declared/derived
+contracts before it could pass Check. `outputs` distinguish declared/derived
 contracts from incomplete contracts (`schema: null` with a static diagnostic).
-Branch and Return are not business-data producers; neither are entry markers or
-notes. Text Model output is a string, with no invented `.text` field.
+Start, Branch and Return are not business-data producers; neither are notes. Text Model output is a string, with no invented `.text` field.
 
 The file definition retains editable Agent profile, Model/Model Profile and Tool
 source/name spellings, including an unselected empty string. Analysis does not
@@ -342,12 +354,16 @@ programs retain the native identity types. Saving still requires compilation.
 
 An optional query names one exact consumer: structured node address, typed field
 (Model/Agent named input, Tool arguments, Review subject/context, Branch
-condition, Return output, Parallel branch input, Loop initial input/`until`/`carry`)
+condition addressed by `case_id`, Return output, a Loop variable's value, a Loop
+break condition, an Iteration's input or output, a Variable Assigner operand)
 and structured steps within a construction or predicate. It can search paths or all matching qualified producer titles,
 limit results and classify one existing/manual `reference`. It does not construct
 a Cartesian product of all fields and consumers.
+The Branch variable selector uses `condition_variable` to query supported
+boolean/string/null variables independently of the current comparison value;
+ordinary `condition` queries still check the opposite operand.
 
-The compiler and analysis share control-flow proof, node-entry scope intersection,
+The compiler and analysis share control-flow proof, node activation and ancestor proofs,
 reference resolution, Model-output validation, aggregate output construction and
 schema compatibility. An unfinished binding does not require an alternate Rust
 compiler or a browser reachability/type engine. The response reports separately:
@@ -361,15 +377,15 @@ ran or that dependencies/admission are ready. If the candidate's control flow
 cannot be proven, known declarations remain visible and availability is pending.
 Producer presence and output-schema knowledge are independent facts. An
 unfinished output schema still contributes its producer to the native scope
-intersection. A guaranteed upstream producer with that schema remains pending;
+proof. A guaranteed upstream producer with that schema remains pending;
 self references, forward references and producers bypassed by a join remain
 unavailable even before their output declarations are completed.
 An unfinished Block input contract likewise marks only `args` as having an
 unknown schema; valid control flow still proves producer presence and absence.
-The entry environment and join intersection do not require input type knowledge.
+Start activation and join proofs do not require input type knowledge.
 Within one Block, a producer has one identity and a fixed declaration. Both
-compilation and analysis retain that identity at a join exactly when every
-incoming scope contains it. They do not test the declaration against itself:
+compilation and analysis retain that identity at a join when it is an ancestor
+and every activation of the join also activates the producer. They do not test the declaration against itself:
 finite `enum` candidates can be filtered by other constraints without changing
 producer identity. Consumer binding checks separately establish assignability
 to the destination schema; presence alone never proves type compatibility.
@@ -377,14 +393,14 @@ Unsupported/optional field traversal remains invalid. Unknown external Tool
 argument contracts remain unknown; no MCP/Python preparation occurs. Whole-object
 and whole-array references are supported; array indexing and optional fallbacks
 are not introduced. The picker may preserve a pending reference in memory, while
-Save/Check keep their existing authoritative compiler rules.
+Check keeps its existing authoritative compiler rules.
 
 Tool argument roots share the compiler's necessary object requirement: a known
 string, array or other non-object root is incompatible. An object remains unknown
 until the complete Tool contract is known; scalar values inside an argument
 object do not inherit its root requirement. Native aggregate output schemas are
 retained as derived, including the extra wrapper around a maximum-depth authored
-Parallel/Loop output. Only the explicit unknown-schema marker lacks a type proof.
+Loop output. Only the explicit unknown-schema marker lacks a type proof.
 Equality and inequality share the compiler's boolean/string/null operand rule.
 Known numeric, object and array operands are incompatible even when the other
 type is unknown. Known supported operands must have matching types; otherwise
@@ -395,7 +411,7 @@ Destination contracts are validated before projecting into constructed fields.
 An undeclared property of an object with `additionalProperties: false` is
 incompatible for every reference, even when its producer type is unknown. This
 prohibition persists through descendant fields and array items, with an explicit
-diagnostic. Return output, Parallel branch input and Loop input/carry use the
+diagnostic. Return output and a Loop variable's value use the
 same native rule. Undeclared fields of open objects and unknown external Tool
 contracts retain unknown compatibility; declared properties use their schemas.
 
@@ -430,11 +446,15 @@ failed request, an output omitted by response truncation, an incomplete output
 declaration and a ready declared/derived schema. It never renders a failed or
 truncated request as a reason to keep waiting for an incomplete declaration.
 
-Ordinary fields use node-entry scope. Parallel input mappings and Loop initial
-input use the parent environment. Private child nodes see only their projected
-`args` and their own producers. Loop `until`/`carry` see only committed body-output
-`result`; downstream parent nodes see only Parallel/Loop aggregates. Joins use the
-intersection of required predecessors, never an ancestor union.
+Ordinary fields use node-entry scope; a Loop variable's value and an Iteration
+input use the scope at their container. As in Dify, a body node also sees the
+scope at its container, the container's own variables under its ID (Loop
+variables, or Iteration `item` and `index`) and the body's producers, with each
+choice's producer addressed in the block that declares it. A break condition and
+an Iteration output see the body after a round: that scope plus every body node.
+Downstream nodes see a Loop's variables and an Iteration's `output`. Concurrent ancestors
+are available at a join when its activation guarantees they run. Producers on
+optional conditional paths remain unavailable.
 
 Requests retain executable limits and additionally cap a query at 16 KiB, search
 at 256 UTF-8 bytes, expression/reference depth at 32 and the opaque generation at
@@ -463,9 +483,15 @@ valid program with a description), `replace` (a complete document), `copy`
 revision (`sha256:<hex>`), or the listing's `absent_revision` for a file that
 must not exist yet. A changed revision is a conflict and nothing is written.
 
-Native code validates the candidate before writing; an invalid candidate leaves
-the file unchanged and returns `workflow_invalid` with its diagnostic. A valid
-candidate is serialized from the native types, reparsed and compared, and
+As a Dify draft, an unfinished workflow saves: the compiler does not gate a
+write. The file is then listed with its diagnostic (the library marks it as
+failing its check), and discovery loads it as invalid, so no Session can run it
+until it is finished. Only what the file cannot hold exactly — an invalid
+presentation entry or a number the browser could not preserve — is refused,
+leaving the file unchanged and returning `workflow_invalid` with its diagnostic.
+A file this version cannot parse (written by another version, or edited by
+hand) is never overwritten: the editor shows why and where, and changes nothing.
+The candidate is serialized from the native types, reparsed and compared, and
 published by the same staged-file and rename path as every configuration
 source. Serialization is normalized: comments and anchors are not preserved,
 defaulted fields are written explicitly, and an ordinary control port is
@@ -711,7 +737,7 @@ connection, Session, WorkflowRun, interaction waiter/request, runtime-state writ
 | Online schema unresolved versus disabled source | `cfg237_online_schema_unresolved_and_disabled_source_are_distinct`, same file |
 | Nested branch schema/scope failures, parser coordinates, compiler agreement | `cfg237_nested_paths_parser_locations_and_compiler_agreement`, same file |
 | Output bound and honest omission | `cfg237_workflow_projection_omission_preserves_validity_and_size_bound`, same file |
-| Loop body/carry scope, iteration bounds and broken control | `cfg237_loop_and_control_failures_keep_authored_paths`, `src/runtime/workflow/tests/templates.rs` |
+| Loop body scope, loop count bounds, break condition and broken control | `cfg237_loop_and_control_failures_keep_authored_paths`, `src/runtime/workflow/tests/templates.rs` |
 | Stable compiled explanation under map reordering | `cfg237_compiled_explanation_ignores_yaml_map_insertion_order`, same file |
 | Finite grammar and rejection of execution controls | `cfg237_workflow_grammar_is_finite_and_rejects_execution_controls`, `src/local_runtime/cli.rs` |
 | Real binary human/JSON framing, exits, invalid paths and no runtime writes | `cfg237_binary_workflow_commands_share_json_exit_and_read_only_contract`, `tests/process/configuration_commands.rs` |
@@ -730,6 +756,6 @@ credentials, WorkflowRun, interaction publication/waiter creation, resource
 generation construction, and Tool registration/domain admission mutation. Measurement wraps the synchronous inspection entry point;
 no sleep or live provider serves as correctness evidence.
 
-Invocation overrides never change Workflow run identity. Workflow Agent children
+Workflow Agent children
 own their Conversations and run in the shared Session workspace; a Workflow owns
 no workspace resource and contributes no Session deletion blocker. See [capability identity and Session ownership](subagent-resources.md#capability-identity-and-session-ownership).

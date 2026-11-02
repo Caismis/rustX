@@ -14,6 +14,7 @@ import type { QuestionSpecification, QuestionnaireSubmission } from '../../../..
 import { emptyDraft, submission, QuestionnaireValidationError, type QuestionDraft } from '../../bindings/questionnaire';
 import { message } from '../../locale/translation';
 import { Button } from '../../presentation/primitives/Button';
+import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { IconCheckOutline14, IconChevronDownOutline14, IconChevronLeftOutline14, IconChevronRightOutline14, IconChevronUpOutline14, IconCloseOutline16, IconEditOutline16 } from '../../presentation/primitives/icons';
 import css from '../../presentation/agent/Question.module.css';
 
@@ -45,9 +46,11 @@ function AnswerField({ variant, value, disabled, autoFocus, onChange, onKeyDown,
   </div>;
 }
 /** Composer takeover for one pending native questionnaire. `status` is shown
- * only when the response lifecycle has something to say beyond waiting. */
-export function Questionnaire({ questions, disabled, status, submitting = false, onSubmit, onDecline }: {
-  questions: QuestionSpecification[]; disabled: boolean; status?: string; submitting?: boolean;
+ * only when the response lifecycle has something to say beyond waiting.
+ * A Workflow Human Input passes its `form` heading: its question is then
+ * Markdown shown above the actions, and it cannot be skipped. */
+export function Questionnaire({ questions, form, disabled, status, submitting = false, onSubmit, onDecline }: {
+  questions: QuestionSpecification[]; form?: { eyebrow: string; title: string }; disabled: boolean; status?: string; submitting?: boolean;
   onSubmit: (value: QuestionnaireSubmission) => void; onDecline: () => void;
 }) {
   const tx = useTranslation();
@@ -99,8 +102,8 @@ export function Questionnaire({ questions, disabled, status, submitting = false,
     <section className={clsx(css.card, minimized && css.cardMinimized)} aria-label={tx('interactions:questionnaire.questionnaire')}>
       <header className={css.header}>
         <div className={css.headingBlock}>
-          <div className={css.eyebrow}>{question.header}</div>
-          <h2 className={css.title} id={titleId}>{question.question}</h2>
+          <div className={css.eyebrow}>{form?.eyebrow ?? question.header}</div>
+          <h2 className={css.title} id={titleId}>{form?.title ?? question.question}</h2>
         </div>
         <div className={css.headerActions}>
           {status && <span className={css.waitStatus}>{status}</span>}
@@ -118,6 +121,7 @@ export function Questionnaire({ questions, disabled, status, submitting = false,
       </header>
       {!minimized && <>
         <div className={css.body} data-question-scroll>
+          {form && <div className={css.detail}><MarkdownText text={question.question}/></div>}
           <div className={css.options} role={shape.type === 'single_choice' ? 'radiogroup' : 'group'} aria-labelledby={titleId}>
             {hasOptions && shape.options.map((option, optionIndex) => {
               const selected = draft.selected.includes(optionIndex);
@@ -154,7 +158,7 @@ export function Questionnaire({ questions, disabled, status, submitting = false,
           </div>
           <div className={css.feedback} role="status">{error}</div>
           <div className={css.footerActions}>
-            <Button variant="outline" disabled={disabled} onClick={skip}>{tx('interactions:questionnaire.skip')}</Button>
+            {!form && <Button variant="outline" disabled={disabled} onClick={skip}>{tx('interactions:questionnaire.skip')}</Button>}
             <Button variant="primary" disabled={disabled || !answered(draft)} onClick={continueFlow}>
               {submitting ? tx('interactions:questionnaire.submitting') : last ? tx('interactions:questionnaire.submit') : tx('interactions:questionnaire.next')}
             </Button>

@@ -1075,6 +1075,7 @@ fn workflow_approval_pins_prepared_native_identity_without_a_canonical_leaf_call
             node: "leaf".into(),
             visit: 0,
         }),
+        retry: 0,
     };
     let subject = InteractionSubject::Approval {
         invocation_id: invocation_id.clone(),
@@ -1116,7 +1117,7 @@ fn workflow_approval_pins_prepared_native_identity_without_a_canonical_leaf_call
     }
     let mut next_visit = subject;
     if let InteractionSubject::Approval {
-        invocation_id: ToolInvocationId::Workflow { node },
+        invocation_id: ToolInvocationId::Workflow { node, .. },
         ..
     } = &mut next_visit
     {
@@ -1733,7 +1734,6 @@ fn rusqlite_open(path: &std::path::Path) -> rusqlite::Connection {
 
 #[test]
 fn review_audit_validates_exact_instance_and_remains_inert_across_reopen() {
-    use rustx::events::review::{ReviewDecision, ReviewResponse};
     for answered in [false, true] {
         let durable = Durable::new();
         let id = interaction_id();
@@ -1747,11 +1747,7 @@ fn review_audit_validates_exact_instance_and_remains_inert_across_reopen() {
         };
         review.instance.block.run.conversation_id = ConversationId::new(CONVERSATION);
         review.instance.block.run.origin = attempt().into();
-        let response = ReviewResponse {
-            instance: review.instance.clone(),
-            subject_digest: review.digest(),
-            decision: ReviewDecision::Accepted,
-        };
+        let response = review.choose(0);
         store
             .append_interaction_audit(requested(&id, InteractionSubject::Review { review }))
             .unwrap();

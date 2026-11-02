@@ -149,6 +149,7 @@ impl Family<'_> {
             | Method::WorkflowList { .. }
             | Method::WorkflowRead { .. }
             | Method::WorkflowModelChoices { .. }
+            | Method::WorkflowToolCatalog { .. }
             | Method::WorkflowCheck { .. }
             | Method::WorkflowAnalyze { .. }
             | Method::SettingsRead { .. }

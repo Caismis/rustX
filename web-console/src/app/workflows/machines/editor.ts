@@ -3,7 +3,6 @@ import type { WorkflowCheckReport, WorkflowSource } from '../../../../../protoco
 import type { WorkflowCommit } from '../../../workspaces/host';
 import { CommandRejected, type RejectionCode } from '../document/commands';
 import { encodeField, fieldText, invertArrayEdit, remapAddress, renameAddress, sameField, type ArrayEdit, type FieldAddress } from '../document/fields';
-import { incompleteIdentities, type IncompleteIdentity } from '../document/identities';
 import { renameSchemaConsumerAddress } from '../document/schema';
 import { existingPath, sameDocument, ROOT, type BlockPath, type WorkflowDocument } from '../document/model';
 import { classifyFailure, type WorkflowFailure, type WorkflowScopePort, type WorkflowTarget } from '../port';
@@ -14,9 +13,6 @@ const HISTORY_LIMIT = 100;
 export interface CheckResult {
   readonly generation: number;
   readonly report: WorkflowCheckReport;
-  readonly explain: boolean;
-  /** The Workspace registration a Global file's dependencies were checked in. */
-  readonly context?: string;
 }
 
 /** The last committed save: its file revision and the generation it wrote. */
@@ -41,8 +37,6 @@ export type EditorNotice =
   | { kind: 'reconciled' }
   /** Reconciliation found a revision this editor did not write. */
   | { kind: 'changed_externally'; revision: string }
-  /** Typed identities still to choose; nothing was sent. */
-  | { kind: 'incomplete'; identities: readonly IncompleteIdentity[] }
   /** Field text that could not be applied (it is invalid, or its field is
    * not shown); nothing was sent and the text is kept. */
   | { kind: 'pending_fields'; count: number };
@@ -130,7 +124,7 @@ export interface EditorContext {
   block: BlockPath;
   check?: CheckResult;
   /** The input of the latest check; in flight only while `ready.checking`. */
-  checking?: { generation: number; document: WorkflowDocument; explain: boolean; context?: string };
+  checking?: { generation: number; document: WorkflowDocument };
   saving?: { generation: number; document: WorkflowDocument };
   /** Set by an uncertain save; a new save requires reconciliation first. */
   uncertain?: { generation: number; document: WorkflowDocument };
@@ -156,7 +150,8 @@ export type EditorEvent =
   /** The author moved on (another selection): the edit session ends. */
   | { type: 'BOUNDARY' }
   | { type: 'NAVIGATE'; block: BlockPath }
-  | { type: 'CHECK'; explain: boolean; context?: string }
+  /** Check the current document, as Dify's checklist follows every edit. */
+  | { type: 'CHECK' }
   | { type: 'SAVE' }
   | { type: 'RECONCILE' }
   | { type: 'RELOAD' }
@@ -329,8 +324,8 @@ export const workflowEditorMachine = setup({
   types: { context: {} as EditorContext, events: {} as EditorEvent, input: {} as EditorInput, emitted: {} as PresentationEvent },
   actors: {
     read: fromPromise<WorkflowSource, { port: WorkflowScopePort; id: string }>(({ input }) => input.port.read(input.id)),
-    check: fromPromise<WorkflowCheckReport, { port: WorkflowScopePort; id: string; document: WorkflowDocument; explain: boolean; context?: string }>(
-      ({ input }) => input.port.check(input.id, input.document, input.explain, input.context)),
+    check: fromPromise<WorkflowCheckReport, { port: WorkflowScopePort; id: string; document: WorkflowDocument }>(
+      ({ input }) => input.port.check(input.id, input.document)),
     save: fromPromise<WorkflowCommit, { port: WorkflowScopePort; id: string; revision: string; document: WorkflowDocument }>(
       ({ input }) => input.port.write(input.id, input.revision, { operation: 'replace', document: input.document })),
     // Observation only: the uncertain write is never sent again. Native
@@ -339,15 +334,14 @@ export const workflowEditorMachine = setup({
     reconcile: fromPromise<Reconciliation, { port: WorkflowScopePort; id: string; base: string; document: WorkflowDocument }>(async ({ input }) => {
       const source = await input.port.read(input.id);
       if (source.revision === input.base) return { kind: 'not_committed', source };
-      const report = await input.port.check(input.id, input.document, false);
-      const committed = report.structure.status === 'valid' && report.structure.revision === source.revision;
+      const report = await input.port.check(input.id, input.document);
+      const committed = report.revision === source.revision;
       return { kind: committed ? 'committed' : 'changed', source };
     }),
   },
   guards: {
     editable: ({ context }) => !!context.document && !!context.base?.document,
     savable: ({ context }) => !!context.document && !!context.base?.document && !context.uncertain,
-    incomplete: ({ context }) => !!context.document && incompleteIdentities(context.document).length > 0,
     canUndo: ({ context }) => context.past.length > 0,
     canRedo: ({ context }) => context.future.length > 0,
     pendingFields: ({ context }) => Object.keys(context.drafts).length > 0,
@@ -426,7 +420,6 @@ export const workflowEditorMachine = setup({
     discardDrafts: assign({ drafts: {}, notice: undefined }),
     pendingFields: assign(({ context }) => ({ notice: { kind: 'pending_fields', count: Object.keys(context.drafts).length } as EditorNotice })),
     dismiss: assign({ notice: undefined, rejection: undefined }),
-    incomplete: assign(({ context }) => ({ notice: { kind: 'incomplete', identities: incompleteIdentities(context.document!) } as EditorNotice })),
   },
 }).createMachine({
   id: 'workflowEditor',
@@ -463,8 +456,8 @@ export const workflowEditorMachine = setup({
       states: {
         idle: {
           on: {
-            CHECK: [{ guard: 'pendingFields', actions: 'pendingFields' }, { guard: 'incomplete', actions: 'incomplete' }, { guard: 'editable', target: 'checking' }],
-            SAVE: [{ guard: 'pendingFields', actions: 'pendingFields' }, { guard: 'incomplete', actions: 'incomplete' }, { guard: 'savable', target: 'saving' }],
+            CHECK: { guard: 'editable', target: 'checking' },
+            SAVE: [{ guard: 'pendingFields', actions: 'pendingFields' }, { guard: 'savable', target: 'saving' }],
             RECONCILE: { guard: ({ context }) => !!context.uncertain, target: 'reconciling' },
             RELOAD: '#workflowEditor.loading',
           },
@@ -473,19 +466,21 @@ export const workflowEditorMachine = setup({
           // A newer check supersedes the older one by stopping it, so the
           // older result has no completion path at all.
           // `checking` is the exact input of the current check. It stays set
-          // through the transition that consumes its result.
-          entry: assign(({ context, event }) => ({ checking: { generation: context.generation, document: context.document!, explain: event.type === 'CHECK' && event.explain, context: event.type === 'CHECK' ? event.context : undefined }, notice: undefined, coalesce: undefined })),
+          // through the transition that consumes its result. A check follows
+          // the author's edits, so it neither ends an edit session nor
+          // dismisses a notice.
+          entry: assign(({ context }) => ({ checking: { generation: context.generation, document: context.document! } })),
           invoke: {
             src: 'check',
-            input: ({ context }) => ({ port: context.port, id: context.target.id, document: context.checking!.document, explain: context.checking!.explain, context: context.checking!.context }),
+            input: ({ context }) => ({ port: context.port, id: context.target.id, document: context.checking!.document }),
             // The report names the generation it checked. A later edit never
             // inherits it: presentation compares it with the current one.
-            onDone: { target: 'idle', actions: assign(({ context, event }) => ({ check: { generation: context.checking!.generation, report: event.output, explain: context.checking!.explain, context: context.checking!.context } })) },
+            onDone: { target: 'idle', actions: assign(({ context, event }) => ({ check: { generation: context.checking!.generation, report: event.output } })) },
             onError: { target: 'idle', actions: assign(({ event }) => ({ notice: { kind: 'failure', operation: 'check', failure: failure(event, false) } as EditorNotice })) },
           },
           on: {
-            CHECK: [{ guard: 'pendingFields', target: 'idle', actions: 'pendingFields' }, { guard: 'incomplete', target: 'idle', actions: 'incomplete' }, { guard: 'editable', target: 'checking', reenter: true }],
-            SAVE: [{ guard: 'pendingFields', target: 'idle', actions: 'pendingFields' }, { guard: 'incomplete', target: 'idle', actions: 'incomplete' }, { guard: 'savable', target: 'saving' }],
+            CHECK: { guard: 'editable', target: 'checking', reenter: true },
+            SAVE: [{ guard: 'pendingFields', target: 'idle', actions: 'pendingFields' }, { guard: 'savable', target: 'saving' }],
           },
         },
         saving: {

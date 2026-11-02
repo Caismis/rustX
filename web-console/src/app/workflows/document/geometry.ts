@@ -1,4 +1,4 @@
-import type { WorkflowBranchPresentation, WorkflowDimensions, WorkflowNodePresentation, WorkflowNote, WorkflowOrderTarget, WorkflowPosition } from '../../../../../protocol/app-server/v62';
+import type { WorkflowDimensions, WorkflowNodePresentation, WorkflowNote, WorkflowOrderTarget, WorkflowPosition } from '../../../../../protocol/app-server/v62';
 import { CommandRejected, validLocalKey } from './commands';
 import { blockAt, nodeAt, sameBlockPath, sameDocument, type BlockPath, type WorkflowDocument } from './model';
 import { emptyPresentation } from './presentation';
@@ -15,7 +15,7 @@ export function dimensions(size: WorkflowDimensions): void {
 /** Bound the same metadata domain as native without deciding program validity. */
 export function presentationEdit(document: WorkflowDocument, edit: (editor: NonNullable<WorkflowDocument['editor']>) => NonNullable<WorkflowDocument['editor']>): WorkflowDocument {
   const editor = edit(document.editor ?? emptyPresentation());
-  if ((editor.nodes?.length ?? 0) + (editor.entries?.length ?? 0) + (editor.branches?.length ?? 0) + (editor.orders?.length ?? 0) + (editor.notes?.length ?? 0) > 1024
+  if ((editor.nodes?.length ?? 0) + (editor.orders?.length ?? 0) + (editor.notes?.length ?? 0) > 1024
     || (editor.notes?.length ?? 0) > 128 || utf8Length(JSON.stringify(editor)) > 256 * 1024) throw new CommandRejected('limit_exceeded');
   return sameDocument(editor, document.editor) ? document : { ...document, editor };
 }
@@ -36,17 +36,7 @@ export function setNodePresentation(document: WorkflowDocument, block: BlockPath
     return { ...editor, nodes };
   });
 }
-export function setEntryPosition(document: WorkflowDocument, block: BlockPath, point: WorkflowPosition): WorkflowDocument {
-  if (!blockAt(document, block)) throw new CommandRejected('missing_node');
-  position(point);
-  return presentationEdit(document, editor => ({ ...editor, entries: [...(editor.entries ?? []).filter(entry => !sameBlockPath(entry.block, block)), { block: [...block], position: point }] }));
-}
-export function setLane(document: WorkflowDocument, value: WorkflowBranchPresentation): WorkflowDocument {
-  const owner = blockAt(document, value.address.block), node = owner && nodeAt(owner, value.address.node);
-  if (node?.type !== 'parallel' || !Object.hasOwn(node.branches, value.branch)) throw new CommandRejected('missing_branch');
-  position(value.position); dimensions(value.dimensions);
-  return presentationEdit(document, editor => ({ ...editor, branches: [...(editor.branches ?? []).filter(entry => !(sameDocument(entry.address, value.address) && entry.branch === value.branch)), value] }));
-}
+export const START_POSITION: WorkflowPosition = { x: 32, y: 80 };
 export function setOrder(document: WorkflowDocument, target: WorkflowOrderTarget, fields: string[]): WorkflowDocument {
   return presentationEdit(document, editor => ({ ...editor, orders: [...(editor.orders ?? []).filter(order => !sameDocument(order.target, target)), { target, fields }] }));
 }
@@ -57,7 +47,7 @@ export function freshNote(document: WorkflowDocument, base = 'note'): string {
 export function putNote(document: WorkflowDocument, note: WorkflowNote): WorkflowDocument {
   if (!blockAt(document, note.block)) throw new CommandRejected('missing_node');
   if (validLocalKey(note.id)) throw new CommandRejected('invalid_identifier');
-  if (utf8Length(note.text) > 16 * 1024) throw new CommandRejected('limit_exceeded');
+  if (utf8Length(note.text) > 64 * 1024) throw new CommandRejected('limit_exceeded');
   position(note.position); dimensions(note.dimensions);
   return presentationEdit(document, editor => ({ ...editor, notes: [...(editor.notes ?? []).filter(entry => entry.id !== note.id), note] }));
 }

@@ -29,6 +29,8 @@ pub struct CanonicalMcpTool {
     pub description: String,
     /// Canonical JSON schema.
     pub input_schema: serde_json::Value,
+    /// The declared schema of the tool's `structuredContent`, when it has one.
+    pub output_schema: Option<serde_json::Value>,
 }
 
 impl TryFrom<rmcp::model::Tool> for CanonicalMcpTool {
@@ -47,6 +49,9 @@ impl TryFrom<rmcp::model::Tool> for CanonicalMcpTool {
                 .description
                 .map_or_else(String::new, std::borrow::Cow::into_owned),
             input_schema,
+            output_schema: tool
+                .output_schema
+                .map(|schema| serde_json::Value::Object((*schema).clone())),
         })
     }
 }

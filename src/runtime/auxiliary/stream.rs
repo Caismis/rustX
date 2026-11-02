@@ -27,6 +27,8 @@ pub const AUXILIARY_CONTENT_BLOCK_LIMIT: u32 = 4096;
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuxiliaryTextOutput {
     pub text: String,
+    /// Visible reasoning text, when the provider streams it.
+    pub reasoning: String,
     pub refused: bool,
     pub finish_reason: ModelFinishReason,
 }
@@ -386,19 +388,24 @@ impl AuxiliaryStreamFold {
                 .map_err(|error| invalid_stream(&format!("{error:?}")))
                 .map(|assembled| {
                     let mut text = String::new();
+                    let mut reasoning = String::new();
                     let mut refused = assembled.finish_reason == ModelFinishReason::Refusal;
                     for block in assembled.content {
                         match block {
                             AssistantContentBlock::Text(block) => text.push_str(&block.text),
                             AssistantContentBlock::Refusal(_) => refused = true,
-                            AssistantContentBlock::Reasoning(_)
-                            | AssistantContentBlock::ToolCall(_)
+                            AssistantContentBlock::Reasoning(block) => {
+                                reasoning.push_str(block.text.as_deref().unwrap_or_default());
+                            }
+                            AssistantContentBlock::ToolCall(_)
                             | AssistantContentBlock::Image(_) => {}
                         }
                     }
-                    // Neither reasoning nor provider continuation leaves this fold.
+                    // Visible reasoning text leaves this fold; opaque provider
+                    // reasoning and continuation state never do.
                     AuxiliaryTextOutput {
                         text,
+                        reasoning,
                         refused,
                         finish_reason: assembled.finish_reason,
                     }

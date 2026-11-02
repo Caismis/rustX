@@ -1834,12 +1834,12 @@ async fn runtime_shutdown_waits_for_workflow_child_native_quiescence() {
                         node_id: Box::new(node_instance.clone()),
                     },
                     terminal: crate::runtime::subagent::SubagentTerminalMode::WorkflowOutput {
-                        output_schema: serde_json::json!({
+                        output_schema: Some(serde_json::json!({
                             "type": "object",
                             "properties": {"summary": {"type": "string"}},
                             "required": ["summary"],
                             "additionalProperties": false
-                        }),
+                        })),
                         workflow_id,
                         run_id,
                         node_id: Box::new(node_instance),

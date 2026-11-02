@@ -827,8 +827,9 @@ Conversation load after unload starts a new physical initialization, whose first
 accepted submission needing preparation owns its wait; it creates no artificial
 full-budget delay per message. The first executable Attempt waits for live
 results: healthy tools are included, optional Root failures/timeouts are reported
-without suppressing healthy siblings/native tools, and required Workflow/child
-contracts remain strict. Expiry cancels and retires pending initialization; the
+without suppressing healthy siblings/native tools. Affected Workflows are disabled
+with diagnostics; frozen child contracts remain strict. Expiry cancels and retires
+pending initialization; the
 same attempt cannot publish Ready afterward. Physical ownership remains counted
 until settlement, even after the wait has timed out.
 

@@ -127,6 +127,7 @@ pub(super) fn intrinsic_value_type(value: &WorkflowValue) -> Option<&'static str
         WorkflowValue::Literal { value } => Some(json_type(value)),
         WorkflowValue::Object { .. } => Some("object"),
         WorkflowValue::Array { .. } => Some("array"),
+        WorkflowValue::Template { .. } => Some("string"),
         WorkflowValue::Reference { .. } => None,
     }
 }
@@ -163,6 +164,25 @@ pub(super) fn validate_predicate(
                 ));
             }
         }
+        WorkflowPredicate::Contains { left, right }
+        | WorkflowPredicate::NotContains { left, right }
+        | WorkflowPredicate::StartsWith { left, right }
+        | WorkflowPredicate::EndsWith { left, right } => {
+            if matches!(right, WorkflowValue::Literal { value: Value::String(text) } if text.is_empty())
+            {
+                return Err(invalid("string comparison requires a nonempty value"));
+            }
+            let left = value_schema(left, available, node, depth + 1)?;
+            let right = value_schema(right, available, node, depth + 1)?;
+            if schema_type(&left) != Some("string") || schema_type(&right) != Some("string") {
+                return Err(invalid("string comparison requires two string operands"));
+            }
+        }
+        WorkflowPredicate::Empty { value } | WorkflowPredicate::NotEmpty { value } => {
+            if schema_type(&value_schema(value, available, node, depth + 1)?) != Some("string") {
+                return Err(invalid("empty comparison requires a string operand"));
+            }
+        }
         WorkflowPredicate::Not { predicate } => {
             validate_predicate(predicate, available, node, depth + 1)?;
         }
@@ -181,7 +201,7 @@ pub(super) fn validate_predicate(
 pub(super) fn evaluate_value(
     expression: &WorkflowValue,
     input: &Value,
-    values: &BTreeMap<String, Value>,
+    values: &imbl::OrdMap<String, Value>,
 ) -> Result<Value, WorkflowRunError> {
     let value = match expression {
         WorkflowValue::Reference { path } => {
@@ -191,7 +211,11 @@ pub(super) fn evaluate_value(
             let mut value = if first == "args" {
                 Some(input)
             } else {
-                values.get(first)
+                Some(
+                    values
+                        .get(first)
+                        .ok_or_else(|| WorkflowRunError::UncommittedReference(path.clone()))?,
+                )
             };
             for key in &path[1..] {
                 value = value.and_then(|value| value.get(key));
@@ -201,23 +225,11 @@ pub(super) fn evaluate_value(
             })?
         }
         WorkflowValue::Literal { value } => value.clone(),
-        WorkflowValue::Object { fields } => {
-            let mut result = serde_json::Map::new();
-            let mut bytes = 2;
-            for (key, expression) in fields {
-                let value = evaluate_value(expression, input, values)?;
-                bytes += serde_json::to_vec(key).expect("JSON key").len()
-                    + serde_json::to_vec(&value).expect("JSON value").len()
-                    + 2;
-                if bytes.saturating_sub(usize::from(!fields.is_empty())) > MAX_VALUE_BYTES {
-                    return Err(WorkflowRunError::InvalidValue(
-                        "constructed object byte bound exceeded".into(),
-                    ));
-                }
-                result.insert(key.clone(), value);
-            }
-            Value::Object(result)
-        }
+        WorkflowValue::Object { fields } => evaluate_object(
+            fields.iter().map(|(key, value)| (key.as_str(), value)),
+            input,
+            values,
+        )?,
         WorkflowValue::Array { items } => {
             let mut result = Vec::new();
             let mut bytes = 2;
@@ -233,9 +245,39 @@ pub(super) fn evaluate_value(
             }
             Value::Array(result)
         }
+        WorkflowValue::Template { parts } => {
+            Value::String(super::model::render_parts(parts, |part| {
+                evaluate_value(part, input, values)
+            })?)
+        }
     };
     bounded_value_bytes(&value)?;
     Ok(value)
+}
+
+/// Construct one bounded object, stopping before retaining an overflowing field.
+/// Loop initializers and Object expressions share this construction boundary.
+pub(super) fn evaluate_object<'a>(
+    fields: impl IntoIterator<Item = (&'a str, &'a WorkflowValue)>,
+    input: &Value,
+    values: &imbl::OrdMap<String, Value>,
+) -> Result<Value, WorkflowRunError> {
+    let mut result = serde_json::Map::new();
+    let mut bytes = 2;
+    for (key, expression) in fields {
+        let value = evaluate_value(expression, input, values)?;
+        bytes += serde_json::to_vec(key).expect("JSON key").len()
+            + bounded_value_bytes(&value)?
+            + 1
+            + usize::from(!result.is_empty());
+        if bytes > MAX_VALUE_BYTES {
+            return Err(WorkflowRunError::InvalidValue(
+                "constructed object byte bound exceeded".into(),
+            ));
+        }
+        result.insert(key.to_owned(), value);
+    }
+    Ok(Value::Object(result))
 }
 
 pub(super) fn bounded_value_bytes(value: &Value) -> Result<usize, WorkflowRunError> {
@@ -268,7 +310,7 @@ pub(super) fn bounded_value_bytes(value: &Value) -> Result<usize, WorkflowRunErr
 pub(super) fn evaluate_predicate(
     predicate: &WorkflowPredicate,
     input: &Value,
-    values: &BTreeMap<String, Value>,
+    values: &imbl::OrdMap<String, Value>,
 ) -> Result<bool, WorkflowRunError> {
     Ok(match predicate {
         WorkflowPredicate::Boolean { value } => evaluate_value(value, input, values)?
@@ -278,6 +320,34 @@ pub(super) fn evaluate_predicate(
             let left = evaluate_value(left, input, values)?;
             let right = evaluate_value(right, input, values)?;
             (left == right) == matches!(predicate, WorkflowPredicate::Equal { .. })
+        }
+        WorkflowPredicate::Contains { left, right }
+        | WorkflowPredicate::NotContains { left, right }
+        | WorkflowPredicate::StartsWith { left, right }
+        | WorkflowPredicate::EndsWith { left, right } => {
+            let left = evaluate_value(left, input, values)?;
+            let right = evaluate_value(right, input, values)?;
+            let left = left
+                .as_str()
+                .ok_or_else(|| WorkflowRunError::InvalidValue("nonstring left operand".into()))?;
+            let right = right
+                .as_str()
+                .ok_or_else(|| WorkflowRunError::InvalidValue("nonstring right operand".into()))?;
+            match predicate {
+                WorkflowPredicate::Contains { .. } => left.contains(right),
+                WorkflowPredicate::NotContains { .. } => !left.contains(right),
+                WorkflowPredicate::StartsWith { .. } => left.starts_with(right),
+                WorkflowPredicate::EndsWith { .. } => left.ends_with(right),
+                _ => unreachable!(),
+            }
+        }
+        WorkflowPredicate::Empty { value } | WorkflowPredicate::NotEmpty { value } => {
+            let value = evaluate_value(value, input, values)?;
+            let empty = value
+                .as_str()
+                .ok_or_else(|| WorkflowRunError::InvalidValue("nonstring empty operand".into()))?
+                .is_empty();
+            empty == matches!(predicate, WorkflowPredicate::Empty { .. })
         }
         WorkflowPredicate::Not { predicate } => !evaluate_predicate(predicate, input, values)?,
         WorkflowPredicate::And { predicates } | WorkflowPredicate::Or { predicates } => {
@@ -306,7 +376,7 @@ mod tests {
     /// data from any producers, and an uncommitted reference still fails.
     #[test]
     fn constructed_values_compose_committed_data_and_reject_uncommitted_references() {
-        let values = BTreeMap::from([
+        let values = imbl::OrdMap::from(vec![
             ("a".to_owned(), serde_json::json!({"passed": true})),
             ("b".to_owned(), serde_json::json!({"passed": false})),
         ]);
@@ -327,7 +397,81 @@ mod tests {
         assert!(evaluate_predicate(&predicate, &Value::Null, &values).unwrap());
         assert!(matches!(
             evaluate_value(&reference(&["missing"]), &Value::Null, &values),
-            Err(WorkflowRunError::InvalidValue(detail)) if detail.contains("uncommitted reference")
+            Err(WorkflowRunError::UncommittedReference(path)) if path == ["missing"]
         ));
+    }
+
+    /// A template is one string: text as is, references as their string or
+    /// JSON text. Its parts are text or references only, in scope.
+    #[test]
+    fn templates_render_text_and_references_into_one_string() {
+        let values = imbl::OrdMap::from(vec![(
+            "search".to_owned(),
+            serde_json::json!({"topic": "rust", "count": 3}),
+        )]);
+        let text = |text: &str| WorkflowValue::Literal {
+            value: Value::String(text.to_owned()),
+        };
+        let reference = |path: &[&str]| WorkflowValue::Reference {
+            path: path.iter().map(|key| (*key).to_owned()).collect(),
+        };
+        let template = WorkflowValue::Template {
+            parts: vec![
+                text("about "),
+                reference(&["search", "topic"]),
+                text(", top "),
+                reference(&["search", "count"]),
+            ],
+        };
+        assert_eq!(
+            evaluate_value(&template, &Value::Null, &values).unwrap(),
+            serde_json::json!("about rust, top 3")
+        );
+        let available = SchemaMap(BTreeMap::from([(
+            "search".to_owned(),
+            serde_json::json!({"type":"object","properties":{"topic":{"type":"string"},"count":{"type":"integer"}},"required":["topic","count"],"additionalProperties":false}),
+        )]));
+        assert_eq!(
+            value_schema(&template, &available, "tool", 0).unwrap(),
+            serde_json::json!({"type": "string"})
+        );
+        let nested = WorkflowValue::Template {
+            parts: vec![WorkflowValue::Array { items: vec![] }],
+        };
+        assert!(value_schema(&nested, &available, "tool", 0).is_err());
+        let unavailable = WorkflowValue::Template {
+            parts: vec![reference(&["missing"])],
+        };
+        assert!(value_schema(&unavailable, &available, "tool", 0).is_err());
+    }
+    #[test]
+    fn bounded_object_construction_stops_on_the_second_large_field() {
+        let fields = (0..128)
+            .map(|index| {
+                (
+                    format!("v{index}"),
+                    WorkflowValue::Reference {
+                        path: vec!["args".into(), "payload".into()],
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let evaluated = std::cell::Cell::new(0);
+        let result = evaluate_object(
+            fields
+                .iter()
+                .inspect(|_| evaluated.set(evaluated.get() + 1))
+                .map(|(key, value)| (key.as_str(), value)),
+            &serde_json::json!({"payload":"x".repeat(60_000)}),
+            &imbl::OrdMap::new(),
+        );
+        assert!(
+            matches!(result, Err(WorkflowRunError::InvalidValue(message)) if message == "constructed object byte bound exceeded")
+        );
+        assert_eq!(
+            evaluated.get(),
+            2,
+            "remaining initializers must not be evaluated"
+        );
     }
 }

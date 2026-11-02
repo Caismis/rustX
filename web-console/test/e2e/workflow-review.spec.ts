@@ -28,7 +28,7 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await fixture.gate('workflow-child-admitted');
     const run = page.locator('[data-workflow-run-id]');
     await expect(run.locator('[data-workflow-node="review"]')).toBeVisible();
-    await expect(run.locator('[data-workflow-node]')).toHaveCount(1);
+    await expect(run.locator('[data-workflow-node]')).toHaveCount(2);
     await expect(run.locator('[data-workflow-node="decision"]')).toHaveCount(0);
     await expect(page.locator('[aria-label="' + copy('Canonical conversation', '规范对话') + '"] [data-workflow-run-id]')).toHaveCount(1);
     const parentTitle = await page.locator('#session-title').innerText();
@@ -42,12 +42,14 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await page.screenshot({ path: `/tmp/rustx-workflow-child-${locale}.png` });
     await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await fixture.release('workflow-child-admitted');
-    const review = page.getByRole('region', { name: copy('Review', '评审'), exact: true });
+    // A Human Input asks in chat: its content, with its actions as the options.
+    const review = page.getByRole('region', { name: copy('Questionnaire', '问卷'), exact: true });
+    await expect(review.getByRole('heading', { name: copy('Human Input', '人工介入'), exact: true })).toBeVisible();
     await expect(review.getByRole('heading', { name: 'Review report' })).toBeVisible();
     await expect(review).toContainText('Check the release version before publishing.');
-    await expect(review.locator('pre')).toHaveCount(0);
+    await expect(review.getByRole('radio')).toHaveCount(2);
     await expect(run.locator('[data-workflow-node="gate"]')).toContainText(copy('Waiting for review', '等待审阅'));
-    await expect.poll(() => run.locator('[data-workflow-node]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-workflow-node')))).toEqual(['review', 'gate']);
+    await expect.poll(() => run.locator('[data-workflow-node]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-workflow-node')))).toEqual(['workflow_start', 'review', 'gate']);
     await page.screenshot({ path: `/tmp/rustx-workflow-review-${locale}.png` });
     // The native review remains pending through reconnect; no choice is sent by rendering it.
     const sidebar = page.getByRole('button', { name: copy('Expand Sidebar', '打开侧边栏'), exact: true });
@@ -73,12 +75,9 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await page.locator(`button[data-session-id="${sessionId}"]`).click();
     await expect(run).toHaveAttribute('data-workflow-run-id', runId!);
     await expect(review.getByRole('heading', { name: 'Review report' })).toBeVisible();
-    await expect.poll(() => run.locator('[data-workflow-node]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-workflow-node')))).toEqual(['review', 'gate']);
-    if (locale === 'zh') {
-      await review.getByRole('radio', { name: '附反馈拒绝', exact: true }).click();
-      await expect(review.getByRole('button', { name: '提交', exact: true })).toBeDisabled();
-      await review.getByLabel('评审反馈', { exact: true }).fill('Please revise the release version.');
-    }
+    await expect.poll(() => run.locator('[data-workflow-node]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-workflow-node')))).toEqual(['workflow_start', 'review', 'gate']);
+    // The chosen action is the exit the run takes.
+    await review.getByRole('radio', { name: locale === 'zh' ? 'Revise' : 'Accept', exact: true }).click();
     await review.getByRole('button', { name: copy('Submit', '提交'), exact: true }).click();
     await expect(review).toHaveCount(0);
     await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();
@@ -87,9 +86,8 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await run.getByRole('button').first().click();
     await expect(run).toContainText(copy('Steps used', '已执行'));
     await expect(run).not.toContainText('/ 10');
-    await expect(run.locator('[data-workflow-node="gate"]')).toContainText(copy('Accepted', '已拒绝'));
     await expect(run.locator('[data-workflow-node="' + (locale === 'zh' ? 'success' : 'failure') + '"]')).toHaveCount(0);
-    await expect.poll(() => run.locator('[data-workflow-node]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-workflow-node')))).toEqual(['review', 'gate', 'decision', locale === 'zh' ? 'failure' : 'success']);
+    await expect.poll(() => run.locator('[data-workflow-node]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-workflow-node')))).toEqual(['workflow_start', 'review', 'gate', locale === 'zh' ? 'failure' : 'success']);
     await expect(run).toContainText(copy('Nodes 4', '4 个节点'));
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: `/tmp/rustx-workflow-completed-${locale}.png` });

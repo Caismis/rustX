@@ -1,9 +1,13 @@
+import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react-dom';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { WorkflowModelPolicy, WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../../locale/react';
 import { encodeField, type FieldAddress, type FieldStep } from '../../../document/fields';
 import type { WorkflowScopePort } from '../../../port';
-import { JsonField, NumberField, Section, SelectField } from './fields';
+import { IconSettingsOutline14 } from '../../../../../presentation/primitives/icons';
+import { KindIcon } from '../../icons';
+import { JsonField, NumberField, SelectField } from './fields';
 import css from '../Editor.module.css';
 
 type Query = { type: 'models' } | { type: 'profiles'; model: string };
@@ -47,9 +51,46 @@ export function useModelChoices(port: WorkflowScopePort, query: Query | undefine
   return { state: shown, load };
 }
 
+/** As Dify's model field: the chosen model on one trigger, whose popup holds
+ * the policy, profile and request parameters. */
+export function ModelSelection(props: {
+  policy: WorkflowModelPolicy; address: FieldAddress; port: WorkflowScopePort;
+  onChange: (value: WorkflowModelPolicy, field: readonly FieldStep[]) => void;
+}) {
+  const tx = useTranslation(), { policy } = props, [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
+  const { refs, floatingStyles } = useFloating({
+    open, placement: 'left-start', strategy: 'fixed', whileElementsMounted: autoUpdate,
+    middleware: [offset(12), flip({ fallbackPlacements: ['bottom-end'], crossAxis: false }), shift({ padding: 12 })],
+  });
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => { if (!popup.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) setOpen(false); };
+    window.document.addEventListener('pointerdown', outside);
+    return () => window.document.removeEventListener('pointerdown', outside);
+  }, [open]);
+  const selected = policy.mode === 'explicit' ? policy : undefined;
+  return <section className={css.group}>
+    <h3 className={css.groupHeading}>{tx('workflows:card.model')}<span className={css.required} aria-hidden>*</span></h3>
+    <button ref={element => { trigger.current = element; refs.setReference(element); }} type="button" className={css.modelTrigger} aria-haspopup="dialog" aria-expanded={open}
+      aria-invalid={selected && !selected.model || undefined} aria-label={tx('workflows:prompt.model-parameters')} onClick={() => setOpen(value => !value)}>
+      <span className={`${css.modelTriggerIcon} ${css.kind_model}`}><KindIcon kind="model" size={14} /></span>
+      <span className={css.modelTriggerName}>{selected ? selected.model || tx('workflows:inspector.model-choose') : tx('workflows:inspector.model-session')}</span>
+      {selected?.profile && <span className={css.modelTriggerBadge}>{selected.profile}</span>}
+      <span className={css.modelTriggerSettings} aria-hidden><IconSettingsOutline14 /></span>
+    </button>
+    {open && createPortal(<div ref={element => { popup.current = element; refs.setFloating(element); }} className={css.modelPopup} role="dialog" aria-label={tx('workflows:prompt.model-parameters')}
+      style={floatingStyles}
+      onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus(); } }}>
+      <h4 className={css.modelPopupTitle}>{tx('workflows:prompt.model-parameters')}</h4>
+      <ModelParameters {...props} />
+    </div>, window.document.body)}
+  </section>;
+}
+
 /** The existing Auxiliary model policy, authored against bounded native
  * registered choices. An unregistered authored identity stays inspectable. */
-export function ModelSelection({ policy, address, port, onChange }: {
+function ModelParameters({ policy, address, port, onChange }: {
   policy: WorkflowModelPolicy; address: FieldAddress; port: WorkflowScopePort;
   onChange: (value: WorkflowModelPolicy, field: readonly FieldStep[]) => void;
 }) {
@@ -60,7 +101,7 @@ export function ModelSelection({ policy, address, port, onChange }: {
   const modelValues = models.state?.choices?.type === 'models' ? models.state.choices.models : [];
   const profileValues = profiles.state?.choices?.type === 'profiles' ? profiles.state.choices.profiles : [];
   const withSelected = (values: readonly string[], selected?: string | null) => [...new Set([...values, ...(selected ? [selected] : [])])];
-  return <Section title={tx('workflows:inspector.model-selection')}>
+  return <>
     <SelectField field={encodeField(address)} label={tx('workflows:inspector.model-source')} value={policy.mode}
       options={[{ value: 'session', label: tx('workflows:inspector.model-session') }, { value: 'explicit', label: tx('workflows:inspector.model-explicit') }]}
       hint={tx('workflows:inspector.model-source-hint')}
@@ -79,7 +120,7 @@ export function ModelSelection({ policy, address, port, onChange }: {
       <JsonField label={tx('workflows:inspector.model-params')} hint={tx('workflows:inspector.model-params-hint')} value={selected.request_params ?? {}} rows={5} address={{ ...address, path: [...address.path, 'request_params'], role: 'optional' }} />
       </details>
     </>}
-  </Section>;
+  </>;
 }
 
 function ChoicePages({ choices: { state, load }, kind }: { choices: ReturnType<typeof useModelChoices>; kind: 'models' | 'profiles' }) {

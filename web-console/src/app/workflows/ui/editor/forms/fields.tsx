@@ -5,6 +5,8 @@ import { encodeField, fieldText, setField, type FieldAddress } from '../../../do
 import type { FieldCommand, FieldError } from '../../../machines/editor';
 import { useFieldDraft } from './drafts';
 import { readJson } from '../../../../../../shared/json-numbers';
+import { IconQuestionOutline14 } from '../../../../../presentation/primitives/icons';
+import { Tooltip } from '../../../../../presentation/primitives/Tooltip';
 import css from '../Editor.module.css';
 
 export function Field({ label, hint, children, error }: { label: string; hint?: ReactNode; children: (id: string, describedBy?: string) => ReactNode; error?: string }) {
@@ -53,7 +55,7 @@ export function useFieldError() {
 
 /** Resolution of a draft whose field changed under it: keep the text over
  * the current value, or take the current value. */
-function ConflictActions({ field }: { field: { conflict?: 'changed' | 'missing'; keep: () => void; reset: () => void } }) {
+export function ConflictActions({ field }: { field: { conflict?: 'changed' | 'missing'; keep: () => void; reset: () => void } }) {
   const tx = useTranslation();
   if (!field.conflict) return null;
   return <div className={css.inline}>
@@ -78,27 +80,36 @@ export function jsonCommand(address: FieldAddress): FieldCommand {
  * the editor (see `useFieldDraft`); blur, Ctrl/Cmd+Enter, Save or Check
  * request its application, which the editor accepts only when it parses
  * within the browser number contract. */
-export function JsonField({ label, hint, value, rows = 6, address }: { label: string; hint?: ReactNode; value: unknown; rows?: number; address: FieldAddress }) {
+/** `line` edits a scalar (a number) on one line. */
+export function JsonField({ label, hint, value, rows = 6, line, address }: { label: string; hint?: ReactNode; value: unknown; rows?: number; line?: boolean; address: FieldAddress }) {
   const describe = useFieldError();
   const field = useFieldDraft({ address, canonical: JSON.stringify(value, null, 2) ?? 'null', command: jsonCommand(address) });
   return <Field label={label} hint={hint} error={describe(field.error)}>{(id, describedBy) => <>
-    <textarea id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(css.input, css.textarea, css.mono)} rows={rows} value={field.text} spellCheck={false}
+    {line ? <input id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(css.input, css.mono)} value={field.text} spellCheck={false}
+      onChange={event => field.change(event.target.value)} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); field.apply(); } }} />
+    : <textarea id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(css.input, css.textarea, css.mono)} rows={rows} value={field.text} spellCheck={false}
       onChange={event => field.change(event.target.value)} onBlur={field.apply}
-      onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); field.apply(); } }} />
+      onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); field.apply(); } }} />}
     <ConflictActions field={field} />
   </>}</Field>;
 }
 
 /** Plain metadata text uses the same versioned draft owner as JSON. Encoding
- * keeps its canonical field identity exact even for empty strings and quotes. */
-export function DraftTextField({ label, value, address, multiline, compact }: { label: string; value: string; address: FieldAddress; multiline?: boolean; compact?: boolean }) {
+ * keeps its canonical field identity exact even for empty strings and quotes.
+ * `compact` is an inline heading (as Dify's node title): clearing it removes
+ * the authored text, so its owner falls back. `bare` is a borderless,
+ * content-sized description under that heading. */
+export function DraftTextField({ label, value, address, multiline, compact, bare, placeholder }: { label: string; value: string; address: FieldAddress; multiline?: boolean; compact?: boolean; bare?: boolean; placeholder?: string }) {
   const describe = useFieldError();
-  const field = useFieldDraft({ address, canonical: JSON.stringify(value), command: jsonCommand(address) });
+  const command = jsonCommand(address);
+  const field = useFieldDraft({ address, canonical: JSON.stringify(value), command: compact
+    ? (document, text) => { try { if (typeof JSON.parse(text) === 'string' && !JSON.parse(text).trim()) return fieldText(document, address) === undefined ? { status: 'unchanged' } : { status: 'applied', document: setField(document, address, undefined) }; } catch { /* The JSON command reports it. */ } return command(document, text); }
+    : command });
   let text = field.text;
   try { const parsed: unknown = JSON.parse(field.text); if (typeof parsed === 'string') text = parsed; } catch { /* Kept detached text remains inspectable. */ }
   const control = (id?: string, describedBy?: string) => multiline
-    ? <textarea id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={clsx(css.input, css.textarea)} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} />
-    : <input id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={compact ? css.titleInput : css.input} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) field.apply(); }} />;
+    ? <textarea id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={bare ? css.bareTextarea : clsx(css.input, css.textarea)} rows={bare ? 1 : undefined} placeholder={placeholder} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} />
+    : <input id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={compact ? css.titleInput : css.input} placeholder={placeholder} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.currentTarget.blur(); field.apply(); } }} />;
   return compact ? <>{control()}{field.error && <small className={css.hintError} role="alert">{describe(field.error)}</small>}<ConflictActions field={field} /></> : <Field label={label} error={describe(field.error)}>{(id, describedBy) => <>{control(id, describedBy)}<ConflictActions field={field} /></>}</Field>;
 }
 
@@ -118,7 +129,7 @@ export function NumberField({ label, value, address, min = 0, max = Number.MAX_S
     onChange={event => field.change(event.target.value)} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) field.apply(); }} /><ConflictActions field={field} /></>}</Field>;
 }
 
-/** An authored key at a `key` address (a node id, a Parallel branch key),
+/** An authored key at a `key` address (a node ID),
  * renamed explicitly on Enter, blur, Apply, Save or Check through `rename`,
  * never per keystroke. `onRenamed` runs once the editor accepted it. */
 export function KeyField({ label, hint, value, address, rename, onRenamed, error, compact }: {
@@ -154,9 +165,15 @@ export function SelectField<T extends string>({ label, value, options, onChange,
   </select>}</Field>;
 }
 
-export function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
+/** A panel group. As Dify, `help` explains it in a "?" tooltip. */
+export function Section({ title, help, aside, children }: { title: string; help?: string; aside?: ReactNode; children: ReactNode }) {
   return <section className={css.group}>
-    <h3 className={css.groupHeading}>{title}{aside !== undefined && <small>{aside}</small>}</h3>
+    <h3 className={css.groupHeading}>{help ? <span className={css.headingText}>{title}<HelpTip text={help} /></span> : title}{aside !== undefined && <small>{aside}</small>}</h3>
     {children}
   </section>;
+}
+
+/** Dify's "?" beside a heading. */
+export function HelpTip({ text }: { text: string }) {
+  return <Tooltip label={text} side="bottom" maxWidth={240}><span className={css.promptHint} tabIndex={0} aria-label={text}><IconQuestionOutline14 /></span></Tooltip>;
 }

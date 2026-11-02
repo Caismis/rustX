@@ -497,7 +497,7 @@ fn loop_facts_remain_journal_observations_without_client_execution_or_history() 
         RuntimeEvent::WorkflowLoopExited {
             node,
             iterations: 1,
-            status: WorkflowLoopExit::Exhausted,
+            status: WorkflowLoopExit::LoopCompleted,
         },
     ] {
         projection.apply(event_observation(event));

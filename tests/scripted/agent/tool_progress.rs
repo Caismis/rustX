@@ -476,7 +476,10 @@ async fn parallel_calls_bound_progress_per_call_and_keep_canonical_order() {
     let guarded_started = std::time::Instant::now();
     let mut fixture_setup_elapsed = None;
     let mut execution_started = None;
-    let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    // A hang guard, not a latency bound: two durable request starts and
+    // hundreds of journaled progress events can take tens of seconds in a
+    // debug build while the whole suite shares the CPU and disk.
+    let result = tokio::time::timeout(std::time::Duration::from_secs(60), async {
         let setup_started = std::time::Instant::now();
         // Construction remains inside the original guard. Retaining this
         // owner only permits bounded original-J diagnostics after cancellation.

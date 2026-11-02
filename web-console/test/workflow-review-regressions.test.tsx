@@ -1,31 +1,31 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within as uiWithin } from '@testing-library/react';
-import { useSelector } from '@xstate/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createActor, waitFor } from 'xstate';
-import { addBranch, addNode, emptyBlock, renameBranch } from '../src/app/workflows/document/commands';
+import { addNode, connect, renameLoopVariable, renameNode, replaceNode } from '../src/app/workflows/document/commands';
+import { rootBlock } from './workflow-root';
 import { copyFragment, duplicateFragment, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
-import { blockField, encodeField, fieldValue, nodeField, setField, within, type FieldAddress } from '../src/app/workflows/document/fields';
-import { putNote, setLane, setNodePresentation, setOrder } from '../src/app/workflows/document/geometry';
-import { blockAt, sameBlockPath, type BlockPath, type Value, type WorkflowDocument } from '../src/app/workflows/document/model';
-import { renameSchemaField, schemaPropertyAddress } from '../src/app/workflows/document/schema';
-import { workflowEditorMachine, type WorkflowEditorActor } from '../src/app/workflows/machines/editor';
+import { blockField, encodeField, nodeField, setField, type FieldAddress } from '../src/app/workflows/document/fields';
+import { putNote, setNodePresentation } from '../src/app/workflows/document/geometry';
+import { sameBlockPath, type Block, type BlockPath, type NodeDefinition, type Value, type WorkflowDocument } from '../src/app/workflows/document/model';
+import { renameSchemaField, schemaConsumers, schemaPropertyAddress } from '../src/app/workflows/document/schema';
+import { blockReferences } from '../src/app/workflows/document/references';
+import { isDirty, workflowEditorMachine, type WorkflowEditorActor } from '../src/app/workflows/machines/editor';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
-import { organizeDocument } from '../src/app/workflows/ui/editor/layout';
 import { projectScene } from '../src/app/workflows/ui/editor/scene';
-import { viewId } from '../src/app/workflows/ui/editor/selection';
 import { DraftOwner, FieldCommits } from '../src/app/workflows/ui/editor/forms/drafts';
 import { ReferencePicker } from '../src/app/workflows/ui/editor/forms/ReferencePicker';
-import { SchemaEditor } from '../src/app/workflows/ui/editor/forms/SchemaEditor';
 import { exampleSource } from './workflow-fixtures';
 import renameCases from '../../tests/fixtures/workflow/schema-rename.json';
 import collisionCases from '../../tests/fixtures/workflow/schema-rename-collisions.json';
-import constructionCollision from '../../tests/fixtures/workflow/schema-construction-collision.json';
+import scopeCases from '../../tests/fixtures/workflow/schema-rename-scopes.json';
+import clipboardCases from '../../tests/fixtures/workflow/clipboard-producer-scopes.json';
+import { putProperty } from '../src/app/workflows/ui/editor/forms/structured-output/schema';
 
 afterEach(cleanup);
-const fixture = (): WorkflowDocument => ({ description: 'Review regressions', block: emptyBlock() });
+const fixture = (): WorkflowDocument => ({ description: 'Review regressions', block: rootBlock() });
 async function actorFor(document: WorkflowDocument, analyze: WorkflowScopePort['analyze'] = () => new Promise(() => {})) {
   const source = { ...exampleSource('typed_agent'), document };
-  const port: WorkflowScopePort = { endpoint: 'ws://fixture/', scope: { kind: 'user' }, analyze, modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}), read: async () => source, check: () => new Promise(() => {}), write: () => new Promise(() => {}) };
+  const port: WorkflowScopePort = { endpoint: 'ws://fixture/', scope: { kind: 'user' }, enable: () => new Promise(() => {}), analyze, toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}), read: async () => source, check: () => new Promise(() => {}), write: () => new Promise(() => {}) };
   const actor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: source.id } } }).start();
   await waitFor(actor, state => !!state.context.document);
   return actor;
@@ -38,176 +38,10 @@ function oneTransaction(actor: WorkflowEditorActor, before: WorkflowDocument, af
 }
 const positions = (document: WorkflowDocument, path: BlockPath) => new Map(projectScene(document).nodes.filter(node => node.data.view === 'node' && sameBlockPath(node.data.path, path)).map(node => [node.data.local, node.position]));
 
-describe('owned Object construction collisions', () => {
-  const owners = ['Parallel output', 'Loop output', 'nested Object', 'Parallel input', 'Loop initial input', 'Loop carry', 'root output'] as const;
-  const cases = owners.flatMap(owner => [true, false].flatMap(source => [false, true].map(literal => ({ owner, source, literal }))));
-  it.each(cases)('rejects $owner with source present=$source literal=$literal before rebinding any consumer or draft', async ({ owner, source, literal }) => {
-    let document = structuredClone(constructionCollision) as WorkflowDocument;
-    let block: BlockPath = [{ node: 'fork', branch: 'main' }], contract = 'output';
-    let construction = nodeField(block, 'done', ['output']);
-    if (owner.startsWith('Loop')) {
-      document = addNode(fixture(), [], 'loop', 'repeat'); block = [{ node: 'repeat' }];
-      construction = owner === 'Loop output' ? nodeField(block, 'done', ['output']) : nodeField([], 'repeat', [owner === 'Loop carry' ? 'carry' : 'input']);
-      contract = owner === 'Loop output' ? 'output' : 'input';
-      // The earlier construction can be changed locally before a later carry
-      // collision throws; the actor must reject that whole candidate too.
-      document = setField(document, nodeField([], 'repeat', ['input']), { type: 'object', fields: { before: { type: 'literal', value: 'wanted' } } });
-    } else if (owner === 'Parallel input') {
-      contract = 'input'; construction = nodeField([], 'fork', ['branches', { key: 'main' }, 'input']);
-    } else if (owner === 'root output') {
-      document = fixture(); block = []; construction = nodeField([], 'done', ['output']);
-    }
-    const schema = { type: 'object', properties: { before: { type: 'string' } }, ...(source ? { required: ['before'] } : {}), additionalProperties: true };
-    const fields: Record<string, Value> = { ...(source ? { before: { type: 'literal' as const, value: 'wanted' } } : {}), after: { type: 'literal', value: 'unrelated' } };
-    const data = { ...(source ? { before: 'wanted' } : {}), after: 'unrelated' };
-    const value: Value = literal ? { type: 'literal', value: data } : { type: 'object', fields }, nested = owner === 'nested Object';
-    const address = blockField(block, [contract, ...(nested ? ['properties', { key: 'wrapper' }] : [])]);
-    document = setField(document, blockField(block, [contract]), nested ? { type: 'object', properties: { wrapper: schema } } : schema);
-    document = setField(document, construction, nested ? literal ? { type: 'literal', value: { wrapper: data } } : { type: 'object', fields: { wrapper: value } } : value);
-    const actor = await actorFor(document);
-    actor.send({ type: 'EDIT', apply: current => ({ ...current, description: 'Earlier accepted edit' }) });
-    actor.send({ type: 'EDIT', apply: current => ({ ...current, description: 'Redo must survive rejection' }) });
-    actor.send({ type: 'UNDO' });
-    const pending = within(construction, literal ? ['value'] : [...(nested ? ['fields', { key: 'wrapper' }] : []), 'fields', { key: source ? 'before' : 'after' }, 'value']);
-    const rename = schemaPropertyAddress(address, 'before'), key = encodeField(rename), other = encodeField(pending);
-    actor.send({ type: 'DRAFT', address: pending, text: '"unfinished construction' });
-    actor.send({ type: 'DRAFT', address: rename, text: 'after' });
-    const prior = actor.getSnapshot().context;
-    expect(prior.past).toHaveLength(1); expect(prior.future).toHaveLength(1);
-    actor.send({ type: 'APPLY_DRAFT', field: key, version: prior.drafts[key].version, command: current => ({ status: 'applied', document: renameSchemaField(current, address, 'before', 'after') }) });
-    const after = actor.getSnapshot().context;
-    expect(after.document).toBe(prior.document); expect(after.document).toEqual(prior.document);
-    expect(after.past).toBe(prior.past); expect(after.future).toBe(prior.future); expect(after.generation).toBe(prior.generation);
-    expect(after.drafts[other]).toBe(prior.drafts[other]);
-    expect(after.drafts[key]).toEqual({ ...prior.drafts[key], error: { kind: 'rejected', code: 'duplicate_identifier' } });
-    actor.stop();
-  });
-
-  it('renames the exact nested construction while leaving an unrelated occupied key alone', () => {
-    let document = fixture();
-    document.block.output = { type: 'object', properties: { wrapper: { type: 'object', properties: { before: { type: 'string' } } } } };
-    document = setField(document, nodeField([], 'done', ['output']), { type: 'object', fields: { wrapper: { type: 'object', fields: { before: { type: 'literal', value: 'wanted' } } }, unrelated: { type: 'object', fields: { after: { type: 'literal', value: 'keep' } } } } });
-    const after = renameSchemaField(document, blockField([], ['output', 'properties', { key: 'wrapper' }]), 'before', 'after');
-    expect(after.block.nodes.done).toMatchObject({ output: { fields: { wrapper: { fields: { after: { value: 'wanted' } } }, unrelated: { fields: { after: { value: 'keep' } } } } } });
-  });
-
-  it('rejects a Literal leaf under an Object AST without rewriting unrelated business literals', () => {
-    let document = fixture();
-    document.block.output = { type: 'object', properties: { wrapper: { type: 'object', properties: { before: { type: 'string' } } } } };
-    document = setField(document, nodeField([], 'done', ['output']), { type: 'object', fields: { wrapper: { type: 'literal', value: { before: 'wanted', after: 'unrelated' } }, unrelated: { type: 'literal', value: { after: 'keep' } } } });
-    expect(() => renameSchemaField(document, blockField([], ['output', 'properties', { key: 'wrapper' }]), 'before', 'after')).toThrow('duplicate_identifier');
-    document = setField(document, nodeField([], 'done', ['output', 'fields', { key: 'wrapper' }]), { type: 'literal', value: { before: 'wanted' } });
-    const after = renameSchemaField(document, blockField([], ['output', 'properties', { key: 'wrapper' }]), 'before', 'after');
-    expect(after.block.nodes.done).toEqual(document.block.nodes.done);
-  });
-
-  it.each([false, true])('refuses an opaque whole-value construction with nested=%s without guessing its upstream data', async nested => {
-    let document = structuredClone(constructionCollision) as WorkflowDocument;
-    const block = [{ node: 'fork', branch: 'main' }];
-    const data = { type: 'object', fields: { before: { type: 'literal', value: 'wanted' }, after: { type: 'literal', value: 'unrelated' } } };
-    document = setField(document, blockField(block, ['input']), { type: 'object', properties: { before: { type: 'string' }, after: { type: 'string' } }, required: ['before', 'after'], additionalProperties: false });
-    document = setField(document, nodeField([], 'fork', ['branches', { key: 'main' }, 'input']), data);
-    const output = blockAt(document, block)!.output;
-    document = setField(document, blockField(block, ['output']), nested ? { type: 'object', properties: { wrapper: output } } : output);
-    document = setField(document, nodeField(block, 'done', ['output']), nested ? { type: 'object', fields: { wrapper: { type: 'reference', path: ['args'] } } } : { type: 'reference', path: ['args'] });
-    const address = blockField(block, ['output', ...(nested ? ['properties', { key: 'wrapper' }] : [])]);
-    const actor = await actorFor(document), field = schemaPropertyAddress(address, 'before'), key = encodeField(field);
-    actor.send({ type: 'DRAFT', address: field, text: 'after' });
-    const prior = actor.getSnapshot().context;
-    actor.send({ type: 'APPLY_DRAFT', field: key, version: prior.drafts[key].version, command: current => ({ status: 'applied', document: renameSchemaField(current, address, 'before', 'after') }) });
-    const after = actor.getSnapshot().context;
-    expect(after.document).toBe(prior.document); expect(after.past).toBe(prior.past); expect(after.future).toBe(prior.future); expect(after.generation).toBe(prior.generation);
-    expect(after.drafts[key]).toEqual({ ...prior.drafts[key], error: { kind: 'rejected', code: 'unsupported_schema_rename' } });
-    actor.stop();
-  });
-
-  it('renames explicit Object keys whose values are references, and refuses an opaque Loop carry', () => {
-    const document = fixture();
-    document.block.output = { type: 'object', properties: { before: { type: 'object' } } };
-    document.block.nodes.done = { type: 'return', output: { type: 'object', fields: { before: { type: 'reference', path: ['args'] } } } };
-    expect(renameSchemaField(document, blockField([], ['output']), 'before', 'after').block.nodes.done).toMatchObject({ output: { fields: { after: { type: 'reference', path: ['args'] } } } });
-    let loop = addNode(fixture(), [], 'loop', 'repeat');
-    loop = setField(loop, blockField([{ node: 'repeat' }], ['input']), { type: 'object', properties: { before: { type: 'string' } } });
-    loop = setField(loop, nodeField([], 'repeat', ['input']), { type: 'object', fields: { before: { type: 'literal', value: 'wanted' } } });
-    expect(() => renameSchemaField(loop, blockField([{ node: 'repeat' }], ['input']), 'before', 'after')).toThrow('unsupported_schema_rename');
-    expect(loop.block.nodes.repeat).toMatchObject({ input: { fields: { before: { value: 'wanted' } } }, carry: { type: 'reference', path: ['result'] } });
-  });
-});
-
-describe('native branch keys in clipboard fragments', () => {
-  it.each(['main', 'args'].flatMap(branch => [false, true].map(child => ({ branch, child }))))('copies, pastes and duplicates branch $branch child=$child with qualified presentation', async ({ branch, child }) => {
-    let document = structuredClone(constructionCollision) as WorkflowDocument;
-    if (branch !== 'main') document = renameBranch(document, [], 'fork', 'main', branch);
-    const privatePath = [{ node: 'fork', branch }];
-    document = setNodePresentation(document, privatePath, 'done', { title: 'Private return', position: { x: 402, y: 120 } });
-    document = setLane(document, { address: { block: [], node: 'fork' }, branch, position: { x: 24, y: 72 }, dimensions: { width: 640, height: 256 } });
-    document = putNote(document, { id: 'private', block: privatePath, text: 'Private note', theme: 'blue', position: { x: 35, y: 300 }, dimensions: { width: 200, height: 100 } });
-    const path = child ? privatePath : [], id = child ? 'done' : 'fork';
-    const fragment = parseFragment(copyFragment(document, 'owner', path, [id]));
-    expect(fragment.nodes[id]).toEqual(blockAt(document, path)!.nodes[id]);
-    const pasted = pasteFragment(document, 'owner', path, fragment), duplicated = duplicateFragment(document, path, [id], [], positions(document, path));
-    for (const result of [pasted, duplicated]) {
-      const at = child ? privatePath : [{ node: 'fork_copy', branch }];
-      expect(blockAt(result.document, at)!.nodes[child ? 'done_copy' : 'done']).toEqual(blockAt(document, privatePath)!.nodes.done);
-      expect(result.document.editor?.nodes).toContainEqual(expect.objectContaining({ address: { block: at, node: child ? 'done_copy' : 'done' }, title: 'Private return' }));
-      if (!child) {
-        expect(result.document.editor?.branches).toContainEqual(expect.objectContaining({ address: { block: [], node: 'fork_copy' }, branch }));
-        expect(result.document.editor?.notes).toContainEqual(expect.objectContaining({ block: at, position: { x: 35, y: 300 } }));
-      }
-      const actor = await actorFor(document); actor.send({ type: 'EDIT', apply: () => result.document });
-      oneTransaction(actor, document, result.document); actor.stop();
-    }
-  });
-
-  it('allows args as an authored branch name while keeping it reserved for executable node IDs', () => {
-    const document = addBranch(addNode(fixture(), [], 'parallel', 'fork'), [], 'fork', 'args');
-    expect(blockAt(document, [{ node: 'fork', branch: 'args' }])).toBeDefined();
-    expect(() => addNode(document, [], 'return', 'args')).toThrow('reserved_identifier');
-    const fragment = JSON.parse(copyFragment(document, 'owner', [], ['fork']));
-    const illegalChild = structuredClone(fragment);
-    illegalChild.nodes.fork.branches.args.block.nodes = { args: illegalChild.nodes.fork.branches.args.block.nodes.done };
-    const bad = [{ ...fragment, nodes: { args: document.block.nodes.fork } }, illegalChild];
-    for (const value of bad) expect(() => parseFragment(JSON.stringify(value))).toThrow('invalid_fragment');
-  });
-
-  it('retains legal args orphan metadata below a copied container without treating it as an executable node', () => {
-    const privatePath = [{ node: 'fork', branch: 'main' }], orphan = [...privatePath, { node: 'args', branch: 'args' }];
-    const document = structuredClone(constructionCollision) as WorkflowDocument;
-    document.editor = {
-      nodes: [{ address: { block: privatePath, node: 'args' }, title: 'Retained orphan' }],
-      entries: [{ block: orphan, position: { x: 24, y: 80 } }],
-      branches: [{ address: { block: privatePath, node: 'args' }, branch: 'args', position: { x: 24, y: 72 }, dimensions: { width: 640, height: 256 } }],
-      notes: [{ id: 'orphan', block: orphan, text: 'Retained', theme: 'blue', position: { x: 24, y: 80 }, dimensions: { width: 200, height: 100 } }],
-      orders: [{ target: { kind: 'block_output', block: orphan, path: [] }, fields: ['keep'] }],
-    };
-    const fragment = parseFragment(copyFragment(document, 'owner', [], ['fork']));
-    expect(fragment.editor).toEqual(document.editor);
-    const after = pasteFragment(document, 'owner', [], fragment).document;
-    expect(after.editor?.nodes).toContainEqual({ address: { block: [{ node: 'fork_copy', branch: 'main' }], node: 'args' }, title: 'Retained orphan' });
-    expect(after.editor?.orders).toContainEqual({ target: { kind: 'block_output', block: [{ node: 'fork_copy', branch: 'main' }, { node: 'args', branch: 'args' }], path: [] }, fields: ['keep'] });
-    expect(blockAt(after, privatePath)!.nodes).not.toHaveProperty('args');
-  });
-
-  it.each(['', 'with.dot', 'x'.repeat(65), 'args\n'])('still rejects invalid local key %j in every identity decoder entry point', branch => {
-    const document = structuredClone(constructionCollision) as WorkflowDocument;
-    const fragment = JSON.parse(copyFragment(document, 'owner', [], ['fork']));
-    const fork = fragment.nodes.fork;
-    const bad = [
-      { ...fragment, nodes: { fork: { ...fork, branches: { [branch]: fork.branches.main } } } },
-      { ...fragment, block: [{ node: 'fork', branch }] },
-      { ...fragment, editor: { branches: [{ address: { block: [], node: 'fork' }, branch, position: { x: 24, y: 72 }, dimensions: { width: 640, height: 256 } }] } },
-      { ...fragment, nodes: { [branch]: { type: 'return', output: { type: 'literal', value: {} } } } },
-      { ...fragment, editor: { notes: [{ id: branch, block: [], text: '', theme: 'blue', position: { x: 24, y: 80 }, dimensions: { width: 200, height: 100 } }] } },
-    ];
-    for (const value of bad) expect(() => parseFragment(JSON.stringify(value))).toThrow('invalid_fragment');
-    expect(() => putNote(document, { id: branch, block: [], text: '', theme: 'blue', position: { x: 24, y: 80 }, dimensions: { width: 200, height: 100 } })).toThrow('invalid_identifier');
-  });
-});
-
 describe('finite schema renames', () => {
   it.each(renameCases)('keeps $name in one undoable native contract transaction', async example => {
     const before = fixture(); before.block.input = example.before;
-    before.block.nodes.done = { type: 'return', output: { type: 'literal', value: { before: 'Do not rewrite business literals' } } };
+    before.block.nodes.done = { type: 'return', outputs: [] };
     const path = example.path as FieldAddress['path'];
     const actor = await actorFor(before);
     actor.send({ type: 'EDIT', apply: document => renameSchemaField(document, blockField([], ['input', ...path]), 'before', 'after') });
@@ -217,8 +51,8 @@ describe('finite schema renames', () => {
     oneTransaction(actor, before, after); actor.stop();
   });
 
-  it.each(['const', 'enum'] as const)('refuses a conflicting ancestor %s atomically', async constraint => {
-    const before = fixture(); before.block.input = { type: 'object', properties: { child: { type: 'object', properties: { before: { type: 'string' } } } }, [constraint]: constraint === 'const' ? { child: { before: 'x', after: 'occupied' } } : [{ child: { before: 'x' } }, { child: { before: 'x', after: 'occupied' } }] };
+  it.each(['const', 'enum', 'default'] as const)('refuses a conflicting ancestor %s atomically', async constraint => {
+    const before = fixture(); before.block.input = { type: 'object', properties: { child: { type: 'object', properties: { before: { type: 'string' } } } }, [constraint]: constraint === 'enum' ? [{ child: { before: 'x' } }, { child: { before: 'x', after: 'occupied' } }] : { child: { before: 'x', after: 'occupied' } } };
     const actor = await actorFor(before);
     actor.send({ type: 'EDIT', apply: document => renameSchemaField(document, blockField([], ['input', 'properties', { key: 'child' }]), 'before', 'after') });
     const state = actor.getSnapshot().context;
@@ -249,77 +83,8 @@ describe('finite schema renames', () => {
   });
 });
 
-function disjointLanes(document: WorkflowDocument, path: BlockPath, id = 'fork') {
-  const frames = projectScene(document).nodes.filter(node => node.data.view === 'lane' && node.parentId === viewId(path, 'node', id));
-  for (let i = 0; i < frames.length; i++) for (const other of frames.slice(i + 1)) {
-    const frame = frames[i];
-    expect(frame.position.x + frame.width! <= other.position.x || other.position.x + other.width! <= frame.position.x || frame.position.y + frame.height! <= other.position.y || other.position.y + other.height! <= frame.position.y).toBe(true);
-  }
-  return frames;
-}
-
-describe('saved Parallel lane growth', () => {
-  it.each(([[], [{ node: 'outer' }]] satisfies BlockPath[]).map(path => ({ path })))('separates new and enlarged lanes in Block $path before and after organize', async ({ path }) => {
-    let document = fixture(); if (path.length) document = addNode(document, [], 'loop', 'outer');
-    document = addNode(document, path, 'parallel', 'fork');
-    document = await organizeDocument(document);
-    document = addBranch(document, path, 'fork', 'alpha');
-    disjointLanes(document, path);
-    const order = { kind: 'branches' as const, address: { block: path, node: 'fork' } };
-    document = setOrder(document, order, ['alpha', 'main']);
-    const first = await organizeDocument(document);
-    const frames = disjointLanes(first, path);
-    expect(frames.find(frame => frame.data.local === 'alpha')!.position).toEqual({ x: 24, y: 72 });
-    expect(frames.find(frame => frame.data.local === 'main')!.position.y).toBeGreaterThan(72);
-    const privatePath = [...path, { node: 'fork', branch: 'alpha' }];
-    let grown = addNode(first, privatePath, 'loop', 'larger');
-    grown = putNote(grown, { id: 'lane_note', block: privatePath, text: 'Relative note', theme: 'blue', position: { x: 30, y: 600 }, dimensions: { width: 220, height: 110 } });
-    disjointLanes(grown, path);
-    const organized = await organizeDocument(grown);
-    disjointLanes(organized, path);
-    expect(organized.block).toBe(grown.block); expect(organized.editor?.notes).toEqual(grown.editor?.notes);
-    for (const lane of organized.editor?.branches ?? []) expect(lane.dimensions.width <= 8192 && lane.dimensions.height <= 8192).toBe(true);
-    expect(await organizeDocument(grown)).toEqual(organized);
-    const actor = await actorFor(grown); actor.send({ type: 'EDIT', apply: () => organized });
-    oneTransaction(actor, grown, organized); actor.stop();
-  });
-
-  it('keeps noncolliding authored lane positions and resolves collisions after child measurement', () => {
-    let document = addBranch(addNode(fixture(), [], 'parallel', 'fork'), [], 'fork', 'alpha');
-    document = setLane(document, { address: { block: [], node: 'fork' }, branch: 'main', position: { x: 500, y: 1000 }, dimensions: { width: 640, height: 232 } });
-    const frames = disjointLanes(document, []);
-    expect(frames.find(frame => frame.data.local === 'main')!.position).toEqual({ x: 500, y: 1000 });
-  });
-});
 
 describe('one duplicate command for every entry point', () => {
-  it.each(['return', 'loop', 'parallel'] as const)('offsets and selects identities for positioned and unpositioned %s copies', async kind => {
-    let document = fixture(); if (kind !== 'return') document = addNode(document, [], kind, 'owner');
-    const id = kind === 'return' ? 'done' : 'owner';
-    if (kind !== 'return') {
-      const child = [{ node: id, ...(kind === 'parallel' ? { branch: 'main' } : {}) }];
-      document = setNodePresentation(document, child, 'done', { position: { x: 402, y: 120 }, title: 'Private return' });
-      document = putNote(document, { id: 'private', block: child, text: 'Keep relative', theme: 'green', position: { x: 35, y: 320 }, dimensions: { width: 240, height: 120 } });
-    }
-    for (const positioned of [false, true]) {
-      const before = positioned ? setNodePresentation(document, [], id, { position: { x: 500, y: 240 }, title: 'Finish', dimensions: { width: 256, height: 128 } }) : document;
-      const original = positions(before, []).get(id)!;
-      const actor = await actorFor(before);
-      actor.send({ type: 'EDIT', apply: current => duplicateFragment(current, [], [id], [], positions(current, [])).document });
-      const after = actor.getSnapshot().context.document!;
-      expect(after.editor?.nodes?.find(entry => entry.address.node === `${id}_copy` && !entry.address.block.length)?.position).toEqual({ x: original.x + 32, y: original.y + 32 });
-      if (kind !== 'return') {
-        const child = [{ node: `${id}_copy`, ...(kind === 'parallel' ? { branch: 'main' } : {}) }];
-        expect(after.editor?.nodes?.find(entry => sameBlockPath(entry.address.block, child))?.position).toEqual({ x: 402, y: 120 });
-        expect(after.editor?.notes?.at(-1)).toMatchObject({ id: 'private_2', block: child, position: { x: 35, y: 320 } });
-      }
-      oneTransaction(actor, before, after);
-      const repeated = duplicateFragment(after, [], [id], [], positions(after, []));
-      expect(repeated.nodes).toEqual([`${id}_copy_2`]);
-      expect(repeated.document.editor?.nodes?.find(entry => entry.address.node === repeated.nodes[0] && !entry.address.block.length)?.position).toEqual({ x: original.x + 64, y: original.y + 64 });
-      expect(document.block.nodes[id]).toEqual(before.block.nodes[id]); actor.stop();
-    }
-  });
 
   it.each([{ x: 0.3, y: 0.3 }, { x: 500.3, y: 240.3 }])('separates repeated node and note copies at fractional position %j', point => {
     let document = setNodePresentation(fixture(), [], 'done', { position: point });
@@ -355,69 +120,270 @@ describe('one duplicate command for every entry point', () => {
   });
 });
 
-function SchemaHarness({ actor }: { actor: WorkflowEditorActor }) {
-  const document = useSelector(actor, state => state.context.document)!;
-  return <DraftOwner value={{ editor: actor, commits: new FieldCommits() }}><SchemaEditor label="Input contract" value={document.block.input} address={blockField([], ['input'])} edit={apply => actor.send({ type: 'EDIT', apply })} /></DraftOwner>;
-}
-it('explicitly creates/omits optional array items and preserves exact detached item drafts', async () => {
-  const document = fixture(); document.block.input = { type: 'array' };
-  const actor = await actorFor(document), ui = render(<SchemaHarness actor={actor} />);
-  expect(actor.getSnapshot().context.document).toEqual(document); expect(actor.getSnapshot().context.past).toHaveLength(0);
-  expect(screen.queryByText('Array item contract', { selector: 'h3 span' })).toBeNull();
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Constrain array items' }));
-  expect(actor.getSnapshot().context.document!.block.input).toEqual({ type: 'array', items: { type: 'string' } });
-  const items = ui.container.querySelector('[data-schema-label="Array item contract"]')!;
-  fireEvent.change(uiWithin(items as HTMLElement).getByLabelText('Type', { exact: true }), { target: { value: 'object' } });
-  fireEvent.click(uiWithin(items as HTMLElement).getByRole('button', { name: 'Advanced JSON' }));
-  const text = '{ "type": "object",\n "properties": { unfinished';
-  fireEvent.change(uiWithin(items as HTMLElement).getByLabelText('Array item contract', { exact: true }), { target: { value: text } });
-  const key = encodeField(within(blockField([], ['input']), ['items']));
-  expect(actor.getSnapshot().context.drafts[key].text).toBe(text);
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Constrain array items' }));
-  expect(actor.getSnapshot().context.document!.block.input).toEqual({ type: 'array' });
-  const detached = Object.entries(actor.getSnapshot().context.drafts).find(([, draft]) => draft.text === text)!;
-  expect(detached[0]).not.toBe(key); expect(detached[1]).toMatchObject({ text, conflict: 'missing' });
-  await act(async () => actor.send({ type: 'UNDO' }));
-  expect(actor.getSnapshot().context.drafts[detached[0]]).toMatchObject({ text, conflict: 'missing' });
-  expect(actor.getSnapshot().context.document!.block.input).toMatchObject({ type: 'array', items: { type: 'object' } });
-  expect(fieldValue(actor.getSnapshot().context.document!, within(blockField([], ['input']), ['items']))?.value).toMatchObject({ type: 'object' });
-  await act(async () => actor.send({ type: 'REDO' }));
-  expect(actor.getSnapshot().context.drafts[detached[0]].text).toBe(text);
-  ui.unmount(); actor.stop();
-});
-
 it('sends the original search with every titled producer to the bounded native query', async () => {
-  const document = fixture(); document.block.nodes.done = { type: 'return', output: { type: 'reference', path: ['args'] } };
+  const document = fixture(); document.block.nodes.done = { type: 'return', outputs: [{ variable: 'args', value_selector: ['args'] }] };
   const titled = setNodePresentation(setNodePresentation(addNode(addNode(document, [], 'model', 'first'), [], 'model', 'second'), [], 'first', { title: 'First Draft' }), [], 'second', { title: 'Second Draft' });
   const queries: string[] = [], actor = await actorFor(titled, async (_id, _document, _generation, query) => { queries.push(query!.search ?? ''); return new Promise(() => {}); });
-  render(<DraftOwner value={{ editor: actor, commits: new FieldCommits() }}><ReferencePicker address={nodeField([], 'done', ['output'])} path={['args']} edit={apply => actor.send({ type: 'EDIT', apply })} /></DraftOwner>);
+  render(<DraftOwner value={{ editor: actor, commits: new FieldCommits() }}><ReferencePicker address={nodeField([], 'done', ['outputs', 0, 'value_selector'])} path={['args']} edit={apply => actor.send({ type: 'EDIT', apply })} /></DraftOwner>);
   fireEvent.click(screen.getByRole('button', { name: 'Choose a variable' }));
   fireEvent.change(screen.getByRole('textbox', { name: 'Search reference paths…' }), { target: { value: 'Draft' } });
   await act(async () => { await Promise.resolve(); });
   expect(queries.at(-1)).toBe('Draft'); actor.stop();
 });
 
-it.each(['root Return', 'private Return', 'Loop input', 'Loop until', 'Loop carry'])('labels a selected result reference by its exact %s consumer scope', async kind => {
+it.each(['root Return', 'Loop variable', 'body Tool', 'break condition'])('titles a selected reference by its producer around or inside the %s', async kind => {
   let document = addNode(addNode(fixture(), [], 'model', 'result'), [], 'loop', 'repeat');
   document = setNodePresentation(document, [], 'result', { title: 'Actual result producer' });
   const body = [{ node: 'repeat' }];
-  document = addNode(document, body, 'model', 'result');
-  document = setNodePresentation(document, body, 'result', { title: 'Private result producer' });
-  let address = nodeField([], 'done', ['output']);
-  if (kind === 'private Return') address = nodeField(body, 'done', ['output']);
-  if (kind === 'Loop input') address = nodeField([], 'repeat', ['input']);
-  if (kind === 'Loop until') {
-    document = setField(document, nodeField([], 'repeat', ['until']), { type: 'equal', left: { type: 'reference', path: ['result'] }, right: { type: 'literal', value: {} } });
-    address = nodeField([], 'repeat', ['until', 'left']);
+  document = addNode(addNode(document, body, 'model', 'inner'), body, 'tool', 'use');
+  document = setNodePresentation(document, body, 'inner', { title: 'Private producer' });
+  // An End output holds the variable's path itself.
+  let address = nodeField([], 'done', ['outputs', 0, 'value_selector']), path = ['result'];
+  document = replaceNode(document, [], 'done', { type: 'return', outputs: [{ variable: 'result', value_selector: path }] });
+  if (kind === 'Loop variable') {
+    document = replaceNode(document, [], 'repeat', { ...document.block.nodes.repeat as Extract<NodeDefinition, { type: 'loop' }>, loop_variables: [{ label: 'text', var_type: 'string', value: { type: 'literal', value: '' } }] });
+    address = nodeField([], 'repeat', ['loop_variables', 0, 'value']);
   }
-  if (kind === 'Loop carry') {
-    document = setField(document, nodeField([], 'repeat', ['carry']), { type: 'object', fields: { echo: { type: 'reference', path: ['result'] } } });
-    address = nodeField([], 'repeat', ['carry', 'fields', { key: 'echo' }]);
+  // As in Dify, a body reads the nodes around it.
+  if (kind === 'body Tool') address = nodeField(body, 'use', ['arguments']);
+  if (kind === 'break condition') {
+    path = ['inner'];
+    document = replaceNode(document, [], 'repeat', { ...document.block.nodes.repeat as Extract<NodeDefinition, { type: 'loop' }>, break_condition: { type: 'equal', left: { type: 'reference', path }, right: { type: 'literal', value: '' } } });
+    address = nodeField([], 'repeat', ['break_condition', 'left']);
   }
-  document = setField(document, address, { type: 'reference', path: ['result'] });
+  if (kind !== 'root Return') document = setField(document, address, { type: 'reference', path });
   const actor = await actorFor(document);
-  render(<DraftOwner value={{ editor: actor, commits: new FieldCommits() }}><ReferencePicker address={address} path={['result']} edit={apply => actor.send({ type: 'EDIT', apply })} /></DraftOwner>);
-  expect(screen.getByRole('button', { name: 'Choose a variable' }).textContent).toBe(kind === 'Loop until' || kind === 'Loop carry' ? 'Committed body result' : kind === 'private Return' ? 'Private result producer' : 'Actual result producer');
+  render(<DraftOwner value={{ editor: actor, commits: new FieldCommits() }}><ReferencePicker address={address} path={path} edit={apply => actor.send({ type: 'EDIT', apply })} /></DraftOwner>);
+  expect(screen.getByRole('button', { name: 'Choose a variable' }).textContent).toBe(kind === 'break condition' ? 'Private producer' : 'Actual result producer');
   expect(actor.getSnapshot().context.document).toBe(document); expect(actor.getSnapshot().context.past).toHaveLength(0);
   actor.stop();
+});
+
+describe('body contract boundaries', () => {
+  it.each(['iteration', 'loop'] as const)('renames a body output and its %s round consumer in one undo step', async kind => {
+    const before = fixture();
+    const body = { input: {}, nodes: { start: { type: 'start' as const }, produce: { type: 'model' as const, model: { mode: 'session' as const }, messages: [], output: { type: 'json_schema' as const, schema: { type: 'object', properties: { old: { type: 'boolean' } }, required: ['old'], additionalProperties: false } } } }, edges: [{ from: 'start', to: 'produce' }] };
+    const reference = { type: 'reference' as const, path: ['produce', 'structured_output', 'old'] };
+    before.block.nodes.repeat = kind === 'iteration' ? { type: kind, iterator: { type: 'reference', path: ['args', 'items'] }, output: reference, body }
+      : { type: kind, loop_count: 2, loop_variables: [], break_condition: { type: 'boolean', value: reference }, body };
+    const address = nodeField([{ node: 'repeat' }], 'produce', ['output', 'schema']);
+    expect(schemaConsumers(before, { ...address, path: [...address.path, 'properties', { key: 'old' }] })).toContainEqual({ block: [], node: 'repeat' });
+    const actor = await actorFor(before);
+    actor.send({ type: 'EDIT', apply: document => renameSchemaField(document, address, 'old', 'new') });
+    const after = actor.getSnapshot().context.document!;
+    const container = after.block.nodes.repeat;
+    expect(container).toMatchObject(kind === 'iteration' ? { output: { path: ['produce', 'structured_output', 'new'] } } : { break_condition: { value: { path: ['produce', 'structured_output', 'new'] } } });
+    oneTransaction(actor, before, after); actor.stop();
+  });
+
+  it('allocates a copied container away from its copied descendants and destination ancestors', () => {
+    const before = fixture();
+    before.block.nodes.repeat = { type: 'iteration', iterator: { type: 'reference', path: ['args', 'items'] }, output: { type: 'reference', path: ['repeat_copy', 'text'] },
+      body: { input: {}, nodes: { start: { type: 'start' }, repeat_copy: { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'text' } } }, edges: [{ from: 'start', to: 'repeat_copy' }] } };
+    const fragment = parseFragment(copyFragment(before, 'same', [], ['repeat'], []));
+    const pasted = pasteFragment(before, 'same', [], fragment);
+    expect(pasted.nodes).toEqual(['repeat_copy_2']);
+    expect(pasted.document.block.nodes.repeat_copy_2).toMatchObject({ output: { path: ['repeat_copy', 'text'] } });
+
+  });
+  it('reserves copied subtree IDs across documents and ancestor IDs inside a destination body', () => {
+    const source = fixture();
+    source.block.nodes.source = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'json', schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'string' } } } } } };
+    source.block.nodes.repeat = { type: 'iteration', iterator: { type: 'reference', path: ['source', 'items'] }, output: { type: 'reference', path: ['repeat_copy', 'text'] }, body: { input: {}, nodes: { start: { type: 'start' }, repeat_copy: { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'text' } } }, edges: [{ from: 'start', to: 'repeat_copy' }] } };
+    const fragment = parseFragment(copyFragment(source, 'source', [], ['source', 'repeat'], []));
+    const pasted = pasteFragment(fixture(), 'destination', [], fragment);
+    expect(pasted.nodes).toContain('repeat_copy_2');
+    expect(pasted.document.block.nodes.repeat_copy_2).toMatchObject({ iterator: { path: ['source_copy', 'items'] }, output: { path: ['repeat_copy', 'text'] } });
+    const destination = fixture();
+    destination.block.nodes.source_copy = { type: 'loop', loop_count: 2, loop_variables: [], body: { input: {}, nodes: { start: { type: 'start' } }, edges: [] } };
+    const leaf = parseFragment(copyFragment(source, 'source', [], ['source'], []));
+    expect(pasteFragment(destination, 'destination', [{ node: 'source_copy' }], leaf).nodes).toEqual(['source_copy_2']);
+  });
+
+});
+
+describe('Agent and Model declaration paths', () => {
+  for (const kind of ['agent', 'model'] as const) it.each([false, true])(`${kind} nested array=%s keeps ancestor finite constraints and references in one transaction`, async array => {
+    const contract = (key: string) => {
+      const finite = { [key]: 'value' };
+      const leaf = { type: 'object', properties: { [key]: { type: 'string' } }, required: [key], additionalProperties: false, const: finite, enum: [finite], default: finite };
+      const parentValue = array ? { rows: [finite] } : finite;
+      const parent = array ? { type: 'object', properties: { rows: { type: 'array', items: leaf, const: [finite], enum: [[finite]], default: [finite] } }, required: ['rows'], additionalProperties: false, const: parentValue, enum: [parentValue], default: parentValue } : leaf;
+      return { type: 'object', properties: { parent }, required: ['parent'], additionalProperties: false, const: { parent: parentValue }, enum: [{ parent: parentValue }], default: { parent: parentValue } };
+    };
+    const before = fixture();
+    before.block.nodes.produce = kind === 'agent' ? { type: 'agent', profile: 'reviewer', task: [], output: { type: 'json_schema', schema: contract('old') } }
+      : { type: 'model', model: { mode: 'session' }, messages: [], output: { type: 'json_schema', schema: contract('old') } };
+    const prefix = kind === 'model' ? ['produce', 'structured_output'] : ['produce'];
+    const reference = [...prefix, 'parent', ...array ? ['rows'] : ['old']];
+    before.block.nodes.done = { type: 'return', outputs: [{ variable: 'result', value_selector: reference }] };
+    const address = nodeField([], 'produce', ['output', 'schema', 'properties', { key: 'parent' }, ...array ? ['properties', { key: 'rows' }, 'items'] : []]);
+    const actor = await actorFor(before);
+    actor.send({ type: 'EDIT', apply: document => renameSchemaField(document, address, 'old', 'new') });
+    const after = actor.getSnapshot().context.document!;
+    expect(after.block.nodes.produce).toMatchObject({ output: { schema: contract('new') } });
+    expect(after.block.nodes.done).toMatchObject({ outputs: [{ value_selector: array ? reference : [...prefix, 'parent', 'new'] }] });
+    oneTransaction(actor, before, after); actor.stop();
+  });
+});
+
+
+it('renames Start defaults and references in one history transaction', async () => {
+  const before = fixture();
+  before.block.input = { type: 'object', properties: { old: { type: 'string' } }, required: ['old'], additionalProperties: false, default: { old: 'hello' } };
+  before.block.nodes.done = { type: 'return', outputs: [{ variable: 'result', value_selector: ['args', 'old'] }] };
+  const actor = await actorFor(before);
+  actor.send({ type: 'EDIT', apply: document => renameSchemaField(document, blockField([], ['input']), 'old', 'new') });
+  const after = actor.getSnapshot().context.document!;
+  expect(after.block.input).toMatchObject({ properties: { new: { type: 'string' } }, required: ['new'], default: { new: 'hello' } });
+  expect(after.block.nodes.done).toMatchObject({ outputs: [{ value_selector: ['args', 'new'] }] });
+  oneTransaction(actor, before, after); actor.stop();
+});
+
+it.each([false, true])('atomically rejects copied descendants that shadow target outer IDs, nested=%s', nested => {
+  const source = fixture();
+  source.block.nodes.repeat = { type: 'loop', loop_count: 1, body: { input: {}, nodes: { worker: { type: 'start' } }, edges: [] } };
+  const fragment = parseFragment(copyFragment(source, 'source', [], ['repeat'], []));
+  const target = fixture();
+  target.block.nodes.worker = { type: 'loop', loop_count: 1, body: { input: {}, nodes: { entry: { type: 'start' } }, edges: [] } };
+  target.block.nodes.target = { type: 'loop', loop_count: 1, body: { input: {}, nodes: { entry: { type: 'start' } }, edges: [] } };
+  const before = structuredClone(target);
+  expect(() => pasteFragment(target, 'target', nested ? [{ node: 'target' }] : [], fragment)).toThrow('duplicate_identifier');
+  expect(target).toEqual(before);
+  expect(pasteFragment(fixture(), 'target', [], fragment).nodes).toEqual(['repeat_copy']);
+});
+
+
+describe('Loop variable declaration renames', () => {
+  const input = (): WorkflowDocument => ({ description: 'Loop fields', block: rootBlock() });
+  it('moves nested reads, targets and the parent completion expression without touching business literals', async () => {
+    const before = input();
+    before.block.nodes.outer = { type: 'iteration', iterator: { type: 'reference', path: ['args', 'items'] }, output: { type: 'reference', path: ['repeat', 'old'] }, body: { nodes: {
+      start: { type: 'start' }, repeat: { type: 'loop', loop_count: 1, loop_variables: [{ label: 'old', var_type: 'string', value: { type: 'literal', value: 'old' } }],
+        break_condition: { type: 'equal', left: { type: 'reference', path: ['repeat', 'old'] }, right: { type: 'literal', value: 'old' } },
+        body: { nodes: { start: { type: 'start' }, assign: { type: 'assigner', items: [{ variable: ['repeat', 'old'], operation: 'set', value: { type: 'literal', value: 'old' } }] }, nested: { type: 'iteration', iterator: { type: 'reference', path: ['args', 'items'] }, output: { type: 'reference', path: ['repeat', 'old'] }, body: { nodes: { start: { type: 'start' } } } } }, edges: [] } },
+    }, edges: [] } };
+    const actor = await actorFor(before);
+    actor.send({ type: 'EDIT', apply: document => renameLoopVariable(document, [{ node: 'outer' }], 'repeat', 'old', 'new') });
+    const after = actor.getSnapshot().context.document!;
+    const outer = after.block.nodes.outer; if (outer.type !== 'iteration') throw new Error('fixture');
+    expect(outer.output).toEqual({ type: 'reference', path: ['repeat', 'new'] });
+    expect(outer.body.nodes.repeat).toMatchObject({ loop_variables: [{ label: 'new', value: { value: 'old' } }], break_condition: { left: { path: ['repeat', 'new'] }, right: { value: 'old' } }, body: { nodes: { assign: { items: [{ variable: ['repeat', 'new'], value: { value: 'old' } }] }, nested: { output: { path: ['repeat', 'new'] } } } } });
+    oneTransaction(actor, before, after); actor.stop();
+  });
+  it.each(['occupied', '', 'illegal space'])('rejects %j atomically', async to => {
+    const before = input();
+    before.block.nodes.repeat = { type: 'loop', loop_count: 1, loop_variables: ['old', 'occupied'].map(label => ({ label, var_type: 'boolean', value: { type: 'literal', value: false } })), body: { nodes: { start: { type: 'start' } } } };
+    const actor = await actorFor(before);
+    actor.send({ type: 'EDIT', apply: document => renameLoopVariable(document, [], 'repeat', 'old', to) });
+    expect(actor.getSnapshot().context.document).toEqual(before); expect(actor.getSnapshot().context.past).toHaveLength(0);
+    expect(actor.getSnapshot().context.rejection).toBe(to === 'occupied' ? 'duplicate_identifier' : 'invalid_identifier'); actor.stop();
+  });
+});
+
+
+it('keeps an unrelated body-local producer with the same ID bound to its own variable declaration', () => {
+  const before = fixture();
+  const local: NodeDefinition = { type: 'loop', loop_count: 1, loop_variables: [{ label: 'old', var_type: 'boolean', value: { type: 'literal', value: false } }],
+    break_condition: { type: 'boolean', value: { type: 'reference', path: ['repeat', 'old'] } }, body: { nodes: { start: { type: 'start' }, assign: { type: 'assigner', items: [{ variable: ['repeat', 'old'], operation: 'set', value: { type: 'literal', value: true } }] } }, edges: [{ from: 'start', to: 'assign' }] } };
+  before.block.nodes.repeat = local;
+  before.block.nodes.sibling = { type: 'iteration', iterator: { type: 'reference', path: ['args', 'items'] }, output: { type: 'reference', path: ['repeat', 'old'] },
+    body: { nodes: { start: { type: 'start' }, repeat: local }, edges: [{ from: 'start', to: 'repeat' }] } };
+  const after = renameLoopVariable(before, [], 'repeat', 'old', 'new');
+  expect(after.block.nodes.repeat).toMatchObject({ loop_variables: [{ label: 'new' }], break_condition: { value: { path: ['repeat', 'new'] } } });
+  expect(after.block.nodes.sibling).toEqual(before.block.nodes.sibling);
+});
+
+
+describe('schema rename producer identities', () => {
+  it.each(scopeCases)('renames only the bound $kind producer through the structured output command', async example => {
+    const before = example.before as WorkflowDocument;
+    const address = nodeField([], 'generate', ['output', 'schema']);
+    expect(schemaConsumers(before, { ...address, path: [...address.path, 'properties', { key: 'foo' }] })).toEqual([{ block: [], node: 'done' }]);
+    const direct = renameSchemaField(before, address, 'foo', 'bar');
+    const { editor: _directPresentation, ...directCore } = direct;
+    expect(directCore).toEqual(example.after);
+    const actor = await actorFor(before);
+    actor.send({ type: 'EDIT', apply: putProperty(address, 'foo', 'bar', { type: 'boolean' }, true) });
+    const after = actor.getSnapshot().context.document!;
+    const { editor: _presentation, ...core } = after;
+    expect(core).toEqual(example.after);
+    expect(after.block.nodes.sibling).toEqual(before.block.nodes.sibling);
+    oneTransaction(actor, before, after); actor.stop();
+  });
+});
+
+
+it.each(scopeCases)('keeps the independent $kind producer bound when renaming the root node ID', async example => {
+  const before = example.before as WorkflowDocument, actor = await actorFor(before);
+  actor.send({ type: 'EDIT', apply: document => renameNode(document, [], 'generate', 'root_generator') });
+  const after = actor.getSnapshot().context.document!;
+  expect(after.block.nodes.sibling).toEqual(before.block.nodes.sibling);
+  expect(after.block.nodes.root_generator).toEqual(before.block.nodes.generate);
+  expect(Object.hasOwn(after.block.nodes, 'generate')).toBe(false);
+  expect(after.block.nodes.done).toMatchObject({ outputs: [{ value_selector: ['root_generator', ...(example.kind === 'model' ? ['structured_output'] : []), 'foo'] }] });
+  oneTransaction(actor, before, after); actor.stop();
+});
+
+
+it.each(clipboardCases)('pastes complete $kind groups across documents without rebinding local producers', async example => {
+  const source = example.source as WorkflowDocument, target = example.target as WorkflowDocument;
+  const original = structuredClone(source);
+  const fragment = parseFragment(copyFragment(source, 'source', [], example.selection));
+  const actor = await actorFor(target);
+  actor.send({ type: 'EDIT', apply: document => pasteFragment(document, 'target', [], fragment).document });
+  const pasted = actor.getSnapshot().context.document!;
+  oneTransaction(actor, target, pasted);
+  const connected = connect(pasted, [], 'start', 'next', 'seed_copy');
+  const { editor: _presentation, ...core } = connected;
+  expect(core).toEqual(example.pasted);
+  expect(source).toEqual(original);
+  actor.stop();
+});
+
+
+it.each(clipboardCases)('rejects an incomplete $kind group regardless of an unrelated same-name body', async example => {
+  const source = example.source as WorkflowDocument;
+  for (const localBody of [true, false]) {
+    const selection = example.selection.filter(id => id !== 'generate' && (localBody || id !== 'sibling'));
+    const fragment = parseFragment(copyFragment(source, 'source', [], selection));
+    const dependencies = blockReferences({ nodes: fragment.nodes, edges: fragment.edges });
+    const selector = ['generate', ...(example.kind === 'model' ? ['structured_output'] : []), 'foo'];
+    expect(dependencies.filter(reference => reference[0] === 'generate')).toEqual([selector, selector, selector]);
+    const target = example.target as WorkflowDocument, original = structuredClone(target);
+    const fragmentBefore = structuredClone(fragment);
+    expect(() => pasteFragment(target, 'target', [], fragment)).toThrow('cross_scope');
+    expect(target).toEqual(original); expect(fragment).toEqual(fragmentBefore);
+    const actor = await actorFor(target);
+    actor.send({ type: 'EDIT', apply: document => pasteFragment(document, 'target', [], fragment).document });
+    expect(actor.getSnapshot().context).toMatchObject({ document: original, past: [], future: [], rejection: 'cross_scope' });
+    expect(isDirty(actor.getSnapshot().context)).toBe(false);
+    actor.stop();
+  }
+});
+
+
+it('collects external reads in entry fields without leaking body-local bindings across scopes', () => {
+  const reference = (...path: string[]): Value => ({ type: 'reference', path });
+  const tool = (fields: Record<string, Value> = {}): NodeDefinition => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' },
+    arguments: { type: 'object', fields }, result: { type: 'text' } });
+  const block: Block = { nodes: {
+    repeat: { type: 'loop', loop_count: 1,
+      loop_variables: [{ label: 'flag', var_type: 'boolean', value: reference('same', 'initial') }],
+      break_condition: { type: 'boolean', value: reference('same', 'done') },
+      body: { nodes: { same: tool(), own: { type: 'assigner', items: [{ variable: ['repeat', 'flag'], operation: 'clear' }] },
+        nested: { type: 'iteration', iterator: reference('same', 'items'), output: reference('deep', 'text'), body: { nodes: {
+          deep: tool(), read: tool({ parent: reference('same', 'text'), local: reference('deep', 'text'), outside: reference('missing', 'deep'),
+            literal: { type: 'literal', value: { type: 'reference', path: ['business_data'] } } }),
+        } } },
+      } } },
+    elsewhere: { type: 'iteration', iterator: reference('same', 'items'), output: reference('local', 'text'),
+      body: { nodes: { local: tool({ outside: reference('same', 'text') }) } } },
+    done: { type: 'return', outputs: [{ variable: 'value', value_selector: ['same', 'result'] }] },
+  } };
+  const references = blockReferences(block);
+  expect(references).toHaveLength(5);
+  expect(references).toEqual(expect.arrayContaining([
+    ['same', 'initial'], ['missing', 'deep'], ['same', 'items'], ['same', 'text'], ['same', 'result'],
+  ]));
 });

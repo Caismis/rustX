@@ -14,9 +14,9 @@ function deferred<T>() {
 function scripted() {
   const requests: { query: WorkflowModelChoicesQuery; expected?: string; result: ReturnType<typeof deferred<WorkflowModelChoices>> }[] = [];
   const port: WorkflowScopePort = {
-    endpoint: 'ws://fixture/', scope: { kind: 'user' }, list: () => new Promise(() => {}), read: () => new Promise(() => {}),
+    endpoint: 'ws://fixture/', scope: { kind: 'user' }, enable: () => new Promise(() => {}), list: () => new Promise(() => {}), read: () => new Promise(() => {}),
     check: () => new Promise(() => {}), write: () => new Promise(() => {}),
-    analyze: () => new Promise(() => {}), modelChoices: (query, expected) => { const result = deferred<WorkflowModelChoices>(); requests.push({ query, expected, result }); return result.promise; },
+    analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: (query, expected) => { const result = deferred<WorkflowModelChoices>(); requests.push({ query, expected, result }); return result.promise; },
   };
   return { port, requests };
 }

@@ -114,7 +114,7 @@ pub(in crate::durable::sqlite) fn validate_approval_subject_against_canonical(
     };
     let call_id = match invocation_id {
         crate::tools::types::ToolInvocationId::Agent { call_id } => call_id,
-        crate::tools::types::ToolInvocationId::Workflow { node } => {
+        crate::tools::types::ToolInvocationId::Workflow { node, .. } => {
             if node.block.run.origin.attempt_id() != Some(attempt_id)
                 || node.block.run.conversation_id != *conversation_id
             {
@@ -777,7 +777,7 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
                 let workflow_node = match subject {
                     InteractionSubject::Review { review } => Some(review.instance.as_ref()),
                     InteractionSubject::Questionnaire {
-                        invocation_id: crate::tools::types::ToolInvocationId::Workflow { node },
+                        invocation_id: crate::tools::types::ToolInvocationId::Workflow { node, .. },
                         ..
                     } => Some(node.as_ref()),
                     _ => None,

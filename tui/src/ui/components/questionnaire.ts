@@ -21,7 +21,9 @@ export interface QuestionnaireOverlayOptions {
    * runtime, never inferred here, so an MCP-originated prompt can name its
    * server and a native `ask_user` prompt is never labelled as MCP.
    */
-  requester: InteractionRequester;
+  requester?: InteractionRequester;
+  /** The frame title when no tool asked: a Workflow Human Input names its node. */
+  title?: string;
   /**
    * The routed source label ("Question from reviewer"), when the interaction
    * did not originate in the conversation this client is attached to.
@@ -58,7 +60,8 @@ type RenderedBody = {
 export class QuestionnaireOverlay implements PopupContent {
   readonly interactionId: string;
   readonly questionnaire: QuestionnaireSpecification;
-  readonly requester: InteractionRequester;
+  readonly requester: InteractionRequester | undefined;
+  readonly #title: string | undefined;
   readonly #sourceLabel: string | undefined;
   readonly #onSubmit: (response: QuestionnaireResponse) => void;
   readonly #onDecline: () => void;
@@ -103,6 +106,7 @@ export class QuestionnaireOverlay implements PopupContent {
     this.interactionId = options.interactionId;
     this.questionnaire = options.questionnaire;
     this.requester = options.requester;
+    this.#title = options.title;
     this.#sourceLabel = options.sourceLabel;
     this.#onSubmit = options.onSubmit;
     this.#onDecline = options.onDecline;
@@ -123,7 +127,7 @@ export class QuestionnaireOverlay implements PopupContent {
 
   /** The popup's frame title, which names an MCP requester when there is one. */
   popupTitle(): string {
-    return requesterTitle(this.requester);
+    return this.#title ?? requesterTitle(this.requester!);
   }
 
   /** The popup's help line, contained by the frame below the body. */
@@ -269,7 +273,7 @@ export class QuestionnaireOverlay implements PopupContent {
     const safeWidth = Math.max(1, Math.floor(width));
     const header = [
       fitLine(role.meta(`interaction ${this.interactionId}`), safeWidth),
-      ...requesterLines(this.requester).map((line) =>
+      ...(this.requester ? requesterLines(this.requester) : []).map((line) =>
         fitLine(role.meta(line), safeWidth)
       ),
       ...(this.#sourceLabel === undefined

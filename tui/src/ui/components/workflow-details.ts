@@ -60,7 +60,6 @@ export function workflowDetails(run: WorkflowRunView): string[] {
     if (row.tool_id != null) text += ` · Tool ${row.tool_id} · visit ${row.visit}`;
     if (row.interaction != null) text += ` · interaction ${row.interaction.interaction_id} (root HITL)`;
     if (row.checks_passed != null) text += ` · business checks ${row.checks_passed ? "passed" : "failed"}`;
-    if (row.review_accepted != null) text += ` · Review ${row.review_accepted ? "accepted" : "rejected"}`;
     lines.push(text);
   }
   if (run.omitted_instances > 0) lines.push(`${run.omitted_instances} execution instances omitted by native retention`);

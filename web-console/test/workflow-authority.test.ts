@@ -20,7 +20,7 @@ interface ObservedRequest { id: string | number; method: string; params: Record<
 const native = vi.hoisted(() => {
   /** `native` is the identity the App Server answering at the endpoint
    * reports at `initialize`; `gate`, when set, holds that answer. */
-  const state = { requests: [] as ObservedRequest[], connects: 0, native: 'native-a', gate: undefined as Promise<void> | undefined };
+  const state = { requests: [] as ObservedRequest[], connects: 0, native: 'native-a', catalogGate: undefined as Promise<void> | undefined, gate: undefined as Promise<void> | undefined };
   class FakeTransport implements AppServerTransport {
     readonly closed = undefined;
     private listeners = new Set<(record: unknown) => void>();
@@ -33,6 +33,7 @@ const native = vi.hoisted(() => {
       else if (request.method === 'configuration/sourceWrite') reply({ type: 'sources_written', revision: 'sha256:created', configuration_revision: null });
       else if (request.method === 'workflow/read') reply({ type: 'workflow_source', source: { id: 'flow', revision: 'sha256:created' } });
       else if (request.method === 'workflow/modelChoices') { const query = request.params.query as { type: string; model?: string }; reply({ type: 'workflow_model_choices', choices: query.type === 'models' ? { type: 'models', revision: 'catalog-1', models: ['fixture/model'], next_offset: null } : { type: 'profiles', revision: 'catalog-1', model: query.model, profiles: ['low'], next_offset: null } }); }
+      else if (request.method === 'workflow/toolCatalog') void (request.params.source === 'slow' ? state.catalogGate ?? Promise.resolve() : Promise.resolve()).then(() => reply({ type: 'workflow_tool_catalog', catalog: { sources: [] } }));
       else if (request.method === 'workflow/list') reply({ type: 'workflow_library', library: { target: request.params.target, directory: '/x', absent_revision: 'missing', files: [], diagnostic: null } });
       return Promise.resolve();
     }
@@ -49,7 +50,7 @@ vi.mock('../../tui/src/app-server/websocket-transport.ts', () => ({
 
 const directories: string[] = [];
 afterEach(() => { directories.splice(0).forEach(path => rmSync(path, { force: true, recursive: true })); });
-beforeEach(() => { native.state.requests.length = 0; native.state.connects = 0; native.state.native = 'native-a'; native.state.gate = undefined; });
+beforeEach(() => { native.state.requests.length = 0; native.state.connects = 0; native.state.native = 'native-a'; native.state.gate = undefined; native.state.catalogGate = undefined; });
 /** Requests other than connection initialization. */
 const dispatched = () => native.state.requests.filter(request => request.method !== 'initialize');
 
@@ -57,9 +58,11 @@ const endpoint = 'ws://127.0.0.1:8080/';
 const document = exampleSource('parallel_review').document as unknown as WorkflowFileDocument;
 const operations: WorkflowHostOperation[] = [
   { kind: 'list' },
+  { kind: 'enable', id: 'flow', expected_revision: 'missing', enabled: true },
+  { kind: 'tool_catalog', source: 'fast' },
+  { kind: 'tool_catalog', source: 'fast', cursor: { offset: 16, digest: 'a'.repeat(64) } },
   { kind: 'read', id: 'flow' },
-  { kind: 'check', scope: 'workspace', id: 'flow', document, explain: false },
-  { kind: 'check', scope: 'user', id: 'flow', document, explain: false },
+  { kind: 'check', id: 'flow', document },
   { kind: 'write', id: 'flow', expected_revision: 'missing', edit: { operation: 'create', description: 'Created' } },
   { kind: 'model_choices', query: { type: 'models', offset: 0 } },
 ];
@@ -90,8 +93,12 @@ describe('Workflow operations and Product Host authority (R1)', () => {
     expect(native.state.connects).toBe(0);
     expect(native.state.requests).toHaveLength(0);
 
+    const cursor = { offset: 16, digest: 'a'.repeat(64) };
+    await h2.workflowWorkspace({ authorityId: current.authorityId, endpoint: current.endpoint }, 'native-a', registration.id, { kind: 'tool_catalog', source: 'fast', cursor });
+    expect(dispatched().at(-1)?.params).toEqual({ target: { kind: 'workspace', directory: b }, source: 'fast', cursor });
+
     // The replacement's own scope reaches exactly its own mapping.
-    await h2.workflowWorkspace({ authorityId: current.authorityId, endpoint: current.endpoint }, 'native-a', registration.id, operations[4]);
+    await h2.workflowWorkspace({ authorityId: current.authorityId, endpoint: current.endpoint }, 'native-a', registration.id, operations.find(operation => operation.kind === 'write')!);
     const [write] = native.state.requests.filter(request => request.method === 'configuration/sourceWrite');
     expect(write.params.target).toEqual({ kind: 'workspace', directory: b });
   });
@@ -109,13 +116,12 @@ describe('Workflow operations and Product Host authority (R1)', () => {
     const [registration] = observed.catalog.workspaces;
     const client = fakeClient();
     const port = createWorkflowPort({ client: client.client, host: () => forwarding, hostAuthority: authority.capture(), scope: { kind: 'workspace', workspaceId: registration.id } });
-    const global = createWorkflowPort({ client: client.client, host: () => forwarding, hostAuthority: authority.capture(), scope: { kind: 'user' } });
 
     // H2 replaces H1 behind the same Product Host address.
     host = h2;
     // Before the browser observes the replacement, the Host refuses it.
     await expect(port.write('flow', 'missing', { operation: 'create', description: 'x' })).rejects.toMatchObject({ failure: { kind: 'unavailable' } });
-    await expect(global.check('flow', document, false, registration.id)).rejects.toMatchObject({ failure: { kind: 'unavailable' } });
+    await expect(port.enable('flow', 'missing', true)).rejects.toMatchObject({ failure: { kind: 'unavailable' } });
     // After it does, the port refuses before calling the Host at all.
     await authority.observe();
     await expect(port.list()).rejects.toMatchObject({ failure: { kind: 'unavailable', message: 'product_host_replaced' } });
@@ -143,9 +149,11 @@ describe('Workflow operations and native App Server authority', () => {
   // pass CAS on a replacement server; identity, not revision, refuses them.
   const portOperations: [string, (port: ReturnType<typeof createWorkflowPort>) => Promise<unknown>][] = [
     ['list', port => port.list()],
+    ['enable', port => port.enable('flow', 'missing', true)],
+    ['tool catalog', port => port.toolCatalog('fast')],
     ['read', port => port.read('flow')],
     ['model choices', port => port.modelChoices({ type: 'models', offset: 0 })],
-    ['check', port => port.check('flow', document, false)],
+    ['check', port => port.check('flow', document)],
     ['create (missing target)', port => port.write('flow', 'missing', { operation: 'create', description: 'x' })],
     ['replace (unchanged revision)', port => port.write('flow', 'sha256:same', { operation: 'replace', document })],
   ];
@@ -159,14 +167,6 @@ describe('Workflow operations and native App Server authority', () => {
     // Known and unavailable: never an uncertain write.
     expect((outcome as WorkflowOperationError).failure).toMatchObject({ kind: 'unavailable', message: 'App Server authority replaced' });
     expect(native.state.connects).toBe(1);
-    expect(dispatched()).toEqual([]);
-  });
-
-  it('refuses a Global dependency check routed through a Workspace on a replaced native server', async () => {
-    const { h, registration, authority } = await host();
-    const port = createWorkflowPort({ client: browser().client, host: () => h, hostAuthority: authority.capture(), scope: { kind: 'user' } });
-    native.state.native = 'native-b';
-    await expect(port.check('flow', document, false, registration)).rejects.toMatchObject({ failure: { kind: 'unavailable' } });
     expect(dispatched()).toEqual([]);
   });
 
@@ -203,6 +203,19 @@ describe('Workflow operations and native App Server authority', () => {
     await expect(port.modelChoices({ type: 'profiles', model: 'fixture/model', offset: 32 }, 'catalog-1')).resolves.toEqual({ type: 'profiles', revision: 'catalog-1', model: 'fixture/model', profiles: ['low'], next_offset: null });
     expect(dispatched()).toHaveLength(1);
     expect(dispatched()[0]).toMatchObject({ method: 'workflow/modelChoices', params: { target: { kind: 'workspace', directory }, query: { type: 'profiles', model: 'fixture/model', offset: 32 }, expected_revision: 'catalog-1' } });
+  });
+
+  it('does not hold the mutation lane or another catalog request behind a slow source', async () => {
+    const { h, registration, authority } = await host();
+    const port = createWorkflowPort({ client: browser().client, host: () => h, hostAuthority: authority.capture(), scope: { kind: 'workspace', workspaceId: registration } });
+    let release!: () => void;
+    native.state.catalogGate = new Promise(resolve => { release = resolve; });
+    const slow = port.toolCatalog('slow');
+    await vi.waitFor(() => expect(dispatched().some(row => row.method === 'workflow/toolCatalog' && row.params.source === 'slow')).toBe(true));
+    await Promise.all([port.toolCatalog('fast'), port.write('flow', 'missing', { operation: 'create', description: 'x' })]);
+    expect(dispatched().filter(row => row.method === 'workflow/toolCatalog')).toHaveLength(2);
+    expect(dispatched().some(row => row.method === 'configuration/sourceWrite')).toBe(true);
+    release(); await slow;
   });
 
   it('refuses a port that never observed a native authority instead of adopting the next one', async () => {
@@ -357,7 +370,7 @@ describe('Library activation after connection bootstrap (R9)', () => {
     expect(library.getSnapshot().context.reading).not.toBe(bound);
     pending[1].resolve({ type: 'workflow_library', library: { target: { kind: 'user' }, directory: '/d', absent_revision: 'missing', files: [], diagnostic: null } });
     await flush();
-    library.send({ type: 'SUBMIT', seq, id: 'fresh', description: 'x' });
+    library.send({ type: 'SUBMIT', seq, id: 'fresh', description: 'x', display: { title: 'Fresh' } });
     expect(library.getSnapshot().context.pending?.port).toBe(bound);
     // A refresh while the operation is in flight neither stops nor retargets it.
     library.send({ type: 'REFRESH' });

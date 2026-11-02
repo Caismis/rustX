@@ -179,7 +179,7 @@ pub use types::{
     RuntimeClock, RuntimeError, SystemClock, TokenMeasurement, TokenMeasurementSource,
 };
 pub use workflow::{
-    WorkflowAgentProgram, WorkflowBlock, WorkflowBranch, WorkflowCatalog, WorkflowCatalogError,
+    WorkflowAgentProgram, WorkflowBlock, WorkflowCatalog, WorkflowCatalogError,
     WorkflowCompileError, WorkflowDefinition, WorkflowEdgeDefinition, WorkflowEdgeProgram,
     WorkflowId, WorkflowIdError, WorkflowNodeDefinition, WorkflowNodeProgram, WorkflowOutputLatch,
     WorkflowOutputSubmission, WorkflowOutputTerminal, WorkflowPort, WorkflowPredicate,

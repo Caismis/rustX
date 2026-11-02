@@ -693,3 +693,136 @@ async fn issue422_creation_previsibility_failure_removes_provisional_binding() {
     assert_eq!(log.next_after(frontier), None);
     f.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn disabled_workflow_missing_agent_does_not_block_session_creation() {
+    let fixture = Fixture::with_session_count(None, 0).await;
+    let directory = fixture.workspaces[0].clone();
+    let workflow = directory.join(".agents/workflows/review.yaml");
+    std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+    let schema = serde_json::json!({"type":"object","properties":{},"additionalProperties":false});
+    std::fs::write(&workflow, serde_json::to_string(&serde_json::json!({
+        "description":"Unavailable reviewer", "block":{"input":schema,"nodes":{
+            "start":{"type":"start"},
+            "review":{"type":"agent","profile":"missing","task":[{"type":"literal","value":"Review"}],"output":{"type":"json_schema","schema":schema}},
+            "done":{"type":"return","outputs":[]}},"edges":[{"from":"start","to":"review"},{"from":"review","to":"done"}]}
+    })).unwrap()).unwrap();
+    std::fs::write(
+        directory.join("rustx.toml"),
+        "[agent]\nworkflows=['review']\n",
+    )
+    .unwrap();
+    let session = fixture
+        .manager
+        .create_session(SessionPersistentState {
+            cwd: directory.clone(),
+            model: None,
+        })
+        .await
+        .unwrap();
+    let loaded = fixture
+        .manager
+        .load(&session.session.id, None)
+        .await
+        .unwrap();
+    let resources = loaded.inspect_runtime().unwrap().runtime_resources();
+    assert!(resources.workflows().enabled_ids().is_empty());
+    let id = crate::runtime::workflow::WorkflowId::parse("review").unwrap();
+    assert!(matches!(&resources.workflows().entries()[&id].admission,
+        crate::runtime::workflow::WorkflowAdmission::Disabled(diagnostics)
+        if diagnostics.iter().any(|diagnostic| matches!(&diagnostic.reason,
+            crate::runtime::workflow::WorkflowDependencyFailure::Agent(
+                crate::runtime::agent_profile::AgentProfileDiagnostic::AgentUnavailable { .. })) )));
+    assert_eq!(
+        std::fs::read_to_string(directory.join("rustx.toml")).unwrap(),
+        "[agent]\nworkflows=['review']\n"
+    );
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn disabled_workflow_external_sources_do_not_block_session_creation_or_reload() {
+    for case in ["missing", "failed_mcp", "failed_python", "missing_agent"] {
+        let fixture = Fixture::with_session_count(None, 0).await;
+        let directory = fixture.workspaces[0].clone();
+        let agents = directory.join(".agents");
+        std::fs::create_dir_all(agents.join("workflows")).unwrap();
+        let source = if case == "failed_python" {
+            let package = agents.join("tools/broken");
+            std::fs::create_dir_all(&package).unwrap();
+            // A demanded package is rejected before runtime/network preparation.
+            std::fs::write(
+                package.join("server.py"),
+                "raise RuntimeError('unusable')\n",
+            )
+            .unwrap();
+            "python:broken"
+        } else {
+            "absent"
+        };
+        if case == "failed_mcp" {
+            std::fs::write(
+                agents.join("mcp.toml"),
+                format!(
+                    "[mcp_servers.absent]\ntype = 'stdio'\ncommand = {:?}\n",
+                    directory.join("missing-mcp-executable").to_str().unwrap()
+                ),
+            )
+            .unwrap();
+        }
+        let schema =
+            serde_json::json!({"type":"object","properties":{},"additionalProperties":false});
+        let mut nodes = serde_json::json!({"start":{"type":"start"},
+            "external":{"type":"tool","selector":{"origin":"source","source_id":source,"name":"inspect"},"arguments":{"type":"literal","value":{}},"result":{"type":"text"}},
+            "done":{"type":"return","outputs":[]}});
+        let mut edges =
+            serde_json::json!([{"from":"start","to":"external"},{"from":"external","to":"done"}]);
+        if case == "missing_agent" {
+            nodes["review"] = serde_json::json!({"type":"agent","profile":"missing","task":[{"type":"literal","value":"Review"}],"output":{"type":"text"}});
+            edges = serde_json::json!([{"from":"start","to":"external"},{"from":"external","to":"review"},{"from":"review","to":"done"}]);
+        }
+        std::fs::write(agents.join("workflows/inspect.yaml"), serde_json::to_string(&serde_json::json!({
+            "description":"Optional external inspection", "block":{"input":schema,"nodes":nodes,"edges":edges}
+        })).unwrap()).unwrap();
+        let configuration = "[agent]\nworkflows=['inspect']\n";
+        std::fs::write(directory.join("rustx.toml"), configuration).unwrap();
+        let created = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: directory.clone(),
+                model: None,
+            })
+            .await
+            .unwrap();
+        for reload in [false, true] {
+            if reload {
+                fixture
+                    .manager
+                    .unload(&created.session.active_conversation_id)
+                    .await
+                    .unwrap();
+            }
+            let loaded = fixture
+                .manager
+                .load(&created.session.id, None)
+                .await
+                .unwrap();
+            let resources = loaded.inspect_runtime().unwrap().runtime_resources();
+            assert!(
+                resources.workflows().enabled_ids().is_empty(),
+                "{case}, reload={reload}"
+            );
+            let id = crate::runtime::workflow::WorkflowId::parse("inspect").unwrap();
+            assert!(
+                matches!(&resources.workflows().entries()[&id].admission,
+                crate::runtime::workflow::WorkflowAdmission::Disabled(diagnostics) if !diagnostics.is_empty()),
+                "{case}, reload={reload}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(directory.join("rustx.toml")).unwrap(),
+                configuration
+            );
+        }
+        fixture.close().await;
+    }
+}

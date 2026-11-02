@@ -17,6 +17,17 @@ impl ProspectiveSessionConfig {
             self.config.agent.agents.iter().cloned().collect();
         for id in &self.config.agent.workflows {
             if let Some(entry) = self.workflows.entries().get(id) {
+                // Missing profiles are a definitive admission failure. Keep
+                // their source and diagnostics, but not a fatal Session demand.
+                // Unprepared external tools alone must not remove dependencies.
+                if entry
+                    .source
+                    .agent_nodes()
+                    .iter()
+                    .any(|node| self.subagents.get(&node.profile).is_none())
+                {
+                    continue;
+                }
                 names.extend(
                     entry
                         .source

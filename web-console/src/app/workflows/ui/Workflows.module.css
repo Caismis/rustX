@@ -176,9 +176,19 @@ span.chooser { cursor: default; }
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 11px;
   background: var(--dsw-alias-bg-layer-1);
+  position: relative;
 }
 
 .card:hover { border-color: var(--dsw-alias-border-l4); }
+/* The whole card opens the editor: the open button's hit area covers it,
+ * and only the actions menu sits above. */
+.cardOpen::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
+.card:has(.cardOpen:focus-visible) { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.cardOpen:focus-visible { outline: none; }
+.dots { position: relative; z-index: 1; }
+/* The Sessions switch sits above the open button's hit area, beside the menu. */
+.enable { position: relative; z-index: 1; margin: 4px 0 0 auto; }
+.table .enable { margin: 0; }
 .invalidCard { border-style: dashed; }
 .cardHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 
@@ -210,7 +220,9 @@ span.chooser { cursor: default; }
   color: var(--dsw-alias-label-secondary);
 }
 
+.cardName { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .cardTitle { font-size: 14px; font-weight: 560; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cardId { font-family: var(--ds-font-family-code); font-size: 11.5px; color: var(--dsw-alias-label-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .dots {
   display: flex;
@@ -254,6 +266,8 @@ span.chooser { cursor: default; }
   color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
 }
+.badgeWarning { display: inline-flex; align-items: center; gap: 4px; border-color: var(--dsw-alias-state-warn-primary); color: var(--dsw-alias-state-warn-primary); }
+.badgeWarning svg { width: 12px; height: 12px; }
 
 .cardFoot {
   display: flex;
@@ -277,6 +291,9 @@ span.chooser { cursor: default; }
 .table code { font-size: 11.5px; }
 
 .rowOpen {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   padding: 0;
   border: 0;
   background: none;
@@ -317,6 +334,9 @@ span.chooser { cursor: default; }
 }
 
 .field input { font-family: var(--ds-font-family-code); }
+/* Text grows with its content between three and eight lines, never by dragging. */
+.field textarea { resize: none; field-sizing: content; min-height: calc(3lh + 18px); max-height: calc(8lh + 18px); line-height: 1.5; }
+.field ::placeholder { color: var(--dsw-alias-label-tertiary); font-family: inherit; }
 .field small { color: var(--dsw-alias-label-tertiary); }
 .error { color: var(--dsw-alias-state-error-primary) !important; }
 .warning { margin: 0; font-size: 12px; color: var(--dsw-alias-state-warn-primary); }
@@ -345,3 +365,23 @@ span.chooser { cursor: default; }
 
 /* The one sidebar entry's selected glyph (sidebar row styling is the shell's). */
 .navActive { color: var(--dsw-alias-state-business-primary); }
+
+/* New Workflow: how people see it, then what the model reads. */
+.identity { display: flex; gap: 12px; align-items: flex-start; }
+.identity .field { flex: 1; min-width: 0; }
+.iconTile { margin-top: 19px; }
+.field input.plain { font-family: inherit; }
+.createDialog { width: min(800px, 100%); }
+.columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+.column { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.formSection {
+  margin: 0 0 -4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2, var(--dsw-alias-border-l3));
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+@media (max-width: 720px) {
+  .columns { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+}

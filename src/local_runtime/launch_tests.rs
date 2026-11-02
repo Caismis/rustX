@@ -170,6 +170,9 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
     );
     let config = json!({"subagents": {}, "agent": {"workflows": []}});
     let original = template_source("typed_agent");
+    let mut invalid_reference: serde_json::Value = serde_yaml::from_str(&original).unwrap();
+    invalid_reference["block"]["nodes"]["summarize"]["task"][2]["path"] =
+        json!(["args", "missing"]);
     let scenarios = [
         (original.clone(), config.clone(), Validity::Valid, None),
         (original.clone(), json!({}), Validity::Valid, None),
@@ -180,10 +183,10 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
             None,
         ),
         (
-            original.replace("[args, topic]", "[args, missing]"),
+            serde_yaml::to_string(&invalid_reference).unwrap(),
             config.clone(),
             Validity::Invalid,
-            Some("block.nodes.summarize.input.topic"),
+            Some("block.nodes.summarize.task.2"),
         ),
         (
             original.replace("timeout_ms: 60000", "timeout_ms: 0"),
@@ -279,11 +282,7 @@ fn cfg237_graph_paths_reach_diagnostics_with_zero_side_effects() {
         ),
         ("/block/edges/0/to", json!("missing"), "block.edges.0.to"),
         ("/block/edges/0/port", json!("true"), "block.edges.0.port"),
-        (
-            "/block/nodes/check_text/branches/clarity/block/edges/0/to",
-            json!("missing"),
-            "block.nodes.check_text.branches.clarity.block.edges.0.to",
-        ),
+        ("/block/edges/2/to", json!("missing"), "block.edges.2.to"),
     ] {
         let mut shape = original.clone();
         *shape.pointer_mut(pointer).unwrap() = value;
@@ -318,18 +317,18 @@ fn cfg237_online_schema_unresolved_and_disabled_source_are_distinct() {
     let text = r"description: Inspect a declared external capability.
 block:
   input: {type: object, properties: {}, additionalProperties: false}
-  output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}
-  entry: inspect
   nodes:
+    workflow_start:
+      type: start
     inspect:
       type: tool
       selector: {origin: source, source_id: external, name: inspect}
       arguments: {type: literal, value: {secret: SECRET_LITERAL}}
-      result: {type: text, part: 0}
+      result: {type: text}
     done:
       type: return
-      output: {type: object, fields: {text: {type: reference, path: [inspect]}}}
-  edges: [{from: inspect, to: done}]
+      outputs: [{variable: text, value_selector: [inspect, text]}]
+  edges: [{from: workflow_start, to: inspect}, {from: inspect, to: done}]
 ";
     install_workflow(&f, text);
     f.mcp(false, json!({"external":{"command":"must-never-spawn"}}));
@@ -375,22 +374,24 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
     f.project(json!({"subagents": {}}));
     let definition: crate::runtime::workflow::WorkflowDefinition =
         serde_yaml::from_str(&template_source("parallel_checks")).unwrap();
-    let original = serde_json::to_value(definition).unwrap();
+    let root = serde_json::to_value(definition.block).unwrap();
+    let original = json!({"description":"Nested checks", "block":{
+        "input":root["input"], "nodes":{
+            "start":{"type":"start"},
+            "repeat":{"type":"loop", "loop_count":1, "body":crate::runtime::workflow::test_body(&root)},
+            "done":{"type":"return","outputs":[]}
+        },"edges":[{"from":"start","to":"repeat"},{"from":"repeat","to":"done"}]
+    }});
     for (pointer, value, expected) in [
         (
-            "/block/nodes/check_text/branches/clarity/block/nodes/assess_clarity/input/text/path",
-            json!(["assess_brevity", "passed"]),
-            "block.nodes.check_text.branches.clarity.block.nodes.assess_clarity.input.text",
+            "/block/nodes/repeat/body/nodes/check_text_clarity_assess_clarity/task/2/path",
+            json!(["check_text_brevity_assess_brevity", "passed"]),
+            "block.nodes.repeat.body.nodes.check_text_clarity_assess_clarity.task.2",
         ),
         (
-            "/block/nodes/check_text/branches/clarity/block/nodes/assess_clarity/output/properties/passed",
+            "/block/nodes/repeat/body/nodes/check_text_clarity_assess_clarity/output/schema/properties/passed",
             json!({"type":"boolean","pattern":"SECRET_SCHEMA"}),
-            "block.nodes.check_text.branches.clarity.block.nodes.assess_clarity.output.properties.passed",
-        ),
-        (
-            "/block/nodes/check_text/branches/clarity/block/nodes/return_clarity/output/path",
-            json!(["args"]),
-            "block.nodes.check_text.branches.clarity.block.nodes.return_clarity.output",
+            "block.nodes.repeat.body.nodes.check_text_clarity_assess_clarity.output.schema.properties.passed",
         ),
     ] {
         let mut shape = original.clone();
@@ -1254,7 +1255,10 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
     assert_eq!(counts, [0; 11]);
-    assert_eq!(report.exit_code(), 2);
+    // An enabled Workflow that fails its check stays off: a warning, never
+    // a configuration error.
+    assert_eq!(report.exit_code(), 3);
+    assert_eq!(report.diagnostics[0].classification, "warning");
     assert_eq!(report.diagnostics[0].file, Some(workflow));
     assert!(
         !report
@@ -1271,7 +1275,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         f.host
             .launch_directory
             .join(".agents/workflows/broken.yaml"),
-        valid.replace("entry: read", "entry: missing_node"),
+        valid.replace("to: read", "to: missing_node"),
     )
     .unwrap();
     f.project(json!({"agent": {"workflows": ["broken"]}}));
@@ -1279,12 +1283,9 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
     assert_eq!(counts, [0; 11]);
-    assert_eq!(
-        report.exit_code(),
-        2,
-        "native compiler rejects the missing entry node"
-    );
-    assert_eq!(report.diagnostics[0].path, "block.entry");
+    assert_eq!(report.exit_code(), 3, "the rejected Workflow stays off");
+    assert_eq!(report.diagnostics[0].classification, "warning");
+    assert_eq!(report.diagnostics[0].path, "block.edges.0.to");
     f.project(json!({}));
     std::fs::write(&model_path, "").unwrap();
     let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
@@ -2595,7 +2596,7 @@ fn cfg275_offline_generation_projects_native_facts_once_without_effects_or_secre
     .unwrap();
     install_workflow(
         &f,
-        "description: Missing tool\nblock:\n  input: {type: object}\n  output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}\n  entry: inspect\n  nodes:\n    inspect:\n      type: tool\n      selector: {origin: source, source_id: optional, name: inspect}\n      arguments: {type: literal, value: {}}\n      result: {type: text, part: 0}\n    done:\n      type: return\n      output: {type: object, fields: {text: {type: reference, path: [inspect]}}}\n  edges: [{from: inspect, to: done}]\n",
+        "description: Missing tool\nblock:\n  input: {type: object}\n  nodes:\n    workflow_start:\n      type: start\n    inspect:\n      type: tool\n      selector: {origin: source, source_id: optional, name: inspect}\n      arguments: {type: literal, value: {}}\n      result: {type: text}\n    done:\n      type: return\n      outputs: [{variable: text, value_selector: [inspect, text]}]\n  edges: [{from: workflow_start, to: inspect}, {from: inspect, to: done}]\n",
     );
     let ((report, launch), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_show", &f.request, &f.host)

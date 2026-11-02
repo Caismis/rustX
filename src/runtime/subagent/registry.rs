@@ -188,10 +188,12 @@ pub enum SubagentTerminalMode {
     /// Publish the ordinary named-subagent result through its native path.
     #[default]
     Normal,
-    /// Require the reserved `workflow_output` protocol with this frozen schema.
+    /// A Workflow-owned `AgentRun`: its final reply is the result, or, with
+    /// a frozen schema, the reserved `workflow_output` protocol.
     WorkflowOutput {
-        /// The output contract the child Agent Loop must satisfy.
-        output_schema: serde_json::Value,
+        /// The output contract the child Agent Loop must satisfy, when the
+        /// node declares one.
+        output_schema: Option<serde_json::Value>,
         /// The immutable Workflow identity owning this `AgentRun`.
         workflow_id: WorkflowId,
         /// The immutable Workflow invocation identity.

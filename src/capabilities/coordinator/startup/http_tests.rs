@@ -179,12 +179,7 @@ async fn terminal_deadline(phase: HeldPhase) {
             SkillDiscovery::with_config(&worker.inner.workspace, SkillDiscoveryConfig::default())
                 .discover();
         worker
-            .prepare_startup_candidate(
-                discovery,
-                BTreeSet::new(),
-                worker_deadline,
-                &CancellationSignal::new(),
-            )
+            .prepare_startup_candidate(discovery, worker_deadline, &CancellationSignal::new())
             .await
     });
     held.peer
@@ -323,12 +318,7 @@ async fn loading_owner_cancels_unarmed_paginated_preparation_and_awaits_settleme
             SkillDiscovery::with_config(&worker.inner.workspace, SkillDiscoveryConfig::default())
                 .discover();
         worker
-            .prepare_startup_candidate(
-                discovery,
-                BTreeSet::new(),
-                worker_deadline,
-                &worker_cancellation,
-            )
+            .prepare_startup_candidate(discovery, worker_deadline, &worker_cancellation)
             .await
     });
     held.peer
@@ -399,12 +389,7 @@ async fn completed_live_preparation_needs_no_wait_when_submission_arms_budget() 
     .discover();
     let deadline = McpStartupDeadline::default();
     let ready = coordinator
-        .prepare_startup_candidate(
-            discovery,
-            BTreeSet::new(),
-            deadline.clone(),
-            &CancellationSignal::new(),
-        )
+        .prepare_startup_candidate(discovery, deadline.clone(), &CancellationSignal::new())
         .await
         .unwrap();
     assert_eq!(deadline.deadline(), None);
@@ -469,12 +454,7 @@ async fn submission_deadline_bounds_eight_sources_including_unstarted_queue() {
             SkillDiscovery::with_config(&worker.inner.workspace, SkillDiscoveryConfig::default())
                 .discover();
         worker
-            .prepare_startup_candidate(
-                discovery,
-                BTreeSet::new(),
-                worker_deadline,
-                &CancellationSignal::new(),
-            )
+            .prepare_startup_candidate(discovery, worker_deadline, &CancellationSignal::new())
             .await
     });
     // Identity ordering and the four-slot limit put exactly the first four

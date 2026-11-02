@@ -481,8 +481,6 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::WorkflowAgentAdmitted { .. }
         | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
         | RuntimeEvent::WorkflowBranchSelected { .. }
-        | RuntimeEvent::WorkflowParallelAdmitted { .. }
-        | RuntimeEvent::WorkflowParallelSettled { .. }
         | RuntimeEvent::WorkflowCompleted { .. }
         | RuntimeEvent::WorkflowCancelled { .. }
         | RuntimeEvent::InteractionRequested { .. }

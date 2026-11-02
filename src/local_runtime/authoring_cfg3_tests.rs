@@ -358,3 +358,30 @@ fn mcp_destination_replacement_drops_lower_secrets_and_headers() {
     assert!(server.headers.is_empty());
     assert!(server.sensitive_headers.is_empty());
 }
+
+#[test]
+fn enabled_workflows_accumulate_across_scopes() {
+    let (config, origins) = effective(
+        "[agent]\nworkflows = [\"daily\", \"shared\"]\n",
+        "[agent]\nworkflows = [\"shared\", \"local\"]\n",
+    );
+    assert_eq!(
+        config
+            .agent
+            .workflows
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["daily", "shared", "local"]
+    );
+    assert_eq!(origins["agent.workflows"], workspace());
+    let (config, _) = effective(
+        "[agent]\nworkflows = [\"daily\"]\n",
+        "[agent]\nworkflows = []\n",
+    );
+    assert_eq!(
+        config.agent.workflows.len(),
+        1,
+        "a Workspace never disables a Global Workflow"
+    );
+}

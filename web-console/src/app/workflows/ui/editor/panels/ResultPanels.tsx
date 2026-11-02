@@ -1,54 +1,34 @@
-import { useId } from 'react';
+import { IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { useTranslation } from '../../../../../locale/react';
-import { blockField, encodeField } from '../../../document/fields';
-import { blockAt } from '../../../document/model';
-import { SchemaEditor } from '../forms/SchemaEditor';
-import { ValueEditor } from '../forms/ValueEditor';
-import { NumberField, Section, SelectField, TextField } from '../forms/fields';
-import { OutputDeclaration, useNode, type PanelProps } from './shared';
+import { IconPlus } from '../../icons';
+import { ReferencePicker } from '../forms/ReferencePicker';
+import { RouteId } from './InferencePanels';
+import { setField, type ArrayEdit } from '../../../document/fields';
+import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 
-export function ToolPanel(props: PanelProps) {
-  const tx = useTranslation(), listId = useId(), { node, at, update } = useNode(props, 'tool');
-  return <>
-    <SelectField label={tx('workflows:inspector.tool-origin')} value={node.selector.origin} options={[{ value: 'builtin', label: tx('workflows:inspector.tool-origin-builtin') }, { value: 'source', label: tx('workflows:inspector.tool-origin-source') }]}
-      onChange={origin => { if (origin !== node.selector.origin) update(current => ({ ...current, selector: origin === 'builtin' ? { origin, name: current.selector.name } : { origin, source_id: '', name: current.selector.name } }), at('selector')); }} />
-    {node.selector.origin === 'source' && <TextField label={tx('workflows:inspector.tool-source')} value={node.selector.source_id} field={encodeField(at('selector', 'source_id'))}
-      onChange={(source_id, session) => update(current => ({ ...current, selector: { origin: 'source', source_id, name: current.selector.name } }), at('selector', 'source_id'), undefined, session)} />}
-    <TextField label={tx('workflows:inspector.tool-name')} value={node.selector.name} list={node.selector.origin === 'builtin' ? listId : undefined} invalid={!node.selector.name} field={encodeField(at('selector', 'name'))}
-      onChange={(name, session) => update(current => ({ ...current, selector: { ...current.selector, name } }), at('selector', 'name'), undefined, session)} />
-    <datalist id={listId}>{props.vocabulary?.builtin_tools.map(name => <option key={name} value={name} />)}</datalist>
-    <p className={css.note}>{tx('workflows:panel.tool-schema')}</p>
-    <ValueEditor label={tx('workflows:inspector.tool-arguments')} address={at('arguments')} value={node.arguments} edit={props.edit} />
-    <SelectField label={tx('workflows:inspector.tool-result')} value={node.result.type} options={[{ value: 'json', label: tx('workflows:inspector.tool-result-json') }, { value: 'text', label: tx('workflows:inspector.tool-result-text') }]}
-      onChange={type => { if (type !== node.result.type) update(current => ({ ...current, result: type === 'json' ? { type, part: current.result.part, schema: { type: 'object', properties: {}, additionalProperties: false } } : { type, part: current.result.part } }), at('result')); }} />
-    <NumberField label={tx('workflows:inspector.tool-part')} value={node.result.part} address={at('result', 'part')} />
-    {node.result.type === 'json' && <SchemaEditor label={tx('workflows:inspector.tool-schema')} value={node.result.schema} address={at('result', 'schema')} edit={props.edit} />}
-    <OutputDeclaration {...props} />
-  </>;
-}
-
-export function ReviewPanel(props: PanelProps) {
-  const tx = useTranslation(), { node, at, update } = useNode(props, 'review');
-  return <>
-    <ValueEditor label={tx('workflows:inspector.review-subject')} address={at('subject', 'value')} value={node.subject.value} edit={props.edit} />
-    <Section title={tx('workflows:inspector.review-context')}>
-      {node.context.map((item, index) => <div key={index} className={css.nestedRow}>
-        <ValueEditor label={`[${index}]`} address={at('context', index)} value={item} edit={props.edit} />
-        <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: `[${index}]` })} onClick={() => update(current => ({ ...current, context: current.context.filter((_, at) => at !== index) }), at('context'), { array: at('context'), removed: index })}>×</button>
-      </div>)}
-      <button type="button" className={css.smallButton} onClick={() => update(current => ({ ...current, context: [...current.context, { type: 'reference', path: ['args'] }] }), at('context'), { array: at('context'), inserted: node.context.length })}>{tx('workflows:inspector.add-item')}</button>
-    </Section>
-    <p className={css.note}>{tx('workflows:inspector.review-note')}</p>
-    <OutputDeclaration {...props} />
-  </>;
-}
-
+/** As Dify's End panel: the output variables, each a name and the variable
+ * it reads. Together they are the workflow's JSON result. */
 export function ReturnPanel(props: PanelProps) {
-  const tx = useTranslation(), { node, at } = useNode(props, 'return');
-  return <>
-    <ValueEditor label={tx('workflows:inspector.return-output')} address={at('output')} value={node.output} edit={props.edit} />
-    <p className={css.note}>{tx('workflows:inspector.return-note')}</p>
-    <SchemaEditor label={tx('workflows:inspector.block-output')} value={blockAt(props.document, props.block)!.output} address={blockField(props.block, ['output'])} edit={props.edit} />
-  </>;
+  const tx = useTranslation(), { node, at, update } = useNode(props, 'return');
+  const outputs = (change: (items: typeof node.outputs) => typeof node.outputs, array: ArrayEdit) => update(current => ({ ...current, outputs: change(current.outputs) }), at('outputs'), array);
+  return <section className={css.group} aria-label={tx('workflows:end.outputs')}>
+    <h3 className={css.groupHeading}>
+      <span className={css.headingText}>{tx('workflows:end.outputs')}</span>
+      <button type="button" className={css.iconButton} aria-label={tx('workflows:end.add')} title={tx('workflows:end.add')}
+        onClick={() => outputs(items => [...items, { variable: '', value_selector: [] }], { array: at('outputs'), inserted: node.outputs.length })}><IconPlus size={14} /></button>
+    </h3>
+    {!node.outputs.length && <p className={css.reviewEmpty}>{tx('workflows:end.empty')}</p>}
+    <div className={css.reviewActions}>
+      {node.outputs.map((output, index) => <div key={index} className={css.endOutput}>
+        <RouteId value={output.variable} label={tx('workflows:end.name')} className={css.endOutputName} address={at('outputs', index, 'variable')} rename={(document, _from, to) => setField(document, at('outputs', index, 'variable'), to)} />
+        <ReferencePicker address={at('outputs', index, 'value_selector')} path={output.value_selector} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')}
+          // As Dify: a nameless output takes the variable's own name.
+          onChoose={choice => update(current => ({ ...current, outputs: current.outputs.map((item, i) => i === index
+            ? { variable: item.variable || choice.path[choice.path.length - 1], value_selector: choice.path } : item) }), at('outputs', index, 'value_selector'))} />
+        <button type="button" className={css.iconButton} aria-label={tx('workflows:end.remove', { p0: output.variable || String(index + 1) })}
+          onClick={() => outputs(items => items.filter((_, i) => i !== index), { array: at('outputs'), removed: index })}><IconTrashOutline16 /></button>
+      </div>)}
+    </div>
+  </section>;
 }

@@ -334,6 +334,6 @@ fn scheduler85_schedule_control_has_no_child_or_fixed_workflow_materialization()
     assert!(
         crate::runtime::workflow::selectable_builtin_tools()
             .iter()
-            .all(|name| !crate::tools::native::SCHEDULE_TOOL_NAMES.contains(&name.as_str()))
+            .all(|tool| !crate::tools::native::SCHEDULE_TOOL_NAMES.contains(&tool.name.as_str()))
     );
 }

@@ -91,6 +91,7 @@ model = "a"
             "missing",
             WorkflowEdit::Create {
                 description: description.into(),
+                display: None,
             },
         )
         .unwrap()
@@ -130,7 +131,7 @@ fn definition(yaml: &str) -> WorkflowFileDocument {
 
 fn with_note(mut document: WorkflowFileDocument, text: &str) -> WorkflowFileDocument {
     document.editor=Some(serde_json::from_value(serde_json::json!({"notes":[{
-        "id":"note", "block":[], "text":text, "theme":"amber", "position":{"x":10.0,"y":20.5}, "dimensions":{"width":240.0,"height":160.0}
+        "id":"note", "block":[], "text":text, "theme":"yellow", "position":{"x":10.0,"y":20.5}, "dimensions":{"width":240.0,"height":160.0}
     }]})).unwrap());
     document
 }
@@ -157,27 +158,18 @@ fn complete_file_revisions_fence_metadata_writes_copies_deletes_and_lost_ack_rep
             .manager
             .check_workflow(&target, &id("metadata"), first.clone(), None, false)
             .unwrap();
-        let WorkflowStructure::Valid {
-            revision: recognized,
-            ..
-        } = checked.structure
-        else {
-            panic!("valid file")
-        };
+        assert!(matches!(checked.structure, WorkflowStructure::Valid { .. }));
         assert_eq!(
-            recognized, first_revision,
+            checked.revision.unwrap(),
+            first_revision,
             "exact complete candidate recognizes a lost acknowledgement"
         );
-        let WorkflowStructure::Valid {
-            revision: other, ..
-        } = roots
+        let other = roots
             .manager
             .check_workflow(&target, &id("metadata"), next.clone(), None, false)
             .unwrap()
-            .structure
-        else {
-            panic!("valid file")
-        };
+            .revision
+            .unwrap();
         assert_ne!(
             other, first_revision,
             "program equivalence cannot recognize another note edit"
@@ -297,19 +289,19 @@ fn analysis_is_inert_correlated_to_complete_candidate_and_separate_from_save_val
 }
 
 #[test]
-fn unselected_authored_identities_round_trip_for_analysis_but_cannot_replace_a_file() {
+fn unselected_authored_identities_round_trip_and_save_as_unfinished() {
     use serde_json::json;
     let roots = Roots::new();
     let nodes = [
-        json!({"type":"agent", "profile":"", "task":"Review", "input":{},
-            "output":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}}),
+        json!({"type":"agent", "profile":"", "task":[{"type":"literal","value":"Review"}],
+            "output":{"type":"json_schema","schema":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}}}),
         json!({"type":"model", "model":{"mode":"explicit","model":"","request_params":{}},
-            "instruction":"Review", "output":{"type":"text"}}),
+            "messages":[{"role":"system","content":[{"type":"literal","value":"Review"}]}], "output":{"type":"text"}}),
         json!({"type":"tool", "selector":{"origin":"source","source_id":"","name":"read"},
-            "arguments":{"type":"reference","path":["args"]}, "result":{"type":"text","part":0}}),
+            "arguments":{"type":"reference","path":["args"]}, "result":{"type":"text"}}),
     ];
     for target in [SourceTarget::User, workspace(&roots.a)] {
-        let saved = roots.create(&target, "unselected", "Original file");
+        let mut saved = roots.create(&target, "unselected", "Original file");
         for node in &nodes {
             let mut value = serde_json::to_value(definition(AGENT_PROGRAM)).unwrap();
             value["block"]["nodes"]["review"] = node.clone();
@@ -339,18 +331,20 @@ fn unselected_authored_identities_round_trip_for_analysis_but_cannot_replace_a_f
                     .structure,
                 WorkflowStructure::Invalid { .. }
             ));
-            assert!(
-                roots
-                    .write(
-                        &target,
-                        "unselected",
-                        &saved,
-                        WorkflowEdit::Replace {
-                            document: Box::new(document),
-                        }
-                    )
-                    .is_err()
-            );
+            let unfinished = roots
+                .write(
+                    &target,
+                    "unselected",
+                    &saved,
+                    WorkflowEdit::Replace {
+                        document: Box::new(document.clone()),
+                    },
+                )
+                .unwrap();
+            let source = roots.read(&target, "unselected");
+            assert_eq!(source.document.as_deref(), Some(&document));
+            assert!(source.diagnostic.is_some());
+            saved = unfinished;
             assert_eq!(roots.read(&target, "unselected").revision, saved);
         }
     }
@@ -368,7 +362,6 @@ fn presentation_damage_is_diagnosed_without_erasing_content_or_claiming_type_fai
     document.editor.as_mut().unwrap().notes[0].block =
         vec![crate::runtime::workflow::authoring::WorkflowBlockStep {
             node: "removed".into(),
-            branch: None,
         }];
     let saved = roots
         .write(
@@ -415,20 +408,23 @@ const AGENT_PROGRAM: &str = r"
 description: Review one proposal.
 block:
   input: {type: object, properties: {proposal: {type: string}}, required: [proposal], additionalProperties: false}
-  output: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}
-  entry: review
   nodes:
+    workflow_start:
+      type: start
     review:
       type: agent
       profile: reviewer
-      task: Review it.
-      input:
-        proposal: {type: reference, path: [args, proposal]}
-      output: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}
+      task:
+      - type: literal
+        value: 'Review it.'
+      - {type: reference, path: [args, proposal]}
+      output: {type: json_schema, schema: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}}
     done:
       type: return
-      output: {type: reference, path: [review]}
+      outputs: [{variable: summary, value_selector: [review, summary]}]
   edges:
+  - from: workflow_start
+    to: review
   - {from: review, to: done}
 ";
 
@@ -600,7 +596,10 @@ fn create_writes_the_native_minimal_program_and_never_overwrites() {
     assert_eq!(source.revision, revision);
     assert!(source.diagnostic.is_none());
     let document = source.document.unwrap();
-    assert_eq!(document.block.entry, "done");
+    assert!(matches!(
+        document.block.nodes["start"],
+        crate::runtime::workflow::WorkflowNodeDefinition::Start {}
+    ));
     WorkflowProgram::compile(id("fresh"), document.definition).unwrap();
     // An existing target is a conflict for the absent revision, and an
     // invalid create even with its exact revision.
@@ -610,7 +609,8 @@ fn create_writes_the_native_minimal_program_and_never_overwrites() {
             "fresh",
             "missing",
             WorkflowEdit::Create {
-                description: "again".into()
+                description: "again".into(),
+                display: None,
             }
         ),
         Err(SettingsError::Conflict { .. })
@@ -621,25 +621,135 @@ fn create_writes_the_native_minimal_program_and_never_overwrites() {
             "fresh",
             &revision,
             WorkflowEdit::Create {
-                description: "again".into()
+                description: "again".into(),
+                display: None,
             }
         ),
         Err(SettingsError::Invalid)
     ));
-    // An empty description is a structural rejection with its native path.
-    let Err(SettingsError::InvalidWorkflow(diagnostic)) = roots.write(
-        &target,
-        "empty",
-        "missing",
-        WorkflowEdit::Create {
-            description: " ".into(),
-        },
-    ) else {
-        panic!("empty description must be invalid");
-    };
-    assert_eq!(diagnostic.path, "description");
-    assert!(!roots.read(&target, "empty").present);
+    // As a Dify draft, an empty description is still written; the file
+    // then reads as unfinished, its problem named by its native path.
+    roots
+        .write(
+            &target,
+            "empty",
+            "missing",
+            WorkflowEdit::Create {
+                description: " ".into(),
+                display: None,
+            },
+        )
+        .unwrap();
+    let empty = roots.read(&target, "empty");
+    assert!(empty.document.is_some());
+    assert_eq!(empty.diagnostic.unwrap().path, "description");
     assert_eq!(roots.read(&target, "fresh").revision, revision);
+}
+
+#[test]
+fn each_scope_enables_its_own_files_in_its_own_configuration() {
+    let roots = Roots::new();
+    let a = workspace(&roots.a);
+    roots.create(&SourceTarget::User, "daily", "Daily");
+    roots.create(&a, "local", "Local");
+    let enable = |target: &SourceTarget, expected: &str, name: &str, enabled: bool| {
+        roots.manager.write_source_settings(
+            target,
+            expected,
+            SourceMutation::Config {
+                mutation: super::super::configuration::settings::ConfigMutation::WorkflowEnabled {
+                    id: id(name),
+                    enabled,
+                },
+            },
+        )
+    };
+    let enabled = |target: &SourceTarget| {
+        let library = roots.manager.workflow_library(target).unwrap();
+        let ids = library
+            .files
+            .iter()
+            .filter(|file| file.enabled)
+            .map(|file| file.file_name.clone())
+            .collect::<Vec<_>>();
+        (library.configuration_revision.unwrap(), ids)
+    };
+    let (user, none) = enabled(&SourceTarget::User);
+    assert!(none.is_empty());
+    let user = enable(&SourceTarget::User, &user, "daily", true).unwrap();
+    assert_eq!(
+        enabled(&SourceTarget::User),
+        (user.clone(), vec!["daily.yaml".into()])
+    );
+    // The Workspace has no configuration yet; enabling creates it, and its
+    // listing names only its own files.
+    let (missing, none) = enabled(&a);
+    assert_eq!((missing.as_str(), none.len()), ("missing", 0));
+    let local = enable(&a, "missing", "local", true).unwrap();
+    assert_eq!(enabled(&a), (local, vec!["local.yaml".into()]));
+    assert!(enabled(&workspace(&roots.b)).1.is_empty());
+    // A stale revision is a conflict; disabling keeps the rest of the file.
+    assert!(matches!(
+        enable(&SourceTarget::User, "missing", "daily", false),
+        Err(SettingsError::Conflict { .. })
+    ));
+    let user = enable(&SourceTarget::User, &user, "daily", false).unwrap();
+    assert_eq!(enabled(&SourceTarget::User), (user, vec![]));
+    let text = std::fs::read_to_string(roots.home.join("rustx/rustx.toml")).unwrap();
+    assert!(text.contains("[models.a]") && !text.contains("workflows"));
+}
+
+#[test]
+fn create_records_display_for_people_apart_from_the_model_description() {
+    let roots = Roots::new();
+    let target = workspace(&roots.a);
+    let display = crate::workflow_file::WorkflowDisplay {
+        title: "周报整理".into(),
+        description: Some("Collects the week's notes into a report".into()),
+        icon: Some("lucide:file-text".into()),
+    };
+    roots
+        .write(
+            &target,
+            "weekly",
+            "missing",
+            WorkflowEdit::Create {
+                description: "Summarize weekly notes".into(),
+                display: Some(display.clone()),
+            },
+        )
+        .unwrap();
+    let document = roots.read(&target, "weekly").document.unwrap();
+    assert_eq!(document.description, "Summarize weekly notes");
+    assert_eq!(document.editor.unwrap().display, Some(display.clone()));
+    let library = roots.manager.workflow_library(&target).unwrap();
+    assert_eq!(library.files[0].display, Some(display));
+    for invalid in [
+        crate::workflow_file::WorkflowDisplay {
+            title: " ".into(),
+            description: None,
+            icon: None,
+        },
+        crate::workflow_file::WorkflowDisplay {
+            title: "Bad icon".into(),
+            description: None,
+            icon: Some("https://example.com/icon.svg".into()),
+        },
+    ] {
+        let Err(SettingsError::InvalidWorkflow(diagnostic)) = roots.write(
+            &target,
+            "rejected",
+            "missing",
+            WorkflowEdit::Create {
+                description: "Rejected".into(),
+                display: Some(invalid),
+            },
+        ) else {
+            panic!("invalid display must be rejected");
+        };
+        assert_eq!(diagnostic.path, "editor.display");
+    }
+    assert!(!roots.read(&target, "rejected").present);
 }
 
 #[test]
@@ -661,55 +771,6 @@ fn identities_are_native_and_reserved_names_are_refused() {
 }
 
 #[test]
-fn invalid_candidates_leave_the_original_file_untouched() {
-    let roots = Roots::new();
-    let target = workspace(&roots.a);
-    let revision = roots.create(&target, "flow", "Valid");
-    let path = roots.a.join(".agents/workflows/flow.yaml");
-    let before = std::fs::read(&path).unwrap();
-    let mut broken = *roots.read(&target, "flow").document.unwrap();
-    broken.block.entry = "absent".into();
-    let Err(SettingsError::InvalidWorkflow(diagnostic)) = roots.write(
-        &target,
-        "flow",
-        &revision,
-        WorkflowEdit::Replace {
-            document: Box::new(broken),
-        },
-    ) else {
-        panic!("dangling entry must be refused");
-    };
-    assert_eq!(diagnostic.path, "block.entry");
-    assert_eq!(diagnostic.category, "workflow_language");
-    assert_eq!(std::fs::read(&path).unwrap(), before);
-    // A nested rejection maps to its exact lexical block and field.
-    let mut nested = definition(include_str!(
-        "../../../examples/local-runtime/.agents/workflows/parallel_review.yaml"
-    ));
-    let crate::runtime::workflow::WorkflowNodeDefinition::Parallel { branches } =
-        nested.block.nodes.get_mut("reviews").unwrap()
-    else {
-        panic!("parallel")
-    };
-    branches.get_mut("quality").unwrap().block.edges[0].to = "missing".into();
-    let Err(SettingsError::InvalidWorkflow(diagnostic)) = roots.write(
-        &target,
-        "flow",
-        &revision,
-        WorkflowEdit::Replace {
-            document: Box::new(nested),
-        },
-    ) else {
-        panic!("dangling nested edge must be refused");
-    };
-    assert_eq!(
-        diagnostic.path,
-        "block.nodes.reviews.branches.quality.block.edges.0.to"
-    );
-    assert_eq!(std::fs::read(&path).unwrap(), before);
-}
-
-#[test]
 fn malformed_files_are_reported_and_never_replaced_by_empty_programs() {
     let roots = Roots::new();
     let target = workspace(&roots.a);
@@ -722,8 +783,8 @@ fn malformed_files_are_reported_and_never_replaced_by_empty_programs() {
         AGENT_PROGRAM
             .replace("Review it.", "Review it.\n      # 1")
             .replace(
-                "proposal: {type: reference, path: [args, proposal]}\n      output",
-                "proposal: {type: literal, value: 9007199254740993}\n      output",
+                "- {type: reference, path: [args, proposal]}\n      output",
+                "- {type: literal, value: 9007199254740993}\n      output",
             ),
     )
     .unwrap();
@@ -923,7 +984,8 @@ fn redirected_and_oversized_workflow_files_are_refused_without_outside_writes() 
                 "leak",
                 "missing",
                 WorkflowEdit::Create {
-                    description: "escape".into()
+                    description: "escape".into(),
+                    display: None,
                 }
             )
             .is_err()
@@ -1120,7 +1182,6 @@ fn native_examples_round_trip_semantically_through_canonical_serialization() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime");
     for (directory, name) in [
         ("workflow-templates/.agents/workflows", "typed_agent"),
-        ("workflow-templates/.agents/workflows", "specialized_agent"),
         ("workflow-templates/.agents/workflows", "parallel_checks"),
         ("workflow-templates/.agents/workflows", "human_plan"),
         (".agents/workflows", "parallel_review"),
@@ -1131,7 +1192,7 @@ fn native_examples_round_trip_semantically_through_canonical_serialization() {
         let wire: WorkflowFileDocument =
             serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
         assert_eq!(wire, original, "{name}");
-        let bytes = candidate::encode(&id(name), &path, &wire).unwrap();
+        let bytes = candidate::encode(&wire).unwrap();
         let canonical: WorkflowFileDocument = serde_yaml::from_slice(&bytes).unwrap();
         assert_eq!(canonical, original, "{name}");
         assert!(
@@ -1150,41 +1211,13 @@ fn native_examples_round_trip_semantically_through_canonical_serialization() {
     }
 }
 
-/// Untouched advanced fields and explicit-empty selections survive a save.
-#[test]
-fn overrides_and_explicit_empty_selections_survive_a_whole_file_save() {
-    let roots = Roots::new();
-    let target = workspace(&roots.a);
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("examples/local-runtime/workflow-templates/.agents/workflows/specialized_agent.yaml");
-    let original = definition(&std::fs::read_to_string(path).unwrap());
-    let text = serde_json::to_string(&original).unwrap();
-    assert!(text.contains("\"override\""), "fixture carries an override");
-    roots.create(&target, "specialized", "seed");
-    let base = roots.read(&target, "specialized").revision;
-    roots
-        .write(
-            &target,
-            "specialized",
-            &base,
-            WorkflowEdit::Replace {
-                document: Box::new(original.clone()),
-            },
-        )
-        .unwrap();
-    assert_eq!(
-        *roots.read(&target, "specialized").document.unwrap(),
-        original
-    );
-}
-
 /// A program whose single node identity is `width` bytes of an invalid
 /// identity: below the native file bound, structurally invalid, and copied
 /// by the parser into both the diagnostic path and its detail.
 fn oversized_identity(width: usize) -> String {
     let node = "N".repeat(width);
     format!(
-        "description: Oversized.\nblock:\n  input: {{type: object, properties: {{}}, additionalProperties: false}}\n  output: {{type: object, properties: {{}}, additionalProperties: false}}\n  entry: {node}\n  nodes:\n    {node}:\n      type: return\n      output: {{type: literal, value: {{}}}}\n"
+        "description: Oversized.\nblock:\n  input: {{type: object, properties: {{}}, additionalProperties: false}}\n  edges:\n  - from: workflow_start\n    to: {node}\n  nodes:\n    workflow_start:\n      type: start\n    {node}:\n      type: return\n      outputs: []\n"
     )
 }
 
@@ -1265,6 +1298,7 @@ fn one_listing_entry_is_reduced_to_its_share_without_losing_its_identity() {
         byte_length: 1,
         modified_ms: None,
         description: Some(escaped(MAX_LISTED_DESCRIPTION_BYTES)),
+        display: None,
         nodes: None,
         diagnostic: Some(WorkflowDiagnostic {
             detail: Some(escaped(MAX_WORKFLOW_DIAGNOSTIC_BYTES)),
@@ -1275,6 +1309,7 @@ fn one_listing_entry_is_reduced_to_its_share_without_losing_its_identity() {
             )
         }),
         shadows_global: false,
+        enabled: false,
     };
     assert!(serde_json::to_vec(&summary).unwrap().len() > MAX_LISTED_ENTRY_BYTES);
     let fitted = fit_listing_share(summary);
@@ -1285,23 +1320,14 @@ fn one_listing_entry_is_reduced_to_its_share_without_losing_its_identity() {
     assert_eq!(fitted.revision, "sha256:0");
 }
 
-/// `AGENT_PROGRAM` returning `{values: [...]}` constructed from the given
-/// numeric literals, under a `number` element contract.
+/// `AGENT_PROGRAM` whose input defaults `values` to the given numeric
+/// literals, under a `number` element contract.
 fn returning(literals: &[&str]) -> String {
-    let items = literals
-        .iter()
-        .map(|literal| format!("{{type: literal, value: {literal}}}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    AGENT_PROGRAM
-        .replace(
-            "output: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}\n  entry",
-            "output: {type: object, properties: {values: {type: array, items: {type: number}}}, required: [values], additionalProperties: false}\n  entry",
-        )
-        .replace(
-            "output: {type: reference, path: [review]}",
-            &format!("output: {{type: object, fields: {{values: {{type: array, items: [{items}]}}}}}}"),
-        )
+    let items = literals.join(", ");
+    AGENT_PROGRAM.replace(
+        "properties: {proposal: {type: string}}",
+        &format!("properties: {{proposal: {{type: string}}, values: {{type: array, items: {{type: number}}, default: [{items}]}}}}"),
+    )
 }
 
 #[test]
@@ -1328,10 +1354,7 @@ fn the_browser_number_contract_holds_for_reading_checking_and_replacing() {
     );
     let diagnostic = source.diagnostic.unwrap();
     assert_eq!(diagnostic.category, "unsupported_number");
-    assert_eq!(
-        diagnostic.path,
-        "block.nodes.done.output.fields.values.items.0.value"
-    );
+    assert_eq!(diagnostic.path, "block.input.properties.values.default.0");
     let library = roots.manager.workflow_library(&target).unwrap();
     assert_eq!(
         library.files[0].diagnostic.as_ref().unwrap().category,
@@ -1402,9 +1425,11 @@ fn a_checked_candidate_names_the_revision_its_normalized_commit_takes() {
         .manager
         .check_workflow(&target, &id("review"), candidate.clone(), None, false)
         .unwrap();
-    let WorkflowStructure::Valid { revision, .. } = report.structure else {
-        panic!("valid: {report:?}");
-    };
+    assert!(
+        matches!(report.structure, WorkflowStructure::Valid { .. }),
+        "valid: {report:?}"
+    );
+    let revision = report.revision.unwrap();
     let committed = roots
         .write(
             &target,
@@ -1423,49 +1448,6 @@ fn a_checked_candidate_names_the_revision_its_normalized_commit_takes() {
             .unwrap()
             .contains("timeout_ms")
     );
-
-    // A meaningful distinction is a different identity: an explicitly empty
-    // override is not an omitted one.
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("examples/local-runtime/workflow-templates/.agents/workflows/specialized_agent.yaml");
-    let original: serde_json::Value =
-        serde_json::to_value(definition(&std::fs::read_to_string(path).unwrap())).unwrap();
-    let mut omitted = original.clone();
-    let mut empty = original;
-    for value in [&mut omitted, &mut empty] {
-        let nodes = value["block"]["nodes"].as_object_mut().unwrap();
-        let (_, agent) = nodes
-            .iter_mut()
-            .find(|(_, node)| node.get("override").is_some())
-            .expect("an override");
-        agent.as_object_mut().unwrap().remove("override");
-    }
-    let nodes = empty["block"]["nodes"].as_object_mut().unwrap();
-    let agent = nodes
-        .values_mut()
-        .find(|node| node["type"] == "agent")
-        .unwrap();
-    agent
-        .as_object_mut()
-        .unwrap()
-        .insert("override".into(), serde_json::json!({}));
-    let identity = |value: serde_json::Value| {
-        let report = roots
-            .manager
-            .check_workflow(
-                &target,
-                &id("specialized"),
-                serde_json::from_value(value).unwrap(),
-                None,
-                false,
-            )
-            .unwrap();
-        match report.structure {
-            WorkflowStructure::Valid { revision, .. } => revision,
-            WorkflowStructure::Invalid { diagnostic } => panic!("{diagnostic:?}"),
-        }
-    };
-    assert_ne!(identity(omitted), identity(empty));
 }
 
 /// Seed `directory` with Workflow files written as an external editor would:
@@ -1545,6 +1527,7 @@ fn a_global_addition_is_admitted_up_to_64_identities_and_refused_before_publicat
         "missing",
         WorkflowEdit::Create {
             description: "One too many.".into(),
+            display: None,
         },
     ));
     assert_eq!(
@@ -1573,6 +1556,7 @@ fn a_workspace_addition_counts_its_union_with_global_and_an_override_adds_no_ide
         "missing",
         WorkflowEdit::Create {
             description: "x".into(),
+            display: None,
         },
     ));
     assert!(
@@ -1619,6 +1603,7 @@ fn a_directory_admits_up_to_128_yaml_entries_and_refuses_the_next() {
         "missing",
         WorkflowEdit::Create {
             description: "x".into(),
+            display: None,
         },
     ));
     assert!(
@@ -1644,6 +1629,7 @@ fn an_externally_over_full_scope_still_allows_guarded_replace_and_delete() {
         "missing",
         WorkflowEdit::Create {
             description: "x".into(),
+            display: None,
         },
     ));
     let replaced = roots.read(&SourceTarget::User, "o000");
@@ -1748,6 +1734,7 @@ fn creating(
                 id: id(name),
                 edit: WorkflowEdit::Create {
                     description: "Racing.".into(),
+                    display: None,
                 },
             },
         )
@@ -1816,6 +1803,7 @@ fn a_workspace_whose_workflow_directory_is_global_holds_its_one_capacity_lock_on
                     id: id("shared_scope"),
                     edit: WorkflowEdit::Create {
                         description: "Created through the Workspace.".into(),
+                        display: None,
                     },
                 },
             )
@@ -1897,6 +1885,7 @@ fn capacity_process_writer_gate() {
             id: id(&std::env::var("RUSTX_491_CAPACITY_ID").unwrap()),
             edit: WorkflowEdit::Create {
                 description: "Racing from another process.".into(),
+                display: None,
             },
         },
     );
@@ -2075,6 +2064,7 @@ fn refused_additions_leave_no_entry_that_discovery_counts() {
             "missing",
             WorkflowEdit::Create {
                 description: "x".into(),
+                display: None,
             },
         ));
         capacity_refusal(roots.copy(&SourceTarget::User, "f000", &format!("copy_{index}")));
@@ -2107,6 +2097,7 @@ fn an_addition_is_refused_when_its_publication_would_pass_the_entry_bound() {
         "missing",
         WorkflowEdit::Create {
             description: "x".into(),
+            display: None,
         },
     ));
     assert!(
@@ -2164,6 +2155,7 @@ fn a_first_write_into_an_externally_full_directory_keeps_its_catalog_readable() 
         "missing",
         WorkflowEdit::Create {
             description: "No room.".into(),
+            display: None,
         },
     ));
     assert!(
@@ -2380,10 +2372,9 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     use serde_json::json;
     let roots = Roots::new();
     let empty = json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
-    let model = json!({"type":"model","instruction":"Draft","output":{"type":"text"}});
-    let done = json!({"type":"return","output":{"type":"object","fields":{}}});
-    let private = json!({"input":empty,"output":empty,"entry":"first","nodes":{"first":model,"second":model,"done":done},
-        "edges":[{"from":"first","to":"second"},{"from":"second","to":"done"}]});
+    let model = json!({"type":"model","messages":[{"role":"system","content":[{"type":"literal","value":"Draft"}]},{"role":"user","content":[{"type":"literal","value":"Go."}]}],"output":{"type":"text"}});
+    let done = json!({"type":"return","outputs":[]});
+    let private = json!({"nodes": {"workflow_start":{"type":"start"},"inner":model},"edges": [{"from":"workflow_start","to":"inner"}],});
     let mut input = empty.clone();
     // More nonmatches than the UI's catalog bound must not hide later matches.
     for index in 0..150 {
@@ -2391,16 +2382,13 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     }
     input["properties"]["Draft"] = json!({"type":"string"});
     let document: crate::workflow_file::WorkflowFileDocument = serde_json::from_value(json!({
-        "description":"Qualified title discovery", "block":{"input":input,"output":empty,"entry":"first",
-            "nodes":{"first":model,"second":model,"done":done,"loop":{"type":"loop","input":{"type":"object","fields":{}},
-                "body":private,"until":{"type":"boolean","value":{"type":"literal","value":true}},"carry":{"type":"object","fields":{}},"max_iterations":1}},
-            "edges":[{"from":"first","to":"second"},{"from":"second","to":"loop"},{"from":"loop","port":"satisfied","to":"done"},{"from":"loop","port":"exhausted","to":"done"}]},
+        "description":"Qualified title discovery", "block":{"input":input,"nodes": {"workflow_start":{"type":"start"},"first":model,"second":model,"done":done,"loop":{"type":"loop","loop_count":1,
+                "body":private}},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"second"},{"from":"second","to":"loop"},{"from":"loop","to":"done"}],},
         "editor":{"nodes":[
             {"address":{"block":[],"node":"first"},"title":"First Draft"},
             {"address":{"block":[],"node":"second"},"title":"Second DRAFT"},
-            {"address":{"block":[{"node":"loop"}],"node":"first"},"title":"Private"},
-            {"address":{"block":[],"node":"args"},"title":"TitleOnly"},
-            {"address":{"block":[],"node":"result"},"title":"TitleOnly"}]}
+            {"address":{"block":[{"node":"loop"}],"node":"inner"},"title":"Private"},
+            {"address":{"block":[],"node":"args"},"title":"TitleOnly"}]}
     })).unwrap();
     let query: WorkflowAnalysisQuery = serde_json::from_value(json!({"consumer":{"address":{"block":[],"node":"done"},"field":{"kind":"return_output"},"path":[]},"search":"dRaFt","limit":128})).unwrap();
     let analyze = |query: WorkflowAnalysisQuery| {
@@ -2426,7 +2414,19 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
             .iter()
             .map(|choice| choice.path.clone())
             .collect::<Vec<_>>(),
-        vec![vec!["args", "Draft"], vec!["first"], vec!["second"]]
+        // A matching producer title qualifies the producer and its fields.
+        std::iter::once(vec!["args", "Draft"])
+            .chain(["first", "second"].into_iter().flat_map(|node| {
+                [
+                    vec![node, "text"],
+                    vec![node, "reasoning_content"],
+                    vec![node, "usage"],
+                    vec![node, "usage", "input_tokens"],
+                    vec![node, "usage", "output_tokens"],
+                    vec![node, "usage", "total_tokens"],
+                ]
+            }))
+            .collect::<Vec<_>>()
     );
     assert!(!report.analysis.truncated);
     for choice in &report.analysis.references[1..] {
@@ -2441,23 +2441,20 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     let limited = analyze(limited);
     assert_eq!(limited.analysis.references.len(), 2);
     assert!(limited.analysis.truncated);
+    // As in Dify, a body sees the titled nodes around it; its own node's
+    // title does not match.
     let mut private = query.clone();
     private.consumer.address.block = serde_json::from_value(json!([{"node":"loop"}])).unwrap();
-    assert!(
-        analyze(private).analysis.references.is_empty(),
-        "same local IDs do not inherit parent titles"
-    );
+    private.consumer.address.node = "inner".into();
+    private.consumer.field =
+        crate::runtime::workflow::authoring::WorkflowConsumerField::Message { index: 0 };
+    let private = analyze(private).analysis.references;
+    assert_eq!(private.len(), report.analysis.references.len());
+    assert!(private.iter().all(|choice| choice.path[0] != "inner"));
     let mut synthetic = query;
     synthetic.search = "TitleOnly".into();
     assert!(
-        analyze(synthetic.clone()).analysis.references.is_empty(),
-        "args is not a real titled producer"
-    );
-    synthetic.consumer.address.node = "loop".into();
-    synthetic.consumer.field =
-        crate::runtime::workflow::authoring::WorkflowConsumerField::LoopCarry;
-    assert!(
         analyze(synthetic).analysis.references.is_empty(),
-        "result is not a real titled producer"
+        "args is not a real titled producer"
     );
 }

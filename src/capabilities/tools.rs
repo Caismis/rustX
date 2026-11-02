@@ -240,17 +240,18 @@ pub(crate) fn select_tools(
     // exact executable contract. Keep its typed diagnostic and frozen intent
     // while failed sources contribute no declarations. Undefined
     // selections, live-confirmed missing exact tools and other profile errors
-    // remain fatal.
+    // remain fatal. An enabled Workflow that is not admitted is off.
     if let Some(diagnostic) = profile.diagnostics.iter().find(|diagnostic| {
         !matches!(
             diagnostic,
-            crate::runtime::agent_profile::AgentProfileDiagnostic::Tool(
-                super::selection::ToolSelectionError::SourceUnavailable {
-                    source: super::ToolSourceId::Mcp(_),
-                    reason: super::selection::SourceResolutionFailure::Unavailable { .. },
-                    ..
-                }
-            )
+            crate::runtime::agent_profile::AgentProfileDiagnostic::WorkflowUnavailable { .. }
+                | crate::runtime::agent_profile::AgentProfileDiagnostic::Tool(
+                    super::selection::ToolSelectionError::SourceUnavailable {
+                        source: super::ToolSourceId::Mcp(_),
+                        reason: super::selection::SourceResolutionFailure::Unavailable { .. },
+                        ..
+                    }
+                )
         )
     }) {
         return Err(format!(

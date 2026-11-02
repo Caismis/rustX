@@ -150,6 +150,8 @@ pub struct WorkflowFileSummary {
     pub modified_ms: Option<i64>,
     /// The bounded authored description of a parseable document.
     pub description: Option<String>,
+    /// How people see a parseable document, its description bounded.
+    pub display: Option<crate::workflow_file::WorkflowDisplay>,
     /// Root-block node count of a parseable document.
     pub nodes: Option<usize>,
     /// Why this file is not a valid Workflow program.
@@ -157,6 +159,9 @@ pub struct WorkflowFileSummary {
     /// Informational: a Workspace file whose id also names a User (Global)
     /// file, which it shadows in this Workspace. Edits never redirect.
     pub shadows_global: bool,
+    /// Enabled for this scope's Sessions: named by the scope's own
+    /// `agent.workflows`. A file that fails its check is never admitted.
+    pub enabled: bool,
 }
 
 /// The Workflow files physically owned by one source scope.
@@ -173,16 +178,19 @@ pub struct WorkflowLibrary {
     pub files: Vec<WorkflowFileSummary>,
     /// A directory-level failure; `files` is then empty, never partial.
     pub diagnostic: Option<WorkflowDiagnostic>,
+    /// The revision of the scope's `rustx.toml`, the CAS token of enabling
+    /// or disabling a file; absent while that document does not parse.
+    pub configuration_revision: Option<String>,
 }
 
 /// The native names an author can choose from in this scope: discovered
 /// named Agent profiles and the builtin Tools a Tool node can select.
 /// Choices, never admission: the native check decides.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowVocabulary {
     pub profiles: Vec<crate::runtime::subagent::SubagentName>,
-    pub builtin_tools: Vec<String>,
+    pub builtin_tools: Vec<crate::runtime::workflow::WorkflowToolChoice>,
 }
 
 /// The complete authorized source of one exact Workflow file.
@@ -398,9 +406,11 @@ fn summarize(
         byte_length: 0,
         modified_ms: modified_ms(path),
         description: None,
+        display: None,
         nodes: None,
         diagnostic: None,
         shadows_global,
+        enabled: false,
     };
     let bytes = match directory.read(name) {
         Ok(Some(bytes)) => bytes,
@@ -438,6 +448,15 @@ fn summarize(
             MAX_LISTED_DESCRIPTION_BYTES,
         )
     });
+    summary.display = definition
+        .as_ref()
+        .and_then(|definition| definition.editor.as_ref()?.display.clone())
+        .map(|mut display| {
+            display.description = display
+                .description
+                .map(|text| bounded(&text, MAX_LISTED_DESCRIPTION_BYTES));
+            display
+        });
     summary.nodes = definition
         .as_ref()
         .map(|definition| definition.definition.block.nodes.len());
@@ -447,7 +466,7 @@ fn summarize(
 
 /// Keep one entry within its fixed listing share. Only an entry authored
 /// to the extreme is reduced, from the least to the most locating fact: the
-/// compiler detail, then the diagnostic path, then the description. Its
+/// compiler detail, then the diagnostic path, then the descriptions. Its
 /// identity, revision and diagnostic category always remain, so an invalid
 /// file stays discoverable and never displaces another entry.
 fn fit_listing_share(mut summary: WorkflowFileSummary) -> WorkflowFileSummary {
@@ -470,6 +489,12 @@ fn fit_listing_share(mut summary: WorkflowFileSummary) -> WorkflowFileSummary {
         return summary;
     }
     summary.description = None;
+    if fits(&summary) {
+        return summary;
+    }
+    if let Some(display) = &mut summary.display {
+        display.description = None;
+    }
     summary
 }
 
@@ -493,7 +518,28 @@ impl UserConfigManager {
             absent_revision: super::settings::revision(None),
             files: Vec::new(),
             diagnostic: None,
+            configuration_revision: None,
         };
+        let config = self.config_path(target);
+        let bytes = match std::fs::read(&config) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        };
+        let layer = bytes.as_ref().ok().and_then(|bytes| {
+            let layer = super::configuration::capture::parse_layer(
+                &config,
+                bytes.as_deref().unwrap_or_default(),
+                matches!(target, SourceTarget::Workspace { .. }),
+            )
+            .ok()?;
+            library.configuration_revision = Some(super::settings::revision(bytes.as_deref()));
+            Some(layer)
+        });
+        let enabled = layer
+            .and_then(|layer| layer.agent)
+            .and_then(|agent| agent.workflows)
+            .unwrap_or_default();
         let paths =
             match super::resource_directory::files(&scope.boundary, &scope.directory, "yaml") {
                 Ok(paths) => paths,
@@ -533,7 +579,9 @@ impl UserConfigManager {
         };
         library.files.extend(paths.into_iter().filter_map(|path| {
             let shadows_global = path.file_name().is_some_and(|name| global.contains(name));
-            summarize(&scope, &directory, &path, shadows_global)
+            let mut summary = summarize(&scope, &directory, &path, shadows_global)?;
+            summary.enabled = summary.id.as_ref().is_some_and(|id| enabled.contains(id));
+            Some(summary)
         }));
         library
             .files

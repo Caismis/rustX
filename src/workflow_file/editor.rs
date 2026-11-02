@@ -10,6 +10,9 @@ pub const MAX_EDITOR_ENTRIES: usize = 1024;
 pub const MAX_EDITOR_NOTES: usize = 128;
 pub const MAX_EDITOR_COORDINATE: f64 = 1_000_000.0;
 pub const MAX_EDITOR_DIMENSION: f64 = 8192.0;
+pub const MAX_DISPLAY_TITLE_BYTES: usize = 128;
+pub const MAX_DISPLAY_DESCRIPTION_BYTES: usize = 1024;
+pub const MAX_DISPLAY_ICON_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -52,35 +55,20 @@ pub struct WorkflowNodePresentation {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<WorkflowPosition>,
-    /// Authored Loop/Parallel container geometry, never measured DOM state.
+    /// Authored Loop container geometry, never measured DOM state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dimensions: Option<WorkflowDimensions>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowEntryPresentation {
-    pub block: Vec<WorkflowBlockStep>,
-    pub position: WorkflowPosition,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowBranchPresentation {
-    pub address: WorkflowNodeAddress,
-    pub branch: String,
-    pub position: WorkflowPosition,
-    pub dimensions: WorkflowDimensions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowNoteTheme {
-    Neutral,
     Blue,
+    Cyan,
     Green,
-    Amber,
-    Rose,
+    Yellow,
+    Pink,
+    Violet,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -88,6 +76,7 @@ pub enum WorkflowNoteTheme {
 pub struct WorkflowNote {
     pub id: String,
     pub block: Vec<WorkflowBlockStep>,
+    /// As Dify, the note's Lexical editor state serialized as JSON.
     pub text: String,
     pub theme: WorkflowNoteTheme,
     pub position: WorkflowPosition,
@@ -115,19 +104,9 @@ pub enum WorkflowOrderTarget {
         block: Vec<WorkflowBlockStep>,
         path: Vec<WorkflowSchemaStep>,
     },
-    BlockOutput {
-        block: Vec<WorkflowBlockStep>,
-        path: Vec<WorkflowSchemaStep>,
-    },
     NodeOutput {
         address: WorkflowNodeAddress,
         path: Vec<WorkflowSchemaStep>,
-    },
-    NodeInput {
-        address: WorkflowNodeAddress,
-    },
-    Branches {
-        address: WorkflowNodeAddress,
     },
 }
 
@@ -138,15 +117,54 @@ pub struct WorkflowFieldOrder {
     pub fields: Vec<String>,
 }
 
+/// How people see the Workflow in the library and editor. Never part of the
+/// program: models only read the definition's own `description`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowDisplay {
+    /// The human name; the file id remains the native identity.
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// An Iconify icon name, `<prefix>:<name>` (e.g. `lucide:workflow`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+fn icon_part(part: &str) -> bool {
+    !part.is_empty()
+        && !part.starts_with('-')
+        && !part.ends_with('-')
+        && !part.contains("--")
+        && part
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+impl WorkflowDisplay {
+    pub(super) fn valid(&self) -> bool {
+        !self.title.trim().is_empty()
+            && self.title.len() <= MAX_DISPLAY_TITLE_BYTES
+            && self
+                .description
+                .as_ref()
+                .is_none_or(|text| text.len() <= MAX_DISPLAY_DESCRIPTION_BYTES)
+            && self.icon.as_ref().is_none_or(|icon| {
+                icon.len() <= MAX_DISPLAY_ICON_BYTES
+                    && icon
+                        .split_once(':')
+                        .is_some_and(|(prefix, name)| icon_part(prefix) && icon_part(name))
+            })
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowEditorMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<WorkflowDisplay>,
     #[serde(default)]
     pub nodes: Vec<WorkflowNodePresentation>,
-    #[serde(default)]
-    pub entries: Vec<WorkflowEntryPresentation>,
-    #[serde(default)]
-    pub branches: Vec<WorkflowBranchPresentation>,
     #[serde(default)]
     pub notes: Vec<WorkflowNote>,
     #[serde(default)]
@@ -162,9 +180,7 @@ fn key(key: &str) -> bool {
 }
 fn block_valid(block: &[WorkflowBlockStep]) -> bool {
     block.len() <= crate::runtime::workflow::MAX_BLOCK_DEPTH
-        && block
-            .iter()
-            .all(|step| key(&step.node) && step.branch.as_deref().is_none_or(key))
+        && block.iter().all(|step| key(&step.node))
 }
 fn address_valid(address: &WorkflowNodeAddress) -> bool {
     block_valid(&address.block) && key(&address.node)
@@ -188,15 +204,21 @@ impl WorkflowEditorMetadata {
     pub(super) fn validate(&self) -> Result<(), WorkflowPresentationDiagnostic> {
         let invalid =
             |reason| WorkflowPresentationDiagnostic::new("editor", "presentation", reason);
-        if self.nodes.len()
-            + self.entries.len()
-            + self.branches.len()
-            + self.notes.len()
-            + self.orders.len()
-            > MAX_EDITOR_ENTRIES
+        if self.nodes.len() + self.notes.len() + self.orders.len() > MAX_EDITOR_ENTRIES
             || self.notes.len() > MAX_EDITOR_NOTES
         {
             return Err(invalid("editor exceeds 1024 entries or 128 notes"));
+        }
+        if self
+            .display
+            .as_ref()
+            .is_some_and(|display| !display.valid())
+        {
+            return Err(WorkflowPresentationDiagnostic::new(
+                "editor.display",
+                "presentation",
+                "display needs a non-empty title within 128 bytes, a description within 1024 bytes and an Iconify `<prefix>:<name>` icon",
+            ));
         }
         if self.nodes.iter().any(|node| {
             !address_valid(&node.address)
@@ -204,39 +226,25 @@ impl WorkflowEditorMetadata {
                 || node.description.as_ref().is_some_and(|s| s.len() > 4096)
                 || node.position.is_some_and(|p| !position_valid(p))
                 || node.dimensions.is_some_and(|d| !dimensions_valid(d))
-        }) || self
-            .entries
-            .iter()
-            .any(|entry| !block_valid(&entry.block) || !position_valid(entry.position))
-            || self.branches.iter().any(|lane| {
-                !address_valid(&lane.address)
-                    || !key(&lane.branch)
-                    || !position_valid(lane.position)
-                    || !dimensions_valid(lane.dimensions)
-            })
-            || self.notes.iter().any(|note| {
-                !block_valid(&note.block)
-                    || !key(&note.id)
-                    || note.text.len() > 16 * 1024
-                    || !position_valid(note.position)
-                    || !dimensions_valid(note.dimensions)
-            })
-        {
+        }) || self.notes.iter().any(|note| {
+            !block_valid(&note.block)
+                || !key(&note.id)
+                || note.text.len() > 64 * 1024
+                || !position_valid(note.position)
+                || !dimensions_valid(note.dimensions)
+        }) {
             return Err(invalid(
                 "invalid editor address, UTF-8 text bound or finite geometry (coordinates ±1000000; dimensions 16..8192)",
             ));
         }
         for order in &self.orders {
             let (valid, path) = match &order.target {
-                WorkflowOrderTarget::BlockInput { block, path }
-                | WorkflowOrderTarget::BlockOutput { block, path } => {
+                WorkflowOrderTarget::BlockInput { block, path } => {
                     (block_valid(block), path.as_slice())
                 }
                 WorkflowOrderTarget::NodeOutput { address, path } => {
                     (address_valid(address), path.as_slice())
                 }
-                WorkflowOrderTarget::NodeInput { address }
-                | WorkflowOrderTarget::Branches { address } => (address_valid(address), &[][..]),
             };
             if !valid
                 || path.len() > 32
@@ -251,8 +259,6 @@ impl WorkflowEditorMetadata {
             }
         }
         if !unique(self.nodes.iter().map(|n| &n.address))
-            || !unique(self.entries.iter().map(|n| &n.block))
-            || !unique(self.branches.iter().map(|n| (&n.address, &n.branch)))
             || !unique(self.notes.iter().map(|n| &n.id))
             || !unique(self.orders.iter().map(|o| &o.target))
         {
@@ -288,22 +294,11 @@ impl WorkflowEditorMetadata {
                         target,
                         Some(
                             WorkflowNodeDefinition::Loop { .. }
-                                | WorkflowNodeDefinition::Parallel { .. }
+                                | WorkflowNodeDefinition::Iteration { .. }
                         )
                     ))
             {
                 add(format!("editor.nodes.{index}"));
-            }
-        }
-        for (index, entry) in self.entries.iter().enumerate() {
-            if block_at(&definition.block, &entry.block).is_none() {
-                add(format!("editor.entries.{index}"));
-            }
-        }
-        for (index, lane) in self.branches.iter().enumerate() {
-            if !matches!(node_at(definition, &lane.address), Some(WorkflowNodeDefinition::Parallel { branches }) if branches.contains_key(&lane.branch))
-            {
-                add(format!("editor.branches.{index}"));
             }
         }
         for (index, note) in self.notes.iter().enumerate() {
@@ -337,35 +332,14 @@ fn order_fields(
     definition: &WorkflowDefinition,
     target: &WorkflowOrderTarget,
 ) -> Option<BTreeSet<String>> {
-    use WorkflowOrderTarget::{BlockInput, BlockOutput, Branches, NodeInput, NodeOutput};
-    let schema = match target {
-        NodeInput { address } => {
-            return match node_at(definition, address)? {
-                WorkflowNodeDefinition::Agent { input, .. }
-                | WorkflowNodeDefinition::Model { input, .. } => {
-                    Some(input.keys().cloned().collect())
-                }
-                _ => None,
-            };
-        }
-        Branches { address } => {
-            return match node_at(definition, address)? {
-                WorkflowNodeDefinition::Parallel { branches } => {
-                    Some(branches.keys().cloned().collect())
-                }
-                _ => None,
-            };
-        }
-        BlockInput { block, .. } => block_at(&definition.block, block)?.input.clone(),
-        BlockOutput { block, .. } => block_at(&definition.block, block)?.output.clone(),
-        NodeOutput { address, .. } => {
+    use WorkflowOrderTarget::{BlockInput, NodeOutput};
+    let (schema, path) = match target {
+        BlockInput { block, path } => (block_at(&definition.block, block)?.input.clone(), path),
+        NodeOutput { address, path } => (
             crate::runtime::workflow::authoring::declared_output(node_at(definition, address)?)
-                .ok()??
-        }
-    };
-    let (BlockInput { path, .. } | BlockOutput { path, .. } | NodeOutput { path, .. }) = target
-    else {
-        unreachable!()
+                .ok()??,
+            path,
+        ),
     };
     let mut schema = &schema;
     for field in path {

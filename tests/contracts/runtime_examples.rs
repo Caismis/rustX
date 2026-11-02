@@ -259,20 +259,20 @@ fn reference_authoring_errors_fail_before_execution() {
             .unwrap();
     let cases = [
         (
-            "/block/nodes/plan/input/brief/path",
+            "/block/nodes/plan/task/2/path",
             serde_json::json!(["args", "missing"]),
         ),
         (
-            "/block/nodes/repair/body/nodes/implement/input/plan/path",
-            serde_json::json!(["plan"]),
+            "/block/nodes/repair/body/nodes/implement/task/2/path",
+            serde_json::json!(["implemented"]),
         ),
-        ("/block/nodes/repair/max_iterations", serde_json::json!(0)),
+        ("/block/nodes/repair/loop_count", serde_json::json!(0)),
         (
-            "/block/nodes/plan/input/brief/path",
+            "/block/nodes/plan/task/2/path",
             serde_json::json!(["repair"]),
         ),
         (
-            "/block/nodes/repair/body/entry",
+            "/block/nodes/repair/body/edges/0/to",
             serde_json::json!("missing_node"),
         ),
     ];
@@ -286,13 +286,13 @@ fn reference_authoring_errors_fail_before_execution() {
         )
         .unwrap_err();
         let diagnostic = error.to_string();
-        let expected_node = if pointer.ends_with("/entry") {
+        let expected_node = if pointer.ends_with("/to") {
             "missing_node"
         } else if pointer.contains("/check/") {
             "check"
         } else if pointer.contains("/implement/") {
             "implement"
-        } else if pointer.ends_with("max_iterations") {
+        } else if pointer.ends_with("loop_count") {
             "repair"
         } else {
             "plan"

@@ -1,8 +1,9 @@
-import { lazy, Suspense, useCallback, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { EditorView } from '@uiw/react-codemirror';
 import { useTranslation } from '../../locale/react';
 import { Button } from './Button';
 import { formatJsonCode, jsonSyntaxErrors } from './json-code';
+import { IconWrapLinesOutline16 } from './icons';
 import css from './JsonCodeEditor.module.css';
 
 const CodeView = lazy(() => import('./JsonCodeView'));
@@ -10,9 +11,9 @@ const CodeView = lazy(() => import('./JsonCodeView'));
 /** One settings JSON surface. The native constraint-validation control makes
  * contenteditable participate in its enclosing form and disabled fieldsets.
  * It carries no authored value; invalid submission focuses the actual editor. */
-export function JsonCodeEditor({ label, value, onChange, error = '', allowEmpty = true, placeholder, minHeight = 144 }: {
+export function JsonCodeEditor({ label, value, onChange, error = '', allowEmpty = true, placeholder, minHeight = 144, panel = false, headerActions }: {
   label: string; value: string; onChange: (text: string) => void; error?: string;
-  allowEmpty?: boolean; placeholder?: string; minHeight?: number;
+  allowEmpty?: boolean; placeholder?: string; minHeight?: number; panel?: boolean; headerActions?: ReactNode;
 }) {
   const tx = useTranslation(), id = useId();
   const editor = useRef<EditorView | undefined>(undefined);
@@ -42,22 +43,22 @@ export function JsonCodeEditor({ label, value, onChange, error = '', allowEmpty 
     if (formatted !== text) view.dispatch({ changes: { from: 0, to: text.length, insert: formatted } });
     return true;
   }, [disabled, allowEmpty]);
-  return <div className={css.root} data-json-editor="" data-empty={!value.trim()} data-invalid={!!problem} data-disabled={disabled}>
+  return <div className={css.root} data-json-editor="" data-panel={panel || undefined} data-empty={!value.trim()} data-invalid={!!problem} data-disabled={disabled}>
     <div className={css.header}>
       <label id={`${id}-label`} onClick={() => editor.current?.focus()}>{label}</label>
-      <Button size="sm" disabled={disabled || !value.trim() || !!syntax.length} onClick={formatDocument}
+      <div className={css.actions}><Button size="sm" disabled={disabled || !value.trim() || !!syntax.length} onClick={formatDocument}
         aria-label={tx('settings:json-editor.format-label', { p0: label })} title={tx('settings:json-editor.format-shortcut')}>
-        {tx('settings:json-editor.format')}
-      </Button>
+        {panel ? <IconWrapLinesOutline16 /> : tx('settings:json-editor.format')}
+      </Button>{headerActions}</div>
     </div>
     <input ref={control} className={css.validity} aria-hidden="true" tabIndex={-1} value="" onChange={() => {}}
       onInvalid={event => { event.preventDefault(); editor.current?.focus(); }} />
     <Suspense fallback={<div className={css.loading} data-json-editor-loading="" role="status">{tx('settings:json-editor.loading')}</div>}>
       <CodeView labelId={`${id}-label`} descriptionId={`${id}-status`} value={value} onChange={onChange}
         editor={editor} diagnostics={diagnostics} invalid={!!problem} disabled={disabled}
-        placeholder={placeholder} minHeight={minHeight} formatDocument={formatDocument} />
+        placeholder={placeholder} minHeight={minHeight} fill={panel} formatDocument={formatDocument} />
     </Suspense>
-    <div id={`${id}-status`} className={css.status}>
+    <div id={`${id}-status`} className={css.status} data-problem={!!problem}>
       {problem ? <>
         <span role="alert">{problem}</span>
         {error && diagnostics[0] && <small>{diagnostics[0].message}</small>}

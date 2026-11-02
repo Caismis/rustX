@@ -391,8 +391,12 @@ Resource call before dispatch; current Attempts retain their declared Tool set
 until the existing safe capability adoption boundary.
 
 An empty source map replaces no named source entries; set a particular source
-to `[]` to override its inherited selection. Agent and Workflow allowlists are
-complete arrays, default empty. Their dispatcher capabilities follow admission
+to `[]` to override its inherited selection. The Agent allowlist is a complete
+array, default empty. `agent.workflows` is the one accumulating unit: the User
+and Workspace arrays are merged, and each enables only the Workflow files its
+own scope owns: a Global file enabled in User `rustx.toml` is enabled in every
+Workspace that does not shadow it, and a Workspace enables its own files. The Workflows page edits it one
+file at a time (`workflow_enabled`). Dispatcher capabilities follow admission
 of those selections. Definition existence never selects a resource.
 
 `agents_md.inherit` defaults true and `files` defaults empty inside its winning
@@ -531,7 +535,7 @@ units; there is no recursive TOML merge.
 | Skill visibility | Complete `agent.skills` value | `[]` exposes none; `"all"` exposes valid eligible packages |
 | Plugins | Complete `agent.plugins.<plugin>` object | Empty object defaults off; omitted contributors use that Plugin's defaults |
 | Agent delegation | Complete `agent.agents` array | `[]` permits no named Agents and composes no Agent controls |
-| Workflow admission | Complete `agent.workflows` array | `[]` permits no Workflows |
+| Workflow enablement | `agent.workflows` array, merged across User and Workspace | `[]` adds none; it never disables a Global Workflow |
 | Project guidance | Complete `agent.agents_md` object | `{}` uses inherit=true, files=[] |
 | Native invocation policy | Complete `native_tools.<tool>` object | `{}` restores that Tool's product defaults |
 | MCP invocation policy | Complete `mcp_tool_policies.<server>` object | `{}` restores domain defaults |

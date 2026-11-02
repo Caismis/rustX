@@ -28,6 +28,7 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         let fixture = Fixture::with_session_count(Some("review"), 1).await;
         let id = fixture.sessions[0].id.clone();
         issue459_reviewer_sources(&fixture);
+        issue459_global_review(&fixture);
         let connection = AppServerConnection::new(fixture.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &fixture, 0).await;

@@ -3164,8 +3164,8 @@ the launch-boundary policy inheritance.
   JSON-compatible values and explicit artifact/reference identities cross
   nodes. An Agent's transcript, reasoning, diagnostics, provider/model
   identity, usage, timing, and parent canonical history never propagate
-  implicitly. Agent tasks are fixed strings and references do not contain an
-  interpolation or expression language.
+  implicitly. Agent tasks and Model messages are fixed text and explicit
+  references; there is no interpolation or expression language.
 - **Agent reasoning and control flow are separate.** Agent invokes one
   Workflow-admitted named Subagent profile with its frozen native resources;
   Branch consumes typed boolean/equality/composition predicates and chooses
@@ -3505,7 +3505,7 @@ A package rewrite is observed only at the next quiescent re-discovery.
   Pending discovery is never evidence that an exact selected name is absent;
   live-confirmed absence and duplicate identities retain ordinary validation.
   Optional Root terminal failures preserve healthy siblings and native tools;
-  required Workflow and frozen child contracts remain strict.
+  affected Workflows are disabled with diagnostics; frozen child contracts remain strict.
 - **One initial batch has one submission-triggered budget.** Mere preparation,
   Session creation and client attachment do not start an owner-level elapsed-time timer.
   Native captures the first submission intent's monotonic receipt before any
@@ -7714,9 +7714,8 @@ query.
 
 A Workflow owns no workspace resource and has no Candidate. Agent and Tool
 nodes run in the shared Session binding under their existing native owners; a
-successful run returns exactly its declared output. Review is a typed
-`{accepted, feedback}` value over an immutable Plan subject, gates later work
-only through an explicit Branch on `accepted`, acquires no filesystem lease,
+successful run returns exactly the object its Return outputs build. A Human Input
+continues through the exit of the action chosen, acquires no filesystem lease,
 and never rolls back an earlier write. Stale responses, wrong node visits,
 wrong subject digests and responses after terminal cancellation remain
 rejected. Workflow children are finite: ordinary durable Agent controls cannot
@@ -8226,7 +8225,8 @@ Original admission scope, current controller and result reservation precede nati
 - Transfer carries physical connection/discovery ownership, invalidation epochs,
   lifecycle counts and retirement obligations. It grants no execution authority.
   Existing complete candidate validation and commit retain their exact meaning;
-  optional Root outcomes are isolated and required Workflow/child contracts strict.
+  optional Root outcomes are isolated, affected Workflows are disabled with diagnostics,
+  and frozen child contracts remain strict.
 - Dropping an RPC waiter is not settlement. Native creation/loading jobs and
   physical preparation tasks retain their owners. Source reservation release
   requires either a validated ownership transfer or proven physical settlement.

@@ -113,20 +113,16 @@ fn program_definition() -> WorkflowDefinition {
         "description":"fixed verification",  "timeout_ms":100,
         "block": {
             "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
-            "output":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
-            "entry":"check",
-            "nodes": {
+            "nodes": {"workflow_start":{"type":"start"},
                 "check":{"type":"tool","selector":{"origin":"builtin","name":"check"},
                     "arguments":{"type":"object","fields":{
                         "passed":{"type":"reference","path":["args","passed"]},
                         "label":{"type":"literal","value":"fixed"}}},
-                    "result":{"type":"json","part":1,"schema":schema(json!({"passed":{"type":"boolean"}}), &["passed"])}},
-                "branch":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["check","passed"]}}},
-                "yes":{"type":"return","output":{"type":"reference","path":["check"]}},
-                "no":{"type":"return","output":{"type":"reference","path":["check"]}}
-            },
-            "edges":[{"from":"check","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}]
-        }
+                    "result":{"type":"json","schema":schema(json!({"passed":{"type":"boolean"}}), &["passed"])}},
+                "branch":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["check","passed"]}}}]},
+                "yes":returns("check", &["passed"]),
+                "no":returns("check", &["passed"])
+            },"edges": [{"from":"workflow_start","to":"check"},{"from":"check","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}
     })).unwrap()
 }
 
@@ -240,7 +236,15 @@ async fn native_view_contains_only_the_selected_path_in_start_order() {
             .iter()
             .filter_map(|row| row.node.as_deref())
             .collect();
-        assert_eq!(path, ["check", "branch", if passed { "yes" } else { "no" }]);
+        assert_eq!(
+            path,
+            [
+                "workflow_start",
+                "check",
+                "branch",
+                if passed { "yes" } else { "no" }
+            ]
+        );
     }
 }
 
@@ -338,7 +342,6 @@ async fn tool_only_inactive_capability_has_no_provider_or_canonical_history_and_
 #[test]
 fn native_failure_matrix_and_explicit_projection_commit_no_business_values() {
     let contract = WorkflowToolResult::Json {
-        part: 0,
         schema: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
     };
     for status in [
@@ -361,8 +364,7 @@ fn native_failure_matrix_and_explicit_projection_commit_no_business_values() {
             .project(&terminal(status.clone()), &test_instance("check", "check"))
             .unwrap_err();
         assert_eq!(error.execution_status(), status);
-        let parallel = WorkflowRunError::ParallelFailed {
-            node: "fanout".into(),
+        let parallel = WorkflowRunError::NodesFailed {
             failures: BTreeMap::from([("leaf".into(), error)]),
         };
         assert_eq!(parallel.execution_status(), status);
@@ -380,10 +382,10 @@ fn native_failure_matrix_and_explicit_projection_commit_no_business_values() {
         "JSON-looking logs are never parsed"
     );
     assert_eq!(
-        WorkflowToolResult::Text { part: 0 }
+        WorkflowToolResult::Text {}
             .project(&result, &test_instance("check", "check"))
             .unwrap(),
-        json!("{\"passed\":true}")
+        json!({"text": "{\"passed\":true}"})
     );
     result.content = vec![ToolResultContent::Json {
         value: json!({"passed": "yes"}),
@@ -460,7 +462,7 @@ async fn cancellation_during_execution_drains_native_settlement_before_node_term
             .unwrap()
             .events
             .iter()
-            .any(|event| matches!(event.event, RuntimeEvent::WorkflowNodeSettled { .. }))
+            .any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeSettled { instance, .. } if instance.node == "check"))
     );
     gate.notify_one();
     let error = task.await.unwrap().unwrap_err();
@@ -717,15 +719,28 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
         crate::agent::AttemptLifecycle::default(),
     );
     let mut definition = program_definition();
-    definition.block.entry = "agent".into();
+    definition
+        .block
+        .edges
+        .retain(|edge| edge.from != "workflow_start");
+    definition.block.edges.insert(
+        0,
+        crate::runtime::workflow::WorkflowEdgeDefinition {
+            from: "workflow_start".into(),
+            to: "agent".into(),
+            port: None,
+        },
+    );
     definition.block.nodes.insert(
         "agent".into(),
         WorkflowNodeDefinition::Agent {
             profile: "reviewer".into(),
-            task: "Return machine-compatible findings".into(),
-            input: BTreeMap::new(),
-            output: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
-            invocation_override: None,
+            task: vec![text("Return machine-compatible findings")],
+            output: WorkflowAgentOutput::JsonSchema {
+                schema: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
+            },
+            routes: Vec::new(),
+            on_error: WorkflowValueErrorStrategy::default(),
         },
     );
     if let WorkflowNodeDefinition::Tool {
@@ -911,7 +926,8 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
         registration
             .prepare_fixed(
                 ToolInvocationId::Workflow {
-                    node: Box::new(test_instance("check", "check"))
+                    node: Box::new(test_instance("check", "check")),
+                    retry: 0,
                 },
                 &changed,
                 &json!({})
@@ -924,31 +940,51 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
         timeout_ms: 100,
         block: WorkflowBlock {
             input: json!({"type":"object"}),
-            output: json!({"type":"object"}),
-            entry: "tool".into(),
-            nodes: BTreeMap::from([
-                (
-                    "tool".into(),
-                    WorkflowNodeDefinition::Tool {
-                        selector: ExactToolSelector::Builtin {
-                            name: "check".into(),
-                        }
-                        .into(),
-                        arguments: WorkflowValue::Literal { value: json!({}) },
-                        result: WorkflowToolResult::Json {
-                            part: 0,
-                            schema: json!({"type":"object"}),
+            nodes: {
+                let mut nodes: std::collections::BTreeMap<
+                    String,
+                    crate::runtime::workflow::WorkflowNodeDefinition,
+                > = BTreeMap::from([
+                    (
+                        "tool".into(),
+                        WorkflowNodeDefinition::Tool {
+                            selector: ExactToolSelector::Builtin {
+                                name: "check".into(),
+                            }
+                            .into(),
+                            arguments: WorkflowValue::Literal { value: json!({}) },
+                            result: WorkflowToolResult::Json {
+                                schema: json!({"type":"object"}),
+                            },
+                            retry: None,
+                            on_error: WorkflowValueErrorStrategy::default(),
                         },
+                    ),
+                    (
+                        "done".into(),
+                        WorkflowNodeDefinition::Return {
+                            outputs: Vec::new(),
+                        },
+                    ),
+                ]);
+                nodes.insert(
+                    "workflow_start".into(),
+                    crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                );
+                nodes
+            },
+            edges: {
+                let mut edges = vec![edge("tool", "done")];
+                edges.insert(
+                    0,
+                    crate::runtime::workflow::WorkflowEdgeDefinition {
+                        from: "workflow_start".into(),
+                        to: "tool".into(),
+                        port: None,
                     },
-                ),
-                (
-                    "done".into(),
-                    WorkflowNodeDefinition::Return {
-                        output: WorkflowValue::Literal { value: json!({}) },
-                    },
-                ),
-            ]),
-            edges: vec![edge("tool", "done")],
+                );
+                edges
+            },
         },
     };
     let mut obsolete = serde_json::to_value(&definition).unwrap();
@@ -959,3 +995,212 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
 
 #[path = "admission.rs"]
 mod admission;
+
+/// Fails its first `failures` calls, then passes; records each invocation.
+struct Flaky {
+    failures: AtomicUsize,
+    ids: std::sync::Mutex<Vec<ToolInvocationId>>,
+}
+
+impl ToolExecutor for Flaky {
+    fn start<'a>(
+        &'a self,
+        invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                self.ids.lock().unwrap().push(invocation.id.clone());
+                let failing = self
+                    .failures
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                        left.checked_sub(1)
+                    })
+                    .is_ok();
+                if failing {
+                    return terminal(ToolExecutionStatus::Failed {
+                        error: "flaky check failed".into(),
+                    });
+                }
+                let mut result = terminal(ToolExecutionStatus::Success);
+                result.content = vec![ToolResultContent::Json {
+                    value: json!({"passed": true}),
+                }];
+                result
+            }),
+            context.cancellation,
+        )
+    }
+    fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+        crate::tools::deadline::ToolProgressCapability::None
+    }
+}
+
+/// One Tool node with `failure` handling whose value, or on a fail branch
+/// its error, is the Workflow's output.
+fn failing_program(failure: &Value) -> Arc<WorkflowProgram> {
+    let passed = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
+    let fail_branch = failure["on_error"]["type"] == "fail_branch";
+    let mut tool = json!({"type":"tool","selector":{"origin":"builtin","name":"check"},
+        "arguments":{"type":"object","fields":{"passed":{"type":"literal","value":true},"label":{"type":"literal","value":"fixed"}}},
+        "result":{"type":"json","schema":passed}});
+    tool.as_object_mut()
+        .unwrap()
+        .extend(failure.as_object().unwrap().clone());
+    let mut nodes = json!({"workflow_start":{"type":"start"},"check":tool,
+        "done":{"type":"return","outputs":[{"variable":"passed","value_selector":["check","passed"]}]}});
+    let mut edges = json!([{"from":"workflow_start","to":"check"},{"from":"check","to":"done"}]);
+    if fail_branch {
+        nodes["failed"] = returns("check", &["error_message"]);
+        edges
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"from":"check","to":"failed","port":"fail"}));
+    }
+    Arc::new(
+        compile_test(
+            serde_json::from_value(json!({"description":"flaky check","timeout_ms":60_000,
+                "block":{"input":schema(json!({}), &[]),"nodes":nodes,"edges":edges}}))
+            .unwrap(),
+        )
+        .unwrap(),
+    )
+}
+
+async fn run_flaky(
+    failures: usize,
+    failure: &Value,
+) -> (Result<Value, WorkflowRunError>, Vec<ToolInvocationId>) {
+    let plane = workflow_test_plane(1);
+    let flaky = Arc::new(Flaky {
+        failures: AtomicUsize::new(failures),
+        ids: std::sync::Mutex::default(),
+    });
+    let context = context_with_registration(
+        &plane,
+        ToolRegistration::plain(definition(), flaky.clone()),
+        crate::agent::AttemptLifecycle::default(),
+    );
+    let (_, cancellation) = workflow_cancellation();
+    let value = workflow_runtime(&plane)
+        .run_test_foreground(
+            failing_program(failure),
+            ToolCallId::new("flaky"),
+            context,
+            json!({}),
+            cancellation,
+        )
+        .await;
+    let ids = flaky.ids.lock().unwrap().clone();
+    (value, ids)
+}
+
+/// As Dify's tool node: a failed call is made again as its own invocation,
+/// then a call that still failed stops the run, defaults, or takes `fail`.
+#[tokio::test]
+async fn a_failed_tool_is_retried_as_new_invocations_then_handled() {
+    let retry = json!({"retry":{"max_retries":2,"interval_ms":100}});
+    let (value, ids) = run_flaky(2, &retry).await;
+    assert_eq!(value.unwrap(), json!({"passed": true}));
+    let retries: Vec<u32> = ids
+        .iter()
+        .map(|id| match id {
+            ToolInvocationId::Workflow { retry, .. } => *retry,
+            ToolInvocationId::Agent { .. } => panic!("workflow invocation"),
+        })
+        .collect();
+    assert_eq!(retries, [0, 1, 2]);
+
+    let (value, ids) = run_flaky(3, &retry).await;
+    assert!(matches!(value, Err(WorkflowRunError::ToolFailed { .. })));
+    assert_eq!(ids.len(), 3);
+
+    let default = json!({"on_error":{"type":"default_value","value":{"passed":false}}});
+    let (value, ids) = run_flaky(1, &default).await;
+    assert_eq!(value.unwrap(), json!({"passed": false}));
+    assert_eq!(ids.len(), 1);
+
+    let branch = json!({"on_error":{"type":"fail_branch"}});
+    let (value, _) = run_flaky(1, &branch).await;
+    assert_eq!(
+        value.unwrap(),
+        json!({"error_message": "flaky check failed"})
+    );
+    let (value, _) = run_flaky(0, &branch).await;
+    assert_eq!(value.unwrap(), json!({"passed": true}));
+}
+
+#[test]
+fn tool_failure_handling_is_validated_at_compile() {
+    let compile = |failure: Value| {
+        let mut definition = program_definition();
+        let WorkflowNodeDefinition::Tool {
+            retry, on_error, ..
+        } = definition.block.nodes.get_mut("check").unwrap()
+        else {
+            unreachable!()
+        };
+        *retry = serde_json::from_value(failure["retry"].clone()).unwrap();
+        *on_error = serde_json::from_value(failure["on_error"].clone()).unwrap_or_default();
+        compile_test(definition)
+    };
+    assert!(compile(json!({"retry":{"max_retries":11,"interval_ms":100}})).is_err());
+    assert!(compile(json!({"retry":{"max_retries":1,"interval_ms":50}})).is_err());
+    assert!(compile(json!({"on_error":{"type":"default_value","value":{"passed":"no"}}})).is_err());
+    assert!(compile(json!({"on_error":{"type":"default_value","value":{"passed":false}}})).is_ok());
+    let error = compile(json!({"on_error":{"type":"fail_branch"}})).unwrap_err();
+    assert!(error.to_string().contains("no fail connection"), "{error}");
+}
+
+/// As Dify's tool outputs: a node's result is fixed by its Tool. A Workflow
+/// object contract is structured; anything else is the Tool's `{text}`.
+#[test]
+fn tool_results_are_declared_by_the_tool() {
+    let choices = crate::runtime::workflow::selectable_builtin_tools();
+    assert!(choices.iter().all(|tool| tool.name != "ask_user"));
+    let result = |name: &str| {
+        choices
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap()
+            .result
+            .clone()
+    };
+    assert_eq!(result("read"), WorkflowToolResult::Text {});
+    let WorkflowToolResult::Json { schema } = result("bash") else {
+        panic!("bash declares its structured result")
+    };
+    assert_eq!(
+        schema["required"],
+        json!(["exit_code", "stdout", "stderr", "combined"])
+    );
+    // A schema outside the Workflow vocabulary (as FastMCP's wrapped
+    // results), or a non-object one, is not a node contract.
+    for open in [
+        json!({"type":"object","properties":{"result":{"type":"string"}},"required":["result"],"x-fastmcp-wrap-result":true}),
+        json!({"type":"string"}),
+    ] {
+        assert_eq!(
+            WorkflowToolResult::declared(Some(&open)),
+            WorkflowToolResult::Text {}
+        );
+    }
+    assert_eq!(
+        WorkflowToolResult::declared(None),
+        WorkflowToolResult::Text {}
+    );
+    let mut text = terminal(ToolExecutionStatus::Success);
+    text.content = vec![
+        ToolResultContent::Text(crate::message::content::TextBlock { text: "a".into() }),
+        ToolResultContent::Json {
+            value: json!({"ignored": true}),
+        },
+        ToolResultContent::Text(crate::message::content::TextBlock { text: "b".into() }),
+    ];
+    assert_eq!(
+        WorkflowToolResult::Text {}
+            .project(&text, &test_instance("check", "check"))
+            .unwrap(),
+        json!({"text": "a\nb"})
+    );
+}

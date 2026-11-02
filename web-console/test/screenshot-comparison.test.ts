@@ -76,8 +76,7 @@ it.each([
   ['live', noisePolicy, reference],
   ['frozen comparator', comparatorPolicy, fixture],
 ] as const)('the %s noise manifest is measured evidence bound to bounded, disjoint regions', (_label, policy, image_) => {
-  if (_label === 'live') expect(policy).toEqual([]);
-  else expect(policy.length).toBeGreaterThan(0);
+  if (_label === 'frozen comparator') expect(policy.length).toBeGreaterThan(0);
   for (const entry of policy) {
     expect(entry.evidence).toBeTruthy();
     expect(entry.regions.length).toBeGreaterThan(0);

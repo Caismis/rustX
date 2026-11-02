@@ -1,5 +1,5 @@
 import { assign, enqueueActions, fromPromise, sendParent, setup, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { WorkflowEdit, WorkflowFileSummary, WorkflowLibrary } from '../../../../../protocol/app-server/v62';
+import type { WorkflowDisplay, WorkflowEdit, WorkflowFileDocument, WorkflowFileSummary, WorkflowLibrary } from '../../../../../protocol/app-server/v62';
 import type { WorkflowCommit } from '../../../workspaces/host';
 import { classifyFailure, sameScope, type WorkflowFailure, type WorkflowScope, type WorkflowScopePort } from '../port';
 
@@ -10,15 +10,21 @@ export type LibraryObservation = Readonly<{ port: WorkflowScopePort; listing: Wo
 
 /** One file operation of the library, bound to the exact scope it started in. */
 export type LibraryOperation =
-  | { kind: 'create'; id: string; description: string }
+  | { kind: 'create'; id: string; description: string; display: WorkflowDisplay }
   | { kind: 'copy'; source: string; sourceRevision: string; id: string }
-  | { kind: 'delete'; id: string; revision: string };
+  /** Replace a file's document with its edited name, description and icon,
+   * against the revision that document was read at. */
+  | { kind: 'edit'; id: string; revision: string; document: WorkflowFileDocument }
+  | { kind: 'delete'; id: string; revision: string }
+  /** Enable or disable a file for its scope's Sessions, against the
+   * revision of the scope's configuration it was listed with. */
+  | { kind: 'enable'; id: string; enabled: boolean };
 
 /** An open confirmation. Its target is captured from one observation when
  * it opens, so what it shows is exactly what it changes. */
 export interface LibraryConfirmation {
   readonly seq: number;
-  readonly kind: LibraryOperation['kind'];
+  readonly kind: Exclude<LibraryOperation['kind'], 'enable'>;
   readonly observation: LibraryObservation;
   /** The source (copy) or target (delete) file, from that observation. */
   readonly file?: WorkflowFileSummary;
@@ -34,7 +40,7 @@ export interface PendingOperation {
   readonly operation: LibraryOperation;
   readonly port: WorkflowScopePort;
   readonly expected: string;
-  /** The confirmation that submitted it. */
+  /** The confirmation that submitted it; 0 for a switch, which has none. */
   readonly confirmation: number;
 }
 
@@ -63,9 +69,12 @@ export type LibraryEvent =
   | { type: 'ACTIVATE' }
   /** Open a confirmation from the accepted observation, only while no
    * read replaces it. `file` names a listed file by its file name. */
-  | { type: 'CONFIRM'; kind: LibraryOperation['kind']; file?: string }
-  /** Submit confirmation `seq` with the author's form values. */
-  | { type: 'SUBMIT'; seq: number; id?: string; description?: string }
+  | { type: 'CONFIRM'; kind: LibraryConfirmation['kind']; file?: string }
+  /** Switch a listed file on or off for its scope's Sessions. */
+  | { type: 'ENABLE'; file: string; enabled: boolean }
+  /** Submit confirmation `seq` with the author's form values; an edit sends
+   * the edited document and the revision it was read at. */
+  | { type: 'SUBMIT'; seq: number; id?: string; description?: string; display?: WorkflowDisplay; document?: WorkflowFileDocument; revision?: string }
   | { type: 'CANCEL'; seq: number }
   /** Open a listed file through the port that listed it. */
   | { type: 'OPEN'; file: string }
@@ -77,10 +86,11 @@ export interface LibraryCreated { type: 'LIBRARY.CREATED'; scope: WorkflowScope;
 /** Sent to the owner to open one listed file through its listing's port. */
 export interface LibraryOpen { type: 'OPEN'; id: string; port: WorkflowScopePort }
 
-function edit(operation: LibraryOperation): WorkflowEdit {
+function edit(operation: Exclude<LibraryOperation, { kind: 'enable' }>): WorkflowEdit {
   switch (operation.kind) {
-    case 'create': return { operation: 'create', description: operation.description };
+    case 'create': return { operation: 'create', description: operation.description, display: operation.display };
     case 'copy': return { operation: 'copy', source: operation.source, source_revision: operation.sourceRevision };
+    case 'edit': return { operation: 'replace', document: operation.document };
     case 'delete': return { operation: 'delete' };
   }
 }
@@ -97,8 +107,10 @@ function operationOf(confirmation: LibraryConfirmation, event: Extract<LibraryEv
   const bound = (operation: LibraryOperation, expected: string): PendingOperation => ({ operation, port: observation.port, expected, confirmation: confirmation.seq });
   const description = event.description?.trim();
   switch (confirmation.kind) {
-    case 'create': return event.id && description ? bound({ kind: 'create', id: event.id, description }, absent) : undefined;
+    case 'create': return event.id && description && event.display?.title.trim() ? bound({ kind: 'create', id: event.id, description, display: event.display }, absent) : undefined;
     case 'copy': return file?.id && event.id ? bound({ kind: 'copy', source: file.id, sourceRevision: file.revision, id: event.id }, absent) : undefined;
+    case 'edit': return file?.id && event.document && event.revision && event.document.description.trim() && event.document.editor?.display?.title.trim()
+      ? bound({ kind: 'edit', id: file.id, revision: event.revision, document: event.document }, event.revision) : undefined;
     case 'delete': return file?.id && file.revision ? bound({ kind: 'delete', id: file.id, revision: file.revision }, file.revision) : undefined;
   }
 }
@@ -117,10 +129,15 @@ export const workflowLibraryMachine = setup({
   types: { context: {} as LibraryContext, events: {} as LibraryEvent, input: {} as { ports: (scope: WorkflowScope) => WorkflowScopePort; scope: WorkflowScope } },
   actors: {
     list: fromPromise<LibraryObservation, { port: WorkflowScopePort }>(async ({ input: { port } }) => ({ port, listing: await port.list() })),
-    operate: fromPromise<WorkflowCommit, PendingOperation>(({ input }) => input.port.write(input.operation.id, input.expected, edit(input.operation))),
+    operate: fromPromise<WorkflowCommit | void, PendingOperation>(({ input: { port, operation, expected } }) => operation.kind === 'enable'
+      ? port.enable(operation.id, expected, operation.enabled) : port.write(operation.id, expected, edit(operation))),
   },
   guards: {
     otherScope: ({ context, event }) => event.type === 'SCOPE' && !sameScope(context.scope, event.scope),
+    switchable: ({ context, event }) => {
+      if (event.type !== 'ENABLE' || !context.observation?.listing.configuration_revision) return false;
+      return !!listed(context.observation, event.file)?.id;
+    },
     submittable: ({ context, event }) => event.type === 'SUBMIT' && context.confirmation?.seq === event.seq && !context.confirmation.uncertain && !!operationOf(context.confirmation, event),
   },
   actions: {
@@ -133,6 +150,11 @@ export const workflowLibraryMachine = setup({
     }),
     submit: assign(({ context, event }) => event.type === 'SUBMIT' && context.confirmation
       ? { pending: operationOf(context.confirmation, event), confirmation: { ...context.confirmation, failure: undefined }, operationFailure: undefined } : {}),
+    switchFile: assign(({ context, event }) => {
+      if (event.type !== 'ENABLE' || !context.observation) return {};
+      const { port, listing } = context.observation, id = listed(context.observation, event.file)!.id!;
+      return { pending: { operation: { kind: 'enable', id, enabled: event.enabled }, port, expected: listing.configuration_revision!, confirmation: 0 }, operationFailure: undefined };
+    }),
     cancel: assign(({ context, event }) => event.type === 'CANCEL' && context.confirmation?.seq === event.seq && context.pending?.confirmation !== event.seq ? { confirmation: undefined } : {}),
     open: enqueueActions(({ context, event, enqueue }) => {
       const file = event.type === 'OPEN' && context.observation ? listed(context.observation, event.file) : undefined;
@@ -179,6 +201,7 @@ export const workflowLibraryMachine = setup({
         REFRESH: 'loading',
         CONFIRM: { actions: 'confirm' },
         OPEN: { actions: 'open' },
+        ENABLE: { guard: 'switchable', target: 'operating', actions: 'switchFile' },
         SUBMIT: { guard: 'submittable', target: 'operating', actions: 'submit' },
       },
     },

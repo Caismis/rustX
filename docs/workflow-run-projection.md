@@ -13,12 +13,12 @@ A run has configured Workflow identity, SHA-256 of its admitted definition,
 the admitted resource revision, conversation/attempt/invocation identity, and
 outer ToolCallId. Replacing a definition does not relabel an admitted program.
 Instances contain concrete block paths and invocation vectors; Loop iterations
-append a fresh one-based component and Parallel branches have distinct static
-paths. There is no authoritative current-node slot. All eight node kinds and
+append a fresh one-based component. Concurrent siblings have distinct native
+node identities. There is no authoritative current-node slot. All eight node kinds and
 block instances share the same executor boundaries. A node row is appended only
 after its native cancellation/budget admission succeeds. Unselected successors
 and nodes cancelled before admission have no row. The instance vector retains
-native start order across blocks, Parallel branches and concrete Loop iterations;
+native start order across blocks, concurrent siblings and concrete Loop iterations;
 later wait/terminal updates do not move rows. The WebUI presents node rows in
 that order rather than regrouping them by definition block. Nested rows retain
 their block path and invocation identity. The visible node count counts retained
@@ -192,7 +192,7 @@ complementary expired-cut path; `native_observation_lag_does_not_change_loop_req
 runs 100 real native check iterations without consuming observations and
 checks exact starts, exhaustion, truncation and canonical isolation.
 
-The existing Parallel child tests now assert simultaneous concrete child rows
+The concurrent child tests now assert simultaneous concrete child rows
 and observe draining before releasing staged child cancellation settlement.
 The nested Loop and Review tests inspect native concrete iterations and the
 recorded Review decision. Separate identity

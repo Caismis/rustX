@@ -1,1 +1,12 @@
-[]
+[
+  {
+    "reference": "workflow-editor-linux.png",
+    "evidence": "Pinned Chromium 1.63.0 on Linux: full workflow suites with one and two workers differed only at the Start icon's rounded corner (786,121); isolated capture matched the reference.",
+    "regions": [
+      { "label": "Start panel icon corner", "x": 786, "y": 121, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 3 }
+    ],
+    "pixels": [
+      [786, 121, [94, 188, 142, 255], [91, 187, 140, 255]]
+    ]
+  }
+]

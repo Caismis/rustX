@@ -34,8 +34,8 @@ export function draftAt(drafts: Readonly<Record<string, FieldDraft>>, field: str
  * Check request its application through `command`; the editor applies it
  * against the current document or keeps it with the error. `onApplied`
  * runs only after the editor accepted exactly the shown text. */
-export function useFieldDraft({ address, canonical, command, onApplied }: {
-  address: FieldAddress; canonical: string; command: FieldCommand; onApplied?: (text: string) => void;
+export function useFieldDraft({ address, canonical, command, onApplied, rename: requestedRename }: {
+  address: FieldAddress; canonical: string; command: FieldCommand; onApplied?: (text: string) => void; rename?: boolean;
 }) {
   const owner = useContext(DraftOwner);
   if (!owner) throw new Error('A deferred-commit field needs its editor');
@@ -55,7 +55,7 @@ export function useFieldDraft({ address, canonical, command, onApplied }: {
     const outcome = editor.getSnapshot().context.applied;
     if (outcome?.field === field && outcome.version === current.version && outcome.result.status === 'applied') latest.current.onApplied?.(current.text);
   };
-  const rename = address.role === 'key';
+  const rename = requestedRename ?? address.role === 'key';
   useEffect(() => commits.register(rename, () => apply.current()), [commits, field, rename]);
   const error = draft?.conflict ? { kind: draft.conflict } as const : draft?.error;
   return {

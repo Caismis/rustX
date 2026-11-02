@@ -1,6 +1,6 @@
 import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v62.ts';
 import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v62.ts';
-import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowEdit, WorkflowLibrary, WorkflowSource, WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../../protocol/app-server/v62.ts';
+import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowEdit, WorkflowLibrary, WorkflowSource, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../protocol/app-server/v62.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 import type { FileBytes, FileReadOptions } from '../../shared/file-preview.ts';
 export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number; read?: FileReadOptions }
@@ -25,16 +25,16 @@ export type WorkspaceConfigurationResult =
   | { kind: 'mcp_probe'; result: McpProbeResult }
   | { kind: 'read' | 'reconcile'; projection: SourceSettings }
   | { kind: 'write'; commit: WorkspaceConfigurationCommit };
-/** One native Workflow file operation in one registered Workspace (Issue #491).
- * `check` with `scope: 'user'` checks a User (Global) file with this
- * Workspace as its explicit dependency context; every other operation
- * addresses this Workspace's own files. */
+/** One native Workflow file operation on one registered Workspace's own
+ * files (Issue #491). */
 export type WorkflowHostOperation =
   | { kind: 'list' }
   | { kind: 'read'; id: string }
   | { kind: 'model_choices'; query: WorkflowModelChoicesQuery; expected_revision?: string | null }
+  | { kind: 'tool_catalog'; source?: string | null; cursor?: WorkflowToolCatalogCursor | null }
+  | { kind: 'enable'; id: string; expected_revision: string; enabled: boolean }
   | { kind: 'analyze'; id: string; document: WorkflowFileDocument; generation: string; query?: WorkflowAnalysisQuery }
-  | { kind: 'check'; scope: 'workspace' | 'user'; id: string; document: WorkflowFileDocument; explain: boolean }
+  | { kind: 'check'; id: string; document: WorkflowFileDocument }
   | { kind: 'write'; id: string; expected_revision: string; edit: WorkflowEdit };
 /** The separate authoritative read attempted after a confirmed Workflow
  * write; its failure never turns the committed write into a failed one. */
@@ -47,6 +47,8 @@ export type WorkflowHostResult =
   | { kind: 'list'; library: WorkflowLibrary }
   | { kind: 'read'; source: WorkflowSource }
   | { kind: 'model_choices'; choices: WorkflowModelChoices }
+  | { kind: 'tool_catalog'; catalog: WorkflowToolCatalog }
+  | { kind: 'enable' }
   | { kind: 'analyze'; report: WorkflowAnalysisReport }
   | { kind: 'check'; report: WorkflowCheckReport }
   | { kind: 'write'; commit: WorkflowCommit };

@@ -156,6 +156,9 @@ struct LayerCapture {
     merged: RuntimeLayer,
     provenance: BTreeMap<String, Origin>,
     project_resources: Vec<PathBuf>,
+    /// The `agent.workflows` of the User and the Workspace document: each
+    /// enables only its own scope's files.
+    scoped_workflows: [Vec<crate::runtime::workflow::WorkflowId>; 2],
 }
 
 /// Canonical source/configuration capture before any launch resource preparation.
@@ -170,6 +173,7 @@ pub(crate) struct SourceCapture {
     pub(crate) models: ModelCatalog,
     pub(crate) provenance: BTreeMap<String, Origin>,
     project_resources: Vec<PathBuf>,
+    scoped_workflows: [Vec<crate::runtime::workflow::WorkflowId>; 2],
 }
 
 /// Immutable prospective Session settings and statically resolved resources.

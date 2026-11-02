@@ -92,9 +92,12 @@ pub enum WorkflowNodeKind {
     Model,
     Tool,
     Branch,
-    Parallel,
+    Start,
     Review,
     Loop,
+    Iteration,
+    LoopEnd,
+    Assigner,
     Return,
 }
 
@@ -119,7 +122,6 @@ pub struct WorkflowInstanceView {
     pub iterations_max: Option<u32>,
     pub loop_exit: Option<WorkflowLoopExit>,
     pub checks_passed: Option<bool>,
-    pub review_accepted: Option<bool>,
 }
 
 impl WorkflowInstanceView {
@@ -140,7 +142,6 @@ impl WorkflowInstanceView {
             iterations_max: None,
             loop_exit: None,
             checks_passed: None,
-            review_accepted: None,
         }
     }
 
@@ -150,15 +151,18 @@ impl WorkflowInstanceView {
             WorkflowNodeProgram::Model(_) => WorkflowNodeKind::Model,
             WorkflowNodeProgram::Tool { .. } => WorkflowNodeKind::Tool,
             WorkflowNodeProgram::Branch { .. } => WorkflowNodeKind::Branch,
-            WorkflowNodeProgram::Parallel { .. } => WorkflowNodeKind::Parallel,
+            WorkflowNodeProgram::Start => WorkflowNodeKind::Start,
             WorkflowNodeProgram::Review { .. } => WorkflowNodeKind::Review,
             WorkflowNodeProgram::Loop { .. } => WorkflowNodeKind::Loop,
+            WorkflowNodeProgram::Iteration { .. } => WorkflowNodeKind::Iteration,
+            WorkflowNodeProgram::LoopEnd => WorkflowNodeKind::LoopEnd,
+            WorkflowNodeProgram::Assigner { .. } => WorkflowNodeKind::Assigner,
             WorkflowNodeProgram::Return { .. } => WorkflowNodeKind::Return,
         };
         let mut view = Self::new(node.block.clone(), Some(node.node.clone()), kind);
         view.visit = Some(node.visit);
-        if let WorkflowNodeProgram::Loop { max_iterations, .. } = program {
-            view.iterations_max = Some(*max_iterations);
+        if let WorkflowNodeProgram::Loop { loop_count, .. } = program {
+            view.iterations_max = Some(*loop_count);
         }
         view
     }

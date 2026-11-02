@@ -609,6 +609,13 @@ pub(crate) const SUBAGENT_FINAL_REPORT_INSTRUCTION: &str = "Your final response 
      task. Do not assume the parent can see your intermediate reasoning, tool calls, tool \
      outputs, or conversation history.";
 
+/// The final-report rule of a Workflow-owned child whose final reply is its
+/// node's `text` result.
+pub(crate) const WORKFLOW_TEXT_RESULT_INSTRUCTION: &str = "Your final response is the complete result of this \
+     workflow step. Later steps receive only that text: include every finding, conclusion and \
+     caveat they need, and do not assume they can see your intermediate reasoning, tool calls, \
+     tool outputs, or conversation history.";
+
 /// Composes the child's immutable `AgentProfile` System authority from the
 /// definition's instruction document (Issue #192).
 ///
@@ -616,9 +623,10 @@ pub(crate) const SUBAGENT_FINAL_REPORT_INSTRUCTION: &str = "Your final response 
 /// final-report handoff rule is appended for a **normal** child activation,
 /// whose final response is the whole semantic result the parent receives.
 ///
-/// A Workflow-owned child (`workflow_output` terminal protocol) is
-/// deliberately excluded: its terminal contract is the structured,
-/// schema-validated `workflow_output` commit, so a free-form final-report
+/// A Workflow-owned child whose final reply is its result gets the same rule
+/// addressed to later workflow steps. One with a `workflow_output` terminal
+/// protocol is deliberately excluded: its terminal contract is the
+/// structured, schema-validated commit, so a free-form final-report
 /// instruction would contradict the terminal protocol its Agent Loop must
 /// satisfy.
 pub(crate) fn compose_child_agent_profile(
@@ -629,7 +637,12 @@ pub(crate) fn compose_child_agent_profile(
         ipc::ChildTerminalMode::Normal => {
             format!("{instructions}\n\n{SUBAGENT_FINAL_REPORT_INSTRUCTION}")
         }
-        ipc::ChildTerminalMode::WorkflowOutput { .. } => instructions.to_owned(),
+        ipc::ChildTerminalMode::WorkflowOutput {
+            output_schema: None,
+        } => format!("{instructions}\n\n{WORKFLOW_TEXT_RESULT_INSTRUCTION}"),
+        ipc::ChildTerminalMode::WorkflowOutput {
+            output_schema: Some(_),
+        } => instructions.to_owned(),
     }
 }
 

@@ -132,6 +132,7 @@ xberg = { version = "1.0.14", default-features = false, features = [
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "connect"] }
 
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
+biodivine-lib-bdd = "0.6.3"
 
 [lints.rust]
 # The runtime process-supervision capability and the per-invocation Bash
@@ -151,3 +152,9 @@ pedantic = "warn"
 tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"
 nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir"] }
+
+[profile.test]
+# Bound non-incremental harness compilation on standard runners while
+# preserving file/line backtraces. Match incremental builds' CGU partitioning.
+debug = "line-tables-only"
+codegen-units = 256

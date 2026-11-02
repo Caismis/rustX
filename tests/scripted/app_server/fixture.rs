@@ -81,7 +81,7 @@ impl Fixture {
     pub(super) fn install_scheduled_workflow(&self, description: &str) {
         let directory = self.workspaces[0].join(".agents/workflows");
         std::fs::create_dir_all(&directory).unwrap();
-        let definition = serde_json::json!({"description":description,"block":{"input":{"type":"object","properties":{},"additionalProperties":false},"output":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false},"entry":"done","nodes":{"done":{"type":"return","output":{"type":"literal","value":{"answer":"native durable return"}}}},"edges":[]}});
+        let definition = serde_json::json!({"description":description,"block":{"input":{"type":"object","properties":{"answer":{"type":"string","default":"native durable return"}},"additionalProperties":false},"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[{"variable":"answer","value_selector":["args","answer"]}]}},"edges": [{"from":"workflow_start","to":"done"}],}});
         std::fs::write(
             directory.join("scheduled.yaml"),
             serde_json::to_vec_pretty(&definition).unwrap(),
@@ -432,8 +432,11 @@ fn delivery_child_gate_uses_exact_task_text_not_parent_context_mentions() {
     assert_eq!(delivery_child_input_index(&tool), 0);
 }
 
+/// A hang guard, not a latency bound. A fixture's durable turns can take tens
+/// of seconds in a debug build while the whole suite shares the CPU and disk,
+/// so only a fixture that stops making progress for minutes is a failure.
 pub(super) async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
-    tokio::time::timeout(std::time::Duration::from_secs(30), future)
+    tokio::time::timeout(std::time::Duration::from_secs(180), future)
         .await
         .expect("test liveness")
 }

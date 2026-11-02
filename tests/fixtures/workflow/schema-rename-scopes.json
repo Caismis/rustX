@@ -1,0 +1,746 @@
+[
+  {
+    "kind": "model",
+    "before": {
+      "description": "Schema rename respects lexical producers",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          },
+          "sibling": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "args",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "generate",
+                "structured_output",
+                "foo"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "generate": {
+                  "type": "model",
+                  "output": {
+                    "type": "json_schema",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "foo": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "foo"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Return the requested boolean."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Produce a result."
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "consume": {
+                  "type": "model",
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Read the boolean as data."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "reference",
+                          "path": [
+                            "generate",
+                            "structured_output",
+                            "foo"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "output": {
+                    "type": "text"
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "generate"
+                },
+                {
+                  "from": "generate",
+                  "to": "consume"
+                }
+              ]
+            }
+          },
+          "generate": {
+            "type": "model",
+            "output": {
+              "type": "json_schema",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "foo": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "foo"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "model": {
+              "mode": "session"
+            },
+            "messages": [
+              {
+                "role": "system",
+                "content": [
+                  {
+                    "type": "literal",
+                    "value": "Return the requested boolean."
+                  }
+                ]
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "literal",
+                    "value": "Produce a result."
+                  }
+                ]
+              }
+            ]
+          },
+          "done": {
+            "type": "return",
+            "outputs": [
+              {
+                "variable": "result",
+                "value_selector": [
+                  "generate",
+                  "structured_output",
+                  "foo"
+                ]
+              }
+            ]
+          }
+        },
+        "edges": [
+          {
+            "from": "start",
+            "to": "sibling"
+          },
+          {
+            "from": "sibling",
+            "to": "generate"
+          },
+          {
+            "from": "generate",
+            "to": "done"
+          }
+        ]
+      }
+    },
+    "after": {
+      "description": "Schema rename respects lexical producers",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          },
+          "sibling": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "args",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "generate",
+                "structured_output",
+                "foo"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "generate": {
+                  "type": "model",
+                  "output": {
+                    "type": "json_schema",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "foo": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "foo"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Return the requested boolean."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Produce a result."
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "consume": {
+                  "type": "model",
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Read the boolean as data."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "reference",
+                          "path": [
+                            "generate",
+                            "structured_output",
+                            "foo"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "output": {
+                    "type": "text"
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "generate"
+                },
+                {
+                  "from": "generate",
+                  "to": "consume"
+                }
+              ]
+            }
+          },
+          "generate": {
+            "type": "model",
+            "output": {
+              "type": "json_schema",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "bar": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "bar"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "model": {
+              "mode": "session"
+            },
+            "messages": [
+              {
+                "role": "system",
+                "content": [
+                  {
+                    "type": "literal",
+                    "value": "Return the requested boolean."
+                  }
+                ]
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "literal",
+                    "value": "Produce a result."
+                  }
+                ]
+              }
+            ]
+          },
+          "done": {
+            "type": "return",
+            "outputs": [
+              {
+                "variable": "result",
+                "value_selector": [
+                  "generate",
+                  "structured_output",
+                  "bar"
+                ]
+              }
+            ]
+          }
+        },
+        "edges": [
+          {
+            "from": "start",
+            "to": "sibling"
+          },
+          {
+            "from": "sibling",
+            "to": "generate"
+          },
+          {
+            "from": "generate",
+            "to": "done"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "kind": "agent",
+    "before": {
+      "description": "Schema rename respects lexical producers",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          },
+          "sibling": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "args",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "generate",
+                "foo"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "generate": {
+                  "type": "agent",
+                  "output": {
+                    "type": "json_schema",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "foo": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "foo"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "profile": "reviewer",
+                  "task": [
+                    {
+                      "type": "literal",
+                      "value": "Produce a result."
+                    }
+                  ]
+                },
+                "consume": {
+                  "type": "model",
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Read the boolean as data."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "reference",
+                          "path": [
+                            "generate",
+                            "foo"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "output": {
+                    "type": "text"
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "generate"
+                },
+                {
+                  "from": "generate",
+                  "to": "consume"
+                }
+              ]
+            }
+          },
+          "generate": {
+            "type": "agent",
+            "output": {
+              "type": "json_schema",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "foo": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "foo"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "profile": "reviewer",
+            "task": [
+              {
+                "type": "literal",
+                "value": "Produce a result."
+              }
+            ]
+          },
+          "done": {
+            "type": "return",
+            "outputs": [
+              {
+                "variable": "result",
+                "value_selector": [
+                  "generate",
+                  "foo"
+                ]
+              }
+            ]
+          }
+        },
+        "edges": [
+          {
+            "from": "start",
+            "to": "sibling"
+          },
+          {
+            "from": "sibling",
+            "to": "generate"
+          },
+          {
+            "from": "generate",
+            "to": "done"
+          }
+        ]
+      }
+    },
+    "after": {
+      "description": "Schema rename respects lexical producers",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          },
+          "sibling": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "args",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "generate",
+                "foo"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "generate": {
+                  "type": "agent",
+                  "output": {
+                    "type": "json_schema",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "foo": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "foo"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "profile": "reviewer",
+                  "task": [
+                    {
+                      "type": "literal",
+                      "value": "Produce a result."
+                    }
+                  ]
+                },
+                "consume": {
+                  "type": "model",
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Read the boolean as data."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "reference",
+                          "path": [
+                            "generate",
+                            "foo"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "output": {
+                    "type": "text"
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "generate"
+                },
+                {
+                  "from": "generate",
+                  "to": "consume"
+                }
+              ]
+            }
+          },
+          "generate": {
+            "type": "agent",
+            "output": {
+              "type": "json_schema",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "bar": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "bar"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "profile": "reviewer",
+            "task": [
+              {
+                "type": "literal",
+                "value": "Produce a result."
+              }
+            ]
+          },
+          "done": {
+            "type": "return",
+            "outputs": [
+              {
+                "variable": "result",
+                "value_selector": [
+                  "generate",
+                  "bar"
+                ]
+              }
+            ]
+          }
+        },
+        "edges": [
+          {
+            "from": "start",
+            "to": "sibling"
+          },
+          {
+            "from": "sibling",
+            "to": "generate"
+          },
+          {
+            "from": "generate",
+            "to": "done"
+          }
+        ]
+      }
+    }
+  }
+]

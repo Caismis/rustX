@@ -7,14 +7,15 @@ import { linter, lintGutter, setDiagnostics, type Diagnostic } from '@codemirror
 
 const basicSetup = { syntaxHighlighting: false, highlightActiveLine: false, highlightSelectionMatches: false, autocompletion: false };
 const emptySetup = { ...basicSetup, lineNumbers: false, foldGutter: false, highlightActiveLineGutter: false };
+const panelSetup = { ...basicSetup, foldGutter: false, highlightActiveLineGutter: false };
 const jsonExtensions = [json(), syntaxHighlighting(classHighlighter), EditorView.lineWrapping];
 const diagnosticsGutter = lintGutter();
 
 /** Lazy CodeMirror engine; its document, history and selection survive renders. */
-export default function JsonCodeView({ labelId, descriptionId, value, onChange, editor, diagnostics, invalid, disabled, placeholder, minHeight, formatDocument }: {
+export default function JsonCodeView({ labelId, descriptionId, value, onChange, editor, diagnostics, invalid, disabled, placeholder, minHeight, fill = false, formatDocument }: {
   labelId: string; descriptionId: string; value: string; onChange: (text: string) => void;
   editor: RefObject<EditorView | undefined>; diagnostics: Diagnostic[]; invalid: boolean; disabled: boolean;
-  placeholder?: string; minHeight: number; formatDocument: () => boolean;
+  placeholder?: string; minHeight: number; fill?: boolean; formatDocument: () => boolean;
 }) {
   const empty = !value.trim();
   const extensions = useMemo(() => [...jsonExtensions,
@@ -34,8 +35,8 @@ export default function JsonCodeView({ labelId, descriptionId, value, onChange, 
     view.dispatch(setDiagnostics(view.state, diagnostics));
   }, [value, diagnostics]);
   useLayoutEffect(() => () => { editor.current = undefined; }, [editor]);
-  return <CodeMirror value={value} onChange={onChange} theme="none" basicSetup={empty ? emptySetup : basicSetup}
-    minHeight={`${minHeight}px`} maxHeight="360px" extensions={extensions} placeholder={placeholder}
+  return <CodeMirror value={value} onChange={onChange} theme="none" basicSetup={empty ? emptySetup : fill ? panelSetup : basicSetup}
+    height={fill ? '100%' : undefined} minHeight={`${minHeight}px`} maxHeight={fill ? undefined : '360px'} extensions={extensions} placeholder={placeholder}
     editable={!disabled} readOnly={disabled} indentWithTab={false}
     onCreateEditor={view => { editor.current = view; view.dispatch(setDiagnostics(view.state, diagnostics)); }}
     onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) formatDocument(); }} />;

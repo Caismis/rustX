@@ -399,8 +399,22 @@ impl AgentProfileLayer {
     fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
         replace_units!(self, layer, "agent.", origin, origins;
             description, instructions, model, skills,
-            agents, workflows, agents_md
+            agents, agents_md
         );
+        // Enabled Workflows accumulate: a Global one is enabled in every
+        // Workspace, and a Workspace adds its own.
+        if let Some(ids) = layer.workflows {
+            let target = self.workflows.get_or_insert_default();
+            // Only identities a lower scope enabled merge; a repeat within
+            // one document stays for validation to reject.
+            let lower = target.len();
+            for id in ids {
+                if !target[..lower].contains(&id) {
+                    target.push(id);
+                }
+            }
+            origins.insert("agent.workflows".into(), origin.clone());
+        }
         if let Some(tools) = layer.tools {
             let target = self.tools.get_or_insert_default();
             replace(

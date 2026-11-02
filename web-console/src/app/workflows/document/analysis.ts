@@ -12,26 +12,34 @@ export function consumerAddress(document: WorkflowDocument, field: FieldAddress)
   const first = parts.shift();
   let consumer: WorkflowConsumerField;
   const key = () => { const part = parts.shift(); return typeof part === 'object' ? part.key : undefined; };
-  if (first === 'input' && (node.type === 'model' || node.type === 'agent')) {
-    const binding = key(); if (binding === undefined) return undefined; consumer = { kind: 'input', binding };
+  if (first === 'messages' && node.type === 'model') {
+    // Every variable of a message shares its scope, inserted or not.
+    const index = parts.shift(); if (typeof index !== 'number' || !node.messages[index]) return undefined;
+    return { address: { block: [...field.block], node: field.node }, field: { kind: 'message', index }, path: [] };
+  } else if (first === 'task' && node.type === 'agent') {
+    return { address: { block: [...field.block], node: field.node }, field: { kind: 'task' }, path: [] };
+  } else if (first === 'content' && node.type === 'review') {
+    return { address: { block: [...field.block], node: field.node }, field: { kind: 'review_content' }, path: [] };
   } else if (first === 'arguments' && node.type === 'tool') consumer = { kind: 'arguments' };
-  else if (first === 'subject' && node.type === 'review' && parts.shift() === 'value') consumer = { kind: 'review_subject' };
-  else if (first === 'context' && node.type === 'review') {
-    const index = parts.shift(); if (typeof index !== 'number') return undefined; consumer = { kind: 'review_context', index };
-  } else if (first === 'condition' && node.type === 'branch') consumer = { kind: 'condition' };
-  else if (first === 'output' && node.type === 'return') consumer = { kind: 'return_output' };
-  else if (first === 'branches' && node.type === 'parallel') {
-    const branch = key(); if (branch === undefined || parts.shift() !== 'input') return undefined; consumer = { kind: 'branch_input', branch };
-  } else if (node.type === 'loop' && first === 'input') consumer = { kind: 'loop_input' };
-  else if (node.type === 'loop' && first === 'until') consumer = { kind: 'loop_until' };
-  else if (node.type === 'loop' && first === 'carry') consumer = { kind: 'loop_carry' };
-  else return undefined;
+  else if (first === 'cases' && node.type === 'branch') {
+    const index = parts.shift(); if (typeof index !== 'number' || parts.shift() !== 'condition' || !node.cases[index]) return undefined;
+    consumer = { kind: 'condition', case_id: node.cases[index].id };
+  }
+  else if (first === 'outputs' && node.type === 'return') return { address: { block: [...field.block], node: field.node }, field: { kind: 'return_output' }, path: [] };
+  else if (node.type === 'loop' && first === 'loop_variables') {
+    const index = parts.shift(); if (typeof index !== 'number' || parts.shift() !== 'value') return undefined; consumer = { kind: 'loop_variable', index };
+  } else if (node.type === 'loop' && first === 'break_condition') consumer = { kind: 'break_condition' };
+  else if (node.type === 'iteration' && first === 'iterator') consumer = { kind: 'iteration_iterator' };
+  else if (node.type === 'iteration' && first === 'output') consumer = { kind: 'iteration_output' };
+  else if (node.type === 'assigner' && first === 'items') {
+    const index = parts.shift(); if (typeof index !== 'number' || parts.shift() !== 'value') return undefined; consumer = { kind: 'assigner_value', index };
+  } else return undefined;
   const path: WorkflowExpressionStep[] = [];
   while (parts.length) {
     const part = parts.shift();
     if (part === 'fields') { const name = key(); if (name === undefined) return undefined; path.push({ kind: 'field', key: name }); }
-    else if (part === 'items' || part === 'predicates') {
-      const index = parts.shift(); if (typeof index !== 'number') return undefined; path.push({ kind: part === 'items' ? 'item' : 'predicate_at', index });
+    else if (part === 'items' || part === 'parts' || part === 'predicates') {
+      const index = parts.shift(); if (typeof index !== 'number') return undefined; path.push({ kind: part === 'predicates' ? 'predicate_at' : 'item', index });
     } else if (part === 'value' || part === 'left' || part === 'right' || part === 'predicate') path.push({ kind: part });
     else return undefined;
   }

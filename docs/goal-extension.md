@@ -430,7 +430,7 @@ are liveness guards, never correctness ordering.
 | 31–33 | `goal351_create_while_idle_admits_one_continuation_and_drain_preserves_active`; `natural_intent_creates_from_human_with_stable_tools_and_current_context`; `goal351_paused_goal_admits_zero_rounds_and_a_human_turn_charges_no_budget`; TUI typed create command test |
 | 34–35 | `goal351_owned_background_is_awaited_without_polling_or_blocking_goal`; `owned_child_and_terminal_publication_prevent_goal_polling` |
 | 37 | `workflow_completion_and_goal_completion_are_independent` |
-| 38–40 | `root_only_scope_is_enforced_for_definition_model_and_workflow_overrides`; `workflow_program_cannot_enable_goal_for_an_agent_node`; `closed_vocabulary_is_opt_in_and_children_are_refused` |
+| 38–40 | `root_only_scope_is_enforced_for_definition_and_invocation_overrides`; `closed_vocabulary_is_opt_in_and_children_are_refused` |
 | 44 | Native typed context/Tool tests above, unchanged provider implementations, and the complete `provider` target |
 
 TUI command tests additionally prove typed creation and revision-pinned pause,
