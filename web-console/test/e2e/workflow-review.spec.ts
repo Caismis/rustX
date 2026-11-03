@@ -53,6 +53,12 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await expect(reviewRecord).toHaveCount(1);
     await expect(reviewRecord).toContainText(copy('waiting', '等待回答'));
     await expect(reviewRecord.locator('[data-disclosure-row]')).not.toHaveAttribute('aria-expanded');
+    await review.getByRole('radio', { name: 'Accept', exact: true }).click();
+    await review.getByRole('button', { name: copy('Collapse the question card', '收起问题卡片'), exact: true }).click();
+    const pendingActivity = reviewRecord.locator('xpath=ancestor::*[@data-step-process][1]').locator(':scope > [data-process-activity]');
+    if (await pendingActivity.isVisible() && await pendingActivity.getAttribute('aria-expanded') === 'false') await pendingActivity.press('Enter');
+    await reviewRecord.getByRole('button', { name: copy('Answer', '回答'), exact: true }).press('Enter');
+    await expect(review.getByRole('radio', { name: 'Accept', exact: true })).toBeChecked();
     await expect(run.locator('[data-workflow-node="gate"]')).toContainText(copy('Waiting for review', '等待审阅'));
     await expect.poll(() => run.locator('[data-workflow-node]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-workflow-node')))).toEqual(['workflow_start', 'review', 'gate']);
     await page.screenshot({ path: `/tmp/rustx-workflow-review-${locale}.png` });
@@ -101,7 +107,7 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     const activity = reviewRecord.locator('xpath=ancestor::*[@data-step-process][1]').locator(':scope > [data-process-activity]');
     if (await activity.isVisible() && await activity.getAttribute('aria-expanded') === 'false') await activity.press('Enter');
     await expect(reviewRecord).toContainText(copy('1/1 answered', '1/1 已回答'));
-    await reviewRecord.locator('[data-disclosure-row]').press('Enter');
+    await reviewRecord.locator('[data-disclosure-row] button[aria-expanded]').press('Enter');
     await expect(reviewRecord.getByRole('heading', { name: 'Review report' })).toBeVisible();
     await expect(reviewRecord.getByText(locale === 'zh' ? 'Revise' : 'Accept', { exact: true })).toHaveCount(1);
     await page.screenshot({ path: `/tmp/rustx-native-review-question-record-${locale}.png` });

@@ -18,6 +18,7 @@ import { useClientSelector, selectShell, sameValue } from '../client/selectors';
 import { ConversationWidthControls } from './agent/ConversationWidthControls';
 import { ConversationLive } from './agent/ConversationLive';
 import { ConversationSeat, ConversationStatus } from './agent/ConversationSeat';
+import { ConversationQuestionPanels } from './agent/QuestionPanels';
 import { readTheme, applyTheme } from './appearance';
 import { Settings } from './settings/Settings';
 import type { ProductHostWorkspaces } from '../workspaces/host';
@@ -368,6 +369,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={view && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
+      <ConversationQuestionPanels client={client} sessionId={view?.id}>
       <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={agentCss.scrollBody} data-conversation-scroll>
       <ConversationLive previewCurrent={previewCurrent} onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} retry={routeState.context.retry} forking={forkingResponse} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}/>
       <ConversationSeat intakeCommitted={center.kind !== 'session-draft'} draftOwner={composerDraft} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
@@ -385,6 +387,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         }}/>
 
       </div></SubagentSurface></ArtifactContext.Provider>
+      </ConversationQuestionPanels>
       </section>
       {commandOpen && command?.route.kind === 'session' && <CommandPanel key={`${command.generation}:${command.route.sessionId}:${command.request.id}:${command.request.messageId ?? ''}`} request={command.request} client={client} sessionId={command.route.sessionId} current={commandCurrent}
         succeeded={() => setConsumed(previous => ({ id: command.request.id, sequence: (previous?.sequence ?? 0) + 1 }))}

@@ -1,3 +1,26 @@
+# Current Harness interaction details (2026-11-03)
+
+The prior change aligned only the compact transcript card. The current sibling
+Harness also offers a separate Answer/View answers pill and a composer-owned
+read-only question panel. Native ask_user and Workflow Human Input now use that
+pattern: the leading disclosure opens the compact record; View answers opens
+the original choices, selected states, descriptions and Markdown preview in the
+questionnaire surface. Recorded panels have paging and Close, with no response
+channel or Submit/Skip actions. Answer reveals the exact existing pending form
+without replacing its draft. Closing a record restores the retained composer.
+
+The header carries the eyebrow/status and the scrollable body carries the
+question, matching the current QuestionFlow. Native index-based answers and
+partial submissions remain authoritative. The presentation panel is scoped by
+endpoint, authority and Conversation; a different Conversation retires the old
+read-only panel. Existing pending forms remain mounted while reading a record,
+so closing it or using Answer restores their original draft.
+
+Approval separates tool, reason and native arguments. Shell requests show the
+command directly; other requests retain their native argument content. A
+historical approval keeps its verdict in the compact row and its known reason
+in a structured detail section. It does not invent missing command arguments.
+
 # Workflow review question records (2026-11-03)
 
 Workflow Human Input history shares ask_user's verdict row and read-only question

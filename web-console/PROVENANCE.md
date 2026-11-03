@@ -1,3 +1,68 @@
+## Current Harness interaction details (2026-11-03)
+
+Read-only comparison uses the unchanged sibling Harness checkout at
+`ce7073d51254c26cd63b22a60835b8f948deb447`. This corrects the prior claim's
+scope: the compact AskQuestionCard was already adapted, but that alone did
+not cover the current panel entry and read-only QuestionFlow.
+
+| Source evidence | Previous rustX behavior | Current treatment |
+| --- | --- | --- |
+| `ui-tool/.../components/QuestionToolRow.tsx` and its CSS: separate leading disclosure and Answer/View answers pill | Only whole-row disclosure, no question-panel entry | Independent pill and leading disclosure when a native panel is available; existing compact record retained |
+| `ui-user-questions/.../QuestionComposer.tsx`: recorded answers lock choices, retain paging, hide Submit/Skip and unused custom field | Only compact questions and answer text | Reuse native Questionnaire with recorded choices, descriptions, selected states, Markdown preview, paging and Close; no response callback exists on the read-only prop branch |
+| The same QuestionFlow keeps only the eyebrow/status in its normal header and the question in the scrolling body | Question always occupied the header | Adopt that header/body split; minimized cards retain the question in their header |
+| `ui-approval/.../ApprovalCard.tsx`, `ApprovalPanel.module.css`, and `ui-chat/.../ApprovalCommand.tsx`: separate description and correlated command | Reason concatenated to the tool title, raw argument JSON, global `pre` typography | Separate description and native command; other Tool argument shapes remain inspectable |
+| `ui-tool/.../AskQuestionCard.tsx` and CSS | Compact card geometry already matched | Retain its 4px margins, 16px group gap, 2px Q/A gap and bounded scroll; Workflow-authored Markdown remains a deliberate native extension |
+
+The upstream pill is offered for its timed-question projection; native rustX
+uses exact pending Interaction references and its recorded Tool/Review receipts
+to provide the same presentation. No timed continuation, late-answer protocol,
+Remote, Cordis store or speculative execution state is imported. Question data
+still pairs by native question index. Option labels must resolve against the
+original authored list before a Tool record offers a read-only panel. Missing
+or ambiguous original options do not acquire invented choices. Native Review
+Markdown, bounded settlement-only summaries and Trace navigation remain intact.
+
+`QuestionPanels` is original app composition over those existing renderers. Its
+pending ports reveal an existing form only; all submission, cancellation,
+uncertainty and authority handling remain in Interactions. A panel record has
+no response action, restores the retained input on close, retires on a different
+endpoint/authority/Conversation. Pending forms remain mounted behind a read-only
+record, so close or Answer restores their existing draft without responding.
+Harness has no corresponding standalone historical approval audit: rustX keeps
+that native receipt, using the existing compact Tool detail surface for its
+known reason and verdict without fabricating absent command arguments.
+
+Per-file source hashes, added immutable source references and retained imports
+are recorded in `source-inventory.json`. Existing MIT attribution applies; no
+dependency, upstream runtime or protocol version changes. The source checkout
+is not modified. Approval and questionnaire reference captures intentionally
+change for the new description/command and question/pill layout; no comparator,
+noise region or tolerance policy changes.
+
+Browser plugin not available; the existing immutable Playwright Chromium image
+validates `127.0.0.1` production preview and fixture routes. All 50 selected
+browser cases pass at 1440px desktop and touch-enabled 390px in both themes:
+12 approval/question-panel cases, four mixed Review histories, two real native
+Workflow review lifecycles, four strict Agent references and 28 spacing cases.
+The panel tests verify keyboard action/disclosure independence, native selected
+options, skipped answers, descriptions, Markdown preview, no blank custom field,
+and zero `interaction/respond` writes while reading or revealing. An active
+question's custom draft survives opening an older record and using Answer to
+return to the pending form. Native Review also survives reload and completes
+through its existing response channel. Approval command type is exactly 13px
+with zero `pre` margin. Page identity, meaningful content, no error overlay,
+console health and horizontal overflow checks pass.
+
+Nine focused unit suites pass 90 tests. `pnpm typecheck`, `pnpm check:i18n`,
+`pnpm check:provenance` (336 source records and 340 package notices), and
+`pnpm build` pass. Browser commands use `bash scripts/browser-tests.sh` with
+the selected specs; unit checks use `pnpm exec vitest run --maxWorkers=4`.
+Captures are outside the repository:
+`/tmp/rustx-ask-record-panel-{width}-{theme}.png`,
+`/tmp/rustx-review-record-panel-{width}-{theme}.png`, and
+`/tmp/rustx-{approval|questionnaire}-parity-{width}-{theme}.png`.
+Safari and physical mobile hardware are outside this Chromium run.
+
 ## Workflow review question records (2026-11-03)
 
 Read-only reference remains sibling Harness

@@ -75,7 +75,15 @@
 }
 
 .headingBlock {
+  flex: 1;
   min-width: 0;
+}
+
+.questionTitle {
+  flex-shrink: 0;
+  margin: 5px 24px 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .eyebrow {
@@ -104,6 +112,13 @@
   font-size: 12px;
   line-height: 24px;
   white-space: nowrap;
+}
+
+.reviewNote {
+  margin: 8px 24px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+  line-height: 24px;
 }
 
 .footerActions {

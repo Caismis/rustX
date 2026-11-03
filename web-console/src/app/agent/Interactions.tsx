@@ -5,7 +5,8 @@ import type { ClientView, SessionView } from '../../client/contracts';
 import { interactionKey } from '../../client/contracts';
 import { json } from '../../bindings/projection';
 import { ApprovalTakeover } from '../../presentation/agent/ApprovalTakeover';
-import { Questionnaire } from './Questionnaire';
+import { Questionnaire, type QuestionnaireProps } from './Questionnaire';
+import { questionPanelKey, useQuestionPanels } from './QuestionPanels';
 import { Button } from '../../presentation/primitives/Button';
 export function Interactions({ client, state, view }: {
   client: AppServerClient; state: ClientView; view: SessionView;
@@ -62,7 +63,7 @@ export function Interactions({ client, state, view }: {
       const response=(decision:'allow'|'deny')=>run(key,()=>client.answer(view.id,item.interaction,{type:'approval',decision:decision==='allow'?{type:'allow'}:{type:'deny',reason:'Denied by developer in rustX Web Console.'}}));
       return <div key={key} className="interaction">
         {failure?.key===key&&<p role="alert">{failure.message}</p>}
-        <ApprovalTakeover title={tx('interactions:interactions.value-value',{p0:approval.tool_name,p1:approval.reason})}
+        <ApprovalTakeover title={approval.tool_name} description={approval.reason}
           detail={<InteractionField client={client} view={view} index={index} identity={key} path={['request','kind','arguments']}/>} disabled={disabled} status={status} onAllow={()=>response('allow')} onDeny={()=>response('deny')}/>
         <Button disabled={disabled} onClick={()=>run(key,()=>client.answer(view.id,item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>
       </div>;
@@ -74,19 +75,21 @@ export function Interactions({ client, state, view }: {
       <Button disabled={disabled} onClick={()=>run(key,()=>client.answer(view.id,item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>
     </section>;
     const kind = body.request.kind;
+    const panelKeys = [questionPanelKey(item.interaction.conversation_id, 'interaction', item.interaction.interaction_id)];
+    if (kind.type === 'questionnaire' && kind.invocation_id.caller === 'agent') panelKeys.push(questionPanelKey(item.interaction.conversation_id, 'call', kind.invocation_id.call_id));
     const response = (answer: Parameters<AppServerClient['answer']>[2]) => run(key, () => client.answer(view.id, item.interaction, answer));
     return <div key={key} className="interaction">
       {failure?.key === key && <p role="alert">{failure.message}</p>}
       {item.source.type === 'subagent' && <small className="inset muted">{tx('interactions:interactions.subagent-request')}</small>}
-      {kind.type === 'approval' ? <ApprovalTakeover title={tx('interactions:interactions.value-value', { p0: kind.tool_name, p1: kind.reason })} detail={<pre>{json(kind.arguments)}</pre>}
+      {kind.type === 'approval' ? <ApprovalTakeover title={kind.tool_name} description={kind.reason} detail={<pre>{approvalText(kind.arguments)}</pre>}
         disabled={disabled} status={status} onAllow={() => response({ type: 'approval', decision: { type: 'allow' } })}
         onDeny={() => response({ type: 'approval', decision: { type: 'deny', reason: 'Denied by developer in rustX Web Console.' } })} />
-        : kind.type === 'questionnaire' ? <Questionnaire key={key} questions={kind.questionnaire.questions} disabled={disabled}
+        : kind.type === 'questionnaire' ? <PendingQuestionnaire panelKeys={panelKeys} key={key} questions={kind.questionnaire.questions} disabled={disabled}
           status={operation || disabled ? status : undefined} submitting={operation === 'in-flight'}
           onSubmit={value => response({ type: 'questionnaire', response: { type: 'submitted', value } })}
           onDecline={() => response({ type: 'questionnaire', response: { type: 'declined' } })} />
           // A Workflow Human Input: its actions are the options; dismissing it cancels.
-          : <Questionnaire key={key} questions={kind.review.questionnaire.questions} disabled={disabled}
+          : <PendingQuestionnaire panelKeys={panelKeys} key={key} questions={kind.review.questionnaire.questions} disabled={disabled}
             form={{ eyebrow: `${kind.review.instance.block.definition.workflow_id} · ${kind.review.instance.node}`, title: tx('interactions:review.title') }}
             status={operation || disabled ? status : undefined} submitting={operation === 'in-flight'}
             onSubmit={submission => response({ type: 'review', response: { instance: kind.review.instance, subject_digest: kind.subject_digest, submission } })}
@@ -100,6 +103,12 @@ export function Interactions({ client, state, view }: {
   {next!=null&&<Button disabled={loading||!client.isAttachmentControlCurrent(view.id,view.attachmentObservation)} onClick={()=>page(Number(next))}>{tx('common:activity.next-interactions')}</Button>}
   </>;
 }
+function PendingQuestionnaire({ panelKeys, ...props }: QuestionnaireProps & { panelKeys: string[] }) {
+  const panel = useRef<{ reveal: () => void }>(null), panels = useQuestionPanels();
+  const key = JSON.stringify(panelKeys), register = panels?.register;
+  useEffect(() => register?.(JSON.parse(key), () => panel.current?.reveal()), [register, key]);
+  return <Questionnaire {...props} ref={panel}/>;
+}
 function InteractionField({client,view,index,identity,path}:{client:AppServerClient;view:SessionView;index:number;identity:string;path:string[]}) {
   const tx=useTranslation(),generation=useRef(0);
   const [state,setState]=useState<{text?:string;loading?:boolean;error?:string}>({});
@@ -111,9 +120,13 @@ function InteractionField({client,view,index,identity,path}:{client:AppServerCli
     void(async()=>{
       const parts:string[]=[];let offset:number|undefined=0;
       do {const chunk=await client.interactionValueChunk(view.id,index,path,offset,current);if(!current())return;parts.push(decoder.decode(chunk.bytes,{stream:chunk.next!==undefined}));offset=chunk.next;}while(offset!==undefined);
-      if(current())setState({text:parts.join('')});
+      if(current())setState({text:approvalText(JSON.parse(parts.join('')))});
     })().catch(error=>{if(current())setState({error:String(error).slice(0,512)});});
     return()=>{generation.current++;};
   },[key,client]);
   return <>{state.loading&&<p role="status">{tx('common:activity.loading')}</p>}{state.text&&<pre>{state.text}</pre>}{state.error&&<p role="alert">{state.error}</p>}</>;
+}
+/** Harness ApprovalCommand: show an authored shell command, otherwise native arguments. */
+function approvalText(value: unknown): string {
+  return value !== null && typeof value === 'object' && 'command' in value && typeof value.command === 'string' ? value.command : json(value);
 }
