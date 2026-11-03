@@ -259,3 +259,32 @@ it is not an exclusive runtime profile or an allocation count.
 
 Fresh structural-stage results and binary identities: [Source metadata reuse](../../docs/issue-481/source-metadata.md).
 The next isolated stage is [append certificate measurements](../../docs/issue-481/append-certificate-results.md), including warm/cold regressions and complete lifecycle counters.
+
+## Native App Server capacity probe
+
+`app-server-capacity.py` uses the authenticated WebSocket API and the existing
+local provider to measure the native server PID, separately from driver/provider
+processes. It requires the Python `websockets` package (measured with 10.4).
+
+```sh
+python3 benchmarks/runtime/app-server-capacity.py \
+  --binary target/release/rustx --output /tmp/rustx-capacity \
+  --sessions 128 --history 8 --widths 1 4 8 --rounds 16
+```
+
+The output directory must not exist. The probe currently pins CPUs 2,8 and uses four
+Tokio workers. It explicitly raises resident capacity to the requested session
+count; the production default is unchanged. It respects one controller per session,
+32 attachments per physical connection and six ordinary/two control request lanes.
+It covers metadata-only/loading/subscription/history, simultaneous attempts,
+cancellation, a paused receiver, detach and three reload/unload cycles. Native
+content and full provider histories must match before completion is accepted.
+
+The first provider wave per width is deliberately held for active-memory sampling;
+exclude it from latency/throughput. CPU/write windows include all rounds, while
+nonheld burst service windows exclude driver setup gaps. This small deterministic
+workload is not a production capacity or P99 guarantee and runs no external tools
+or containers. Optional `--cpu-profiler /path/to/libprofiler.so.0` profiles only the
+last active-width window; those products are diagnostic, not ordinary timings.
+
+[Resource/capacity results and limitations](../../docs/pi-durable-cost-model/2026-11-03-resources-capacity.md).

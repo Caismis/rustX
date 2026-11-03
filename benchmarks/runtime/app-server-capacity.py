@@ -396,8 +396,11 @@ shutdown_deadline_ms = 30000
                 await client.call('session/checkpoint', {'target': target, 'trace_records': []})
                 await client.call('session/detach', {'target': target})
             deadline = time.monotonic() + 30
-            while (await client.call('server/diagnostics', {}))['snapshot']['loaded']:
-                assert time.monotonic() < deadline
+            while True:
+                diagnostic = (await client.call('server/diagnostics', {}))['snapshot']
+                if diagnostic['loaded'] == diagnostic['loading'] == diagnostic['unloading'] == 0:
+                    break
+                assert time.monotonic() < deadline, diagnostic
                 await asyncio.sleep(0.1)
             await sample(f'reload_unload_cycle_{cycle}')
         await client.close()
