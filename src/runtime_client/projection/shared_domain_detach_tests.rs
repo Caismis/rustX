@@ -20,7 +20,7 @@ fn stored_tool_update_detaches_only_matching_domains_and_keeps_old_seed() {
     for (descriptor, transcript) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut current = source.clone();
         if !descriptor {
-            current.message_descriptors[0].tool_calls[0]
+            Arc::make_mut(&mut current.message_descriptors[0]).tool_calls[0]
                 .occurrence
                 .block_index = ContentBlockIndex::new(99);
         }
@@ -241,4 +241,74 @@ fn read_domain_mixed_update_keeps_signed_zero_and_json_order_changes() {
         serde_json::to_vec(&previous.snapshot.materialize()).unwrap(),
         before
     );
+}
+
+#[test]
+fn descriptor_heads_share_unchanged_rows_and_keep_exact_old_versions() {
+    let (mut projection, _, _, _) = native_running_tool_fixture();
+    let original = projection.snapshot.message_descriptors.owned();
+    let original_wire = serde_json::to_vec(&original).unwrap();
+    let mut added = original[0].as_ref().clone();
+    added.locator = crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position: 999 };
+    let added = Arc::new(added);
+    projection.install_canonical_descriptor(Arc::clone(&added));
+    let appended = projection.snapshot.message_descriptors.owned();
+    assert!(Arc::ptr_eq(appended.back().unwrap(), &added));
+    for (old, current) in original.iter().zip(appended.iter()) { assert!(Arc::ptr_eq(old, current)); }
+    let frozen_wire = serde_json::to_vec(&appended).unwrap();
+    let mut changed = original[0].as_ref().clone();
+    changed.kind.push_str("-refined");
+    projection.install_canonical_descriptor(Arc::new(changed));
+    let refined = projection.snapshot.message_descriptors.owned();
+    assert!(!Arc::ptr_eq(&original[0], &refined[0]));
+    assert!(Arc::ptr_eq(appended.back().unwrap(), refined.back().unwrap()));
+    assert_eq!(serde_json::to_vec(&original).unwrap(), original_wire);
+    assert_eq!(serde_json::to_vec(&appended).unwrap(), frozen_wire);
+    let public: Vec<crate::runtime_client::snapshot::RuntimeClientMessageDescriptor> =
+        serde_json::from_slice(&frozen_wire).unwrap();
+    assert_eq!(public, appended.iter().map(|row| row.as_ref().clone()).collect::<Vec<_>>());
+    assert_eq!(serde_json::to_vec(&public).unwrap(), frozen_wire);
+}
+
+#[test]
+fn descriptor_tool_refinement_detaches_only_the_changed_row() {
+    let (projection, _, _, _) = native_running_tool_fixture();
+    let mut snapshot = projection.snapshot.clone();
+    let occurrence = snapshot.message_descriptors[0].tool_calls[0].occurrence.clone();
+    let mut other = snapshot.message_descriptors[0].as_ref().clone();
+    for slot in &mut other.tool_calls { slot.occurrence.block_index = ContentBlockIndex::new(99); }
+    snapshot.message_descriptors.push_back(Arc::new(other));
+    let frozen = snapshot.clone();
+    let bytes = serde_json::to_vec(&frozen.message_descriptors).unwrap();
+    update_stored_tool_slots(&mut snapshot, &occurrence, |slot| slot.name.push_str("-changed"));
+    assert!(!Arc::ptr_eq(&snapshot.message_descriptors[0], &frozen.message_descriptors[0]));
+    assert!(Arc::ptr_eq(snapshot.message_descriptors.back().unwrap(), frozen.message_descriptors.back().unwrap()));
+    assert_eq!(serde_json::to_vec(&frozen.message_descriptors).unwrap(), bytes);
+}
+
+#[test]
+fn transcript_replay_pages_share_immutable_arrays_and_detach_on_mutation() {
+    let (projection, _, _, _) = native_running_tool_fixture();
+    let source = projection.snapshot.transcript.clone();
+    let page = source.owned();
+    let mut later = page.clone();
+    assert!(page.content.same_owner(&source.content));
+    assert!(page.collections.same_owner(&source.collections));
+    assert!(page.deferred_entries.same_owner(&source.deferred_entries));
+    assert!(page.entries.same_owner(&source.entries));
+    let wire = serde_json::to_vec(&page).unwrap();
+    later.entries.push(RuntimeClientTranscriptEntry {
+        turn_process: None, response_pending: false, completed_response: None,
+        tool_calls: vec![], cursor: RuntimeClientTranscriptCursor::new(999),
+        item: RuntimeClientTranscriptItem::Message { message: compactable_user("new-shared-page") },
+    });
+    assert!(!later.entries.same_owner(&page.entries));
+    assert!(later.content.same_owner(&page.content));
+    assert!(later.collections.same_owner(&page.collections));
+    assert!(later.deferred_entries.same_owner(&page.deferred_entries));
+    assert_eq!(serde_json::to_vec(&page).unwrap(), wire);
+    let decoded: crate::runtime_client::snapshot::RuntimeClientTranscriptPage = serde_json::from_slice(&wire).unwrap();
+    assert_eq!(serde_json::to_vec(&decoded).unwrap(), wire);
+    let installed: crate::runtime_client::projection::shared_snapshot::SharedTranscript = page.clone().into();
+    assert!(installed.entries.same_owner(&page.entries));
 }

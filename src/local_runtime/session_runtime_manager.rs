@@ -788,6 +788,13 @@ impl SessionRuntimeManager {
             let Some(native) = resident.shutdown_runtime() else {
                 continue;
             };
+            native.reclaim_idle_store_cache();
+            // An attached runtime cannot unload. Avoid durable idle probes that
+            // would warm its SQLite cache once per second merely to reject it.
+            if resident.external.load(Ordering::Relaxed) != 0 {
+                *resident.idle.lock().expect("idle mutex") = None;
+                continue;
+            }
             let epoch = native.idle_epoch().ok();
             #[cfg(test)]
             self.probe(&resident.identity.conversation)

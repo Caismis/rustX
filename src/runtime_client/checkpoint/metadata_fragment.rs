@@ -76,6 +76,9 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for MetadataFragment<T> {
     }
 }
 impl<T: schemars::JsonSchema> schemars::JsonSchema for MetadataFragment<T> {
+    fn inline_schema() -> bool {
+        T::inline_schema()
+    }
     fn schema_name() -> std::borrow::Cow<'static, str> {
         T::schema_name()
     }
@@ -84,6 +87,36 @@ impl<T: schemars::JsonSchema> schemars::JsonSchema for MetadataFragment<T> {
     }
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         T::json_schema(generator)
+    }
+}
+impl<T: Clone + IntoIterator> IntoIterator for MetadataFragment<T> {
+    type Item = T::Item;
+    type IntoIter = T::IntoIter;
+    fn into_iter(self) -> Self::IntoIter {
+        self.into_owned().into_iter()
+    }
+}
+// The wrapped container exposes iter/iter_mut through Deref/DerefMut.
+#[allow(clippy::into_iter_without_iter)]
+impl<'a, T> IntoIterator for &'a MetadataFragment<T>
+where
+    &'a T: IntoIterator,
+{
+    type Item = <&'a T as IntoIterator>::Item;
+    type IntoIter = <&'a T as IntoIterator>::IntoIter;
+    fn into_iter(self) -> Self::IntoIter {
+        (&**self).into_iter()
+    }
+}
+#[allow(clippy::into_iter_without_iter)]
+impl<'a, T: Clone> IntoIterator for &'a mut MetadataFragment<T>
+where
+    &'a mut T: IntoIterator,
+{
+    type Item = <&'a mut T as IntoIterator>::Item;
+    type IntoIter = <&'a mut T as IntoIterator>::IntoIter;
+    fn into_iter(self) -> Self::IntoIter {
+        (&mut **self).into_iter()
     }
 }
 impl<T> MetadataFragment<T> {

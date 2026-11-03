@@ -99,6 +99,11 @@ pub enum RuntimeClientInteractionKind {
     Review,
 }
 
+/// An immutable historical head shares unchanged rows and persistent container nodes.
+/// Serde retains the protocol's ordinary descriptor array representation.
+pub type RuntimeClientMessageDescriptorHead =
+    imbl::Vector<std::sync::Arc<RuntimeClientMessageDescriptor>>;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientMessageDescriptor {
@@ -333,18 +338,22 @@ pub struct RuntimeClientSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
+// Loaded arrays share immutable owners across published cuts. Mutation detaches
+// the changed array; serialization remains the same bounded transcript page.
 pub struct RuntimeClientTranscriptPage {
     /// The exact native source cut from which bodies and evidence were read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_cut: Option<crate::durable::observation::ObservationReadCut>,
     /// Deferred bytes remain explicitly recoverable on older historical pages.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub content: Vec<super::checkpoint::ContentBinding>,
+    pub content: super::checkpoint::MetadataFragment<Vec<super::checkpoint::ContentBinding>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub collections: Vec<super::checkpoint::CollectionFrontier>,
+    pub collections:
+        super::checkpoint::MetadataFragment<Vec<super::checkpoint::CollectionFrontier>>,
     /// Native items whose structural display requires bounded further reading.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub deferred_entries: Vec<super::checkpoint::CheckpointPageItem>,
+    pub deferred_entries:
+        super::checkpoint::MetadataFragment<Vec<super::checkpoint::CheckpointPageItem>>,
 
     /// Last native transcript position inherited by this lineage; zero for an empty prefix.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -354,7 +363,7 @@ pub struct RuntimeClientTranscriptPage {
     pub statistics: Option<super::response::ConversationStatistics>,
     /// Items in chronological order within this page.
     #[serde(default)]
-    pub entries: Vec<RuntimeClientTranscriptEntry>,
+    pub entries: super::checkpoint::MetadataFragment<Vec<RuntimeClientTranscriptEntry>>,
     /// The exclusive cursor for the next older page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<RuntimeClientTranscriptCursor>,
@@ -514,12 +523,12 @@ pub(crate) fn transcript_page_view(
         .collect::<Result<Vec<_>, String>>()?;
     Ok(RuntimeClientTranscriptPage {
         source_cut: None,
-        content: Vec::new(),
-        collections: Vec::new(),
-        deferred_entries: Vec::new(),
+        content: Vec::new().into(),
+        collections: Vec::new().into(),
+        deferred_entries: Vec::new().into(),
         inherited_through: Some(page.inherited_through.into()),
         statistics: None,
-        entries,
+        entries: entries.into(),
         next_cursor: page.next_cursor.map(Into::into),
     })
 }

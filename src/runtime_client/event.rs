@@ -373,8 +373,9 @@ pub enum RuntimeClientEvent {
     /// read-only.
     MessageDescriptorCommitted {
         attempt_id: Option<AttemptId>,
-        descriptor: Box<super::snapshot::RuntimeClientMessageDescriptor>,
-        head: Vec<super::snapshot::RuntimeClientMessageDescriptor>,
+        descriptor: std::sync::Arc<super::snapshot::RuntimeClientMessageDescriptor>,
+        #[schemars(with = "Vec<super::snapshot::RuntimeClientMessageDescriptor>")]
+        head: super::snapshot::RuntimeClientMessageDescriptorHead,
         transcript_cursor: Option<RuntimeClientTranscriptCursor>,
         evicted_message_id: Option<MessageId>,
     },

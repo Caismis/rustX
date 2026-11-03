@@ -217,7 +217,7 @@ fn incremental_transcript_cut_changes_reuse_rows_and_keep_current_envelope() {
         let page = captured.materialize().snapshot.transcript;
         assert_eq!(page.source_cut, current.snapshot.transcript.source_cut);
         assert_eq!(page.next_cursor, current.snapshot.transcript.next_cursor);
-        assert_eq!(&page.collections, current.snapshot.transcript.collections.value());
+        assert_eq!(&page.collections, &current.snapshot.transcript.collections);
         compare_original(&current);
     }
     assert_eq!(original.checkpoint_candidate().unwrap(), retained);

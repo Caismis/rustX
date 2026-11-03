@@ -1194,12 +1194,12 @@ impl CheckpointSeed {
                     publication_settlements: source.publication_settlements.owned(),
                     transcript: super::snapshot::RuntimeClientTranscriptPage {
                         source_cut: source.transcript.source_cut.clone(),
-                        content: source.transcript.content.owned(),
-                        collections: source.transcript.collections.owned(),
-                        deferred_entries: transcript_deferred_entries.into_owned(),
+                        content: source.transcript.content.clone(),
+                        collections: source.transcript.collections.clone(),
+                        deferred_entries: transcript_deferred_entries.into_owned().into(),
                         inherited_through: source.transcript.inherited_through,
                         statistics: transcript_statistics.into_owned(),
-                        entries: transcript_entries.into_owned(),
+                        entries: transcript_entries.into_owned().into(),
                         next_cursor: source.transcript.next_cursor,
                     },
                     trace: super::trace::TracePage {
@@ -1345,7 +1345,7 @@ impl CheckpointSeed {
             .message_descriptors
             .iter()
             .map(|source| {
-                let mut descriptor = source.clone();
+                let mut descriptor = source.as_ref().clone();
                 while super::checkpoint::bounded_len(&descriptor, 16_384).is_none() {
                     let Some(removed) = descriptor.tool_calls.pop() else {
                         break;
@@ -1386,12 +1386,14 @@ impl CheckpointSeed {
         let source = &self.snapshot;
         super::snapshot::RuntimeClientTranscriptPage {
             source_cut: source.transcript.source_cut.clone(),
-            content: source.transcript.content.owned(),
-            collections: source.transcript.collections.owned(),
-            deferred_entries: capture.page(
-                "transcript.deferred_entries",
-                &source.transcript.deferred_entries,
-            ),
+            content: source.transcript.content.clone(),
+            collections: source.transcript.collections.clone(),
+            deferred_entries: capture
+                .page(
+                    "transcript.deferred_entries",
+                    &source.transcript.deferred_entries,
+                )
+                .into(),
             inherited_through: source.transcript.inherited_through,
             statistics: capture
                 .item(
@@ -1399,7 +1401,9 @@ impl CheckpointSeed {
                     source.transcript.statistics.value(),
                 )
                 .flatten(),
-            entries: capture.transcript_page(&source.transcript.entries, &source.conversation_id),
+            entries: capture
+                .transcript_page(&source.transcript.entries, &source.conversation_id)
+                .into(),
             next_cursor: source.transcript.next_cursor,
         }
     }
@@ -2801,7 +2805,7 @@ impl RuntimeClientProjection {
         self.snapshot.transcript = (super::snapshot::transcript_page_view(seed.transcript.clone())
             .expect("runtime bootstrap transcript is valid"))
         .into();
-        self.transcript_bindings = self.snapshot.transcript.content.owned().into();
+        self.transcript_bindings = self.snapshot.transcript.content.clone().into();
         self.transcript_head = super::checkpoint::PreparedTranscriptHead::from_entries(
             &self.snapshot.conversation_id,
             &self.snapshot.transcript.entries,
@@ -3637,12 +3641,15 @@ impl RuntimeClientProjection {
 
                 let descriptor = header
                     .as_ref()
-                    .and_then(super::snapshot::RuntimeClientMessageDescriptor::from_header);
+                    .and_then(super::snapshot::RuntimeClientMessageDescriptor::from_header)
+                    .map(Arc::new);
                 let descriptor_only = header
                     .as_ref()
                     .is_some_and(|header| header.display.is_none());
                 if let Some(descriptor) = descriptor.as_ref() {
-                    self.snapshot.message_descriptors.push(descriptor.clone());
+                    self.snapshot
+                        .message_descriptors
+                        .push_back(Arc::clone(descriptor));
                     if self.snapshot.message_descriptors.len()
                         > super::checkpoint::CHECKPOINT_NATIVE_HEAD_ITEMS
                     {
@@ -3677,7 +3684,7 @@ impl RuntimeClientProjection {
                     if let Some(descriptor) = descriptor {
                         events.push(RuntimeClientEvent::MessageDescriptorCommitted {
                             attempt_id,
-                            descriptor: Box::new(descriptor),
+                            descriptor,
                             head: self.snapshot.message_descriptors.owned(),
                             transcript_cursor,
                             evicted_message_id,
@@ -3687,7 +3694,7 @@ impl RuntimeClientProjection {
                     if let Some(descriptor) = descriptor {
                         events.push(RuntimeClientEvent::MessageDescriptorCommitted {
                             attempt_id: attempt_id.clone(),
-                            descriptor: Box::new(descriptor),
+                            descriptor,
                             head: self.snapshot.message_descriptors.owned(),
                             transcript_cursor,
                             evicted_message_id: evicted_message_id.clone(),
@@ -5846,7 +5853,7 @@ impl RuntimeClientProjection {
         self.snapshot
             .message_descriptors
             .iter()
-            .any(|current| current == descriptor)
+            .any(|current| current.as_ref() == descriptor)
             && match &header.display {
                 Some(message) => {
                     self.snapshot
@@ -5869,25 +5876,26 @@ impl RuntimeClientProjection {
 
     fn install_canonical_descriptor(
         &mut self,
-        descriptor: &super::snapshot::RuntimeClientMessageDescriptor,
+        descriptor: Arc<super::snapshot::RuntimeClientMessageDescriptor>,
     ) -> Option<MessageId> {
-        if let Some(existing) = self
-            .snapshot
-            .message_descriptors
-            .iter_mut()
-            .find(|existing| existing.locator == descriptor.locator)
+        let head = &mut self.snapshot.message_descriptors;
+        if let Some(index) = head
+            .iter()
+            .position(|row| row.locator == descriptor.locator)
         {
-            existing.clone_from(descriptor);
+            head.set(index, descriptor);
         } else {
-            self.snapshot.message_descriptors.push(descriptor.clone());
+            let position = canonical_locator_position(&descriptor.locator);
+            let index = head
+                .iter()
+                .position(|row| canonical_locator_position(&row.locator) > position)
+                .unwrap_or(head.len());
+            head.insert(index, descriptor);
         }
-        self.snapshot
-            .message_descriptors
-            .sort_by_key(|descriptor| canonical_locator_position(&descriptor.locator));
         let evicted = if self.snapshot.message_descriptors.len()
             > super::checkpoint::CHECKPOINT_NATIVE_HEAD_ITEMS
         {
-            self.snapshot.message_descriptors.remove(0).identity
+            self.snapshot.message_descriptors.remove(0).identity.clone()
         } else {
             None
         };
@@ -5920,11 +5928,12 @@ impl RuntimeClientProjection {
         if !owns_header && self.canonical_header_unchanged(&header, &descriptor) {
             return events;
         }
-        let evicted_message_id = self.install_canonical_descriptor(&descriptor);
+        let descriptor = Arc::new(descriptor);
+        let evicted_message_id = self.install_canonical_descriptor(Arc::clone(&descriptor));
         let transcript_cursor = transcript_cursor.map(RuntimeClientTranscriptCursor::from);
         events.push(RuntimeClientEvent::MessageDescriptorCommitted {
             attempt_id: attempt_id.clone(),
-            descriptor: Box::new(descriptor),
+            descriptor,
             head: self.snapshot.message_descriptors.owned(),
             transcript_cursor,
             evicted_message_id: evicted_message_id.clone(),
@@ -7053,7 +7062,8 @@ impl RuntimeClientProjection {
             .headers
             .iter()
             .filter_map(super::snapshot::RuntimeClientMessageDescriptor::from_header)
-            .collect::<Vec<_>>())
+            .map(Arc::new)
+            .collect::<super::snapshot::RuntimeClientMessageDescriptorHead>())
         .into();
         self.snapshot.messages = (messages
             .headers
@@ -7062,7 +7072,7 @@ impl RuntimeClientProjection {
             .collect::<Vec<_>>())
         .into();
         self.snapshot.transcript = (super::snapshot::transcript_header_view(transcript)).into();
-        self.transcript_bindings = self.snapshot.transcript.content.owned().into();
+        self.transcript_bindings = self.snapshot.transcript.content.clone().into();
         self.transcript_head = super::checkpoint::PreparedTranscriptHead::from_entries(
             &self.snapshot.conversation_id,
             &self.snapshot.transcript.entries,
@@ -8201,18 +8211,22 @@ fn update_stored_tool_slots(
     occurrence: &super::snapshot::RuntimeClientToolOccurrence,
     mut update: impl FnMut(&mut super::snapshot::ForegroundToolExecution),
 ) {
-    // An absent occurrence must not detach and clone an unrelated frozen head.
-    if snapshot.message_descriptors.iter().any(|descriptor| {
-        descriptor
-            .tool_calls
-            .iter()
-            .any(|slot| &slot.occurrence == occurrence)
-    }) {
-        for slot in snapshot
-            .message_descriptors
-            .iter_mut()
-            .flat_map(|descriptor| &mut descriptor.tool_calls)
-        {
+    // Detach only rows containing this occurrence; historical heads keep all
+    // other immutable rows and persistent vector nodes.
+    let matching: Vec<_> = snapshot
+        .message_descriptors
+        .iter()
+        .enumerate()
+        .filter_map(|(index, descriptor)| {
+            descriptor
+                .tool_calls
+                .iter()
+                .any(|slot| &slot.occurrence == occurrence)
+                .then_some(index)
+        })
+        .collect();
+    for index in matching {
+        for slot in &mut Arc::make_mut(&mut snapshot.message_descriptors[index]).tool_calls {
             if &slot.occurrence == occurrence {
                 update(slot);
             }

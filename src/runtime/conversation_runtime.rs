@@ -6410,6 +6410,21 @@ impl ConversationRuntime {
         self.inner.lifecycle.wait_for_no_admissions().await;
     }
 
+    /// Cache reclamation is advisory: no shutdown claim, durable probe or wait.
+    pub(crate) fn reclaim_idle_store_cache(&self) {
+        let Ok(state) = self.inner.state.try_lock() else {
+            return;
+        };
+        if self
+            .inner
+            .idle_epoch_probed(&state, IdleProbe::InMemory)
+            .is_ok()
+            && let Err(error) = self.inner.tool_runtime.durable_store().reclaim_idle_cache()
+        {
+            tracing::warn!(%error, "idle store cache maintenance failed");
+        }
+    }
+
     pub(crate) fn idle_epoch(&self) -> Result<u64, IdleBusyReason> {
         self.inner.idle_epoch_locked(&self.inner.lock_state())
     }

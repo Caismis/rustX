@@ -146,7 +146,7 @@ enum BindingPrefix {
 }
 type BindingFragments = checkpoint::metadata_fragment::BindingFragments;
 struct BindingHead {
-    values: Vec<checkpoint::ContentBinding>,
+    values: checkpoint::MetadataFragment<Vec<checkpoint::ContentBinding>>,
     budget: OnceLock<Option<usize>>,
     prefixed: std::sync::Mutex<Option<(BindingPrefix, BindingFragments)>>,
 }
@@ -161,6 +161,11 @@ impl Default for PreparedBindingHead {
 }
 impl From<Vec<checkpoint::ContentBinding>> for PreparedBindingHead {
     fn from(values: Vec<checkpoint::ContentBinding>) -> Self {
+        Self::from(checkpoint::MetadataFragment::from(values))
+    }
+}
+impl From<checkpoint::MetadataFragment<Vec<checkpoint::ContentBinding>>> for PreparedBindingHead {
+    fn from(values: checkpoint::MetadataFragment<Vec<checkpoint::ContentBinding>>) -> Self {
         Self(Arc::new(BindingHead {
             values,
             budget: OnceLock::new(),

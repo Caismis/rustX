@@ -128,7 +128,7 @@ async def main(a):
         'sha256': hashlib.sha256(a.binary.read_bytes()).hexdigest(),
         'websockets': websockets.__version__, 'affinity': sorted(os.sched_getaffinity(0)),
         'sessions': a.sessions, 'history_turns': a.history, 'widths': a.widths,
-        'rounds': a.rounds, 'scope': 'Actual native App Server over authenticated WebSocket. '
+        'rounds': a.rounds, 'cache_probes': a.cache_probes, 'scope': 'Actual native App Server over authenticated WebSocket. '
         'Single-process samples, not a production capacity/P99 guarantee. '
         'Driver and provider are siblings; only server PID resource counters are reported.',
         'inputs': inputs, 'tokio_workers': 4})
@@ -145,7 +145,9 @@ async def main(a):
         'uv', 'run', '--project', str(REPO / 'test-support/fake-provider'), '--frozen',
         'python', str(REPO / 'benchmarks/runtime/app-server-capacity-provider.py'),
         '--seed-requests', str(seed_requests), '--widths', ','.join(map(str, a.widths)),
-        '--rounds', str(a.rounds), stdout=asyncio.subprocess.PIPE, stderr=provider_log,
+        '--rounds', str(a.rounds),
+        '--cache-probe-requests', str(24 + 2 * a.sessions if a.cache_probes else 0),
+        stdout=asyncio.subprocess.PIPE, stderr=provider_log,
         env=os.environ | {'UV_OFFLINE': '1'})
     process = None
     clients = []
@@ -291,6 +293,45 @@ shutdown_deadline_ms = 30000
                 await asyncio.gather(*(turn(i) for i in range(start, min(start + 8, a.sessions))))
             if seed + 1 in [1, a.history]:
                 await sample(f'seeded_history_{seed + 1}')
+        if a.cache_probes:
+            # All endpoints below still hold every actor and subscription.
+            # Diagnostic RPCs touch manager metadata, not conversation SQLite.
+            idle_began = time.monotonic()
+            await asyncio.sleep(32)
+            await sample('cache_pages_idle')
+            mixed_before = counter(process.pid)
+            kept_warm = []
+            for repeat in range(24):
+                await asyncio.sleep(max(0, idle_began + 36 + repeat * 4 - time.monotonic()))
+                kept_warm.append(await turn(repeat % 4))
+            await asyncio.sleep(max(0, idle_began + 130 - time.monotonic()))
+            await sample('cache_statements_idle')
+            write(out / 'cache-kept-warm.json', {'before': mixed_before, 'after': counter(process.pid), 'rows': kept_warm,
+                'scope': '24 turns in four sessions at16s/session while the other124 stay subscribed and idle. Counter window includes idle maintenance, not pure active CPU.'})
+            inspect_before = counter(process.pid)
+            inspect_began = time.monotonic_ns()
+            checkpoint = await owners[a.sessions-2].call('session/checkpoint', {'target': targets[a.sessions-2], 'trace_records': []})
+            history = await client.call('session/history', {'session_id': sessions[a.sessions-3], 'node_id': None, 'at': {'type': 'latest'}, 'limit': 32})
+            content_ref = next(binding['content_ref']
+                for descriptor in checkpoint['checkpoint']['snapshot']['message_descriptors']
+                for binding in descriptor['content'] if binding['content_ref']['readable_end'] > 0)
+            chunks = [await owners[a.sessions-2].call('conversation/contentRead', {
+                'target': targets[a.sessions-2], 'agent_id': None, 'content_ref': content_ref,
+                'offset': 0, 'max_bytes': 4096}) for _ in range(2)]
+            assert chunks[0] == chunks[1]
+            import base64
+            chunk = chunks[0]['chunk']
+            assert chunk['content_ref'] == content_ref and chunk['offset'] == 0
+            assert len(base64.b64decode(chunk['data_base64'], validate=True)) == chunk['end_offset']
+            write(out / 'cache-inspector.json', {'checkpoint': checkpoint, 'history': history, 'chunks': chunks,
+                'elapsed_ms': (time.monotonic_ns()-inspect_began)/1e6,
+                'before': inspect_before, 'after': counter(process.pid)})
+            for label in ['cold', 'warm']:
+                before = counter(process.pid)
+                rows = [await turn(index) for index in range(a.sessions)]
+                write(out / f'cache-rotation-{label}.json', {'before': before, 'after': counter(process.pid), 'rows': rows,
+                    'scope': 'One sequential turn per session. Cold excludes sessions0..3 kept active and the two Inspector targets when aggregating cold-eligible rows; warm repeats the same order promptly.'})
+                await sample('cache_rotation_' + label)
         for width in a.widths:
             before = counter(process.pid)
             profiling = a.cpu_profiler is not None and width == a.widths[-1]
@@ -504,6 +545,8 @@ if __name__ == '__main__':
     parser.add_argument('--widths', type=int, nargs='+', default=[1, 4, 8])
     parser.add_argument('--rounds', type=int, default=16)
     parser.add_argument('--cpu-profiler', type=Path)
+    parser.add_argument('--cache-probes', action='store_true', help='Measure page/statement idle windows, four warm sessions, Inspector and cold/warm128-session rotation')
     options = parser.parse_args()
     assert 2 <= options.sessions <= 256 and max(options.widths) <= options.sessions
+    assert not options.cache_probes or options.sessions >= 8
     asyncio.run(main(options))

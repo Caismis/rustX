@@ -168,7 +168,8 @@ fn bounded_response_page_combines_ordinary_and_deferred_limit() {
     let mut page = assert_response_page_oracle(&store, &cut);
     assert!(!page.entries.is_empty() && !page.deferred_entries.is_empty());
     assert_eq!(page.entries.len() + page.deferred_entries.len(), 32);
-    page.deferred_entries.push(page.deferred_entries[0].clone());
+    let duplicate = page.deferred_entries[0].clone();
+    page.deferred_entries.push(duplicate);
     assert!(matches!(
         crate::runtime_client::response::decorate_through(&store, &mut page, cut.read.journal),
         Err(ConversationStoreError::InvalidReference(_))

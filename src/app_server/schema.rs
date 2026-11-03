@@ -551,13 +551,13 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 target_cursor: None,
                 page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage {
                     source_cut: None,
-                    content: Vec::new(),
-                    collections: Vec::new(),
-                    deferred_entries: Vec::new(),
+                    content: Vec::new().into(),
+                    collections: Vec::new().into(),
+                    deferred_entries: Vec::new().into(),
                     inherited_through: Some(
                         crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(0),
                     ),
-                    entries: Vec::new(),
+                    entries: Vec::new().into(),
                     next_cursor: None,
                     statistics: None,
                 },
