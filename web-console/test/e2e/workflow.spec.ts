@@ -27,11 +27,9 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     const child = page.locator('[data-workflow-activation-id]');
     const run = page.locator('[data-workflow-run-id]');
     // Chat restores request notices independently of the Workflow header.
-    // Wait for this fixture's initial prompt before choosing pointer coordinates;
-    // its late insertion otherwise moves the node during the click itself.
-    const waitInitialPrompt = () => expect(page.locator('[data-system-change="prompt"]:visible')).toHaveCount(1);
+    // Chat hides the initial system prompt (Harness hidden rows), so no late
+    // row insertion can move the node under the pointer.
     const openChild = async () => {
-      await waitInitialPrompt();
       await run.getByRole('button', { name: 'View review', exact: true }).click();
     };
     await expect(child).toHaveCount(1); await expect(run).toHaveCount(1);
@@ -97,7 +95,6 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();
     await expect(run).toContainText('completed');
     await expect(catalog).toHaveText('1 subagents');
-    await waitInitialPrompt();
     await run.getByRole('button').first().click();
     await openChild();
     await expect(childView).toContainText('One-shot subagent record');
@@ -107,7 +104,6 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(childView).toContainText('One-shot subagent record');
     await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await page.reload(); await connect();
-    await waitInitialPrompt();
     await run.getByRole('button').first().click();
     await openChild();
     await expect(childView).toContainText('One-shot subagent record');

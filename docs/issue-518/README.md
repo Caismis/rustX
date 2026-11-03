@@ -51,9 +51,11 @@ Server protocol/connection layer.
 - **External edits.** A bounded `notify` watcher routes changed paths to their
   owning source target and feeds `observe_source_change`, the same capture,
   fence and validation path as a native write. Coverage: User document
-  directory (that file), `~/rustx/.agents` (recursive), each Workspace with
-  source authority or a Session scope (`rustx.toml`, root `*.md`) and its
-  `.agents` (recursive).
+  directory (that file); `~/rustx/.agents` for `mcp.toml` with `agents`,
+  `skills`, `tools` and `workflows` recursively; each Workspace with source
+  authority or a Session scope (`rustx.toml`, root `*.md`) and its `.agents`
+  alike. Session uploads under `.agents/uploads` are never watched (the full
+  browser suite caught an early version that did).
 
 ## Removed
 
@@ -124,4 +126,5 @@ TUI notice (deterministic render, `tui/test/configuration-notice.test.ts`):
   The fixture therefore keeps its base capture with only the removed
   eligibility vocabulary stripped.
 - `stream_progress::large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_execution`
-  is load-sensitive: it failed under the full parallel suite and passes alone.
+  is load-sensitive: it failed in two earlier full parallel runs, passes alone,
+  and passed in the final full run.

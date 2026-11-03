@@ -53,9 +53,9 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
         await page.getByRole('button', { name: '关闭设置' }).click();
       }
       await send('Earlier question'); await expect(page.getByText('Earlier answer stays.', { exact: true })).toBeVisible(); const earlier = await settled();
-      // Native settlement does not finish Trace hydration. Its initial prompt
-      // disclosure must be mounted before a later pointer target can stay put.
-      await expect(page.locator('.chat-reading-surface [data-system-change="prompt"]')).toHaveCount(1);
+      // Chat hides the initial system prompt (Harness hidden rows): no late
+      // disclosure can move a later pointer target.
+      await expect(page.locator('.chat-reading-surface [data-system-change]')).toHaveCount(0);
       await send('Retry this question'); await expect(page.getByRole('heading', { name: 'Original response' })).toBeVisible(); const original = await settled(earlier.attemptId);
       await expect(page.getByText('Old reply to replace.', { exact: true })).toBeVisible();
       const surface = await page.locator('.chat-reading-surface').elementHandle(), editor = await message.elementHandle();
