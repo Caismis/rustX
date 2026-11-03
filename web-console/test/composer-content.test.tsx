@@ -25,7 +25,12 @@ it('keeps an unsaved hydrated Goal objective draft while a Todo-only update wait
  const view = server.client.getSnapshot().views.A, cut = view.checkpoint!.read_cut;
  const objective = 'Hydrated authoritative Goal objective';
  server.handlers.set('conversation/checkpointValueRead', () => ({ type: 'checkpoint_value_chunk', chunk: { cut, domain: 'goal', item_offset: 0, path: ['current', 'objective'], offset: 0, readable_end: objective.length, next_offset: null, representation: 'utf8_text', bytes_base64: btoa(objective) } }));
- const ui = render(<Goal view={view}/>); await screen.findByText(objective);
+ server.held.add('conversation/checkpointValueRead');
+ const ui = render(<Goal view={view}/>);
+ const hydration = await server.waitFor('conversation/checkpointValueRead', 1);
+ // Settle hydration and its passive draft-reset effects before the user edit.
+ await act(async () => server.socket.success(hydration, server.handlers.get('conversation/checkpointValueRead')!(hydration)));
+ await screen.findByText(objective);
  fireEvent.click(screen.getByRole('button', { name: 'Edit goal objective' }));
  const input = screen.getByRole('textbox', { name: 'Goal objective' });
  fireEvent.change(input, { target: { value: 'My unsaved Goal objective' } });
