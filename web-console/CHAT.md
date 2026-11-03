@@ -1,3 +1,13 @@
+# Expanded Workflow process spacing (2026-11-03)
+
+The 16px nested completed-header boundary applies while that header is
+collapsed. Once its process is expanded, its last visible process row and the
+following Workflow use the standard 4px gap in both shared-entry and cross-entry
+layouts. A row's trailing-header role is independent of its leading User/body
+role, so a collapsed native header seated above Agent Status also owns 16px
+clearance. Status visibility and its trailing role use the same presentation
+facts; native placement and disclosure ownership stay unchanged.
+
 # Cross-entry completed-header spacing (2026-11-03)
 
 A collapsed entry that renders only its completed header carries the same

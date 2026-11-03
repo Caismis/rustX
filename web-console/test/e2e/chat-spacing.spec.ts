@@ -7,7 +7,7 @@ const gap = async (a: Locator, b: Locator) => {
 };
 for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const) test.describe(`${width}px ${theme}`, () => {
   test.use({ hasTouch: width === 390, isMobile: width === 390 });
-  for (const kind of ['workflow', 'workflow-turns', 'workflow-turns-hidden', 'descriptor', 'descriptor-tools', 'status']) test(`${kind} keeps spacing at native seat boundaries`, async ({ page }) => {
+  for (const kind of ['workflow', 'workflow-turns', 'workflow-turns-hidden', 'workflow-turns-status', 'descriptor', 'descriptor-tools', 'status']) test(`${kind} keeps spacing at native seat boundaries`, async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -35,6 +35,25 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
         await headers.nth(index).press('Enter'); await headers.nth(index).press('Enter');
         expect(await clearance()).toEqual([16, 16]);
       }
+      // Keep both Turns expanded, as in the reported comparison. Their last
+      // visible process summaries must have the same gap to the Workflow.
+      for (const header of await headers.all()) await header.press('Enter');
+      const summaries = [0, 1].map(index => page.locator(`[data-turn-process-owner='["conversation-A","workflow-turn-${index + 1}"]'] [data-process-activity]:visible`).last());
+      for (const summary of summaries) await expect(summary).toBeVisible();
+      if (kind === 'workflow-turns-status') await expect(page.locator('[data-agent-status]')).toBeVisible();
+      const processClearance = () => Promise.all(summaries.map((summary, index) => gap(summary, cards.nth(index))));
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await headers.first().scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `/tmp/rustx-${kind}-${width}-${theme}-open.png` });
+      expect(await processClearance()).toEqual([4, 4]);
+      for (const [index, summary] of summaries.entries()) {
+        await summary.press('Enter');
+        expect(await gap(summary.locator('..'), cards.nth(index))).toBe(4);
+        await summary.press('Enter');
+        expect(await processClearance()).toEqual([4, 4]);
+      }
+      for (const header of await headers.all()) await header.press('Enter');
+      expect(await clearance()).toEqual([16, 16]);
       expect(await cards.first().evaluate((element, previous) => element === previous, retainedCard)).toBe(true);
     } else if (kind === 'workflow') {
       const tool = page.locator('[data-tool-call-id="spacing-bash"]'), cards = page.locator('[data-workflow-run-id]');

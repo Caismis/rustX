@@ -1225,7 +1225,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "824d050b13fc7aa9d8e80f51b7ac06e7186a5f97e5053e9d17e92c294a6f2c79",
+      "local_sha256": "0694f0912d2f88e30e36ece65721cf6fa053458db4d657d2fde8fdd320083f55",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
@@ -1237,7 +1237,7 @@
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
           "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
           "upstream_sha256": "ed939e63d6e6479b7b240a79c3231ade8c32f55235002ac33fc6a085e0497b60",
-          "treatment": "Adapt the current Harness 4px process, 12px response and 16px settled-boundary rhythm, stable running/tail geometry and native anchored seats. Canonical entries and deferred-content sections share the flow layout; content after a nested process header receives the same clearance without a Workflow-only exception. Native seat and reading ownership remain unchanged. Cross-entry settled clearance follows the preceding visible header role and ignores retained hidden seats, instead of relying on DOM adjacency."
+          "treatment": "Adapt the current Harness 4px process, 12px response and 16px completed-header rhythm, stable running/tail geometry and native anchored seats. Canonical and deferred-content sections share the flow layout. A trailing collapsed header, including one seated above Agent Status, owns the settled boundary across retained hidden rows; expanded process content retains 4px spacing. Native seat and reading ownership remain unchanged."
         }
       ]
     },

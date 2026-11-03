@@ -81,8 +81,8 @@
 .column > .flowItem:has([data-turn-process]),
 .column > [data-chat-after-process]:not([hidden]):not(:empty),
 .flow > [data-turn-process] + :not([hidden]):not(:empty):not([role="status"]),
-/* Anchored process headers may be inside the preceding MessageSeat. */
-.flow > .flow:has(> [data-turn-process]) + :not([hidden]):not(:empty) {
+/* A collapsed header is the trailing content; expanded process rows use 4px. */
+.flow > .flow:has(> [data-turn-process]:not([data-open])) + :not([hidden]):not(:empty) {
   margin-top: 16px;
 }
 

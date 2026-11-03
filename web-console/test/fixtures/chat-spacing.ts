@@ -6,7 +6,9 @@ import { workflowTurnsFixture } from './workflow-turns';
 
 /** Native layouts that put multiple visible surfaces in one canonical seat. */
 export function chatSpacingFixture(server: Server, current: RuntimeClientSnapshot, kind: string | null) {
-  if (kind === 'workflow-turns' || kind === 'workflow-turns-hidden') { workflowTurnsFixture(server, current, kind === 'workflow-turns-hidden'); return; }
+  if (kind === 'workflow-turns' || kind === 'workflow-turns-hidden' || kind === 'workflow-turns-status') {
+    workflowTurnsFixture(server, current, kind === 'workflow-turns-hidden', kind === 'workflow-turns-status'); return;
+  }
   if (kind === 'workflow') {
     workflowRunsFixture(server, current);
     current.messages = current.messages.slice(0, 2);

@@ -1,3 +1,37 @@
+## Expanded Workflow process spacing (2026-11-03)
+
+The report shows both Turn processes expanded, with Agent Status in one Turn.
+Paired cases reproduce `[4, 16]` from their visible Tool summaries to Workflow
+cards: the old nested-header selector applied 16px after the whole MessageSeat
+even when its process body followed the header. It now applies only to a
+collapsed header; visible process content uses the existing 4px row gap.
+
+An added FreshInbound Status case also reproduces `[4, 16]` while collapsed:
+its header is seated in the User entry's suffix, so a header-only-entry label
+cannot describe its trailing content. A separate trailing-process attribute now
+describes that boundary. Shared Status presentation facts drive both native
+visibility and the trailing role, replacing duplicated hidden-state predicates.
+Native anchors, keys, body visibility and disclosure ownership are preserved.
+
+The paired regression now checks both Turns while open, the Agent Status path,
+expanded Tool bodies, Workflow toggles and return to the collapsed state. It
+requires `[4, 4]` below visible process summaries and `[16, 16]` below collapsed
+headers at 1440px desktop and touch-enabled 390px, in both themes. Browser plugin
+not available; the pinned Playwright Chromium container supplies the captures
+at `/tmp/rustx-workflow-turns[-hidden|-status]-{width}-{theme}-open.png`.
+
+Validation: all 78 selected browser cases pass, including all 12 expanded paired
+cases, prior exact Agent/composer references, Chat reading/switching, delivery,
+compaction and the real native Workflow child. No reference PNG or comparator
+policy changes. The four focused native-status/process suites pass 55 tests.
+The full four-worker unit run passes 3,918 tests with one unrelated workspace-PTY
+timeout; its isolated file then passes all 22 tests with the original deadlines.
+Types, localization, production build, 336 source records and notices for 340
+packages pass. Docker creation stalled before browser startup; the already-created
+owned container was started and reused with the same immutable image and remote
+Playwright server. Host Chrome is not used. Safari and physical phones are not
+part of this Chromium run.
+
 ## Cross-entry completed-header spacing (2026-11-03)
 
 The two-Turn report reproduces 4px after a header seated in earlier reasoning,

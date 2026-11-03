@@ -73,14 +73,14 @@ export interface RequestFeedback {
   messages: ReadonlyMap<string, ReactNode>;
   attempts: ReadonlyMap<string, ReactNode>;
 }
-type FlowRow = ReactElement<{ hidden?: boolean; 'data-chat-flow-kind'?: string; 'data-chat-after-process'?: boolean }>;
+type FlowRow = ReactElement<{ hidden?: boolean; 'data-chat-trailing-process'?: boolean; 'data-chat-after-process'?: boolean }>;
 /** A retained hidden seat must not interrupt the next visible header boundary. */
 function withProcessSpacing(rows: (FlowRow | null)[]) {
   let afterProcess = false;
   return rows.map(row => {
     if (!row || row.props.hidden || row.type === TranscriptContinuation) return row;
     const next = afterProcess ? cloneElement(row, { 'data-chat-after-process': true }) : row;
-    afterProcess = row.props['data-chat-flow-kind'] === 'turn-process';
+    afterProcess = !!row.props['data-chat-trailing-process'];
     return next;
   });
 }
@@ -404,7 +404,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       }
       if (node.kind === 'process' && node.process.outcome === 'running') return null;
       if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} forking={!!forking && attemptOwnerKey(forking.origin) === node.key} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}>{deliveryTail(node.key, entries.find(entry => entry.completed_response === node.response)?.cursor, node.response.origin)}</TurnTail>;
-      if (node.kind === 'process') return <div className={css.flowItem} data-chat-flow-kind="turn-process" key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(node.process))}</div>;
+      if (node.kind === 'process') return <div className={css.flowItem} data-chat-flow-kind="turn-process" data-chat-trailing-process={!requestFeedback.attempts.has(attemptOwnerKey(node.process)) || undefined} key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(node.process))}</div>;
       const entry = node.entry;
       if (entry.item.type === 'attempt_terminal') {
         const turn = entry.item.turn;
@@ -427,7 +427,13 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       const processOpen = verbose || !group || group.owner.outcome !== 'completed' || expanded.has(key!);
       const final = isFinalTurnMessage(entry);
       const statusOwner = (status: typeof statuses[number]) => process.attempts.get(JSON.stringify([snapshot.conversation_id, status.attempt_id]));
-      const visibleStatus = statuses.some(status => { const owner = statusOwner(status); return verbose || !owner || process.groups.get(owner)?.owner.outcome !== 'completed' || expanded.has(owner); });
+      const statusRows = statuses.map(status => {
+        const owner = statusOwner(status), seat = owner ? process.groups.get(owner)?.seat : undefined;
+        const header = seat?.kind === 'status' && seat.statusId === statusIdentity(status);
+        const bodyHidden = !verbose && !!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner);
+        return { status, owner, header, bodyHidden, hidden: bodyHidden && !header };
+      });
+      const visibleStatus = statusRows.some(row => !row.bodyHidden);
       const body = hasBody(entry) && !toldByCall(entry);
       const stepped = steps.get(entry.cursor);
       const entrySeat = group?.seat?.kind === 'entry' && group.seat.cursor === entry.cursor;
@@ -439,8 +445,10 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       if ((!body || stepped?.length === 0) && !statuses.length && !entrySeat && !feedback && !runPanels.length) return null;
       const seatHidden = (!body || stepped?.length === 0 || !!group && !processOpen && !final) && !entrySeat && !statusSeat && !visibleStatus;
       const response = entry.item.type === 'message' && entry.item.message.role === 'assistant' && (stepped ? stepped.some(piece => piece.kind === 'reply') : entry.item.message.content.some(block => block.type === 'text' || block.type === 'refusal'));
-      const headerOnly = entrySeat && !processOpen && !final && !feedback && !runPanels.length && !visibleStatus;
-      return <div className={`${css.flowItem} ${css.flow}`} hidden={seatHidden && !feedback && !runPanels.length} data-chat-group-part={response ? 'response' : undefined} data-chat-flow-kind={entry.item.type === 'message' && isUser(entry.item.message) ? 'user' : headerOnly ? 'turn-process' : undefined} key={entry.item.type === 'publication_audit' ? `message:${entry.item.audit.message_id}` : entryIdentity(entry)} data-chat-anchor-key={entry.turn_process?.outcome==='completed' && entry.turn_process.control_cursor===entry.cursor ? turnAnchor(entry.turn_process) : undefined}><MessageSeat key="seat" id={entryIdentity(entry)} turnOwner={entry.turn_process ? turnAnchor(entry.turn_process) : undefined} hidden={seatHidden && !feedback} owner={key} reveal={entry === latestResponse || entry === latestPartial || entry === latestUser ? 'always' : 'hover'}
+      const headerOnly = entrySeat && !processOpen && !final && !feedback && !requestFeedback.attempts.has(key!) && !visibleStatus;
+      const lastStatus = statusRows.filter(row => !row.hidden).at(-1);
+      const trailingHeader = !runPanels.length && (lastStatus ? lastStatus.header && lastStatus.bodyHidden : headerOnly);
+      return <div className={`${css.flowItem} ${css.flow}`} hidden={seatHidden && !feedback && !runPanels.length} data-chat-group-part={response ? 'response' : undefined} data-chat-flow-kind={entry.item.type === 'message' && isUser(entry.item.message) ? 'user' : undefined} data-chat-trailing-process={trailingHeader || undefined} key={entry.item.type === 'publication_audit' ? `message:${entry.item.audit.message_id}` : entryIdentity(entry)} data-chat-anchor-key={entry.turn_process?.outcome==='completed' && entry.turn_process.control_cursor===entry.cursor ? turnAnchor(entry.turn_process) : undefined}><MessageSeat key="seat" id={entryIdentity(entry)} turnOwner={entry.turn_process ? turnAnchor(entry.turn_process) : undefined} hidden={seatHidden && !feedback} owner={key} reveal={entry === latestResponse || entry === latestPartial || entry === latestUser ? 'always' : 'hover'}
         prefix={<>
         {entrySeat && disclosure(key!)}
         {entry.completed_response && !process.groups.has(process.attempts.get(attemptOwnerKey(entry.completed_response.origin)) ?? '') && <><TurnProcess id={attemptOwnerKey(entry.completed_response.origin)} open tools={entry.turn_process?.tool_call_count ?? 0} messages={entry.turn_process?.message_count ?? 0} durationMs={entry.completed_response.timing?.total_duration_ms ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(entry.completed_response.origin))}</>}
@@ -450,12 +458,10 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         actions={entry.item.type === 'message' && userActions(entry.item.message)}
         tools={toolsOf(entry)}
         other={stepped ? pieces(entry, stepped, processOpen) : body && (entry.item.type === 'message' && entry.item.message.role === 'assistant' ? messageSegments(entry.item.message, entry.item.message.content, toolsOf(entry)) : audit(entry))}
-        suffix={<>{statuses.map(status => {
+        suffix={<>{statusRows.map(({ status, owner, header, bodyHidden, hidden }) => {
           // Keep the native anchor, while sharing its exact completed Attempt's
           // disclosure. Never borrow the adjacent row's ownership for a status.
-          const owner = statusOwner(status);
-          const seat = owner ? process.groups.get(owner)?.seat : undefined;
-          return <div className={css.flow} hidden={!verbose && !!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner) && !(seat?.kind === 'status' && seat.statusId === statusIdentity(status))} key={statusIdentity(status)}>{seat?.kind === 'status' && seat.statusId === statusIdentity(status) && disclosure(owner!)}<div hidden={!verbose && !!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner)}><AgentStatusAnnotation status={status}/></div></div>;
+          return <div className={css.flow} hidden={hidden} key={statusIdentity(status)}>{header && disclosure(owner!)}<div hidden={bodyHidden}><AgentStatusAnnotation status={status}/></div></div>;
         })}</>}/>{runPanels}</div>;
     }))}
     {blockPages.errors.map(error => <p role="alert" key={error}>{error} <button type="button" onClick={blockPages.retry}>{tx('agent:message.retry-content')}</button></p>)}

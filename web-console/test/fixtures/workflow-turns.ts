@@ -3,7 +3,7 @@ import type { Server } from '../fixture';
 import { workflowRunsFixture } from './workflow-runs';
 
 /** Same Workflow in two Turns: one call follows reasoning, one owns the header. */
-export function workflowTurnsFixture(server: Server, current: RuntimeClientSnapshot, hiddenReply = false) {
+export function workflowTurnsFixture(server: Server, current: RuntimeClientSnapshot, hiddenReply = false, withStatus = false) {
   workflowRunsFixture(server, current);
   const run = current.workflows!.runs[0], work = current.transcript.entries![1];
   const entries: RuntimeClientTranscriptEntry[] = [], runs = [] as typeof current.workflows.runs, cursors: string[] = [];
@@ -36,6 +36,9 @@ export function workflowTurnsFixture(server: Server, current: RuntimeClientSnaps
   current.transcript.entries = entries;
   current.messages = entries.flatMap(entry => entry.item.type === 'message' ? [entry.item.message] : []);
   current.workflows = { revision: '2', runs, omitted_runs: 0 };
+  if (withStatus) current.statuses = [{ attempt_id: 'workflow-turn-1', turn: 1, status_message_id: 'workflow-turn-native-status',
+    opportunities: { fresh_inbound: { target_message_id: 'workflow-turn-user-0' } },
+    sections: [{ type: 'temporal', current_time: '2026-11-03T06:34:00Z', timezone: 'Asia/Shanghai' }], rendered: 'Native time observation' }];
   server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: {
     cut: { conversation_id: current.conversation_id, journal: String(entries.length), transcript: String(entries.length), mutation_revision: '0', ledger_through: String(entries.length), surface_revision: '1', transcript_total: String(entries.length), pending_through: '0', pending_total: '0' },
     offset: 0, total: '2', turns: [0, 1].map(index => ({ id: { conversation_id: current.conversation_id, attempt_id: `workflow-turn-${index + 1}`, attempt_id_source: null },
