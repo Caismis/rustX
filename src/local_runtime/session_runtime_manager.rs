@@ -23,6 +23,21 @@ use crate::credentials::CredentialSnapshot;
 use crate::runtime::conversation_runtime::ConversationRuntime;
 use crate::runtime::identity::ConversationId;
 
+/// Cache frees can stay resident in the system allocator. Return whole unused
+/// pages once after a maintenance batch, with no native/store/registry lock held.
+/// Other system allocators retain their own normal release policy.
+fn release_allocator_pages() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        #[allow(unsafe_code)]
+        // SAFETY: glibc documents malloc_trim as MT-Safe. It takes no pointers
+        // and releases only unused allocator pages, never live Rust/SQLite data.
+        unsafe {
+            libc::malloc_trim(0);
+        }
+    }
+}
+
 /// Process-local live composition identity. Never a durable or transport identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
@@ -783,12 +798,13 @@ impl SessionRuntimeManager {
                 .collect()
         };
         let now = self.clock.now_millis();
+        let mut reclaimed = false;
         for resident in candidates {
             let activity = resident.activity.load(Ordering::Relaxed);
             let Some(native) = resident.shutdown_runtime() else {
                 continue;
             };
-            native.reclaim_idle_store_cache();
+            reclaimed |= native.reclaim_idle_store_cache();
             // An attached runtime cannot unload. Avoid durable idle probes that
             // would warm its SQLite cache once per second merely to reject it.
             if resident.external.load(Ordering::Relaxed) != 0 {
@@ -843,6 +859,9 @@ impl SessionRuntimeManager {
             #[cfg(test)]
             self.probe(&id).idle_after_claim.enter();
             self.spawn_unload(id, resident, flight, None);
+        }
+        if reclaimed {
+            release_allocator_pages();
         }
     }
 

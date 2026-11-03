@@ -6411,17 +6411,23 @@ impl ConversationRuntime {
     }
 
     /// Cache reclamation is advisory: no shutdown claim, durable probe or wait.
-    pub(crate) fn reclaim_idle_store_cache(&self) {
+    pub(crate) fn reclaim_idle_store_cache(&self) -> bool {
         let Ok(state) = self.inner.state.try_lock() else {
-            return;
+            return false;
         };
         if self
             .inner
             .idle_epoch_probed(&state, IdleProbe::InMemory)
-            .is_ok()
-            && let Err(error) = self.inner.tool_runtime.durable_store().reclaim_idle_cache()
+            .is_err()
         {
-            tracing::warn!(%error, "idle store cache maintenance failed");
+            return false;
+        }
+        match self.inner.tool_runtime.durable_store().reclaim_idle_cache() {
+            Ok(reclaimed) => reclaimed,
+            Err(error) => {
+                tracing::warn!(%error, "idle store cache maintenance failed");
+                false
+            }
         }
     }
 

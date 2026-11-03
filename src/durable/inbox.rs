@@ -1646,8 +1646,8 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
 pub trait ConversationStore: Send + Sync + 'static {
     /// Best-effort maintenance of reconstructible connection caches. In-memory
     /// backends have no such cache. This never changes facts or read proofs.
-    fn reclaim_idle_cache(&self) -> Result<(), ConversationStoreError> {
-        Ok(())
+    fn reclaim_idle_cache(&self) -> Result<bool, ConversationStoreError> {
+        Ok(false)
     }
 
     /// Finite typed facts from original native J rows at one authentic cut.

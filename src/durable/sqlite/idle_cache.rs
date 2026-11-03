@@ -36,11 +36,11 @@ impl ConnectionSlot {
     }
 }
 impl ConnectionOwner {
-    pub(super) fn reclaim_idle_cache(&self, now: Instant) -> Result<(), ConversationStoreError> {
+    pub(super) fn reclaim_idle_cache(&self, now: Instant) -> Result<bool, ConversationStoreError> {
         // Never wait behind a user operation, a presentation read or another lease.
         let mut slot = match self.available.try_lock() {
             Ok(slot) => slot,
-            Err(TryLockError::WouldBlock) => return Ok(()),
+            Err(TryLockError::WouldBlock) => return Ok(false),
             Err(TryLockError::Poisoned(_)) => return Err(storage("connection poisoned")),
         };
         if self.poisoned.load(std::sync::atomic::Ordering::Acquire) {
@@ -52,16 +52,16 @@ impl ConnectionOwner {
         } else if idle >= PAGE_IDLE {
             Reclaimed::Pages
         } else {
-            return Ok(());
+            return Ok(false);
         };
         if slot.reclaimed == target || slot.reclaimed == Reclaimed::Statements {
-            return Ok(());
+            return Ok(false);
         }
         let Some(connection) = slot.connection.as_ref() else {
-            return Ok(());
+            return Ok(false);
         };
         if !connection.is_autocommit() {
-            return Ok(());
+            return Ok(false);
         }
         if target == Reclaimed::Statements {
             connection.flush_prepared_statement_cache();
@@ -70,7 +70,7 @@ impl ConnectionOwner {
             .release_memory()
             .map_err(|error| storage(format!("release idle SQLite cache: {error}")))?;
         slot.reclaimed = target;
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -146,7 +146,7 @@ mod tests {
         };
         let manifest = Arc::clone(&store.conn.manifest);
         let now = age(&store.conn, PAGE_IDLE + Duration::from_secs(1));
-        store.conn.reclaim_idle_cache(now).unwrap();
+        assert!(store.conn.reclaim_idle_cache(now).unwrap());
         assert_eq!(
             plans(&store),
             before,
@@ -161,7 +161,11 @@ mod tests {
         };
         assert!(cache_after < cache_before);
         let now = age(&store.conn, STATEMENT_IDLE + Duration::from_secs(1));
-        store.conn.reclaim_idle_cache(now).unwrap();
+        assert!(store.conn.reclaim_idle_cache(now).unwrap());
+        assert!(
+            !store.conn.reclaim_idle_cache(now).unwrap(),
+            "one reclamation per idle stage"
+        );
         assert_eq!(plans(&store), 0);
         eprintln!(
             "{}",
@@ -187,7 +191,7 @@ mod tests {
         }
         let active = plans(&store);
         assert!(active > 0);
-        store.conn.reclaim_idle_cache(Instant::now()).unwrap();
+        assert!(!store.conn.reclaim_idle_cache(Instant::now()).unwrap());
         assert_eq!(
             plans(&store),
             active,
@@ -199,7 +203,7 @@ mod tests {
         let (_root, store) = populated();
         let now = age(&store.conn, STATEMENT_IDLE + Duration::from_secs(1));
         let held = store.conn.lock().unwrap();
-        store.conn.reclaim_idle_cache(now).unwrap(); // Returns without waiting for held.
+        assert!(!store.conn.reclaim_idle_cache(now).unwrap()); // Does not wait for held.
         held.execute_batch(
             "BEGIN; CREATE TABLE transient(value); INSERT INTO transient VALUES (7)",
         )
