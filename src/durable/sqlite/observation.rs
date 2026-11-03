@@ -1339,7 +1339,15 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             |row| row.get(0),
         )
         .map_err(|error| storage(error.to_string()))?;
-    if !blocks.contains("CHECK(length(header_json)<=16384)") || !blocks.contains("WITHOUT ROWID") {
+    // Compact database pages keep medium BLOB headers local in rowid leaves.
+    let clustered: bool = connection
+        .query_row(
+            "SELECT wr FROM pragma_table_list WHERE schema='main' AND name='observation_block_headers' AND type='table'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    if !blocks.contains("CHECK(length(header_json)<=16384)") || clustered {
         return Err(ConversationStoreError::IncompatibleSchema(
             "invalid finite native observation metadata layout".into(),
         ));
