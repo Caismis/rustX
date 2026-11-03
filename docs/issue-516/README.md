@@ -1,117 +1,100 @@
 # CAD sidebar validation
 
-Implementation baseline: `b0aa75fe110ca53a1dfc0637280f2f08508c8b7e`.
-[Geometry contracts](../geometry-previews.md) define source ownership, formats and
-resource limits. The [performance report](performance.md) includes the measured
-environment, source/fixture digests, raw timing samples, repeated interaction
-distributions, allocation accounting and Docker peak memory.
+Current implementation: `7044adafc40b6c75e421c6e486b50a7f703083d1`.
+[Geometry contracts](../geometry-previews.md) define the formats, source authority,
+fixed-copy lifetime, lossless preparation and resource limits.
+[Current performance evidence](performance-optimization.md) contains measured
+results, raw samples, environment/source/artifact digests and the open budget gap.
+The earlier performance reports in this directory are historical baselines.
 
-## Performance follow-up
+## Outcome and verification
 
-The [performance follow-up](performance-followup.md) covers bounded camera
-publication with final-pose retention, hidden-subtree picking, cached size/DPR
-updates and canceled HTTP payload materialization. It includes same-host
-before/after raw samples and explicitly retains the unchanged large-STL
-camera bottleneck and higher sampled CAD P95 timings. The original evidence
-below remains attached to its measured implementation baseline.
+GLB, binary/ASCII STL, STEP/STP, IGES/IGS and Open CASCADE BREP open through the
+shared delivery/Workbench document body. The original PBR shading and MSAA are
+preserved. Exact indexing and certified planar preparation retain represented
+surfaces, bounds, scale, normals/color semantics, hierarchy and original bytes.
+No lossy simplifier or warm parsed-model/Worker/WASM-instance cache is shipped.
 
-The follow-up passes 16 fixed-browser functional cases, including a new
-synchronous camera-change burst followed by immediate hide/remount, and both
-repeated large-model performance/retirement cases. The Web suite passes 4003
-tests with four platform skips; final retirement-focused checks pass 117 tests.
-
-## Executed checks
+The 50-ms interaction P95 / 200-ms first-display target remains **unmet across
+all measured workloads and entry points**. Native GPU completion is reported
+separately from the next-rendering-opportunity proxy and the legacy display
+clock; none is silently substituted for independently observed presentation.
+The explicit budget-gate run fails, while correctness and lifecycle checks pass.
 
 | Check | Result |
 | --- | --- |
-| `pnpm typecheck` | Passed |
-| `pnpm build` | Passed, including native Host and production provenance/runtime checks |
-| `pnpm check:provenance` | Passed: 336 source records, 344 production notices and pinned geometry assets |
-| `pnpm check:i18n` | Passed |
-| Focused geometry, source/copy ownership, shared document/preview, file actions and Workflow identity | 175 passed |
-| Native Workbench and desktop Host contracts | 52 passed |
-| Pinned browser geometry acceptance | 15 passed |
-| Repeated heavy-model performance and retirement | 2 passed |
-| Existing Workflow keyboard/selection/undo and screenshot reference | Passed |
-| Fake-provider protocol/scenario/server suite | 94 passed |
-| `cargo fmt --all -- --check` / `git diff --check` | Passed |
+| Complete Web/Host suite | 4023 passed, 4 platform skips |
+| Type checking and full production application build | Passed |
+| Source provenance, dependency notices and exact runtime assets/memory maximum | Passed: 336 source records, 345 notices, original pinned CAD assets |
+| Product localization ownership | Passed |
+| Fixed Linux browser geometry, real production sidebar and document acceptance | 19 passed |
+| Separate installed Edge 156 functional/resource smoke | 14 passed |
+| Native GPU real App Server/Host sidebar | 2 passed |
+| Production-fixture latency capture | 10 native captures and 2 constrained software captures |
+| Unchanged whole-action/two-model/retirement capture | 2 passed |
+| Explicit 50/200-ms budget gate | Failed for both workloads; acceptance gap retained |
+| Rust formatting and whitespace | Passed |
 
-The local commands cover the affected browser/native seams. The complete Web and
-Rust matrix is required through the PR's exact-head FULL CI profile; this is not
-a claim that the entire local Web suite was rerun.
+The latest pushed PR head requires its own selected CI checks. A prior head's CI
+success is not certification of the current revision. The PR remains draft.
 
-## Coverage and fixtures
+## Functional and fidelity coverage
 
-The real production application opens the named twelve-part STEP/GLB assembly
-through committed delivery and Workbench, using the existing App Server, Product
-Host, file authority, sidebar tabs, path header and source actions. Tests exercise
-short-window layout, orbit, selection/visibility, a default-collapsed tree inside
-the viewport, Escape/focus return, Markdown/model tab switches, Chinese dark
-narrow presentation and the file-location/application action.
+The named twelve-part STEP/GLB assembly opens through the real production App
+Server and Product Host with existing source authorization, sidebar tabs/path
+header, Refresh, original Download and file-location/application actions.
+Coverage includes orbit, pan, fit/standard views, selection/visibility, a
+collapsed in-viewport part tree, Escape/focus return, Markdown/model tab changes,
+short/narrow windows, Chinese/English and dark/light layouts.
 
-Real-loader regressions reject empty or degenerate default GLB scenes even when
-another scene has valid geometry, dispose every loaded scene before renderer
-admission, and preserve authorized original Download. Mixed unnamed branches,
-unequal depths and numeric sibling prefixes preserve actual part ancestry.
+Fixtures and independent analytic/OCCT references cover unit conversion,
+unitless BREP/STL, embedded GLB textures, authored hierarchy/transforms and
+materials. GLB admission independently checks the selected scene and actual
+position-derived bounds/spheres, with complete cleanup on rejection. The existing
+external-resource, malformed/oversized, decode-failure, context-loss, source
+retirement, copy/Refresh and current-original Download cases remain enforced.
 
-The shared browser corpus covers binary/ASCII STL, STEP including inch output,
-IGES, BREP and embedded-texture GLB through both presentation entry points. It
-also checks fixed-copy refresh and current-original Download, authority retirement,
-split/fullscreen, keyboard menus, external-resource rejection, context loss,
-late-image disposal, failed-image URL cleanup, Top/Bottom orbit restoration and
-bounded retiring imports. Whole STL buffers transfer without adapter copies;
-multi-group and offset views retain exact owned ranges. Position-derived bounds
-and spheres remain mandatory at GPU admission.
+New regressions cover a 992,016-vertex closed STL through the actual Worker and
+its original deadline; a tiny disconnected zero-normal cube; curved/thin closed
+surfaces; holes/colors/reverse winding/overlaps; unused indexed coordinates;
+and floating-point cancellation that otherwise erases a tiny attached surface.
+The real coordinator/lease regression exercises final-pose retirement at full
+two-pane capacity, rather than relying on a capacity-free mock.
 
-Repeated measurements use a 735,000-vertex STL and a 96-part CAD assembly, with
-five samples per action, a two-model load and zero owned resources after closing.
-The software-rendered large STL has substantial measured stalls; the report
-states those results and makes no hardware-GPU or universal frame-rate claim.
+The pinned browser verifies zero idle draws and zero owned Workers, contexts,
+buffers, textures and URLs after closing. Resource ceilings and CAD tolerances
+remain as documented. Source-only inactive retention and authorization remain
+with the existing owners.
 
-Fixtures and generators are original MIT-licensed data, with independent OCCT
-export and analytic reference bounds described in the
-[fixture manifest](../../web-console/test/fixtures/geometry/README.md).
-No new production dependency or hidden parsed-model/WASM cache was added.
+## Current visual evidence
 
-## Visual evidence
-
-The compact left operator bar shares its DSH presentation module with Workflow.
-The tree is inside the preview viewport and both its panel and branches begin
-closed. Geometry reuses the document sidebar's existing Refresh action without a
-permanent explanatory banner. Workbench defaults to opening the original file's
-location and retains its application chooser.
+The images below are diagnostic production-sidebar captures from the pinned
+Linux browser; no screenshot-comparator threshold or reference was changed.
 
 ![Production document sidebar](cad-preview.png)
 
-[Expanded part tree](cad-parts.png) · [GLB in the production sidebar](cad-sidebar-glb.png) ·
+[Expanded parts](cad-parts.png) · [GLB in the sidebar](cad-sidebar-glb.png) ·
 [Chinese dark Workbench](cad-workbench-zh-dark.png)
 
-![Narrow Chinese dark document sidebar](geometry-narrow-zh-dark.png)
+![Narrow Chinese dark view](geometry-narrow-zh-dark.png)
 
-[Expanded narrow part tree](cad-parts-narrow-zh-dark.png)
+[Expanded narrow parts](cad-parts-narrow-zh-dark.png)
 
 ## Reproduction
 
-Run the normal pinned-browser path from `web-console`:
+From web-console:
 
 ```sh
-pnpm test:e2e -- geometry.spec.ts geometry-sidebar.spec.ts geometry-performance.spec.ts
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm check:i18n
+pnpm check:provenance
+pnpm test:e2e -- geometry.spec.ts geometry-sidebar.spec.ts geometry-performance.spec.ts geometry-latency.spec.ts workbench-documents.spec.ts
 ```
 
-Docker Desktop with a separate WSL test runner can expose the exact pinned
-Playwright run-server and set `RUSTX_BROWSER_WS_ENDPOINT`; the geometry tests use
-native loopback forwarding. Native tests use the existing project binary and
-standard supervisor paths. Neither browser references nor screenshot thresholds
-were changed.
-
-Focused adapter/content checks:
-
-```sh
-pnpm exec vitest run test/geometry-adapters.test.ts test/geometry-worker.test.ts test/geometry-view.test.tsx test/preview-content.test.ts test/geometry-evidence.test.ts test/workbench-file-actions.test.tsx
-```
-
-The [performance report](performance.md) records the measured
-`575785d0c7ed29ea933ea8c07722870ba2317e26` baseline and source digests. The
-admission/ancestry corner-case repairs use targeted correctness regressions;
-no new performance gain is claimed. The report documents the broader sampling method
-and observed limitations separately from enforceable source/output/WASM budgets.
+The native-filesystem validation copy uses the same source bytes, locked
+libraries and native binary. The [performance report](performance-optimization.md)
+describes separate production-fixture/native-source lanes and their limitations.
+Fixture origins and generators are recorded in the
+[fixture manifest](../../web-console/test/fixtures/geometry/README.md).
