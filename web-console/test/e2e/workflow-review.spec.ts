@@ -48,6 +48,11 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await expect(review.getByRole('heading', { name: 'Review report' })).toBeVisible();
     await expect(review).toContainText('Check the release version before publishing.');
     await expect(review.getByRole('radio')).toHaveCount(2);
+    const transcript = page.locator(`[aria-label="${copy('Canonical conversation', '规范对话')}"]:visible`);
+    const reviewRecord = transcript.locator('[data-review-interaction]');
+    await expect(reviewRecord).toHaveCount(1);
+    await expect(reviewRecord).toContainText(copy('waiting', '等待回答'));
+    await expect(reviewRecord.locator('[data-disclosure-row]')).not.toHaveAttribute('aria-expanded');
     await expect(run.locator('[data-workflow-node="gate"]')).toContainText(copy('Waiting for review', '等待审阅'));
     await expect.poll(() => run.locator('[data-workflow-node]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-workflow-node')))).toEqual(['workflow_start', 'review', 'gate']);
     await page.screenshot({ path: `/tmp/rustx-workflow-review-${locale}.png` });
@@ -91,6 +96,15 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await expect(run).toContainText(copy('Nodes 4', '4 个节点'));
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: `/tmp/rustx-workflow-completed-${locale}.png` });
+    // The original pending record becomes one read-only ask_user-style card.
+    await transcript.locator('[data-turn-process]').first().press('Enter');
+    const activity = reviewRecord.locator('xpath=ancestor::*[@data-step-process][1]').locator(':scope > [data-process-activity]');
+    if (await activity.isVisible() && await activity.getAttribute('aria-expanded') === 'false') await activity.press('Enter');
+    await expect(reviewRecord).toContainText(copy('1/1 answered', '1/1 已回答'));
+    await reviewRecord.locator('[data-disclosure-row]').press('Enter');
+    await expect(reviewRecord.getByRole('heading', { name: 'Review report' })).toBeVisible();
+    await expect(reviewRecord.getByText(locale === 'zh' ? 'Revise' : 'Accept', { exact: true })).toHaveCount(1);
+    await page.screenshot({ path: `/tmp/rustx-native-review-question-record-${locale}.png` });
     expect(errors).toEqual([]); passed = true;
   } catch (error) { console.error(fixture.diagnostics()); await page.screenshot({ path: `/tmp/rustx-workflow-failure-${locale}.png` }).catch(() => {}); throw error; }
   finally { await fixture.stop(passed); }

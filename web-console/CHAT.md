@@ -1,3 +1,16 @@
+# Workflow review question records (2026-11-03)
+
+Workflow Human Input history shares ask_user's verdict row and read-only question
+card. Pending rows show waiting; the existing Questionnaire owns answering.
+Settled records start folded, show answered counts or cancellation/interruption/
+timeout, and expand to the original Markdown questions and selected option labels
+once. Omitted answers remain unanswered. Rich questions own their Markdown
+whitespace instead of inheriting the plain-text question's pre-wrap.
+
+Receipts still pair by exact native Attempt and Interaction identity. Repeated
+visits of the same node stay separate. A settlement without its original request
+shows only the known answer count, without inventing questions or option labels.
+
 # Expanded Workflow process spacing (2026-11-03)
 
 The 16px nested completed-header boundary applies while that header is

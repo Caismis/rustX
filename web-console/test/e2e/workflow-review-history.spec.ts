@@ -1,0 +1,43 @@
+import { expect, test } from '@playwright/test';
+import { translator } from '../../src/locale/translation';
+const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
+
+for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const) test.describe(`${width}px ${theme}`, () => {
+  test.use({ hasTouch: width === 390, isMobile: width === 390 });
+  test('review history shares the ask_user verdict and question card without repeated answers', async ({ page }) => {
+    const locale = width === 390 ? 'zh' : 'en', tx = translator(locale), errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+    await page.addInitScript(({ theme, locale }) => { localStorage.setItem('rustx-appearance-v1', theme); localStorage.setItem('rustx-locale-v1', locale); }, { theme, locale });
+    await page.goto(`${origin}/test/fixtures/agent.html?mode=review-history`);
+    await expect(page).toHaveTitle('Session A — rustX');
+    await page.locator('[data-turn-process]').press('Enter');
+    await page.locator('[data-process-activity]:visible').first().press('Enter');
+    const rows = page.locator('[data-review-interaction]'), answered = rows.nth(0), cancelled = rows.nth(1);
+    await expect(rows).toHaveCount(2);
+    await expect(answered).toContainText(tx('tools:ask.answered', { answered: 1, total: 1 }));
+    await expect(cancelled).toContainText(tx('tools:ask.cancelled'));
+    await expect(rows.locator('[data-tool-call-id]')).toHaveCount(0);
+    await expect(rows.getByRole('heading', { name: '审核内容' })).toHaveCount(0);
+    await answered.locator('[data-disclosure-row]').press('Enter');
+    await expect(answered.getByRole('heading', { name: '审核内容' })).toBeVisible();
+    expect(await answered.locator('[data-markdown-variant]').evaluate(element => getComputedStyle(element).whiteSpace)).toBe('normal');
+    expect(await answered.locator('[data-markdown-variant]').evaluate(element => element.querySelector('p')!.getBoundingClientRect().top - element.querySelector('h2')!.getBoundingClientRect().bottom)).toBeLessThanOrEqual(24);
+    await expect(answered.getByText('叫！！！', { exact: true })).toHaveCount(1);
+    await expect(answered.locator('dl')).toBeVisible();
+    await answered.locator('[data-disclosure-row]').press('Enter');
+    await cancelled.locator('[data-disclosure-row]').press('Space');
+    await expect(cancelled.getByRole('heading', { name: '审核内容' })).toBeVisible();
+    expect(await cancelled.locator('[data-markdown-variant]').evaluate(element => getComputedStyle(element).whiteSpace)).toBe('normal');
+    await expect(cancelled).toContainText(tx('tools:ask.cancelled-detail'));
+    await expect(cancelled.getByText('叫！！！', { exact: true })).toHaveCount(0);
+    await answered.locator('[data-disclosure-row]').press('Enter');
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await answered.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `/tmp/rustx-review-question-history-${width}-${theme}.png` });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+  });
+});

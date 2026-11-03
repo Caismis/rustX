@@ -1,3 +1,51 @@
+## Workflow review question records (2026-11-03)
+
+Read-only reference remains sibling Harness
+`ce7073d51254c26cd63b22a60835b8f948deb447`, specifically
+`packages/client/ui-tool/src/client/tool/components/QuestionToolRow.tsx`,
+`AskQuestionCard.tsx` and its CSS. The existing adapted QuestionRow now serves
+Workflow review receipts as well as native ask_user Tool records. New immutable
+per-file source hashes and current local hashes are in `source-inventory.json`;
+MIT attribution remains in place. No package, Harness runtime, timed-question
+action, store or service is introduced.
+
+The reported expanded review printed the selected answer twice: once in the
+question body and again as its bottom summary. A regression test reproduced two
+copies before the fix. Review history now uses the shared closed-by-default
+verdict row and Q/A card, with one selected answer and native answered counts.
+Waiting content remains on the existing live Questionnaire surface. Native
+user cancellation, other cancellation and deadline expiry have distinct verdicts.
+Review Markdown is retained inside an explicit normal-whitespace wrapper: the
+first browser pass exposed oversized gaps from inherited plain-text pre-wrap.
+Ordinary ask_user text keeps its existing whitespace and inspection behavior.
+
+The app projects the read-only card from native request/settlement receipts;
+exact Attempt/Interaction pairing, live form authority, reload, submission and
+Workflow branching stay with their existing owners. Repeated visits are not
+merged by node name. Bounded settlement-only records show a known submitted
+count without a fabricated question, total, option label or Tool call identity.
+Other questionnaire and approval audit renderers retain their native paths.
+
+Browser plugin not available; validation uses the repository's immutable
+Playwright Chromium container at 1440px desktop and touch-enabled 390px, light
+and dark. The mixed answered/cancelled history checks keyboard disclosure,
+Markdown block whitespace and geometry, answer uniqueness, independent records,
+overflow and console health. The real native Workflow tests verify pending,
+reload and submission through completion, then inspect the same settled record
+in English desktop and Chinese mobile. Captures are outside the repository at
+`/tmp/rustx-review-question-history-{width}-{theme}.png` and
+`/tmp/rustx-native-review-question-record-{locale}.png`. Safari and physical
+phones are outside this Chromium run. No screenshot reference or tolerance changes.
+
+Validation: six focused unit suites pass 68 tests, including mixed multi-choice/
+skipped questions, native timeout/cancellation and bounded settlement-only reads.
+All 37 selected browser cases pass: six review lifecycle/history cases plus 28
+desktop/mobile spacing cases and three strict existing Agent/ask_user references.
+Types, localization, production build, 336 source records and notices for 340
+packages pass. Key checks use `pnpm exec vitest run` on the six suites,
+`pnpm typecheck`, `pnpm check:i18n`, `pnpm check:provenance`, `pnpm build`, and
+`bash scripts/browser-tests.sh` for the selected browser specs.
+
 ## Expanded Workflow process spacing (2026-11-03)
 
 The report shows both Turn processes expanded, with Agent Status in one Turn.

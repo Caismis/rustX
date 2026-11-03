@@ -4116,7 +4116,7 @@
           "upstream_sha256": "4840dc1d554a4f2457b51339e9195041b6230822c72fc5b10c8f3c2aad971cdb"
         }
       ],
-      "local_sha256": "a1387659b696da761a24f464c144da390085db1ef73a11faa3853a89b54b6e0f"
+      "local_sha256": "772d994a271e2ea94577a61a6b4fc7c99591cfab0c68185f8923de032e1d4981"
     },
     {
       "upstream": "packages/client/ui-sidebar/src/client/locales.ts",
@@ -4303,19 +4303,33 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "bc604df4065b860e256e884dce7ec88c9a7edb8e2f575dcb01d551b368323991"
+      "local_sha256": "08ee0860e1f8f5362cf58a7d6f75293380d955750f935b7dc227131e29fe24fd",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-tool/src/client/tool/components/QuestionToolRow.tsx",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "89882e7c1fd7e3abc8f2d967d3e125c29ed19ffd3ab59084a82fd14f06b62149",
+          "treatment": "Share the question verdict/disclosure/card with native Workflow review receipts. Preserve review Markdown, action labels and independent interaction identity; support timeout and bounded settlement-only counts without duplicating answers or inventing original questions."
+        },
+        {
+          "upstream": "packages/client/ui-tool/src/client/tool/components/AskQuestionCard.tsx",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "624f9963678f7b452072982b07823ba7018efc3ec798a057bac17d6957d95d17",
+          "treatment": "Share the question verdict/disclosure/card with native Workflow review receipts. Preserve review Markdown, action labels and independent interaction identity; support timeout and bounded settlement-only counts without duplicating answers or inventing original questions."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-tool/src/client/tool/components/AskQuestionCard.module.css",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "destination": "web-console/src/presentation/agent/AskQuestionCard.module.css",
       "upstream_sha256": "e8796a15b635851f22a0190d991ba2cb8f0fa685c354a64db68f2bf0795873fb",
-      "classification": "A",
-      "treatment": "Pinned Harness styles; the radius token is inlined at its Harness value.",
+      "classification": "B",
+      "treatment": "Pinned Harness styles; the radius token is inlined at its Harness value. Rich question renderers own Markdown block whitespace; plain ask_user questions retain pre-wrap.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "7acae60780eac0db9b10a00bf0d6951a98f8424eef7273503899d8b97236875b"
+      "local_sha256": "40cf7c940b394d8424a500a07a35fe962b1d5073dd70237036c7c236f01f844a"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatGroupSeat.tsx",

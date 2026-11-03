@@ -33,6 +33,11 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* Rich question renderers own their block spacing; pre-wrap is for plain text. */
+.richQuestion {
+  white-space: normal;
+}
+
 .answer {
   color: var(--dsw-alias-label-primary);
 }

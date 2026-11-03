@@ -86,7 +86,9 @@ it('renders historical review and its exact settlement once, without raw interac
   const ui = render(<AgentTranscript snapshot={s}/>);
   expect(ui.container.querySelectorAll('[data-interaction-audit]')).toHaveLength(1);
   fireEvent.click(ui.getByRole('button', { name: /Human Input · gate/ }));
-  expect(ui.getAllByText('Revise').length).toBeGreaterThan(0);
+  expect(ui.getAllByText('Revise')).toHaveLength(1);
+  expect(ui.getByText('1/1 answered')).toBeTruthy();
+  expect(ui.container.querySelector('[data-tool="review"] dl')).not.toBeNull();
   expect(ui.container.textContent).not.toMatch(/interaction_requested|subject_digest|Historical interaction/);
 });
 
