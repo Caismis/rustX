@@ -283,7 +283,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       return <div className={css.flowItem} data-chat-group-part="response" key={messageStepKey(message.id, piece.blocks[0])}>{entry ? <Message message={message} include={piece.blocks} tools={toolsOf(entry)}/> : headBody(head!, piece.blocks)}</div>;
     }
     const keys = piece.group.members.map(stepMemberKey);
-    return <div className={css.flowItem} key={piece.group.key}><StepGroup id={piece.group.key} counts={piece.group.counts} hidden={!processOpen} open={keys.some(key => stepsOpen.has(key))}
+    return <div className={css.flowItem} hidden={!processOpen} key={piece.group.key}><StepGroup id={piece.group.key} counts={piece.group.counts} open={keys.some(key => stepsOpen.has(key))}
       direct={verbose || !groupedLive && (!entry || entry.turn_process?.outcome === 'running')}
       {...(!entry && snapshot.attempt?.phase.type === 'running' || entry?.turn_process?.outcome === 'running' ? liveGroup(piece.group.members.flatMap(memberTools), piece.group.members.flatMap(member => 'head' in member ? (member.head.blocks ?? (member.head.message.role === 'assistant' ? member.head.message.content : [])).filter(block => block.type === 'reasoning').map(block => block.text ?? '') : member.entry.item.type === 'message' && member.entry.item.message.role === 'assistant' ? member.entry.item.message.content.filter(block => block.type === 'reasoning').map(block => block.text ?? '') : []).at(-1)) : {})}
       onToggle={() => toggleSteps(keys)}>
@@ -331,7 +331,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const startTime = startedAt ? Date.parse(startedAt) : undefined;
   const descriptorOwner = (descriptor:RuntimeClientMessageDescriptor) => (descriptor.turn_process && descriptorProcessSeats.get(attemptOwnerKey(descriptor.turn_process))===canonicalLocatorKey(descriptor.locator) && <>
         <TurnProcess id={attemptOwnerKey(descriptor.turn_process)} open tools={descriptor.turn_process.tool_call_count} messages={descriptor.turn_process.message_count}
-          outcome={descriptor.turn_process.outcome} running={descriptor.turn_process.outcome==='running'} start={descriptor.turn_process.started_at??undefined} end={descriptor.turn_process.ended_at??undefined}/>
+          outcome={descriptor.turn_process.outcome} start={descriptor.turn_process.started_at??undefined} end={descriptor.turn_process.ended_at??undefined}/>
         {requestFeedback.attempts.get(attemptOwnerKey(descriptor.turn_process))}
       </>);
   const descriptorResponse = (descriptor:RuntimeClientMessageDescriptor) => {
@@ -376,7 +376,8 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         const grouped = steps.get(headStepSeatKey(message.id));
         if (grouped?.length === 0 && !requestFeedback?.messages.has(message.id) && !descriptor?.completed_response) return null;
         const tools = toolsOfHead(head), childUser = !!receiver && isUser(message);
-        return <div className={css.flowItem} data-chat-flow-kind={childUser ? 'user' : undefined} key={`message:${message.id}`}><MessageSeat key="seat" id={`message:${message.id}`} reveal={childUser ? 'always' : undefined}
+        const response = message.role === 'assistant' && (grouped ? grouped.some(piece => piece.kind === 'reply') : (head.blocks ?? message.content).some(block => block.type === 'text' || block.type === 'refusal'));
+        return <div className={css.flowItem} data-chat-group-part={response ? 'response' : undefined} data-chat-flow-kind={childUser ? 'user' : undefined} key={`message:${message.id}`}><MessageSeat key="seat" id={`message:${message.id}`} reveal={childUser ? 'always' : undefined}
           prefix={<>{requestFeedback?.messages.get(message.id)}{descriptor && descriptorOwner(descriptor)}</>}
           message={message.role !== 'assistant' ? message : undefined} tools={tools} actions={childUser && userActions(message)}
           other={message.role === 'assistant' ? grouped ? pieces(undefined, grouped, true, head) : messageSegments(message,head.blocks ?? message.content,tools) : undefined} suffix={descriptor && descriptorResponse(descriptor)}/></div>;
@@ -385,7 +386,8 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         const tools = snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.streaming.message_id) ?? [];
         const grouped = steps.get(headStepSeatKey(node.streaming.message_id));
         if (grouped?.length === 0 && !requestFeedback?.messages.has(node.streaming.message_id)) return null;
-        return <div className={css.flowItem} key={`message:${node.streaming.message_id}`}><MessageSeat key="seat" id={`message:${node.streaming.message_id}`}
+        const response = grouped ? grouped.some(piece => piece.kind === 'reply') : node.streaming.blocks?.some(block => block.type === 'text' || block.type === 'refusal');
+        return <div className={css.flowItem} data-chat-group-part={response ? 'response' : undefined} key={`message:${node.streaming.message_id}`}><MessageSeat key="seat" id={`message:${node.streaming.message_id}`}
           turnOwner={snapshot.attempt ? turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt.attempt_id,attempt_id_source:snapshot.attempt.attempt_id_source}) : undefined}
           prefix={requestFeedback?.messages.get(node.streaming.message_id)} other={grouped ? pieces(undefined, grouped, true, headsById.get(node.streaming.message_id)) : messageSegments({role:'assistant',id:node.streaming.message_id,content:[]}, node.streaming.blocks ?? [], tools, { streaming: true })}/></div>;
       }

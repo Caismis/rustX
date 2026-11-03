@@ -1219,13 +1219,19 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "594d5aea14f75bf9ee0002e2d4ceb89e5d082ebab5019e835f2a959121fb45c1",
+      "local_sha256": "434b4539c1b768ac2fd032330160e21936cf6e7ef0067abc90c381874aa633ea",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "9b5f56347f4b86846766ae9544207b7ecf112e857e2c31ca9fb8a3e734b5bafb",
           "treatment": "Match the current compact Load earlier radius and keep native continuation markers out of visible flow chrome."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "ed939e63d6e6479b7b240a79c3231ade8c32f55235002ac33fc6a085e0497b60",
+          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization."
         }
       ]
     },
@@ -1318,7 +1324,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "073776db936c4122c90e88d7fc57d899b624b5674d9fe6f80c5393737e7b6df3",
+      "local_sha256": "c2d9114728b94be7ee525c07d9af7a192a38ca39b74512b696c0580fb7878532",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/AssistantMarkdown.module.css",
@@ -1331,6 +1337,12 @@
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "d82759f3805832e0087dd85b41473ec4bf93aea51aa039378f161df4ccac1038",
           "treatment": "User attachment row above the text bubble, optional text seat, file type icon/name/metadata and compact file tile. Native adapters retain exact block indices and original-source preview ownership; unknown historical byte counts are omitted."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.module.css",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "ca84271735a3e41229d4edc49bd9e3ddc06ea99698f12a2a3c98dd30a8d14743",
+          "treatment": "Move Assistant block flow styling out of the global console sheet into its Message component; match current Harness 4px process and 12px reply rhythm while retaining native block identity."
         }
       ]
     },
@@ -1356,7 +1368,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "116baedb6e4c806dbda1a14283a85f189a5c4cc2e894d815aa87d44bc637f4ce",
+      "local_sha256": "adda6e8145a6c011357dc1302e85b0bb5363c4bd6a934d20e150d17379daa3ac",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/CompactionItem.tsx",
@@ -1387,6 +1399,12 @@
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "44ac2d3e9a046f1e0dbe45b3cdaf07f5f6e92ae6f95fcf54762bc6d22330b7bf",
           "treatment": "User attachment row above the text bubble, optional text seat, file type icon/name/metadata and compact file tile. Native adapters retain exact block indices and original-source preview ownership; unknown historical byte counts are omitted."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "b337fd86608b7c22406f794024af8bdc011bd0c51bfd16c575c3b1e7f8aa3d4e",
+          "treatment": "Move Assistant block flow styling out of the global console sheet into its Message component; match current Harness 4px process and 12px reply rhythm while retaining native block identity."
         }
       ]
     },
@@ -1517,13 +1535,19 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "7aa938b3c581e9c2fcf9b17f420f99805a7ef5887390067670d005c192639a90",
+      "local_sha256": "8515f0c288e7178172107ea32a4827074f7ec8c92996dc1268a58f89c1064c3b",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ReasoningRow.tsx",
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "5bf98dd0c28c7ef48795fda2b714cc32b36bb2d6e86b78add02d89590a884612",
           "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/ReasoningRow.tsx",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "5ff9e4f02929bf58ce091b1a0f009753685336b0437b8af4684c3a23a31f651d",
+          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization."
         }
       ]
     },
@@ -1542,13 +1566,19 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "ac2625e8d76892916436ef6e1ba131cda305a3154244d96a1fb2e18f23770259",
+      "local_sha256": "c53e3551deaa73d9e4db3fa74764abbd20bc2f843224ff14bc3cce02aea295ac",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.module.css",
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "943c0b6205ba9eb922e1ced7223dcf6d908d3012dfbd58ccaa73b65c2ef99313",
           "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
+        },
+        {
+          "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.module.css",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "81e369d2df56ce4e1417532802727a2b085317afc33bdcf119a377418abe3716",
+          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization."
         }
       ]
     },
@@ -2098,7 +2128,15 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "local_sha256": "beb6f5801b164f90f48ee52e25b94b3973d27d076f8e50e672525138693dccce"
+      "local_sha256": "8c96765f8b71ef9327b4dcf5813140a9cccdfc5e8ca190637c0776668d069a2f",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/DisclosureRow.module.css",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "ab01c441fccaba51ebfa1769f73cee4a87fa28e09d09fcdee311052d9540dc32",
+          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
@@ -2115,13 +2153,19 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "e73ec24b331d021bc57db3036ab33154e5a8c0c5d665fae28eebb06e4eb4e201",
+      "local_sha256": "d88ac75e07f97efdcd9f83fd3204e28e2882dc4325db2c526aac178ac9e2e01d",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "000d8193ebed80b6ac1d9ff8f8b7ce76e596532065b08003d0033c0ab040501d",
           "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
+        },
+        {
+          "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "000d8193ebed80b6ac1d9ff8f8b7ce76e596532065b08003d0033c0ab040501d",
+          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization."
         }
       ]
     },
@@ -3534,21 +3578,26 @@
       "retained_dependencies": [
         "../../locale/react",
         "../primitives/icons",
-        "./TurnProcess.module.css",
-        "react"
+        "./TurnProcess.module.css"
       ],
       "excluded_dependencies": [
         "Cordis slots and runtime authority",
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "bc6fa34d2164335ebe2c97603d8369058581a9c174316ad84f7efcee69f51e66",
+      "local_sha256": "42cf33fc1c2e9c9e468670d68d08827dcbe36c06175f2029fa77341c30cbeb78",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx",
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
           "upstream_sha256": "731a879e517c9ff28c7d833863e774745666cffe3a2fd2f9aa3fff1adcbc4a17",
           "treatment": "Turn-local clock, duration and terminal vocabulary adapted to native Attempt timestamps and outcomes."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "b7aa82eeb7c8e32bc7e67cca6f4695d23d0ee497c4fc537160a78716a3283dd6",
+          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization."
         }
       ]
     },
@@ -3566,13 +3615,19 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "b793df7c610fcf2ef9a37d7644c24fcf67e83c54f24dff12b31fadebbb495381",
+      "local_sha256": "0b93abf4158cc1be1a3b07796b385f1b93058c42d20178d393adec3167df6351",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css",
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
           "upstream_sha256": "7c86bb575337bb661714c72c1776bcfbf81519b0d8b37f5f432c786b774d5945",
           "treatment": "Current process-row typography, disabled/hover treatment, chevron geometry and reduced-motion behavior."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "a20eaf9a5f4c6096b74d4a50ec48673f3044f4d5e07d8a57f1fda2225d9633ce",
+          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization."
         }
       ]
     },
@@ -4272,7 +4327,15 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "5cb56e2e856025728dffba5b2be33093b7cf40d09847556ac34683d9803e445a"
+      "local_sha256": "c93460881ecaa0abb402713b67909d77c6afc9d4dad3315be14eb6fb84df789d",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/ChatGroupSeat.module.css",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "3588ae0f5ab150632e529ffdbdc0883fdab939f1b46ab7bb03b35130297ac8d1",
+          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/stat-dialog.ts",

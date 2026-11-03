@@ -1,3 +1,39 @@
+## Conversation flow audit (2026-11-03)
+
+Read-only source: sibling `deepseek-harness` at
+[`ce7073d51254c26cd63b22a60835b8f948deb447`](https://github.com/deepseek-ai/deepseek-harness/tree/ce7073d51254c26cd63b22a60835b8f948deb447).
+Inspected `packages/client/ui-chat/src/client/chat/ChatView.module.css`,
+`ChatGroupSeat.module.css`, `TurnProcessNodeView.tsx` / `.module.css`,
+`ReasoningRow.tsx`, `packages/client/ui-primitives/src/DisclosureRow.tsx` /
+`.module.css`, and `packages/client/ui-tool/src/client/tool/components/ToolRow`.
+
+| Reference evidence | rustX presentation |
+| --- | --- |
+| 4px process spacing, 12px replies, 16px Turn boundaries | Apply the rhythm to native anchored seats and process-group bodies; collapsed seats do not add gaps, and first replies do not double their outer spacing |
+| Running content shares the completed footer's row height; its divider is absolute | Preserve one fixed running footprint before and after output appears |
+| Duration control renders only after closure, with tabular numeric fragments | Use native outcome/timestamps; never invent elapsed completion time from the browser clock |
+| Memoized reasoning and bounded disclosure text layout | Retain mounted disclosure state and fit long summaries beside their leading icons |
+| Hover applies only to devices that support it | Keyboard focus reveals controls; touch inspection remains visible without hover |
+
+Native transcript order, identity, process folding and read/settlement authority
+remain rustX-owned. Cordis, Harness's node assembler, slot system and folding
+animation are excluded. rustX keeps its existing scroll/reading owner instead
+of importing a second scroll implementation. The native-frame tests cover
+opening and switching history separately from visual flow rhythm.
+
+Browser plugin not available; validation uses the repository's pinned Playwright
+Chromium container. `test/e2e/chat-flow.spec.ts` covers live Tool work, reply
+arrival, settlement, keyboard disclosures and retained final answers in light
+and dark modes at 1440px and touch-enabled 390px. Screenshots and traces are
+written outside the repository. Geometry assertions check the actual 4/12/16px
+gaps and the running footprint at 10, 14 and 22px font sizes. The fixture supplies
+an outline cut consistent with its transcript, including the running Turn.
+Validation passes: 3,918 WebUI unit tests (four existing platform/opt-in skips),
+23 browser cases covering flow, reading, retry, Stop and Tool details, nine
+refreshed screenshot references verified by a normal exact comparison, production
+build, types, localization and source/dependency provenance checks. Firefox and
+Safari are not part of this rendered run.
+
 ## Conversation header audit (2026-10-23)
 
 Read-only reference: `../deepseek-harness` at

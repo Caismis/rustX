@@ -2,11 +2,42 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createRef } from 'react';
 import { Reasoning } from '../src/presentation/agent/Reasoning';
+import { TurnProcess } from '../src/presentation/agent/TurnProcess';
 import { DisclosureRow } from '../src/presentation/primitives/DisclosureRow';
 import { SessionNodeItem } from '../src/presentation/workspace/Rows';
 import { translator } from '../src/locale/translation';
+import { AgentTranscript } from '../src/app/agent/AgentTranscript';
+import { Server, snapshot } from './fixture';
+import { chatFlowFixture } from './fixtures/chat-flow';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+it('a native running process keeps its Tool work and gains a settled duration without hiding the answer', async () => {
+  const server = new Server(), state = snapshot();
+  chatFlowFixture(server, state); server.snapshots.set('A', state);
+  try {
+    await server.attached('A');
+    const view = render(<AgentTranscript snapshot={state}/>);
+    expect(view.queryByRole('button', { name: /Took/ })).toBeNull();
+    expect(view.container.querySelector('[data-tool-call-id="flow-read"]')).not.toBeNull();
+    await act(() => window.chatFlowFixture.settle());
+    view.rerender(<AgentTranscript snapshot={server.snapshots.get('A')!}/>);
+    expect(view.getByRole('heading', { name: '对话流已整理' })).toBeTruthy();
+    expect(view.container.querySelector('[data-turn-process]')?.textContent).toContain('1m 5s');
+  } finally { await server.client.disconnect(); }
+});
+
+it('only settled work has a duration header and missing end times never run a browser clock', () => {
+  const props = { id: 'turn', tools: 2, messages: 1, open: true, start: '2026-11-03T01:00:00Z' };
+  const view = render(<TurnProcess {...props} outcome="running"/>);
+  expect(view.queryByRole('button')).toBeNull();
+  view.rerender(<TurnProcess {...props} outcome="completed"/>);
+  expect(view.getByRole('button', { name: 'Worked' })).toBeTruthy();
+  view.rerender(<TurnProcess {...props} outcome="completed" end="2026-11-03T01:01:05Z"/>);
+  expect(view.getByRole('button').textContent).toBe(translator('en')('agent:copy.took-value', { p0: translator('en')('agent:duration.minutes-seconds', { m: 1, s: 5 }) }));
+  view.rerender(<TurnProcess {...props} outcome="cancelled" end="2026-11-03T01:01:05Z"/>);
+  expect(view.getByRole('button', { name: 'Stopped' })).toBeTruthy();
+});
 
 it('a running disclosure retains one accessible title and its controlled body', () => {
   const toggle = vi.fn();

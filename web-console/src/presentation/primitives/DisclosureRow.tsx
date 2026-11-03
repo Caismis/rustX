@@ -105,7 +105,7 @@ export function DisclosureRow({
             {leading}
           </span>
         )}
-        <TextShimmer active={running}>
+        <TextShimmer active={running} className={css.content}>
         <TextShimmer className={clsx(css.title, titleClassName)}>{title}</TextShimmer>
         {(keepContentWhenOpen || !open) && collapsedContent}
         </TextShimmer>

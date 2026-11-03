@@ -1,3 +1,25 @@
+# Conversation flow refresh (2026-11-03)
+
+Read-only reference: sibling DeepSeek Harness checkout at
+`ce7073d51254c26cd63b22a60835b8f948deb447`, `ui-chat`'s
+`ChatView.module.css`, `ChatGroupSeat.module.css`, `TurnProcessNodeView.tsx` /
+`.module.css`, `ReasoningRow.tsx`, and `ui-primitives`'s `DisclosureRow`.
+Process rows now keep a 4px rhythm, with 12px reply and 16px Turn separation.
+Provisional and canonical reply seats share the same response role. Hidden
+process seats keep their mounted state without contributing a gap; the first
+reply inside a seat uses its outer spacing rather than adding it twice.
+The running status uses a fixed 28px row plus 4px internal clearance; its
+divider is painted outside layout, matching the completed action-row footprint.
+Only a settled native Turn has a duration header. Missing end timestamps do
+not start a browser clock; completed duration digits use tabular code type.
+
+Disclosure summaries shrink beside their icons without clipping the row.
+Keyboard focus reveals the disclosure affordance and Tool inspection action;
+touch inspection is visible without hover. Unchanged reasoning rows are
+memoized while native streaming updates the rest of the transcript. Native
+message identity, process membership, history and the single scroll owner are
+preserved. All presentation remains derived from native observations.
+
 # Incremental Session projection and Chat ownership (#420)
 
 `protocol/app-server/projection.ts` folds native events below React. The connection
