@@ -2,7 +2,7 @@ import type { Translate } from '../../locale/translation';
 import type {
   ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
-} from '../../../../protocol/app-server/v62';
+} from '../../../../protocol/app-server/v63';
 import type { ConnectionState } from '../../client/contracts';
 
 /** Each Settings target names one exact configuration owner. The catalog scope
@@ -468,30 +468,36 @@ export function observedUnitLabel(tx: Translate, unit: ObservedUnit): string {
           : unit === 'provider' ? tx('settings:copy.providers-models')
             : tx('settings:copy.shared-capacity');
 }
-/** A truthful observed result. `ready` carries native cache impact; `applied`
- * is the native-confirmed state and is never called a classification. */
+/** A truthful observed result. `ready` means prepared and waiting for the
+ * Session's current work to settle before native commits it; `applied` is the
+ * native-confirmed state and is never called a classification. */
 export type ObservedResult =
   | { state: 'applied' }
   | { state: 'preparing' }
-  | { state: 'ready'; impact: string }
+  | { state: 'ready' }
   | { state: 'failed'; diagnostic: string }
+  | { state: 'uncertain'; diagnostic: string }
   | { state: 'restart_pending' }
   | { state: 'unavailable' };
 export function observedResult(unit: UnitApplication | undefined): ObservedResult {
   if (!unit) return { state: 'unavailable' };
-  if (unit.status === 'applied') return { state: 'applied' };
-  if (unit.status === 'preparing') return { state: 'preparing' };
-  if (unit.status === 'failed') return { state: 'failed', diagnostic: unit.diagnostic };
-  if (unit.status === 'process_restart') return { state: 'restart_pending' };
-  return { state: 'ready', impact: unit.impact };
+  switch (unit.status) {
+    case 'applied': return { state: 'applied' };
+    case 'preparing': return { state: 'preparing' };
+    case 'ready': return { state: 'ready' };
+    case 'failed': return { state: 'failed', diagnostic: unit.diagnostic };
+    case 'uncertain': return { state: 'uncertain', diagnostic: unit.diagnostic };
+    case 'process_restart': return { state: 'restart_pending' };
+  }
 }
 export function observedResultLabel(tx: Translate, result: ObservedResult): string {
   return result.state === 'applied' ? tx('settings:copy.applied')
     : result.state === 'preparing' ? tx('settings:copy.preparing')
       : result.state === 'failed' ? tx('settings:copy.failed')
-        : result.state === 'restart_pending' ? tx('settings:copy.restart-pending')
-          : result.state === 'ready' ? tx('settings:copy.ready')
-            : tx('settings:copy.not-observed');
+        : result.state === 'uncertain' ? tx('settings:copy.uncertain')
+          : result.state === 'restart_pending' ? tx('settings:copy.restart-pending')
+            : result.state === 'ready' ? tx('settings:copy.waiting-to-apply')
+              : tx('settings:copy.not-observed');
 }
 
 /** Native change behavior, distinct from an observed result. */

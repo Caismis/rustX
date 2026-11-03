@@ -3,10 +3,10 @@ import { displayText, translator } from '../src/locale/translation';
 import { workspaceApprovalBlock, approvalIdentity, approvalMutation } from '../src/app/new-conversation/approval';
 import { expect, it, vi } from 'vitest';
 import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v62';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v63';
 import { admitsSourceMutation, mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
 import { awaitingCommitObservation, discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
-import { adoptionInFlight, applicationCurrent, applicationKnown, observationUnavailable, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';
+import { applicationCurrent, applicationKnown, observationUnavailable, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';
 import {
   admitsFocus, settingsNavigationMachine, settingsPages,
   type OwnerResolution, type SettingsFocus, type SettingsPage,
@@ -1754,89 +1754,29 @@ it('R36 the retirement announcement is a terminal state of the transaction itsel
 
 // ── 12./13. Session configuration ───────────────────────────────────────────
 
-const candidate = { identity: { input_revision: 'input-2', attempt: '2' }, expected_binding: '1', impact: 'prefix_changed' as const };
+const desired = { input_revision: 'input-2', attempt: '2' };
 
-/** A Session actor whose reads and adoptions are released explicitly by the
+/** A Session actor whose reads are released explicitly by the
  * test. Created on a connected generation, it starts the one read that
  * connected span owes by itself: `reads[0]`. */
 function scriptedSession(connection: ConnectionState = 'connected', generation = 1) {
   const reads: ReturnType<typeof deferred<ConfigurationApplication | null>>[] = [];
-  const adoptions: ReturnType<typeof deferred<void>>[] = [];
   const actor = createActor(sessionConfigurationMachine, {
     input: {
       port: {
         read: () => { const gate = deferred<ConfigurationApplication | null>(); reads.push(gate); return gate.promise; },
-        adopt: () => { const gate = deferred<void>(); adoptions.push(gate); return gate.promise; },
       },
       connection, generation,
     },
   });
   actor.start();
-  return { actor, reads, adoptions };
+  return { actor, reads };
 }
 const transport = (actor: ReturnType<typeof scriptedSession>['actor'], connection: ConnectionState, generation: number) =>
   actor.send({ type: 'TRANSPORT', connection, generation });
 /** Native publishes `application` for this Session on the current connection. */
 const published = (actor: ReturnType<typeof scriptedSession>['actor'], application: ConfigurationApplication, generation = 1) =>
   actor.send({ type: 'TRANSPORT', connection: 'connected', generation, publication: application });
-
-it('R12 a failed reread after a failed adoption strands no in-flight guard', async () => {
-  const { actor, reads, adoptions } = scriptedSession();
-  await flush();
-  reads[0].resolve({ ...cfg3SourceApplication(), candidate });
-  await flush();
-  actor.send({ type: 'ADOPT', candidate });
-  await flush();
-  adoptions[0].reject(new Error('NotReady'));
-  await flush();
-  // The adoption region leaves `submitting` on the adoption response alone.
-  expect(actor.getSnapshot().matches({ adoption: 'rejected' })).toBe(true);
-  expect(actor.getSnapshot().context.adoptionError).toContain('NotReady');
-  // The authoritative reread it triggers is independent cleanup: however it
-  // settles it cannot strand the guard, and it never replays the adoption.
-  reads.at(-1)!.reject(new Error('configuration read unavailable'));
-  await flush();
-  expect(actor.getSnapshot().matches({ adoption: 'rejected' })).toBe(true);
-  expect(actor.getSnapshot().matches({ observation: { connected: 'failed' } })).toBe(true);
-  expect(adoptions).toHaveLength(1);
-  // With no authoritative observation there is nothing to adopt against.
-  actor.send({ type: 'ADOPT', candidate });
-  await flush();
-  expect(actor.getSnapshot().matches({ adoption: 'rejected' })).toBe(true);
-  expect(adoptions).toHaveLength(1);
-  // A later native publication is an authoritative observation: it answers
-  // the failed read and makes the same candidate actionable again, unread.
-  const before = reads.length;
-  published(actor, { ...cfg3SourceApplication(), version: '3', candidate });
-  await flush();
-  expect(actor.getSnapshot().matches({ observation: { connected: 'ready' } })).toBe(true);
-  expect(reads).toHaveLength(before);
-  actor.send({ type: 'ADOPT', candidate });
-  await flush();
-  expect(actor.getSnapshot().matches({ adoption: 'submitting' })).toBe(true);
-  expect(adoptions).toHaveLength(2);
-});
-
-it('R13 a successful observation clears the read failure and preserves the independent adoption failure', async () => {
-  const { actor, reads, adoptions } = scriptedSession();
-  await flush();
-  reads[0].resolve({ ...cfg3SourceApplication(), candidate });
-  await flush();
-  actor.send({ type: 'ADOPT', candidate });
-  await flush();
-  adoptions[0].reject(new Error('Conflict'));
-  await flush();
-  reads.at(-1)!.reject(new Error('configuration read unavailable'));
-  await flush();
-  expect(actor.getSnapshot().context.readError).toContain('configuration read unavailable');
-  expect(actor.getSnapshot().context.adoptionError).toContain('Conflict');
-  published(actor, { ...cfg3SourceApplication(), version: '9', candidate });
-  await flush();
-  // Exactly the read state it answers is cleared.
-  expect(actor.getSnapshot().context.readError).toBe('');
-  expect(actor.getSnapshot().matches({ observation: { connected: 'ready' } })).toBe(true);
-  expect(actor.getSnapshot().context.adoptionError).toContain('Conflict');
-});
 
 // ── 13b. Session observation is owned by the transport, not by a presentation
 //
@@ -1845,13 +1785,13 @@ it('R13 a successful observation clears the read failure and preserves the indep
 // drive nothing but transport transitions: no presentation, no Session
 // attachment and no snapshot change is needed for recovery.
 
-const otherCandidate = { identity: { input_revision: 'input-9', attempt: '9' }, expected_binding: '2', impact: 'prefix_changed' as const };
+const otherDesired = { input_revision: 'input-9', attempt: '9' };
 
 it('R13b a reconnect reads exactly once, on connected, and the new generation establishes its own application-version baseline', async () => {
   const { actor, reads } = scriptedSession();
   // The actor owes, and starts, the first read of its connected span itself.
   expect(reads).toHaveLength(1);
-  reads[0].resolve({ ...cfg3SourceApplication(), version: '100', candidate });
+  reads[0].resolve({ ...cfg3SourceApplication(), version: '100', desired });
   await flush();
   expect(actor.getSnapshot().context.application?.version).toBe('100');
   expect(actor.getSnapshot().matches({ observation: { connected: 'ready' } })).toBe(true);
@@ -1876,15 +1816,15 @@ it('R13b a reconnect reads exactly once, on connected, and the new generation es
   transport(actor, 'connected', 2);
   await flush();
   expect(reads).toHaveLength(2);
-  expect(actor.getSnapshot().matches({ observation: { connected: { loading: 'owed' } } })).toBe(true);
+  expect(actor.getSnapshot().matches({ observation: { connected: 'loading' } })).toBe(true);
   // Application versions are a runtime counter of one process, so generation
   // 2's version 3 is not "older" than generation 1's 100: were they compared,
   // 100 would win. There is nothing to compare across the boundary at all.
-  reads[1].resolve({ ...cfg3SourceApplication(), version: '3', candidate: otherCandidate });
+  reads[1].resolve({ ...cfg3SourceApplication(), version: '3', desired: otherDesired });
   await flush();
   const snapshot = actor.getSnapshot();
   expect(snapshot.context.application?.version).toBe('3');
-  expect(snapshot.context.application?.candidate).toEqual(otherCandidate);
+  expect(snapshot.context.application?.desired).toEqual(otherDesired);
   expect(snapshot.context.staleApplication).toBeUndefined();
   expect(snapshot.matches({ observation: { connected: 'ready' } })).toBe(true);
   // Settled: no further read without a new trigger.
@@ -1894,14 +1834,14 @@ it('R13b a reconnect reads exactly once, on connected, and the new generation es
 
 it('R13b a generation published already connected ends the old span and starts exactly one read of the new one', async () => {
   const { actor, reads } = scriptedSession();
-  reads[0].resolve({ ...cfg3SourceApplication(), version: '100', candidate });
+  reads[0].resolve({ ...cfg3SourceApplication(), version: '100', desired });
   await flush();
   transport(actor, 'connected', 2);
   await flush();
   expect(reads).toHaveLength(2);
   expect(actor.getSnapshot().context.application).toBeUndefined();
   expect(actor.getSnapshot().context.staleApplication?.version).toBe('100');
-  reads[1].resolve({ ...cfg3SourceApplication(), version: '3', candidate: otherCandidate });
+  reads[1].resolve({ ...cfg3SourceApplication(), version: '3', desired: otherDesired });
   await flush();
   expect(actor.getSnapshot().context.application?.version).toBe('3');
   expect(reads).toHaveLength(2);
@@ -1950,10 +1890,10 @@ it.each(['older', 'absent', 'failed'] as const)('R13b a publication supersedes a
   // The owed read answers with an older version: it settles the read, never
   // the observation.
   if (outcome === 'failed') reads[0].reject(new Error('obsolete failure'));
-  else reads[0].resolve(outcome === 'absent' ? null : { ...cfg3SourceApplication(), version: '4', candidate });
+  else reads[0].resolve(outcome === 'absent' ? null : { ...cfg3SourceApplication(), version: '4', desired });
   await flush();
   expect(actor.getSnapshot().context.application?.version).toBe('5');
-  expect(actor.getSnapshot().context.application?.candidate).toBeNull();
+  expect(actor.getSnapshot().context.application?.desired).toEqual(cfg3SourceApplication().desired);
   expect(applicationCurrent(actor.getSnapshot())).toBe(true);
   expect(actor.getSnapshot().context.readError).toBe('');
   expect(reads).toHaveLength(1);
@@ -1968,7 +1908,7 @@ it.each(['resolves', 'rejects'] as const)('R13b an old-generation read that %s a
   expect(reads).toHaveLength(1);
   transport(actor, 'stale', 2);
   await flush();
-  if (outcome === 'resolves') reads[0].resolve({ ...cfg3SourceApplication(), version: '101', candidate });
+  if (outcome === 'resolves') reads[0].resolve({ ...cfg3SourceApplication(), version: '101', desired });
   else reads[0].reject(new Error('old-generation read failed'));
   await flush();
   const snapshot = actor.getSnapshot();
@@ -1978,112 +1918,6 @@ it.each(['resolves', 'rejects'] as const)('R13b an old-generation read that %s a
   expect(snapshot.context.readError).toBe('');
   expect(observationUnavailable(snapshot)).toBe(true);
   expect(reads).toHaveLength(1);
-});
-
-it.each(['resolves', 'rejects'] as const)('R13b an adoption submitted on a replaced generation is an unknown outcome at the replacement, and its late reply that %s settles nothing', async outcome => {
-  const { actor, reads, adoptions } = scriptedSession();
-  reads[0].resolve({ ...cfg3SourceApplication(), version: '100', candidate });
-  await flush();
-  actor.send({ type: 'ADOPT', candidate });
-  await flush();
-  expect(adoptionInFlight(actor.getSnapshot())).toBe(true);
-  transport(actor, 'stale', 2);
-  await flush();
-  // The replacement itself classifies the adoption: it may have committed, and
-  // its reply can no longer arrive on this connection.
-  expect(actor.getSnapshot().matches({ adoption: 'uncertain' })).toBe(true);
-  expect(actor.getSnapshot().context.adoptionError).toContain('uncertain');
-  expect(adoptionInFlight(actor.getSnapshot())).toBe(false);
-  if (outcome === 'resolves') adoptions[0].resolve();
-  else adoptions[0].reject(new Error('NotReady'));
-  await flush();
-  // No adoption settlement, no reread raised by it and no read of any kind
-  // while the transport cannot read.
-  expect(actor.getSnapshot().matches({ adoption: 'uncertain', observation: 'offline' })).toBe(true);
-  expect(actor.getSnapshot().context.adoptionError).not.toContain('NotReady');
-  expect(reads).toHaveLength(1);
-  // The reconnected span's own owed read is the authoritative reread; the
-  // adoption is never replayed.
-  transport(actor, 'connected', 2);
-  await flush();
-  expect(reads).toHaveLength(2);
-  reads[1].resolve({ ...cfg3SourceApplication(), version: '1' });
-  await flush();
-  expect(actor.getSnapshot().matches({ adoption: 'uncertain', observation: { connected: 'ready' } })).toBe(true);
-  expect(adoptions).toHaveLength(1);
-});
-
-it('R13b the end of a connected span never re-enters the adoption region: a settled adoption outcome survives it', async () => {
-  const { actor, reads, adoptions } = scriptedSession();
-  reads[0].resolve({ ...cfg3SourceApplication(), version: '100', candidate });
-  await flush();
-  actor.send({ type: 'ADOPT', candidate });
-  await flush();
-  adoptions[0].reject(new Error('NotReady'));
-  await flush();
-  reads[1].resolve({ ...cfg3SourceApplication(), version: '101', candidate });
-  await flush();
-  expect(actor.getSnapshot().matches({ adoption: 'rejected' })).toBe(true);
-  transport(actor, 'stale', 2);
-  transport(actor, 'connected', 2);
-  await flush();
-  expect(actor.getSnapshot().matches({ adoption: 'rejected', observation: { connected: 'loading' } })).toBe(true);
-  expect(actor.getSnapshot().context.adoptionError).toContain('NotReady');
-  expect(adoptions).toHaveLength(1);
-});
-
-it('R13b an adoption reread of a replaced generation settles nothing, and its adoption transaction ends at the replacement', async () => {
-  const { actor, reads, adoptions } = scriptedSession();
-  reads[0].resolve({ ...cfg3SourceApplication(), version: '100', candidate });
-  await flush();
-  actor.send({ type: 'ADOPT', candidate });
-  await flush();
-  adoptions[0].resolve();
-  await flush();
-  expect(actor.getSnapshot().matches({ observation: { connected: { loading: 'adoptionReread' } } })).toBe(true);
-  expect(adoptionInFlight(actor.getSnapshot())).toBe(true);
-  transport(actor, 'stale', 2);
-  await flush();
-  expect(adoptionInFlight(actor.getSnapshot())).toBe(false);
-  reads[1].resolve({ ...cfg3SourceApplication(), version: '101' });
-  await flush();
-  expect(actor.getSnapshot().context.application).toBeUndefined();
-  expect(actor.getSnapshot().context.staleApplication?.version).toBe('100');
-  expect(reads).toHaveLength(2);
-});
-
-it('R13c an obsolete result of the same connection generation still cannot regress the observation', async () => {
-  const { actor, reads, adoptions } = scriptedSession();
-  reads[0].resolve({ ...cfg3SourceApplication(), version: '3', candidate: otherCandidate });
-  await flush();
-  expect(actor.getSnapshot().context.application?.version).toBe('3');
-  // Same connected span, same application-version domain: the reread an
-  // adoption rejection owes answers version 2, which is genuinely older and
-  // never replaces version 3.
-  actor.send({ type: 'ADOPT', candidate: otherCandidate });
-  await flush();
-  adoptions[0].reject(new Error('NotReady'));
-  await flush();
-  reads[1].resolve({ ...cfg3SourceApplication(), version: '2', candidate });
-  await flush();
-  const snapshot = actor.getSnapshot();
-  expect(snapshot.context.application?.version).toBe('3');
-  expect(snapshot.context.application?.candidate).toEqual(otherCandidate);
-  expect(snapshot.matches({ observation: { connected: 'ready' } })).toBe(true);
-});
-
-it('R13c an equal-version authoritative read is not obsolete: the adoption reread replaces the observation', async () => {
-  const { actor, reads, adoptions } = scriptedSession();
-  reads[0].resolve({ ...cfg3SourceApplication(), version: '3', candidate });
-  await flush();
-  actor.send({ type: 'ADOPT', candidate });
-  await flush();
-  adoptions[0].resolve();
-  await flush();
-  reads[1].resolve({ ...cfg3SourceApplication(), version: '3', candidate: null });
-  await flush();
-  expect(actor.getSnapshot().context.application?.candidate).toBeNull();
-  expect(applicationCurrent(actor.getSnapshot())).toBe(true);
 });
 
 it('R13d an authoritative answer that the Session has no application is a known observation', async () => {
@@ -2104,32 +1938,6 @@ it('R13d an authoritative answer that the Session has no application is a known 
   await flush();
   expect(applicationKnown(actor.getSnapshot())).toBe(false);
   expect(observationUnavailable(actor.getSnapshot())).toBe(true);
-});
-
-it('R13d an owed reread keeps the observation known but not current, and only a genuine read failure makes it unavailable', async () => {
-  const { actor, reads, adoptions } = scriptedSession();
-  reads[0].resolve({ ...cfg3SourceApplication(), version: '3', candidate });
-  await flush();
-  actor.send({ type: 'ADOPT', candidate });
-  await flush();
-  adoptions[0].reject(new Error('Busy'));
-  await flush();
-  // The adoption's owed reread is in flight: the span still knows authority.
-  expect(actor.getSnapshot().matches({ observation: { connected: { loading: 'adoptionReread' } } })).toBe(true);
-  expect(applicationKnown(actor.getSnapshot())).toBe(true);
-  expect(applicationCurrent(actor.getSnapshot())).toBe(false);
-  expect(observationUnavailable(actor.getSnapshot())).toBe(false);
-  expect(actor.getSnapshot().context.application?.candidate).toEqual(candidate);
-  // Not current means not actionable: a second adoption waits for the reread.
-  actor.send({ type: 'ADOPT', candidate });
-  await flush();
-  expect(adoptions).toHaveLength(1);
-  reads[1].reject(new Error('configuration read unavailable'));
-  await flush();
-  expect(applicationKnown(actor.getSnapshot())).toBe(false);
-  expect(observationUnavailable(actor.getSnapshot())).toBe(true);
-  // The failed span still retains what it observed for presentation.
-  expect(actor.getSnapshot().context.application?.candidate).toEqual(candidate);
 });
 
 // ── 13c. The configuration system owns actor lifetime ───────────────────────
@@ -2314,131 +2122,14 @@ it('R26 the configuration system observes its client through exactly one subscri
   expect(native.subscribers()).toBe(1);
 });
 
-/** A Session actor of the current authority, held by one presentation, observed
- * with a candidate and with an adoption of it in flight. */
-async function adoptingSession(native: ReturnType<typeof scriptedClient>) {
+async function observedSession(native: ReturnType<typeof scriptedClient>) {
   const actor = native.system.sessionConfiguration('session-1');
   native.system.retainSession(actor);
   await flush();
-  native.pending('session/configuration')[0].resolve({ application: { ...cfg3SourceApplication(), candidate } });
+  native.pending('session/configuration')[0].resolve({ application: cfg3SourceApplication() });
   await flush();
-  actor.send({ type: 'ADOPT', candidate });
-  await flush();
-  expect(native.pending('session/adoptConfiguration')).toHaveLength(1);
   return actor;
 }
-
-it.each([
-  ['accepted', 'observed'],
-  ['accepted', 'failed'],
-  ['uncertain', 'observed'],
-  ['rejected', 'failed'],
-] as const)('R27 a Session actor no presentation holds is released exactly at its adoption transaction terminal point, when adoption is %s and its reread %s', async (adoption, reread) => {
-  const native = scriptedClient();
-  const actor = await adoptingSession(native);
-  // The last presentation leaves while the adoption is in flight.
-  native.system.releaseSession(actor);
-  expect(actor.getSnapshot().status).toBe('active');
-  expect(native.system.sessionConfiguration('session-1')).toBe(actor);
-  const response = native.pending('session/adoptConfiguration')[0];
-  if (adoption === 'accepted') response.resolve({});
-  else if (adoption === 'uncertain') response.reject(new OutcomeUncertain());
-  else response.reject(new Error('NotReady'));
-  await flush();
-  // The native response alone is not the terminal point: the authoritative
-  // reread it owes is part of the same adoption transaction and still settles
-  // under this Session lifetime.
-  const answered = actor.getSnapshot();
-  expect(answered.status).toBe('active');
-  expect(answered.matches({ adoption: adoption === 'accepted' ? 'idle' : adoption })).toBe(true);
-  expect(answered.matches({ observation: { connected: { loading: 'adoptionReread' } } })).toBe(true);
-  expect(native.pending('session/configuration')).toHaveLength(2);
-  const rereadGate = native.pending('session/configuration')[1];
-  if (reread === 'observed') rereadGate.resolve({ application: cfg3SourceApplication() });
-  else rereadGate.reject(new Error('configuration read unavailable'));
-  await flush();
-  // The reread settled: that is the terminal point, and the system stops and
-  // removes the actor at once, with no second release.
-  const terminal = actor.getSnapshot();
-  expect(terminal.status).toBe('stopped');
-  expect(terminal.matches({ observation: { connected: reread === 'observed' ? 'ready' : 'failed' } })).toBe(true);
-  // Adoption was never replayed, whatever its outcome, and nothing reread twice.
-  expect(native.pending('session/adoptConfiguration')).toHaveLength(1);
-  expect(native.pending('session/configuration')).toHaveLength(2);
-  // A later lookup is a new Session lifetime, which owes its own first read.
-  expect(native.system.sessionConfiguration('session-1')).not.toBe(actor);
-  expect(native.pending('session/configuration')).toHaveLength(3);
-});
-
-it.each(['stays attached', 'leaves again'] as const)('R27 a presentation that attaches before the adoption settles and %s governs release', async holder => {
-  const native = scriptedClient();
-  const actor = await adoptingSession(native);
-  native.system.releaseSession(actor);
-  // A new presentation holds the actor before the adoption settles.
-  native.system.retainSession(actor);
-  if (holder === 'leaves again') native.system.releaseSession(actor);
-  native.pending('session/adoptConfiguration')[0].resolve({});
-  await flush();
-  native.pending('session/configuration')[1].resolve({ application: cfg3SourceApplication() });
-  await flush();
-  if (holder === 'stays attached') {
-    // A held actor outlives the adoption's terminal point…
-    expect(actor.getSnapshot().status).toBe('active');
-    expect(native.system.sessionConfiguration('session-1')).toBe(actor);
-    // …and its last holder leaving with nothing in flight releases it at once.
-    native.system.releaseSession(actor);
-  }
-  expect(actor.getSnapshot().status).toBe('stopped');
-  expect(native.system.sessionConfiguration('session-1')).not.toBe(actor);
-  expect(native.pending('session/adoptConfiguration')).toHaveLength(1);
-});
-
-it.each([
-  ['accepted', 'released'],
-  ['uncertain', 'released'],
-  ['rejected', 'released'],
-  ['accepted', 'held'],
-  ['answered, its reread pending,', 'released'],
-] as const)('R30 an authority replacement stops a Session actor at once, and its late %s adoption response starts nothing through the replacement, when the actor is %s', async (adoption, holder) => {
-  const native = scriptedClient();
-  const actor = await adoptingSession(native);
-  if (adoption === 'answered, its reread pending,') {
-    native.pending('session/adoptConfiguration')[0].resolve({});
-    await flush();
-    expect(actor.getSnapshot().matches({ observation: { connected: { loading: 'adoptionReread' } } })).toBe(true);
-  }
-  // The last presentation leaves: the actor is alive only because its adoption
-  // transaction is in flight.
-  if (holder === 'released') native.system.releaseSession(actor);
-  expect(actor.getSnapshot().status).toBe('active');
-  expect(adoptionInFlight(actor.getSnapshot())).toBe(true);
-  const reads = native.pending('session/configuration').length;
-  native.replaceAuthority();
-  // Linearization point: the authority publication, with no replacement Session
-  // actor requested. The old Session actor is stopped at once, and with it the
-  // invoked adoption and reread actors.
-  expect(actor.getSnapshot().status).toBe('stopped');
-  // The obsolete authority answers late. A stopped actor has no completion path
-  // for it: no `ADOPTION.REREAD`, so no `session/configuration`, and never an
-  // adoption replay — nothing at all is issued through the replacement.
-  if (adoption === 'accepted') native.pending('session/adoptConfiguration')[0].resolve({});
-  else if (adoption === 'uncertain') native.pending('session/adoptConfiguration')[0].reject(new OutcomeUncertain());
-  else if (adoption === 'rejected') native.pending('session/adoptConfiguration')[0].reject(new Error('NotReady'));
-  else native.pending('session/configuration').at(-1)!.resolve({ application: cfg3SourceApplication() });
-  await flush();
-  expect(native.pending('session/configuration')).toHaveLength(reads);
-  expect(native.pending('session/adoptConfiguration')).toHaveLength(1);
-  expect(native.issuedUnder(2)).toEqual([]);
-  // A presentation leaving afterwards finds nothing left to release.
-  if (holder === 'held') native.system.releaseSession(actor);
-  expect(native.issuedUnder(2)).toEqual([]);
-  // The replacement lifetime starts from nothing: its own actor owes, and
-  // issues, exactly the one read of its own connected span.
-  const replacement = native.system.sessionConfiguration('session-1');
-  expect(replacement).not.toBe(actor);
-  expect(replacement.getSnapshot().matches({ adoption: 'idle', observation: { connected: 'loading' } })).toBe(true);
-  expect(native.issuedUnder(2)).toEqual(['session/configuration']);
-});
 
 it('R31 a connection generation replacement inside one authority keeps every lifetime and retires only generation-scoped observation', async () => {
   const native = scriptedClient();
@@ -2446,7 +2137,7 @@ it('R31 a connection generation replacement inside one authority keeps every lif
   const unit = target.getSnapshot().context.units[providerIdentity];
   target.send({ type: 'UNIT.SUBMIT', identity: providerIdentity, selector: revisionSelector(providerMutation), revision: 'r1', mutation: providerMutation });
   await flush();
-  const session = await adoptingSession(native);
+  const session = await observedSession(native);
   const held = native.system.sessionConfiguration('session-2');
   native.system.retainSession(held);
   await flush();
@@ -2470,11 +2161,8 @@ it('R31 a connection generation replacement inside one authority keeps every lif
   expect(native.pending('configuration/sourcesRead')).toHaveLength(2);
   expect(held.getSnapshot().context.application).toBeUndefined();
   expect(held.getSnapshot().context.staleApplication).toBeDefined();
-  // The adoption submitted on the replaced connection is an unknown outcome
-  // at the replacement: nothing holds its Session actor and nothing is in
-  // flight, so the actor is released at that same publication.
+  // Nothing holds the released Session actor and nothing is in flight.
   expect(session.getSnapshot().status).toBe('stopped');
-  expect(session.getSnapshot().matches({ adoption: 'uncertain' })).toBe(true);
   expect(native.system.sessionConfiguration('session-2')).toBe(held);
   // The write submitted on the old generation still settles its exact
   // transaction, and the actor stays live for its whole authority.
@@ -2484,13 +2172,7 @@ it('R31 a connection generation replacement inside one authority keeps every lif
   expect(unit.getSnapshot().context.submitted?.committed).toBe('r2');
   expect(target.getSnapshot().status).toBe('active');
   expect(native.system.transactionOwners()).toHaveLength(1);
-  // A late reply to the old-generation adoption settles and rereads nothing.
-  const reads = native.pending('session/configuration').length;
-  native.pending('session/adoptConfiguration')[0].resolve({});
-  await flush();
-  expect(native.pending('session/configuration')).toHaveLength(reads);
   expect(native.pending('configuration/sourceWrite')).toHaveLength(1);
-  expect(native.pending('session/adoptConfiguration')).toHaveLength(1);
   expect(native.issuedUnder(2)).toEqual([]);
 });
 
@@ -3449,42 +3131,4 @@ it.each([new OutcomeUncertain(), new RpcFailure({ code: -32000, message: 'Confli
   expect(workspaceApprovalBlock(actor)).toMatch(/^workspace:approval\.(uncertain|conflict)$/);
   expect(actor.getSnapshot().context.units[approvalIdentity]?.getSnapshot().context.draft?.value).toBe('full_access');
   expect(scripted.writes).toHaveLength(1); actor.stop();
-});
-
-it.each(['older', 'absent', 'failed'] as const)('R35 adoption reread settles after a concurrent publication and a %s completion', async outcome => {
-  const { actor, reads, adoptions } = scriptedSession();
-  reads[0].resolve({ ...cfg3SourceApplication(), version: '1', candidate });
-  await flush();
-  actor.send({ type: 'ADOPT', candidate });
-  adoptions[0].resolve();
-  await flush();
-  expect(reads).toHaveLength(2);
-  const publication = { ...cfg3SourceApplication(), version: '5' };
-  published(actor, publication);
-  expect(adoptionInFlight(actor.getSnapshot())).toBe(true);
-  if (outcome === 'failed') reads[1].reject(new Error('superseded reread'));
-  else reads[1].resolve(outcome === 'absent' ? null : { ...publication, version: '4' });
-  await flush();
-  expect(actor.getSnapshot().context.application).toBe(publication);
-  expect(actor.getSnapshot().context.readError).toBe('');
-  expect(applicationCurrent(actor.getSnapshot())).toBe(true);
-  expect(adoptionInFlight(actor.getSnapshot())).toBe(false);
-  expect(adoptions).toHaveLength(1);
-  expect(reads).toHaveLength(2);
-  actor.stop();
-});
-
-it('equal-version native delivery still supersedes an earlier adoption reread failure', async () => {
-  const { actor, reads, adoptions } = scriptedSession();
-  const application = { ...cfg3SourceApplication(), version: '5', candidate };
-  reads[0].resolve(application); await flush();
-  actor.send({ type: 'ADOPT', candidate }); adoptions[0].resolve(); await flush();
-  const publication = { ...application };
-  published(actor, publication);
-  reads[1].reject(new Error('older read failed')); await flush();
-  expect(actor.getSnapshot().context.application).toBe(publication);
-  expect(applicationCurrent(actor.getSnapshot())).toBe(true);
-  expect(adoptionInFlight(actor.getSnapshot())).toBe(false);
-  expect(actor.getSnapshot().context.readError).toBe('');
-  expect(reads).toHaveLength(2); expect(adoptions).toHaveLength(1); actor.stop();
 });

@@ -5,7 +5,7 @@ import { completeTools } from '../../client/request-system';
 import { useTraceContent, type ToolContent } from './useTraceContent';
 import { Button } from '../../presentation/primitives/Button';
 import { parseJson, isJsonNumber } from '../../presentation/primitives/json';
-import type { Translate } from '../../locale/translation';
+import type { Translate, TranslationKey } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { backgroundLaunch } from '../../bindings/jobs';
 import { traceStateLabel } from '../../bindings/status-labels';
@@ -23,7 +23,8 @@ import { recordedToolDetails } from '../../bindings/recorded-tool-details';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v62';
+import type { BoundedNames, TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v63';
+import { configurationDomainLabel, configurationNames } from '../../bindings/configuration-change';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -543,7 +544,7 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v62').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v63').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
   stale?: boolean;
@@ -685,6 +686,24 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
           <OverviewSection label={tx('trajectory:tab.usage')} onOpen={() => onFacet('usage')}><UsageRows usage={usage} /></OverviewSection>
           <OverviewSection label={tx('trajectory:tab.timing')} onOpen={() => onFacet('timing')}><RequestTiming request={record} /></OverviewSection>
         </div>
+      </>;
+    }
+    if (record.kind === 'configuration' && record.configuration) {
+      const change = record.configuration;
+      const names = (label: TranslationKey, list: BoundedNames) => list.total > 0 && <div key={label}><dt>{tx(label)}</dt><dd>{configurationNames(tx, list)}</dd></div>;
+      return <>
+        <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="" data-configuration-change="">
+          <div><dt>{tx('trajectory:configuration.reason')}</dt><dd>{tx(`trajectory:configuration.reason.${change.reason}`)}</dd></div>
+          <div><dt>{tx('trajectory:configuration.domains')}</dt><dd>{change.domains.map(domain => configurationDomainLabel(tx, domain)).join(', ')}</dd></div>
+          {names('trajectory:configuration.tools-added', change.tools.added)}
+          {names('trajectory:configuration.tools-removed', change.tools.removed)}
+          {names('trajectory:configuration.tools-changed', change.tools.changed)}
+          {names('trajectory:configuration.skills-added', change.skills.added)}
+          {names('trajectory:configuration.skills-removed', change.skills.removed)}
+          {names('trajectory:configuration.skills-changed', change.skills.changed)}
+          <div><dt>{tx('trajectory:configuration.binding')}</dt><dd>{change.previous_binding_revision} → {change.binding_revision}</dd></div>
+        </dl>
+        <p className={css.summaryScrollRegion}>{tx('trajectory:configuration.first-use')}</p>
       </>;
     }
     if (record.kind === 'compaction') {

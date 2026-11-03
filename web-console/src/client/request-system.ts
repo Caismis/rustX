@@ -1,6 +1,6 @@
-import type { CheckpointReadCut, TraceRecord, TraceToolDefinition } from '../../../protocol/app-server/v62';
+import type { CheckpointReadCut, TraceRecord, TraceToolDefinition } from '../../../protocol/app-server/v63';
 import { checkpointReadCutKey } from '../../../protocol/app-server/content-identity';
-import { traceAttemptKey, traceFieldKey } from '../../../protocol/app-server/trace-identity';
+import { traceFieldKey } from '../../../protocol/app-server/trace-identity';
 import type { TraceFieldReader } from './trace';
 import { readTraceValue } from './trace-content';
 
@@ -49,35 +49,6 @@ export async function readRequestPredecessor(reader: TraceFieldReader, cut: Chec
   throw Error('Original preceding request is unavailable.');
 }
 
-/** Read requests and input anchors for represented native Attempts, stopping
- * after their start rows and the visible ordinary inputs have been covered.
- * The result is replaceable view data, never a browser-authored change history. */
-export async function readSystemRequests(reader: TraceFieldReader, cut: CheckpointReadCut, owners: ReadonlySet<string>, current: () => boolean, inputIds: ReadonlySet<string> = new Set()) {
-  if (!owners.size) return [];
-  const pending = new Set(owners), inputs = new Set(inputIds), requests: TraceRecord[] = [];
-  let before = 0;
-  do {
-    const page = await readSystemTracePage(reader, cut, before, current);
-    requests.unshift(...page.records.filter(record => (record.kind === 'request' || record.kind === 'user') && owners.has(traceAttemptKey(record.location) ?? '')));
-    for (const record of page.records) {
-      if (record.kind === 'attempt') pending.delete(traceAttemptKey(record.location) ?? '');
-      if (record.kind === 'user' && record.message_id != null) inputs.delete(record.message_id);
-    }
-    if (!pending.size && !inputs.size || page.next === undefined) break;
-    before = page.next;
-  } while (current());
-  return requests;
-}
-
 export function completeTools(tools: readonly TraceToolDefinition[]) {
   return tools.every(tool => !tool.description.truncated && !tool.input_schema.truncated);
-}
-
-export function toolChanges(previous: readonly TraceToolDefinition[], current: readonly TraceToolDefinition[]) {
-  const before = new Map(previous.map(tool => [tool.name, tool])), after = new Map(current.map(tool => [tool.name, tool]));
-  return {
-    added: current.filter(tool => !before.has(tool.name)).map(tool => tool.name),
-    removed: previous.filter(tool => !after.has(tool.name)).map(tool => tool.name),
-    updated: current.filter(tool => before.has(tool.name) && JSON.stringify(before.get(tool.name)) !== JSON.stringify(tool)).map(tool => tool.name),
-  };
 }

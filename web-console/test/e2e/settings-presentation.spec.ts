@@ -755,67 +755,51 @@ type NativeRequest = { method: string; params: Record<string, unknown> };
 const nativeRequests = (page: Page) => page.evaluate(() => (window as unknown as { rustxNativeRequests: () => NativeRequest[] }).rustxNativeRequests());
 const banner = (page: Page) => page.getByRole('region', { name: 'Session configuration' });
 
-test('Session configuration banner: preparing, ready, blocked and failed, compact and owner-correct', async ({ page }) => {
-  // Preparing: no adoption requirement, stated as text.
+test('Session configuration banner: preparing, waiting and failed, compact and owner-correct', async ({ page }) => {
+  // Preparing: stated as text; nothing to confirm.
   let errors = await start(page, '?session=preparing');
-  await expect(banner(page).locator('[data-state="preparing"]')).toContainText('Preparing configuration…');
-  await expect(banner(page).getByRole('button', { name: 'Adopt configuration' })).toHaveCount(0);
+  await expect(banner(page).locator('[data-state="preparing"]')).toContainText('Preparing configuration changes…');
+  await expect(banner(page).getByRole('button')).toHaveCount(0);
   await expectAccessible(page, '[aria-label="Session configuration"]');
   await expectStableScreenshot(page.locator('#session-view > header'), 'session-banner-preparing-light.png');
   expect(errors).toEqual([]);
 
-  // Blocked: the native reason, a disabled Adopt, and nothing cancelled or queued.
-  errors = await start(page, '?session=blocked');
-  const blocked = banner(page).locator('[data-state="blocked"]');
-  await expect(blocked).toContainText('Session work must settle before adoption.');
-  await expect(blocked.getByRole('button', { name: 'Adopt configuration' })).toBeDisabled();
-  await expectStableScreenshot(page.locator('#session-view > header'), 'session-banner-blocked-light.png');
-  expect((await nativeRequests(page)).filter(request => ['session/adoptConfiguration', 'turn/cancel'].includes(request.method))).toEqual([]);
+  // Waiting: the prepared change applies by itself after current work; the
+  // browser confirms, schedules and cancels nothing.
+  errors = await start(page, '?session=ready');
+  const waiting = banner(page).locator('[data-state="waiting"]');
+  await expect(waiting).toContainText('Configuration changes will apply automatically after the current work settles.');
+  await expect(banner(page).getByRole('button')).toHaveCount(0);
+  await expectAccessible(page, '[aria-label="Session configuration"]');
+  await expectStableScreenshot(page.locator('#session-view > header'), 'session-banner-waiting-light.png');
+  expect((await nativeRequests(page)).filter(request => ['configuration/reconcile', 'turn/cancel'].includes(request.method))).toEqual([]);
   expect(errors).toEqual([]);
 
-  // Failed: the native diagnostic and one action per native owner — here User
-  // and Workspace B, although the focused Session lives in /workspace/A.
+  // Failed: the native diagnostic, one action per native owner — here User
+  // and Workspace B, although the focused Session lives in /workspace/A — and
+  // a native Retry.
   errors = await start(page, '?session=failed');
   const failed = banner(page).locator('[data-state="failed"]');
+  await expect(failed).toContainText('previous configuration');
   await expect(failed).toContainText('Capabilities: failed — MCP server repository-index failed to start');
-  await expect(failed.getByRole('button')).toHaveText(['Open User Settings', 'Open Workspace Settings — /workspace/B']);
-  await expect(banner(page).getByRole('button', { name: 'Adopt configuration' })).toHaveCount(0);
+  await expect(failed.getByRole('button')).toHaveText(['Open User Settings', 'Open Workspace Settings — /workspace/B', 'Retry']);
   await expectStableScreenshot(page.locator('#session-view > header'), 'session-banner-failed-light.png');
   await failed.getByRole('button', { name: 'Open Workspace Settings — /workspace/B' }).click();
   await expect(dialog(page).getByRole('heading', { level: 2, name: 'Workspace Settings — Workspace B' })).toBeVisible();
   await closeSettings(page);
-  // Narrow: the reason and both owner actions wrap; nothing scrolls sideways.
+  // Narrow: the reason and the actions wrap; nothing scrolls sideways.
   await setTheme(page, 'Dark');
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(failed.getByRole('button', { name: 'Open Workspace Settings — /workspace/B' })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await expectStableScreenshot(page.locator('#session-view > header'), 'session-banner-failed-mobile-dark.png');
-  expect(errors).toEqual([]);
-
-  // Ready: Adopt carries exactly the inspected candidate and expected binding,
-  // once; the banner leaves only after native's authoritative reread.
-  errors = await start(page, '?session=ready');
-  const ready = banner(page).locator('[data-state="ready"]');
-  await expect(ready).toContainText('Prepared configuration is waiting for this Session.');
-  await expectAccessible(page, '[aria-label="Session configuration"]');
-  await expectStableScreenshot(page.locator('#session-view > header'), 'session-configuration-banner-light.png');
-  const before = (await nativeRequests(page)).filter(request => request.method === 'session/configuration').length;
-  await ready.getByRole('button', { name: 'Adopt configuration' }).click();
-  await expect(banner(page)).toHaveCount(0);
-  const requests = await nativeRequests(page);
-  const adoptions = requests.filter(request => request.method === 'session/adoptConfiguration');
-  expect(adoptions.map(request => request.params)).toEqual([{ session_id: 'A', candidate: { input_revision: 'input-2', attempt: '2' }, expected_binding: '1' }]);
-  // The adoption response is followed by the authoritative reread it owes.
-  const adoptionAt = requests.indexOf(adoptions[0]);
-  expect(requests.slice(adoptionAt).filter(request => request.method === 'session/configuration').length).toBeGreaterThanOrEqual(1);
-  expect(requests.filter(request => request.method === 'session/configuration').length).toBeGreaterThan(before);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
 
 test('Session configuration banner neither flickers nor rereads configuration while an answer streams', async ({ page }) => {
   const errors = await start(page, '?session=ready');
-  const ready = banner(page).locator('[data-state="ready"]');
-  await expect(ready).toContainText('Prepared configuration is waiting for this Session.');
+  const waiting = banner(page).locator('[data-state="waiting"]');
+  await expect(waiting).toContainText('Configuration changes will apply automatically after the current work settles.');
   // Record every DOM mutation that ever shows the unavailable line, so a single
   // painted frame of it fails the test.
   await page.evaluate(() => {
@@ -830,7 +814,7 @@ test('Session configuration banner neither flickers nor rereads configuration wh
   await page.evaluate(() => (window as unknown as { rustxStream: (deltas: number) => Promise<void> }).rustxStream(200));
   expect(await page.evaluate(() => (window as unknown as { rustxUnavailableFrames: number }).rustxUnavailableFrames)).toBe(0);
   expect(await reads()).toBe(before);
-  await expect(ready.getByRole('button', { name: 'Adopt configuration' })).toBeEnabled();
+  await expect(waiting).toBeVisible();
   expect(errors).toEqual([]);
 });
 

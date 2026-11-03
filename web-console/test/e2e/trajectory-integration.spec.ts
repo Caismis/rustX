@@ -9,14 +9,14 @@ import { routeWorkspaceHost } from './workspace-host';
 import { closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { diagnosticCut } from './wire-diagnostics';
-import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v62';
+import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v63';
 
 function immutable(request: TraceRequestDetail) {
   const { usage: _usage, failure: _failure, generation: _generation, ...input } = request;
   return input;
 }
 
-test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption and historical Trace', async ({ page }) => {
+test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic commit and historical Trace', async ({ page }) => {
   const f = await startDogfood('web_trace_convergence');
   const remote = await AppServerHost.connectRemote({ endpoint: f.endpoint, token: f.token });
   const wire = await wireProbe(page);
@@ -37,13 +37,13 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     const trace = async () => (await remote.client.call('session/trace', { target: attachedA.target, limit: 32 }, 'trace')).page;
     const detail = async (record_id: string) => {
       const {page}=await remote.client.call('session/traceDetail',{target:attachedA.target,record_id},'domain_page');
-      const value=await domainOriginalValue<import('../../../protocol/app-server/v62').TraceDetail>(page,{
+      const value=await domainOriginalValue<import('../../../protocol/app-server/v63').TraceDetail>(page,{
         current:()=>!remote.client.closed,
         page:async(previous,offset)=>(await remote.client.call('conversation/checkpointPage',{target:attachedA.target,agent_id:null,cut:previous.read_cut,domain:previous.domain,offset,limit:32},'checkpoint_page')).page,
         value:async(previous,item,offset)=>(await remote.client.call('conversation/checkpointValueRead',{target:attachedA.target,agent_id:null,cut:previous.read_cut,domain:previous.domain,item_offset:Number(item.offset),path:[],offset,max_bytes:65536},'checkpoint_value_chunk')).chunk});
       return value.request!;
     };
-    await remote.client.call('turn/start', { target: attachedA.target, content: [{ type: 'text', text: 'Before adoption' }] }, 'inbound_accepted');
+    await remote.client.call('turn/start', { target: attachedA.target, content: [{ type: 'text', text: 'Before automatic commit' }] }, 'inbound_accepted');
     await f.gate('trace-before');
     const oldRecord = (await trace()).records.find(record => record.kind === 'request')!;
     const before = immutable(await detail(oldRecord.id));
@@ -72,27 +72,25 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     expect(workspaceSource.projection.workspace?.authored?.agent?.instructions).toBe('TRACE_NEW_INSTRUCTIONS');
     expect(source.user.authored?.agent?.tools?.builtin).not.toContain('read');
     const application = (id: string) => readApplication(remote, id);
-    await expect.poll(async () => (await application(a)).candidate != null).toBe(true);
-    // Adoption eligibility is runtime state on A's Runtime Client snapshot.
-    const eligibility = async () => (await remote.client.call('session/checkpoint', { target: attachedA.target }, 'checkpoint')).checkpoint.snapshot.configuration_adoption_eligibility.status;
-    const busy = await application(a);
-    expect(await eligibility()).toBe('busy');
+    // A is busy: native keeps the prepared change waiting and never asks for consent.
+    const waiting = async (id: string) => Object.values((await application(id)).units).some(unit => unit?.status === 'ready');
+    await expect.poll(() => waiting(a)).toBe(true);
     expect(immutable(await detail(oldRecord.id))).toEqual(before);
-    await expect(remote.client.call('session/adoptConfiguration', { session_id: a, candidate: busy.candidate!.identity, expected_binding: busy.candidate!.expected_binding }, 'configuration_receipt')).rejects.toThrow();
     expect((await f.control('requests')).requests).toHaveLength(1);
     await f.release('trace-before');
-    await expect.poll(eligibility).toBe('eligible');
-    const eligible = await application(a);
-    await remote.client.call('session/adoptConfiguration', { session_id: a, candidate: eligible.candidate!.identity, expected_binding: eligible.candidate!.expected_binding }, 'configuration_receipt');
+    // The safe boundary commits it automatically and records one change fact.
+    await expect.poll(() => waiting(a)).toBe(false);
+    await expect.poll(async () => (await trace()).records.filter(record => record.kind === 'configuration').length).toBe(1);
+    const committed = (await trace()).records.find(record => record.kind === 'configuration')!;
+    expect(committed.configuration).toMatchObject({ reason: 'source', domains: expect.arrayContaining(['instructions', 'tools']), tools: { removed: { names: ['read'], total: 1 } } });
     expect(immutable(await detail(oldRecord.id))).toEqual(before);
     const afterB = await readEffective(remote, attachedB.target);
     expect(afterB.adopted_binding).toBe(bindingB);
-    await expect.poll(async () => Object.values((await application(b)).units).some(unit => unit.status === 'failed')).toBe(true);
-    expect((await application(a)).candidate).toBeNull();
+    await expect.poll(async () => Object.values((await application(b)).units).some(unit => unit?.status === 'failed')).toBe(true);
     following = await followRoot(remote, attachedA.target);
     let settled = false, settlementFailure: unknown;
     const settlement = following.nextSettlement().then(() => { settled = true; }, error => { settlementFailure = error; });
-    await remote.client.call('turn/start', { target: attachedA.target, content: [{ type: 'text', text: 'After adoption' }] }, 'inbound_accepted');
+    await remote.client.call('turn/start', { target: attachedA.target, content: [{ type: 'text', text: 'After automatic commit' }] }, 'inbound_accepted');
     await expect.poll(() => { if (settlementFailure) throw settlementFailure; return settled; }).toBe(true);
     await settlement;
     expect((await trace()).records.filter(record => record.kind === 'request' && record.state === 'completed')).toHaveLength(2);
@@ -112,22 +110,19 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     await remote.client.call('session/detach', { target: attachedA.target }, 'detached');
     await page.locator(`button[data-session-id="${a}"]`).click();
     await page.getByRole('tab', { name: 'Chat', exact: true }).click();
-    const promptNotice = page.locator(`[data-system-change="prompt"][data-request-id="${current.id}"]`);
-    const toolNotice = page.locator(`[data-system-change="tools"][data-request-id="${current.id}"]`);
-    await expect(promptNotice).toContainText('System Prompt Updated');
-    await expect(toolNotice).toContainText('Removed 1');
-    const turnInput = await page.getByText('After adoption', { exact: true }).elementHandle();
-    expect(await promptNotice.evaluate((node, input) => !!input && !!(node.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING), turnInput)).toBe(true);
-    await promptNotice.getByRole('button').click();
-    await expect(promptNotice.locator('[data-system-prompt-body]')).toContainText('TRACE_NEW_INSTRUCTIONS');
-    await toolNotice.getByRole('button').click();
-    await expect(toolNotice).toContainText('Removed: read');
-    await expect(page.locator('[data-system-change="prompt"]')).toHaveCount(2);
-    await page.screenshot({ path: '/tmp/rustx-system-chat-desktop.png' });
+    // Harness hidden rows: Chat shows no system-prompt row, only the committed
+    // Tool removal, as one compact DisclosureRow fact before the next input.
+    const change = page.locator('[data-configuration-change]');
+    await expect(change).toHaveCount(1);
+    await expect(change).toContainText('Tool removed: read');
+    await expect(page.locator('[data-system-change]')).toHaveCount(0);
+    await expect(page.getByText('TRACE_NEW_INSTRUCTIONS')).toHaveCount(0);
+    const turnInput = await page.getByText('After automatic commit', { exact: true }).elementHandle();
+    expect(await change.evaluate((node, input) => !!input && !!(node.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING), turnInput)).toBe(true);
+    await page.screenshot({ path: '/tmp/rustx-configuration-chat-desktop.png' });
     await page.setViewportSize({ width: 390, height: 844 });
-    await toolNotice.scrollIntoViewIfNeeded();
-    await expect(toolNotice.getByRole('button')).toHaveAttribute('aria-expanded', 'true');
-    await page.screenshot({ path: '/tmp/rustx-system-chat-mobile.png' });
+    await change.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: '/tmp/rustx-configuration-chat-mobile.png' });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const boundary = page.locator(`[data-display-type="SystemPromptCell"][data-owner="${current.id}"]`);
@@ -150,7 +145,7 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
       catch (diagnosticError) { cut = { unavailable: String(diagnosticError).slice(0, 256) }; }
     }
     const failure = error as { method?: string; kind?: string };
-    console.error('Native adoption Trace diagnostic', JSON.stringify({ method: failure.method, kind: failure.kind, issued_cut_after_failure: cut, native_stderr: f.diagnostics().appErrors.slice(-4096) }));
+    console.error('Native configuration commit Trace diagnostic', JSON.stringify({ method: failure.method, kind: failure.kind, issued_cut_after_failure: cut, native_stderr: f.diagnostics().appErrors.slice(-4096) }));
     throw error;
   } finally { following?.stop(); await remote.shutdown(); await page.close(); await f.stop(passed); }
 });

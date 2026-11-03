@@ -569,19 +569,19 @@ it('classification belongs to exactly the native summary page that requested it'
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
 // navigation → the concrete Settings target. Nothing here mocks the callback or
 // inspects a fabricated `source:*` string.
-async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v62').SourceTarget[], host = hostFixture()) {
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v63').SourceTarget[], host = hostFixture()) {
   server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/workspace/A' },'0')));
   server.handlers.set('session/configuration', () => ({
     type: 'session_configuration',
     // A real Session application: `scope` is the Session identity the App
     // Server read it under, and the authored owners are a separate fact.
     projection:(applicationReceipt(({ scope: 'A', sources: [...sources], version: '2', desired: { input_revision: 'input-1', attempt: '1' },
-      units: { capabilities: { status: 'failed', diagnostic: 'resource failed' } }, candidate: null }))),
+      units: { capabilities: { status: 'failed', diagnostic: 'resource failed' } } }))),
   }));
   await mount(host);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace A' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
-  await screen.findByText(/Some configuration preparation failed/);
+  await screen.findByText(/could not be applied/);
   return host;
 }
 
@@ -628,7 +628,7 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
 // Settings navigation is linearized by its dedicated actor. A delayed owning
 // Workspace catalog lookup is preparation, never authority to override a newer
 // navigation decision.
-async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v62').SourceTarget[]) {
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v63').SourceTarget[]) {
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();

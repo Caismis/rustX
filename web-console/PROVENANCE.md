@@ -1,3 +1,25 @@
+## Issue #518 — automatic Session configuration commit
+
+Read-only references, inspected outside rustX and never vendored:
+`deepseek-ai/deepseek-harness` at `ce7073d51254c26cd63b22a60835b8f948deb447`
+(supersedes older Harness pins for this surface only), `earendil-works/pi` at
+`9c9ce8547e5a88cbe834a53e9a6d83a789d08e47` and `openai/codex` at
+`c60cda34a3ba6975f698d63da9e8ca8a1616f0c9`.
+
+| Pinned source / component | rustX component | Preserved interactions | Necessary semantic adaptations |
+| --- | --- | --- | --- |
+| Harness `ui-chat/README.md` — Hidden Chat rows | `src/app/agent/AgentTranscript.tsx` (`audit`, `hasInlineBody`) | System-prompt and ordinary Context rows are hidden from Chat; Tool add/remove rows stay visible | Rows come only from a committed native `configuration_applied` fact, never from a browser diff of request snapshots; the request-diff `SystemChanges` surface is removed |
+| Harness `ui-chat/.../ContextInjectionRow.tsx` + `.module.css` | `src/app/agent/ConfigurationChangeRow.tsx` + `.module.css` | 24px DisclosureRow header, separator and count summary, expanded added/removed groups in the 141px opaque scrollport | A single Tool is one non-expandable row; names are native-bounded (16 per list) with exact totals ("and N more"); names wrap on narrow Sessions; same-name definition changes stay Trace-only |
+| Harness `ui-primitives/src/DisclosureRow.tsx` | existing `src/presentation/primitives/DisclosureRow.tsx` | Row-click expansion, keyboard disclosure, keep-content-when-open | None; reused unchanged, no second design system |
+| Harness `ui-trajectory/README.md`, `TrajectoryTable.tsx` and inspector | `src/app/trajectory/layout.ts`, `TrajectoryInspector.tsx`, `protocol/app-server/trace-inspection.ts` | A Session-level record in table order with its own row and an inspector details block | Native `TraceKind::Configuration` record with zero duration, no owning Attempt, and the typed change (domains, bounded names) as its detail |
+| Pi `interactive-mode.ts` `showStatus()` | `tui/src/ui/components/status.ts` `configurationSegment` | Dim transient status that replaces itself rather than stacking lines | State-derived footer segment from the native application (preparing / applies after current work / failed · previous kept / needs restart); silent once applied |
+| Codex `history_cell/notices.rs` `new_info_event()` | `tui/src/ui/components/transcript.ts` `renderConfigurationApplied` | One `•` info line with dim detail, separate from diagnostics | Rendered from the durable transcript row, so live and paged history agree; `/session settings` keeps detailed inspection; `/session adopt` is removed |
+
+Web Session banner (`src/app/SessionConfiguration.tsx`) keeps only compact
+pending/failure status; nothing in the browser confirms, schedules or replays a
+commit. No Harness backend, Cordis dependency or reference repository is
+introduced.
+
 ## Conversation header audit (2026-10-23)
 
 Read-only reference: `../deepseek-harness` at

@@ -1,4 +1,4 @@
-import { useSystemChanges } from './SystemChanges';
+import { ConfigurationChangeRow, hasConfigurationChangeRow } from './ConfigurationChangeRow';
 import { WorkflowRunPanel } from './WorkflowRunPanel';
 import { workflowKey } from '../../bindings/workflow-children';
 import { InteractionAudit } from './InteractionAudit';
@@ -20,7 +20,7 @@ import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v62';
+import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v63';
 import { conversation } from '../../bindings/projection';
 import { agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../../bindings/agent-status';
 import { TranscriptContinuation } from './TranscriptContinuation';
@@ -45,14 +45,15 @@ import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
-import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v62';
+import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v63';
 /** Standalone Tool-result bodies are suppressed: the native call projection
  * already renders their content beside the call. Suppressing a body does not
  * erase the entry's authoritative transcript position, so a `PostToolBatch`
  * annotation anchored there still renders in place — as an annotation-only slot. */
 const hasInlineBody = (entry: RuntimeClientTranscriptEntry) => entry.item.type === 'publication_audit'
   ? entry.item.audit.content.some(block => block.kind !== 'proposed_tool_call' && block.text.trim() !== '')
-  : entry.item.type !== 'message' || entry.item.message.role !== 'tool';
+  : entry.item.type === 'configuration_applied' ? hasConfigurationChangeRow(entry.item.change)
+    : entry.item.type !== 'message' || entry.item.message.role !== 'tool';
 /** A native `ask_user` questionnaire is already told by its call's question row
  * (Harness shows no separate interaction record), so its request and settlement
  * audits keep their transcript positions without a body of their own. Other
@@ -73,6 +74,7 @@ export interface RequestFeedback {
   messages: ReadonlyMap<string, ReactNode>;
   attempts: ReadonlyMap<string, ReactNode>;
 }
+const noFeedback: RequestFeedback = { messages: new Map(), attempts: new Map() };
 export function AgentTranscript({ snapshot, history, publicationHeads = [], retrying = false, loadEarlier, loadLater, onHistorical, historicalDisabled, forking, lineageSwitchSafe = false, requestFeedback: suppliedFeedback, compactions = [], contextActivity, workflows }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'|'pending_interactions'>>; history?: TranscriptCache; publicationHeads?: readonly PublicationHead[]; retrying?: boolean; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; forking?: CompletedResponseView; lineageSwitchSafe?: boolean; requestFeedback?: RequestFeedback; compactions?: readonly { head: RuntimeClientProjectionHeadView; content: ReactNode }[]; contextActivity?: ReactNode; workflows?: RuntimeClientSnapshot['workflows'] }) {
   const tx = useTranslation();
   const receiver = useContext(AgentConversationContext);
@@ -128,7 +130,9 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     .map(head => ({ cursor: head.transcript_cursor, item: { type: 'publication_audit', audit: head.audit } }));
   const entries = auditHeads.length ? [...loaded, ...auditHeads].sort((a,b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1) : loaded;
   const descriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], history?.page ?? snapshot.transcript, entries, !!history?.window).filter(descriptor => !isRuntimeStatusContext(descriptor));
-  const requestFeedback = useSystemChanges(snapshot, entries, streaming?.message_id, suppliedFeedback, descriptors);
+  // Harness Chat hides system-prompt and ordinary Context rows; committed
+  // Tool changes arrive as their own transcript facts, never from requests.
+  const requestFeedback = suppliedFeedback ?? noFeedback;
   const deliveries = turnDeliveries(entries, deferredToolDescriptors(snapshot.message_descriptors ?? [], page, [], !!history?.window), page);
   const deliveredTurns = new Set<string>();
   const deliveryTail = (key: string, before?: string, owner?: {conversation_id:string;attempt_id?:string|null}) => {
@@ -264,6 +268,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         partial.content.flatMap(block => block.kind === 'proposed_tool_call' ? [] : [{ type: block.kind, block_index: block.block_index, text: block.text }]), [], { stopped: true, publicationStream: partial.stream_id,
           actions: partial.content.some(block => block.kind === 'text' || block.kind === 'refusal') && <div className={tailCss.actions} data-clock="end"><CopyMessage text={text} publication={partial}/><MessageTime time={partial.settled_at}/></div> });
     }
+    if (entry.item.type === 'configuration_applied') return <ConfigurationChangeRow change={entry.item.change}/>;
     if (entry.item.type === 'interaction_requested' || entry.item.type === 'interaction_settled') {
       const item = entry.item;
       const settlement = entries.find(candidate => candidate.item.type === 'interaction_settled' && candidate.item.attempt_id === item.attempt_id && candidate.item.interaction_id === item.interaction_id)?.item;
