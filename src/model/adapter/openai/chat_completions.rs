@@ -1855,7 +1855,7 @@ fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<Ch
                 function: FunctionObject {
                     name: tool.name.clone(),
                     description: Some(tool.description.clone()),
-                    parameters: Some(tool.input_schema.clone()),
+                    parameters: Some((*tool.input_schema).clone()),
                     strict: None,
                 },
             })
@@ -1951,7 +1951,7 @@ mod tests {
             id: crate::runtime::identity::ToolId::new("tool-ask-user"),
             name: "ask_user".to_owned(),
             description: "structured questionnaire".to_owned(),
-            input_schema: schema.clone(),
+            input_schema: schema.clone().into(),
         }]))
         .expect("Chat Completions tools serialize");
         assert_eq!(encoded[0]["function"]["name"], "ask_user");

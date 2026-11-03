@@ -775,7 +775,8 @@ async fn business_schema_violation_is_a_normal_failed_result_slot() {
         "properties": {"path": {"type": "string"}},
         "required": ["path"],
         "additionalProperties": false
-    });
+    })
+    .into();
     tools
         .register(definition, Arc::new(tool))
         .expect("register");

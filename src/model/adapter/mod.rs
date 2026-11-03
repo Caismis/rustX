@@ -22,6 +22,7 @@ pub mod openai;
 pub(crate) mod profile;
 pub(crate) mod proposal;
 pub mod traits;
+mod transport;
 pub mod validation;
 
 pub use traits::{

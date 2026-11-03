@@ -420,19 +420,56 @@ fn declares_request_params(schema: &Value, root: &Value, path: &[Segment]) -> bo
     }
 }
 
+pub(super) trait Envelope: schemars::JsonSchema + 'static {
+    fn serialize_native<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error>;
+}
+
+struct Native<'a, T>(&'a T);
+impl<T: Envelope> Serialize for Native<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[cfg(test)]
+        NATIVE_PASSES.with(|passes| passes.set(passes.get() + 1));
+        self.0.serialize_native(serializer)
+    }
+}
+
+// Only the bounded transport writer uses this carrier. Wire encoding preserves
+// native JSON or adds decimal quotes, so its final byte bound also bounds the
+// native representation. Avoid traversing the entire DTO once just to count it.
+pub(super) fn bounded_envelope<T: Envelope>(value: &T) -> impl Serialize + '_ {
+    struct Wire<'a, T>(&'a T);
+    impl<T: Envelope> Serialize for Wire<'_, T> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            let schema = crate::runtime_client::structural_json::root::<T>();
+            crate::runtime_client::structural_json::serialize_wire(
+                &Native(self.0),
+                &schema,
+                serializer,
+            )
+        }
+    }
+    Wire(value)
+}
+
+#[cfg(test)]
+thread_local! { static NATIVE_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(super) fn take_native_passes() -> usize {
+    NATIVE_PASSES.with(|passes| passes.replace(0))
+}
+
 macro_rules! envelope {
     ($ty:ty) => {
+        impl Envelope for $ty {
+            fn serialize_native<S: serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> Result<S::Ok, S::Error> {
+                <$ty>::serialize(self, serializer)
+            }
+        }
         impl Serialize for $ty {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                struct Native<'a>(&'a $ty);
-                impl Serialize for Native<'_> {
-                    fn serialize<S: serde::Serializer>(
-                        &self,
-                        serializer: S,
-                    ) -> Result<S::Ok, S::Error> {
-                        <$ty>::serialize(self.0, serializer)
-                    }
-                }
                 // Bound the original native record before wire numeric validation.
                 // The final wire encoding is checked independently by the writer.
                 struct Budget(usize);
@@ -458,12 +495,7 @@ macro_rules! envelope {
                         serde::ser::Error::custom(error)
                     }
                 })?;
-                let schema = crate::runtime_client::structural_json::root::<$ty>();
-                crate::runtime_client::structural_json::serialize_wire(
-                    &Native(self),
-                    &schema,
-                    serializer,
-                )
+                bounded_envelope(self).serialize(serializer)
             }
         }
         impl<'de> Deserialize<'de> for $ty {

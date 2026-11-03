@@ -212,7 +212,8 @@ fn prepared_request(
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": { "command": { "type": "string" } },
-            }),
+            })
+            .into(),
         }],
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -2498,7 +2499,7 @@ fn identity_bounds_make_canonical_trace_details_explicitly_partial() {
                 id: ToolId::new(&identity),
                 name: "historical".into(),
                 description: "frozen".into(),
-                input_schema: serde_json::json!({}),
+                input_schema: serde_json::json!({}).into(),
             }]),
         );
         let call = bash_call("bounded-call");
@@ -4347,7 +4348,8 @@ fn shared_predecessor_compares_complete_prompt_and_tool_definitions() {
         let mut first = prepared_request(&store, 0, None, identity_of("1", 0));
         first.effective_system_prompt = prefix.clone();
         first.tool_definitions[0].description = "t".repeat(TRACE_DETAIL_TEXT_BYTES + 1);
-        first.tool_definitions[0].input_schema = serde_json::json!({"value": "s".repeat(8192)});
+        first.tool_definitions[0].input_schema =
+            serde_json::json!({"value": "s".repeat(8192)}).into();
         let first = commit_request(&store, first, &[]);
         completion(&store, &first, None, None, 4);
         let mut second = prepared_request(&store, 1, None, identity_of("1", 1));
@@ -4355,7 +4357,7 @@ fn shared_predecessor_compares_complete_prompt_and_tool_definitions() {
             format!("{prefix}{}", if prompt_changed { "different" } else { "" });
         second.tool_definitions.clone_from(&first.tool_definitions);
         if tools_changed {
-            second.tool_definitions[0].input_schema["value"] =
+            std::sync::Arc::make_mut(&mut second.tool_definitions[0].input_schema)["value"] =
                 serde_json::json!(format!("{}different", "s".repeat(8192)));
         }
         let second = commit_request(&store, second, &[]);

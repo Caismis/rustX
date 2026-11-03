@@ -1577,7 +1577,7 @@ pub struct RuntimeClientTool {
     /// The human-readable description.
     pub description: String,
     /// The canonical JSON Schema of accepted arguments.
-    pub input_schema: serde_json::Value,
+    pub input_schema: std::sync::Arc<serde_json::Value>,
     /// Who owns an invocation: attempt (foreground) or conversation
     /// (background).
     pub execution_policy: ToolExecutionPolicy,

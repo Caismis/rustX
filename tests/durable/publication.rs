@@ -3608,7 +3608,7 @@ fn t08_t15_request_field_pages_advance_past_large_keys_without_losing_source_byt
             id: ToolId::new("schema-tool"),
             name: "schema_tool".into(),
             description: "description".into(),
-            input_schema: serde_json::Value::Object(schema),
+            input_schema: serde_json::Value::Object(schema).into(),
         }],
         CapabilityRevision::new(1),
         ContextGeneration {

@@ -840,7 +840,7 @@ fn trace_large_request(store: &SqliteConversationStore) -> (RequestSnapshot, u64
         id: ToolId::new("trace-original-tool"),
         name: "Original".into(),
         description: "original schema".repeat(100_000),
-        input_schema: serde_json::json!({"opaque":"水".repeat(400_000),"integer":u64::MAX,"zero":-0.0}),
+        input_schema: serde_json::json!({"opaque":"水".repeat(400_000),"integer":u64::MAX,"zero":-0.0}).into(),
     }];
     freeze_test_input(store, &mut snapshot, &[]);
     let start = store

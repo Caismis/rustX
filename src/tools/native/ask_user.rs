@@ -46,7 +46,7 @@ fn invalid_arguments(detail: impl std::fmt::Display) -> String {
 // typed indexes and property names found in the tool's generated input schema.
 fn malformed_arguments(path: &serde_path_to_error::Path) -> String {
     let schema = input_schema::<AskUserInput>();
-    let mut field_schema = &schema;
+    let mut field_schema = schema.as_ref();
     let mut field_path = String::new();
     for segment in path {
         match segment {
@@ -559,17 +559,17 @@ mod tests {
         ))
         .unwrap();
         let mut original_definition = definition();
-        original_definition.input_schema = before.clone();
+        original_definition.input_schema = before.clone().into();
         let compiled_before = crate::tools::schema::compile_model_definition(&original_definition)
             .expect("baseline definition compiles for model adapters");
-        assert_eq!(compiled_before.input_schema, before);
-        let mut after = registry().model_definitions().remove(0).input_schema;
+        assert_eq!(compiled_before.input_schema.as_ref(), &before);
+        let mut after = (*registry().model_definitions().remove(0).input_schema).clone();
         let captured_after: serde_json::Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/ask_user/schema-after.json"
         ))
         .unwrap();
         assert_eq!(after, captured_after);
-        assert_eq!(after, definition().input_schema);
+        assert_eq!(&after, definition().input_schema.as_ref());
         let text_paths = [
             ("/properties/questions/items/properties/question", 4096),
             ("/properties/questions/items/properties/header", 16),

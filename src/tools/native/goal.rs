@@ -36,17 +36,11 @@ enum UpdateInput {
     Blocked { expected: GoalRef, reason: String },
 }
 
-fn update_schema() -> serde_json::Value {
-    let mut schema = super::registration::input_schema::<UpdateInput>();
-    schema["type"] = serde_json::json!("object");
-    schema
-}
-
 pub(crate) fn registrations() -> Vec<ToolRegistration> {
     [
         (NAMES[0], "Read the current revisioned Goal, or null. Reading never creates or resumes a Goal.", super::registration::input_schema::<GetInput>()),
         (NAMES[1], "Create a persistent cross-turn Goal ONLY when the current Human request explicitly authorizes persistent autonomous pursuit (for example, keep working until the outcome is achieved). The user need not type /goal. Do not create a Goal merely because a task is hard, long, multi-step, uses many Tools, Workflows, or Subagents. Preserve the authorized objective without narrowing or expanding it. Runtime binds the actual initiating Human identity; arguments cannot supply it. One unfinished Goal is allowed. Budget is 1..100 autonomous continuation rounds, default 10; this Human attempt consumes zero. You cannot later increase this budget.", super::registration::input_schema::<CreateInput>()),
-        (NAMES[2], "Declare an Active Goal complete or blocked using the exact observed GoalRef. A stale revision is rejected: read and reason again, never blindly retry. Complete is terminal; blocked requires a reason. Completion declares state; use ordinary facts and Tool results to judge success. Pause, resume, objective edits and budget changes belong to explicit user controls.", update_schema()),
+        (NAMES[2], "Declare an Active Goal complete or blocked using the exact observed GoalRef. A stale revision is rejected: read and reason again, never blindly retry. Complete is terminal; blocked requires a reason. Completion declares state; use ordinary facts and Tool results to judge success. Pause, resume, objective edits and budget changes belong to explicit user controls.", super::registration::input_schema::<UpdateInput>()),
     ].into_iter().map(|(name, description, input_schema)| ToolRegistration::plain(ToolDefinition {
         id: crate::runtime::identity::ToolId::new(format!("native.{name}")),
         name: name.to_owned(), description: description.to_owned(), input_schema,

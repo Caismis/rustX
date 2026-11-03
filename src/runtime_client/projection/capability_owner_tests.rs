@@ -11,7 +11,7 @@ fn tool(index: usize) -> RuntimeClientTool {
         id: ToolId::new(format!("tool-{index}")),
         name: format!("tool_{index}"),
         description: "unchanged 水🙂\\\"\n".repeat(64),
-        input_schema: serde_json::json!({"type":"object","properties":{"n":{"minimum":-0.0}}}),
+        input_schema: serde_json::json!({"type":"object","properties":{"n":{"minimum":-0.0}}}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Parallel,
         approval_policy: ToolApprovalPolicy::Never,
@@ -186,9 +186,9 @@ fn immutable_capability_owner_preserves_raw_pages_and_historical_cut_on_replacem
     let mut oversized = tool(1);
     oversized.description = "x".repeat(checkpoint::CHECKPOINT_ITEM_BYTES);
     let mut overwide = tool(2);
-    overwide.input_schema = serde_json::json!({"enum": vec![0; 33]});
+    overwide.input_schema = serde_json::json!({"enum": vec![0; 33]}).into();
     let mut opaque_integer = tool(3);
-    opaque_integer.input_schema = serde_json::json!({"integer": u64::MAX});
+    opaque_integer.input_schema = serde_json::json!({"integer": u64::MAX}).into();
     let raw = header(vec![tool(0), oversized, overwide, opaque_integer, tool(4)]);
     let raw_bytes = serde_json::to_vec(&raw).unwrap();
     let mut projection = initialized(raw.clone());
@@ -211,7 +211,7 @@ fn immutable_capability_owner_preserves_raw_pages_and_historical_cut_on_replacem
     assert!(!pages.items[3].deferred);
     assert_eq!(
         pages.items[3].value.as_ref().unwrap()["input_schema"],
-        raw.tools[3].input_schema
+        *raw.tools[3].input_schema
     );
     assert!(
         !pages.items[4].deferred,

@@ -66,7 +66,9 @@ async-openai = { version = "0.41", default-features = true, features = ["chat-co
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 eventsource-stream = "0.2"
 tower = { version = "0.5", features = ["util"] }
-jsonschema = "0.26"
+# Upstream's generated meta validators avoid retaining runtime trees for all
+# bundled drafts. Authored schemas and tool arguments are still validated.
+jsonschema = { version = "0.60.2", features = ["macros"] }
 # The native-search substrate behind Glob and Grep. These are implementation
 # dependencies of the shared traversal and of the Grep engine only: no `rg`
 # executable is ever spawned, and none of their defaults are part of the

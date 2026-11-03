@@ -431,7 +431,8 @@ fn child_approval_tools() -> (
             "properties": {"target": {"type": "string"}},
             "required": ["target"],
             "additionalProperties": false
-        }),
+        })
+        .into(),
         execution_policy: rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: rustx::tools::types::ToolConcurrencyPolicy::Sequential,
         approval_policy: rustx::tools::types::ToolApprovalPolicy::Always,

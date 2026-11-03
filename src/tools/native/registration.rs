@@ -107,7 +107,7 @@ fn identity_arguments(arguments: &serde_json::Value) -> Result<serde_json::Value
 ///
 /// Native tools are always builtin-origin and never replayable; the three
 /// policy axes come from the composed [`ToolInvocationPolicy`].
-pub(crate) fn native_definition<I: JsonSchema>(
+pub(crate) fn native_definition<I: JsonSchema + 'static>(
     id: &str,
     name: &str,
     description: &str,
@@ -144,7 +144,21 @@ pub(crate) fn native_definition<I: JsonSchema>(
 ///
 /// Panics only when a native input contract generates a non-object root
 /// schema, which cannot happen for the derived struct contracts.
-pub(crate) fn input_schema<I: JsonSchema>() -> serde_json::Value {
+pub(crate) fn input_schema<I: JsonSchema + 'static>() -> Arc<serde_json::Value> {
+    // Only this closed set of native Rust input types enters the cache. No
+    // authored schema, credential, executor or conversation authority lives here.
+    static SCHEMAS: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<std::any::TypeId, Arc<serde_json::Value>>>,
+    > = std::sync::LazyLock::new(std::sync::Mutex::default);
+    let mut schemas = SCHEMAS.lock().expect("native schema cache");
+    Arc::clone(
+        schemas
+            .entry(std::any::TypeId::of::<I>())
+            .or_insert_with(|| Arc::new(generate_input_schema::<I>())),
+    )
+}
+
+fn generate_input_schema<I: JsonSchema>() -> serde_json::Value {
     let mut settings = SchemaSettings::draft2020_12().with_transform(OptionalIsAbsentNotNull);
     settings.inline_subschemas = true;
     settings.meta_schema = None;
@@ -156,7 +170,28 @@ pub(crate) fn input_schema<I: JsonSchema>() -> serde_json::Value {
         .expect("native tool input contracts generate root object schemas");
     object.remove("title");
     object.remove("description");
+    // Every native call accepts an object, including tagged input enums.
+    object.insert("type".into(), serde_json::json!("object"));
     schema
+}
+
+#[cfg(test)]
+mod sharing_tests {
+    #[test]
+    fn native_schema_is_shared_by_input_type_and_detaches_only_for_edits() {
+        type Input = std::collections::BTreeMap<String, String>;
+        let original = super::input_schema::<Input>();
+        let mut edited = super::input_schema::<Input>();
+        assert!(std::sync::Arc::ptr_eq(&original, &edited));
+        let before = serde_json::to_vec(&original).unwrap();
+        std::sync::Arc::make_mut(&mut edited)["description"] = serde_json::json!("different");
+        assert_eq!(serde_json::to_vec(&original).unwrap(), before);
+        assert!(!std::sync::Arc::ptr_eq(&original, &edited));
+        assert!(std::sync::Arc::ptr_eq(
+            &original,
+            &super::input_schema::<Input>()
+        ));
+    }
 }
 
 /// The native input-contract rule that an optional property means an

@@ -1305,7 +1305,7 @@ mod tests {
             id: ToolId::new(id),
             name: name.to_owned(),
             description: String::new(),
-            input_schema: schema,
+            input_schema: schema.into(),
             execution_policy: execution,
             concurrency_policy: concurrency,
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -1429,7 +1429,7 @@ mod tests {
         // Capability discovery can still supply changed or unvalidated
         // registrations, so that boundary must retain full validation.
         let mut changed = registry.registrations();
-        changed[0].definition.input_schema = json!({"type": "unknown"});
+        changed[0].definition.input_schema = json!({"type": "unknown"}).into();
         assert!(matches!(
             ToolRegistry::from_registrations(changed),
             Err(ToolRegistryError::InvalidSchema(_))
@@ -1769,7 +1769,7 @@ mod tests {
                     panic!("{label} needs no synthetic field under {policy:?}: {error}")
                 });
                 assert_eq!(
-                    &registry.model_definitions()[0].input_schema,
+                    registry.model_definitions()[0].input_schema.as_ref(),
                     schema,
                     "{label} is compiled verbatim under {policy:?}"
                 );
@@ -2004,7 +2004,7 @@ mod tests {
             ),
         )
         .expect("register");
-        assert_eq!(registry.definitions()[0].input_schema, schema);
+        assert_eq!(registry.definitions()[0].input_schema.as_ref(), &schema);
         let compiled = registry.model_definitions()[0].input_schema.clone();
         assert!(
             compiled["properties"]["execution_mode"].is_object(),
@@ -2015,8 +2015,8 @@ mod tests {
             "the retired reserved selector is gone from the compiled schema"
         );
         assert_eq!(
-            registry.definitions()[0].input_schema,
-            schema,
+            registry.definitions()[0].input_schema.as_ref(),
+            &schema,
             "the canonical schema stays verbatim"
         );
     }

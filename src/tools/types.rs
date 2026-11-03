@@ -11,6 +11,7 @@
 //! MCP tools, Issue #174). No external SDK type appears here.
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::runtime::identity::{McpServerId, ToolCallId, ToolId};
 use crate::runtime::types::CancellationReason;
@@ -42,7 +43,7 @@ pub struct ToolDefinition {
     pub description: String,
     /// The original canonical JSON Schema document describing the accepted
     /// tool-call arguments. Tool-owned and never mutated by the runtime.
-    pub input_schema: serde_json::Value,
+    pub input_schema: Arc<serde_json::Value>,
     /// Who owns an invocation of this tool: the attempt (foreground) or the
     /// conversation (background). Required: a missing policy is never
     /// silently interpreted.
@@ -1065,7 +1066,7 @@ pub struct ModelToolDefinition {
     pub description: String,
     /// The compiled model-facing JSON Schema, including the reserved
     /// runtime invocation metadata for `ModelSelectable` tools.
-    pub input_schema: serde_json::Value,
+    pub input_schema: Arc<serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -1120,7 +1121,7 @@ mod tests {
             id: ToolId::new("tool-bash"),
             name: "bash".to_owned(),
             description: "Run a shell command".to_owned(),
-            input_schema: json!({"type": "object"}),
+            input_schema: json!({"type": "object"}).into(),
             execution_policy: ToolExecutionPolicy::ModelSelectable,
             concurrency_policy: ToolConcurrencyPolicy::Parallel,
             approval_policy: ToolApprovalPolicy::Always,

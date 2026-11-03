@@ -519,7 +519,7 @@ pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),
         description: format!("Tool {name}"),
-        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
         approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
@@ -982,7 +982,7 @@ pub fn tool_policies(
         id: ToolId::new(id),
         name: name.to_owned(),
         description: format!("Tool {name}"),
-        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}).into(),
         execution_policy: execution,
         concurrency_policy: concurrency,
         approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
@@ -1321,7 +1321,7 @@ pub fn model_tool(name: &str, id: &str) -> rustx::tools::types::ModelToolDefinit
         id: ToolId::new(id),
         name: name.to_owned(),
         description: format!("Tool {name}"),
-        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}).into(),
     }
 }
 
@@ -1345,7 +1345,8 @@ pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::Model
             "type": "object",
             "properties": {"command": {"type": "string"}},
             "required": ["command"],
-        }),
+        })
+        .into(),
         execution_policy: ToolExecutionPolicy::ModelSelectable,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
         approval_policy: ToolApprovalPolicy::Never,

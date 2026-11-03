@@ -8,7 +8,7 @@ fn configuration_snapshot(store: &SqliteConversationStore, turn: u32) -> Request
         id: ToolId::new(format!("native-shared-{index}")),
         name: format!("native_shared_{index}"),
         description: "exact tool description".repeat(128),
-        input_schema: serde_json::json!({"type":"object", "properties":{"opaque":{"default":[null,true,-0.0,u64::MAX],"description":"schema 水🙂".repeat(512)}}}),
+        input_schema: serde_json::json!({"type":"object", "properties":{"opaque":{"default":[null,true,-0.0,u64::MAX],"description":"schema 水🙂".repeat(512)}}}).into(),
     }).collect();
     snapshot.system_sections = ["first", "second"]
         .map(|name| crate::context::assembly::AcceptedSystemSection {

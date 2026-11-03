@@ -389,7 +389,8 @@ mod tests {
             input_schema: serde_json::json!({
                 "type": "object",
                 "additionalProperties": false
-            }),
+            })
+            .into(),
             execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,

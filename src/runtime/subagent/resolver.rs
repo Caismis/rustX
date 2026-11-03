@@ -1671,7 +1671,8 @@ mod tests {
             id: ToolId::new(format!("tool-{name}-{origin:?}")),
             name: name.to_owned(),
             description: format!("{name} tool"),
-            input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
+            input_schema: serde_json::json!({"type": "object", "additionalProperties": false})
+                .into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
             approval_policy: ToolApprovalPolicy::Never,
@@ -2600,7 +2601,8 @@ mod tests {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
                 "required": ["path"]
-            }),
+            })
+            .into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
             approval_policy: ToolApprovalPolicy::Never,
@@ -2647,7 +2649,8 @@ mod tests {
             "type": "object",
             "properties": {"path": {"type": "string"}, "limit": {"type": "number"}},
             "required": ["path"]
-        });
+        })
+        .into();
         variants.push(spec_with_builtin(reschematized));
 
         let mut backgrounded = base.clone();
@@ -2724,9 +2727,9 @@ mod tests {
         );
 
         let mut first = frozen_builtin_definition();
-        first.input_schema = forwards;
+        first.input_schema = forwards.into();
         let mut second = frozen_builtin_definition();
-        second.input_schema = backwards;
+        second.input_schema = backwards.into();
         assert_eq!(
             spec_with_builtin(first).profile_digest(),
             spec_with_builtin(second).profile_digest(),
@@ -2736,9 +2739,9 @@ mod tests {
         // Array order, by contrast, is semantic in JSON Schema and is never
         // sorted away.
         let mut ascending = frozen_builtin_definition();
-        ascending.input_schema = serde_json::json!({"required": ["a", "b"]});
+        ascending.input_schema = serde_json::json!({"required": ["a", "b"]}).into();
         let mut descending = frozen_builtin_definition();
-        descending.input_schema = serde_json::json!({"required": ["b", "a"]});
+        descending.input_schema = serde_json::json!({"required": ["b", "a"]}).into();
         assert_ne!(
             spec_with_builtin(ascending).profile_digest(),
             spec_with_builtin(descending).profile_digest(),
@@ -2763,7 +2766,7 @@ mod tests {
             id: ToolId::new("mcp-github-get_issue"),
             name: "get_issue".to_owned(),
             description: "Reads one issue.".to_owned(),
-            input_schema: serde_json::json!({"type": "object"}),
+            input_schema: serde_json::json!({"type": "object"}).into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
             approval_policy: ToolApprovalPolicy::Never,

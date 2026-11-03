@@ -623,7 +623,8 @@ async fn schema_rejection_stays_on_the_tool_path() {
         "properties": {"path": {"type": "string"}},
         "required": ["path"],
         "additionalProperties": false
-    });
+    })
+    .into();
     tools
         .register(definition, Arc::new(tool))
         .expect("register the strict tool");

@@ -118,7 +118,7 @@ impl CapabilityReadSource {
                 [key] if key == "name" => Some(&tool.name),
                 [key] if key == "description" => Some(&tool.description),
                 [key, rest @ ..] if key == "input_schema" => {
-                    let mut value = &tool.input_schema;
+                    let mut value = tool.input_schema.as_ref();
                     for component in rest {
                         value = if let Some(index) = component.strip_prefix('@') {
                             value.as_array()?.get(index.parse::<usize>().ok()?)?

@@ -2490,7 +2490,8 @@ async fn invalid_preflight_never_reaches_pre_tool_policy() {
             "type": "object",
             "required": ["path"],
             "properties": {"path": {"type": "string"}}
-        }),
+        })
+        .into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
         approval_policy: ToolApprovalPolicy::Never,

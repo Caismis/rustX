@@ -161,7 +161,7 @@ fn shape_snapshot(store: &SqliteConversationStore, turn: u32) -> RequestSnapshot
                 "number": {"enum":[-1.25, -0.0, 0, 1]},
                 "opaque": {"const":u64::MAX}
             }
-        }),
+        }).into(),
     }];
     let history = store.projected_history().unwrap();
     snapshot.history_cut = history.cut;

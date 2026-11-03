@@ -335,11 +335,11 @@ fn t08_t12_t19_request_metadata_requires_the_original_message_producer_path() {
         id: ToolId::new("metadata-tool"),
         name: "Original".into(),
         description: "Original schema".into(),
-        input_schema: opaque.clone(),
+        input_schema: opaque.clone().into(),
     }];
     let mut deferred = snapshot.tool_definitions[0].clone();
     deferred.id = ToolId::new("metadata-unsafe-original");
-    deferred.input_schema["integer"] = serde_json::json!(u64::MAX);
+    std::sync::Arc::make_mut(&mut deferred.input_schema)["integer"] = serde_json::json!(u64::MAX);
     snapshot.tool_definitions.push(deferred);
     freeze_test_input(&store, &mut snapshot, &[]);
     let started = store
