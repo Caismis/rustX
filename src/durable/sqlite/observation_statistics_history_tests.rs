@@ -374,3 +374,41 @@ fn statistics_start_facts_derive_deferred_clock_coordinates_and_preserve_exact_t
         at
     );
 }
+
+#[test]
+fn statistics_normal_nonstatistical_batch_keeps_the_provisional_prefix() {
+    use self::observation_response_tests::response_start;
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = response_start(&store, "statistics-forward-prefix");
+    observation_statistics::fold_work();
+    observation_statistics::read_work();
+    {
+        let connection = store.lock().unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        for (id, event) in [
+            ("forward-start", RuntimeEvent::TurnStarted),
+            ("forward-done", RuntimeEvent::TurnCompleted),
+            (
+                "forward-terminal",
+                RuntimeEvent::AttemptTimedOut {
+                    attempt_id: attempt.clone(),
+                },
+            ),
+        ] {
+            let mut envelope = envelope(store.conversation_id(), id, Some(attempt.clone()), event);
+            envelope.turn_id = Some(TurnId::new("forward-turn"));
+            persist_event_tx(
+                &store.conn.event_guard,
+                &transaction,
+                &store.conversation_id,
+                envelope,
+            )
+            .unwrap();
+        }
+        transaction.commit().unwrap();
+    }
+    assert_eq!(observation_statistics::fold_work(), (2, 0));
+    assert_eq!(observation_statistics::read_work().0, 0);
+    assert_eq!(store.observation_statistics(4).unwrap().steps, 1);
+}

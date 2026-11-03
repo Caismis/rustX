@@ -143,10 +143,19 @@ impl FoldCache {
             if changed {
                 self.history_started.store(true, Ordering::Release);
                 self.invalidate();
-            } else if self.seat.lock().expect("statistics fold").pending.is_some() {
-                // A provisional append may have been rolled back and its
-                // native sequence reused by this non-statistical event.
-                self.invalidate();
+            } else if let PreUpdateCase::Insert(new) = change {
+                let seat = self.seat.lock().expect("statistics fold");
+                if let Some(pending) = &seat.pending {
+                    // A later unrelated append preserves the prefix. A reused
+                    // provisional sequence can follow ROLLBACK TO, so fence it.
+                    let later = new.get_new_column_value(self.columns[0]).is_ok_and(|value| {
+                        matches!(value, rusqlite::types::ValueRef::Integer(sequence)
+                            if u64::try_from(sequence).is_ok_and(|sequence| sequence > pending.frame.sequence))
+                    });
+                    if !later {
+                        self.invalidate();
+                    }
+                }
             }
         } else if changed {
             // Product statistics are append-only after bootstrap. An UPDATE,
@@ -177,10 +186,33 @@ impl FoldCache {
                 } else {
                     self.invalidate();
                 }
-            } else if self.seat.lock().expect("statistics fold").pending.is_some() {
-                // Fence a native frontier rewrite after a provisional fold,
-                // including reuse of a rolled-back sequence in this batch.
-                self.invalidate();
+            } else if let PreUpdateCase::Update {
+                old_value_accessor: old,
+                new_value_accessor: new,
+            } = change
+            {
+                let seat = self.seat.lock().expect("statistics fold");
+                if let Some(pending) = &seat.pending {
+                    // Ordinary cursor advancement cannot remove a prefix. An
+                    // old cursor below the certificate exposes ROLLBACK TO;
+                    // a rewind or invalid value is not a native append.
+                    let forward = match (
+                        old.get_old_column_value(self.base_columns[2]),
+                        new.get_new_column_value(self.base_columns[2]),
+                    ) {
+                        (
+                            Ok(rusqlite::types::ValueRef::Integer(old)),
+                            Ok(rusqlite::types::ValueRef::Integer(new)),
+                        ) => {
+                            u64::try_from(old).is_ok_and(|old| old >= pending.frame.sequence)
+                                && new >= old
+                        }
+                        _ => false,
+                    };
+                    if !forward {
+                        self.invalidate();
+                    }
+                }
             }
         }
     }
