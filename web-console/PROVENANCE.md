@@ -1,3 +1,35 @@
+## Cross-entry completed-header spacing (2026-11-03)
+
+The two-Turn report reproduces 4px after a header seated in earlier reasoning,
+versus 16px when the header and Workflow share an entry. Earlier checks covered
+the shared-entry layout but missed the cross-entry path. A collapsed header-only
+entry now has the existing process-header role, and presentation marks its next
+visible row for the same 16px clearance. Retained hidden rows and invisible
+continuation markers do not consume the boundary; the former DOM-adjacent
+selector is removed. Native keys, anchor identity, disclosure state and source
+order are preserved. This also makes a reply directly below the completed
+divider use 16px; replies after visible process content continue to use 12px.
+
+The native `workflow-turns` fixture puts the two layouts on one page. Its second
+variant inserts a retained, folded intermediate Assistant reply between the
+header and Workflow. Both variants reproduced `[4, 16]` before the fix and must
+produce `[16, 16]` after it, including Workflow and process disclosure round trips
+at desktop 1440px and touch-enabled 390px in both themes. Browser plugin not
+available; verification uses the existing pinned Chromium container. Captures
+are saved outside the repository as `/tmp/rustx-workflow-turns-{width}-{theme}.png`
+and `/tmp/rustx-workflow-turns-hidden-{width}-{theme}.png`.
+
+Validation passes 3,919 unit tests (four existing skips) and 74 distinct browser
+cases, including all eight paired-Turn cases, strict existing Agent/composer
+references, Chat opening/switching/reading, disclosures, delivery/summary flows
+and the real native Workflow child. The mobile comparison reads both rectangles
+in one browser execution, so focus-driven reader scrolling cannot mix coordinate
+frames. It also checks that the intermediate seat remains hidden and mounted,
+and that toggling retains the original Workflow card DOM. Types, production
+build, localization and source/dependency provenance pass. No screenshot
+references or comparison tolerances change. Safari and real mobile hardware
+remain outside this pinned Chromium run.
+
 ## Chat spacing audit (2026-11-03)
 
 Read-only reference remains Harness `ce7073d51254c26cd63b22a60835b8f948deb447`,

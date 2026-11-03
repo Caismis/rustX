@@ -72,7 +72,7 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
     const duration = t('agent:duration.minutes-seconds', { m: 1, s: 5 });
     await expect(process).toHaveText(t('agent:copy.took-value', { p0: duration }));
     await expect(process).toHaveAttribute('aria-expanded', 'false');
-    expect(await gap(process, reply)).toBe(12);
+    expect(await gap(process, reply)).toBe(16);
     await expect(page.getByRole('heading', { name: '对话流已整理', exact: true })).toBeVisible();
     await process.focus(); await process.press('Enter');
     await expect(process).toHaveAttribute('aria-expanded', 'true');

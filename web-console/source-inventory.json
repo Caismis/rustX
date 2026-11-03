@@ -1225,7 +1225,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "fed34d843977a720f6603f0f0ed9728a9e2269cada43643722a666e9df817f61",
+      "local_sha256": "824d050b13fc7aa9d8e80f51b7ac06e7186a5f97e5053e9d17e92c294a6f2c79",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
@@ -1237,7 +1237,7 @@
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
           "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
           "upstream_sha256": "ed939e63d6e6479b7b240a79c3231ade8c32f55235002ac33fc6a085e0497b60",
-          "treatment": "Adapt the current Harness 4px process, 12px response and 16px settled-boundary rhythm, stable running/tail geometry and native anchored seats. Canonical entries and deferred-content sections share the flow layout; content after a nested process header receives the same clearance without a Workflow-only exception. Native seat and reading ownership remain unchanged."
+          "treatment": "Adapt the current Harness 4px process, 12px response and 16px settled-boundary rhythm, stable running/tail geometry and native anchored seats. Canonical entries and deferred-content sections share the flow layout; content after a nested process header receives the same clearance without a Workflow-only exception. Native seat and reading ownership remain unchanged. Cross-entry settled clearance follows the preceding visible header role and ignores retained hidden seats, instead of relying on DOM adjacency."
         }
       ]
     },

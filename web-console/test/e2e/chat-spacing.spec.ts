@@ -2,12 +2,12 @@ import { expect, test, type Locator } from '@playwright/test';
 
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 const gap = async (a: Locator, b: Locator) => {
-  const first = (await a.boundingBox())!, next = (await b.boundingBox())!;
-  return next.y - first.y - first.height;
+  // Focus can scroll the mobile reader between separate remote measurements.
+  return a.evaluate((first, next) => next!.getBoundingClientRect().top - first.getBoundingClientRect().bottom, await b.elementHandle());
 };
 for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const) test.describe(`${width}px ${theme}`, () => {
   test.use({ hasTouch: width === 390, isMobile: width === 390 });
-  for (const kind of ['workflow', 'descriptor', 'descriptor-tools', 'status']) test(`${kind} keeps spacing at native seat boundaries`, async ({ page }) => {
+  for (const kind of ['workflow', 'workflow-turns', 'workflow-turns-hidden', 'descriptor', 'descriptor-tools', 'status']) test(`${kind} keeps spacing at native seat boundaries`, async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -16,7 +16,27 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
     await page.addInitScript(theme => { localStorage.setItem('rustx-appearance-v1', theme); localStorage.setItem('rustx-locale-v1', 'en'); }, theme);
     await page.goto(`${origin}/test/fixtures/agent.html?mode=chat-spacing&case=${kind}`);
     await expect(page).toHaveTitle('Session A — rustX');
-    if (kind === 'workflow') {
+    if (kind.startsWith('workflow-turns')) {
+      const headers = page.locator('[data-turn-process]'), cards = page.locator('[data-workflow-run-id]');
+      await expect(headers).toHaveCount(2); await expect(cards).toHaveCount(2);
+      if (kind === 'workflow-turns-hidden') {
+        const intermediate = page.locator('[data-chat-anchor-key="message:workflow-turn-intermediate"]');
+        await expect(intermediate).toBeAttached(); await expect(intermediate).toBeHidden();
+      }
+      const retainedCard = await cards.first().elementHandle();
+      const clearance = async () => Promise.all([0, 1].map(index => gap(headers.nth(index), cards.nth(index))));
+      await headers.first().scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `/tmp/rustx-${kind}-${width}-${theme}.png` });
+      expect(await clearance()).toEqual([16, 16]);
+      for (const index of [0, 1]) {
+        const toggle = cards.nth(index).locator('[data-disclosure-row]'); await toggle.press('Enter');
+        expect(await clearance()).toEqual([16, 16]);
+        await toggle.press('Enter');
+        await headers.nth(index).press('Enter'); await headers.nth(index).press('Enter');
+        expect(await clearance()).toEqual([16, 16]);
+      }
+      expect(await cards.first().evaluate((element, previous) => element === previous, retainedCard)).toBe(true);
+    } else if (kind === 'workflow') {
       const tool = page.locator('[data-tool-call-id="spacing-bash"]'), cards = page.locator('[data-workflow-run-id]');
       await expect(tool).toBeVisible(); await expect(cards).toHaveCount(2);
       await page.screenshot({ path: `/tmp/rustx-chat-spacing-${kind}-${width}-${theme}.png` });

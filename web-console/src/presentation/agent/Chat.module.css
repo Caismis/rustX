@@ -79,7 +79,7 @@
 .column > [data-chat-flow-kind="turn-process"],
 .column > [data-chat-flow-kind="user"]:not(:first-child),
 .column > .flowItem:has([data-turn-process]),
-.column > [data-chat-flow-kind="turn-process"] + :not([hidden]):not(:empty),
+.column > [data-chat-after-process]:not([hidden]):not(:empty),
 .flow > [data-turn-process] + :not([hidden]):not(:empty):not([role="status"]),
 /* Anchored process headers may be inside the preceding MessageSeat. */
 .flow > .flow:has(> [data-turn-process]) + :not([hidden]):not(:empty) {

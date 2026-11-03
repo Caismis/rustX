@@ -1,3 +1,13 @@
+# Cross-entry completed-header spacing (2026-11-03)
+
+A collapsed entry that renders only its completed header carries the same
+presentation role as a standalone process header. The next visible native row
+receives 16px clearance even when its Workflow call is in a later entry.
+Retained hidden intermediate replies and invisible continuation markers do not
+consume that boundary. Native keys, anchors and mounted disclosure bodies stay
+in place. Ordinary process rows retain 4px and replies after visible process
+content retain 12px; a reply directly after the completed divider uses 16px.
+
 # Chat spacing audit (2026-11-03)
 
 Canonical entries and deferred original-content sections now use the existing
