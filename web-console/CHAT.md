@@ -23,6 +23,11 @@ status text. Successful runs collapse on settlement; abnormal runs stay open,
 and focused one-shot Agent links retain their inspection/navigation owner.
 These changes concern Workflow execution inside Chat, not the graph editor.
 
+The settled divider also retains its 16px clearance when a Workflow panel is
+the sibling of an anchored MessageSeat. These native cards stay visible when
+the process is folded, so the spacing rule covers their actual sibling layout
+as well as direct process content; consecutive Workflow cards still use 4px.
+
 # Conversation flow refresh (2026-11-03)
 
 Read-only reference: sibling DeepSeek Harness checkout at

@@ -22,6 +22,14 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
     const first = completed.locator('[data-disclosure-row]').first(), second = cancelled.locator('[data-disclosure-row]').first();
     await expect(first).toHaveAttribute('aria-expanded', 'false');
     await expect(second).toHaveAttribute('aria-expanded', 'true');
+    const process = page.locator('[data-turn-process]');
+    const dividerClearance = async () => {
+      const header = (await process.boundingBox())!, card = (await first.boundingBox())!;
+      return card.y - header.y - header.height;
+    };
+    await expect(process).toHaveAttribute('aria-expanded', 'false');
+    await page.screenshot({ path: `/tmp/rustx-workflow-divider-${width}-${theme}.png` });
+    expect(await dividerClearance()).toBe(16);
     const countText = t('common:workflow.nodes', { count: 3 });
     for (const header of [first, second]) {
       const title = header.getByText(header === first ? 'test_flow' : 'test_flow_cancelled_with_a_long_name_for_layout', { exact: true });
@@ -38,6 +46,14 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
     await expect(cancelled.locator('[data-workflow-node]')).toHaveCount(0);
     await page.screenshot({ path: `/tmp/rustx-composer-workflow-${width}-${theme}-collapsed.png` });
     await first.focus(); await first.press('Space');
+    await expect(completed.locator('[data-workflow-node]')).toHaveCount(3);
+    expect(await dividerClearance()).toBe(16);
+    await process.focus(); await process.press('Enter');
+    await expect(process).toHaveAttribute('aria-expanded', 'true');
+    expect(await dividerClearance()).toBeGreaterThanOrEqual(16);
+    await process.press('Enter');
+    await expect(process).toHaveAttribute('aria-expanded', 'false');
+    expect(await dividerClearance()).toBe(16);
     await expect(completed.locator('[data-workflow-node]')).toHaveCount(3);
     await expect(completed).toContainText(t('common:workflow.kind.template'));
     await expect(completed).toContainText(t('common:workflow.kind.list'));

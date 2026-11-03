@@ -1,5 +1,17 @@
 ## Composer and Workflow display audit (2026-11-03)
 
+Follow-up: the supplied image exposed a 0px gap between the settled Turn's
+divider and the first Workflow card. The native transcript renders cards beside
+their MessageSeat to retain visibility when its process is folded; the existing
+16px direct-child rule missed this sibling boundary. Extend that same spacing
+rule to the native card position, without moving cards into the disclosure or
+changing admission, visibility or status ownership. All four desktop/narrow and
+light/dark browser cases first reproduced the 0px gap, then assert 16px clearance
+with the Workflow open/closed and after a process disclosure round trip.
+Follow-up validation passes 45 related unit tests and nine pinned Chromium
+cases covering Workflow clearance, Chat flow and the native one-shot child;
+TypeScript, production build and source/dependency provenance also pass.
+
 Read-only reference: sibling `deepseek-harness` at
 [`ce7073d51254c26cd63b22a60835b8f948deb447`](https://github.com/deepseek-ai/deepseek-harness/tree/ce7073d51254c26cd63b22a60835b8f948deb447).
 Inspected `packages/client/ui-conversation/src/client/skeleton/InputBar.tsx` /
