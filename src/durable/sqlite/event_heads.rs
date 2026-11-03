@@ -3,8 +3,10 @@
 //! newer of those two rows. It never scans unrelated headers or sorts history.
 use super::{Connection, ConversationStoreError, OptionalExtension, storage};
 
-pub(super) const STATISTICS: &str = "SELECT observation_statistics FROM events WHERE sequence=(
-    SELECT max(sequence) FROM (
+pub(super) const STATISTICS: &str = "SELECT sequence,
+    CASE WHEN typeof(observation_statistics)='blob' AND length(observation_statistics)<=49152 THEN observation_statistics ELSE 0 END,
+    CASE WHEN observation_statistics_checkpoint IS NULL THEN NULL WHEN typeof(observation_statistics_checkpoint)='blob' AND length(observation_statistics_checkpoint)<=49152 THEN observation_statistics_checkpoint ELSE 0 END
+    FROM events WHERE sequence=(SELECT max(sequence) FROM (
         SELECT (SELECT sequence FROM events INDEXED BY events_aggregate_heads_idx
             WHERE observation_aggregate_heads>0 AND observation_aggregate_heads=2
             AND sequence<=?1 ORDER BY sequence DESC LIMIT 1) AS sequence

@@ -283,7 +283,7 @@ fn deferred_native_event_schema_refuses_the_old_overlay_database() {
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 88,
-            expected: 89
+            expected: 90
         })
     ));
 }

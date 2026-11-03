@@ -17,7 +17,7 @@ use crate::durable::sqlite::statements::FixedStatements;
 /// caller's pinned transaction, so external DDL cannot race the proof.
 pub(super) struct Guard {
     installed: Option<(i64, i64)>,
-    statistics: observation_statistics::FoldCache,
+    statistics: std::sync::Arc<observation_statistics::FoldCache>,
     execution: observation_execution::FoldCache,
 }
 impl Guard {
@@ -25,11 +25,14 @@ impl Guard {
     pub(super) fn uninstalled() -> Self {
         Self {
             installed: None,
-            statistics: observation_statistics::FoldCache::default(),
+            statistics: observation_statistics::FoldCache::uninstalled(),
             execution: observation_execution::FoldCache::default(),
         }
     }
-    pub(super) fn new(connection: &Connection) -> Self {
+    pub(super) fn new(
+        connection: &Connection,
+        statistics: std::sync::Arc<observation_statistics::FoldCache>,
+    ) -> Self {
         let installed = connection
             .unchecked_transaction()
             .ok()
@@ -39,9 +42,12 @@ impl Guard {
                     .flatten();
                 transaction.commit().ok().and(installed)
             });
+        if installed.is_none() {
+            statistics.disable();
+        }
         Self {
             installed,
-            statistics: observation_statistics::FoldCache::default(),
+            statistics,
             execution: observation_execution::FoldCache::default(),
         }
     }
@@ -51,7 +57,11 @@ impl Guard {
         {
             return true;
         }
+        self.statistics.disable();
         no_custom_triggers(connection)
+    }
+    pub(super) fn publish_statistics(&self, connection: &Connection) {
+        self.statistics.publish(connection);
     }
 }
 fn schema_versions(connection: &Connection) -> Option<(i64, i64)> {
@@ -397,14 +407,14 @@ fn insert(
         observation_readiness_missing,observation_trace_total,observation_statistics,observation_members,observation_member_anchor,
         observation_assistant_ledger,observation_tool_ledger,observation_tool_block,observation_tool_phase,observation_execution,observation_execution_owner,
         observation_occupancy,observation_source,observation_witness,observation_trace_fact,observation_trace_owner,
-        observation_transcript,observation_turn_header,observation_turn_anchor,observation_turn_ordinal,observation_turn_prompt,observation_turn_prompt_positive,observation_unavailable)
-        VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38)",
+        observation_transcript,observation_turn_header,observation_turn_anchor,observation_turn_ordinal,observation_turn_prompt,observation_turn_prompt_positive,observation_unavailable,observation_statistics_checkpoint)
+        VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39)",
         params![event.sequence,event.event_id.as_str(),i64::from(event.schema_version),event.conversation_id.as_str(),event.attempt_id.as_ref().map(ToString::to_string),event.turn_id.as_ref().map(ToString::to_string),json,event.timestamp.to_rfc3339(),
             observation_statistics::is_trace_anchor(&event.event),observation_statistics::requires_statistics(event),observation_event::native_kind(&event.event).ok(),observation_members::requires_members(event),observation_turn::required(event),observation_trace::required(event),observation_execution::required(event),
             !row.readiness,aggregate.and_then(|value|value.statistics.trace_total),aggregate.and_then(|value|value.statistics.statistics.as_ref()).map(|value|&value.bytes),aggregate.and_then(|value|value.members.as_ref()).map(|value|&value.bytes),aggregate.and_then(append_facts::Aggregates::member_anchor),
             row.assistant_ledger,occurrence.map(|value|value.ledger_position),occurrence.map(|value|value.block_index.get()),occurrence.and(phase),row.execution.as_ref().map(|value|&value.capture.bytes),row.execution.as_ref().map(|value|value.owner),
             row.occupancy,source.and_then(|value|value.inline_source.as_ref()),source.map(|value|&value.witness.bytes),row.trace.as_ref().map(|value|&value.bytes),row.trace.as_ref().and_then(|value|value.owner),
-            row.transcript.map(TranscriptCursor::get),turn.and_then(|value|value.header.as_ref()),turn.and_then(|value|value.anchor),turn.and_then(|value|value.ordinal),turn.and_then(|value|value.prompt.as_ref()),turn.and_then(|value|value.prompt.as_ref()).is_some_and(|bytes|!bytes.is_empty()),!row.available])
+            row.transcript.map(TranscriptCursor::get),turn.and_then(|value|value.header.as_ref()),turn.and_then(|value|value.anchor),turn.and_then(|value|value.ordinal),turn.and_then(|value|value.prompt.as_ref()),turn.and_then(|value|value.prompt.as_ref()).is_some_and(|bytes|!bytes.is_empty()),!row.available,aggregate.and_then(|value|value.statistics.checkpoint.as_ref())])
         .map_err(|error|storage(format!("insert prepared runtime event: {error}")))?;
     // Immediate foreign keys require the native J row before its model and
     // adoption children. Their values were prepared above without rereading

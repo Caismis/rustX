@@ -280,44 +280,20 @@ fn append_aggregate_failure_keeps_other_event_evidence_independent() {
 }
 
 #[test]
-fn append_statistics_reuse_keeps_actual_cut_and_hole_checks() {
+fn append_statistics_reads_current_contributions_and_keeps_actual_cut_and_hole_checks() {
     use super::observation_response_tests::response_start;
-    let store = store();
-    store.initialize(&[]).unwrap();
-    response_start(&store, "stored-statistics");
-    let event = store.read_events(None, 1).unwrap().events.pop().unwrap();
-    let connection = store.lock().unwrap();
-    let prepared = observation_statistics::prepare(&connection, &event).unwrap();
-    assert_eq!(
-        observation_statistics::read_prepared(&connection, 1, Some(&prepared)).unwrap(),
-        observation_statistics::read(&connection, 1).unwrap()
-    );
-    let mut changed: serde_json::Value =
-        observation_codec::decode(&prepared.statistics.as_ref().unwrap().bytes).unwrap();
-    changed[0][0] = serde_json::json!(99);
-    connection
-        .execute(
-            "UPDATE events SET observation_statistics=?1 WHERE sequence=1",
-            [observation_codec::encode_admitted(&changed).unwrap()],
-        )
-        .unwrap();
-    let actual = observation_statistics::read_prepared(&connection, 1, Some(&prepared)).unwrap();
-    assert_eq!(actual.turns, 99);
-    assert_eq!(
-        actual,
-        observation_statistics::read(&connection, 1).unwrap()
-    );
-    assert!(matches!(
-        observation_statistics::read_prepared(&connection, 2, Some(&prepared)),
-        Err(ConversationStoreError::InvalidReference(_))
-    ));
-    connection
-        .execute(
-            "UPDATE events SET observation_statistics=NULL WHERE sequence=1",
-            [],
-        )
-        .unwrap();
-    assert!(observation_statistics::read_prepared(&connection, 1, Some(&prepared)).is_err());
+    let store=store();store.initialize(&[]).unwrap();response_start(&store,"stored-statistics");
+    let connection=store.lock().unwrap();
+    let expected=observation_statistics::read(&connection,1).unwrap();assert_eq!(expected.turns,1);
+    let bytes:Vec<u8>=connection.query_row("SELECT observation_statistics FROM events WHERE sequence=1",[],|row|row.get(0)).unwrap();
+    let mut changed:serde_json::Value=observation_codec::decode(&bytes).unwrap();changed[3][0]=serde_json::json!(255);
+    let transaction=connection.unchecked_transaction().unwrap();
+    transaction.execute("UPDATE events SET observation_statistics=?1 WHERE sequence=1",[observation_codec::encode_admitted(&changed).unwrap()]).unwrap();
+    assert!(observation_statistics::read(&transaction,1).is_err());
+    assert!(matches!(observation_statistics::read(&transaction,2),Err(ConversationStoreError::InvalidReference(_))));
+    transaction.rollback().unwrap();assert_eq!(observation_statistics::read(&connection,1).unwrap(),expected);
+    connection.execute("UPDATE events SET observation_statistics=NULL WHERE sequence=1",[]).unwrap();
+    assert!(observation_statistics::read(&connection,1).is_err());
 }
 
 #[test]
@@ -403,10 +379,13 @@ fn aggregate_folds_reuse_current_full_state_and_keep_old_cuts() {
     let attempt = response_start(&store, "fold-owned");
     let old = store.observation_statistics(1).unwrap();
     append_facts::take_fold_work();
+    observation_statistics::fold_work();
     response_message(&store, &attempt, "fold-owned-message");
-    assert_eq!(append_facts::take_fold_work(), (2, 0));
+    assert_eq!(append_facts::take_fold_work(), (1, 0));
+    assert_eq!(observation_statistics::fold_work(), (1,0));
     response_complete(&store, &attempt);
-    assert_eq!(append_facts::take_fold_work(), (2, 0));
+    assert_eq!(append_facts::take_fold_work(), (1, 0));
+    assert_eq!(observation_statistics::fold_work(), (1,0));
     assert_eq!(store.observation_statistics(1).unwrap(), old);
     let current = store.observation_read_cut().unwrap().read.journal;
     assert_eq!(
@@ -434,8 +413,8 @@ fn aggregate_fold_reuse_rechecks_corrupt_current_bytes_without_hiding_other_doma
         .unwrap();
     append_facts::take_fold_work();
     response_message(&store, &attempt, "fold-corrupt-message");
-    let (hits, misses) = append_facts::take_fold_work();
-    assert!(misses >= 1);
+    let (hits, _) = append_facts::take_fold_work();
+    assert!(observation_statistics::fold_work().1 >= 1);
     assert!(hits >= 1);
     assert!(store.observation_statistics(2).is_err());
     assert_eq!(store.load_canonical().unwrap().len(), 1);
@@ -463,40 +442,28 @@ fn aggregate_fold_pending_value_does_not_survive_rollback_as_current_state() {
         .unwrap();
         transaction.rollback().unwrap();
     }
-    append_facts::take_fold_work();
+    observation_statistics::fold_work();
     response_message(&store, &attempt, "fold-rollback-message");
-    let (_, misses) = append_facts::take_fold_work();
-    assert!(misses >= 1);
+    assert!(observation_statistics::fold_work().1 >= 1);
     assert_eq!(store.observation_statistics(2).unwrap().steps, 0);
 }
 
 #[test]
-fn aggregate_fold_reuse_observes_a_valid_external_header_rewrite() {
-    use super::observation_response_tests::{response_message, response_start};
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("fold.sqlite");
-    let store = SqliteConversationStore::open(ConversationId::generate(), &path).unwrap();
-    store.initialize(&[]).unwrap();
-    let attempt = response_start(&store, "fold-external");
-    let other = rusqlite::Connection::open(&path).unwrap();
-    let bytes: Vec<u8> = other
-        .query_row(
-            "SELECT observation_statistics FROM events WHERE sequence=1",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let mut value: serde_json::Value = observation_codec::decode(&bytes).unwrap();
-    value[0][0] = serde_json::json!(44);
-    other
-        .execute(
-            "UPDATE events SET observation_statistics=?1 WHERE sequence=1",
-            [observation_codec::encode_admitted(&value).unwrap()],
-        )
-        .unwrap();
-    append_facts::take_fold_work();
-    response_message(&store, &attempt, "fold-external-message");
-    let (_, misses) = append_facts::take_fold_work();
-    assert!(misses >= 1);
-    assert_eq!(store.observation_statistics(2).unwrap().turns, 44);
+fn a_valid_external_checkpoint_rewrite_cannot_redefine_statistical_facts() {
+    use super::observation_response_tests::{response_message,response_start,response_complete};
+    let directory=tempfile::tempdir().unwrap();let path=directory.path().join("fold.sqlite");
+    let store=SqliteConversationStore::open(ConversationId::generate(),&path).unwrap();store.initialize(&[]).unwrap();
+    let attempt=response_start(&store,"fold-external");response_message(&store,&attempt,"fold-external-message");response_complete(&store,&attempt);
+    assert_eq!(store.observation_statistics(3).unwrap().turns,1);
+    let other=rusqlite::Connection::open(&path).unwrap();
+    let bytes:Vec<u8>=other.query_row("SELECT observation_statistics_checkpoint FROM events WHERE sequence=3",[],|row|row.get(0)).unwrap();
+    let mut value:serde_json::Value=observation_codec::decode(&bytes).unwrap();value[0][0]=serde_json::json!(44);
+    other.execute("UPDATE events SET observation_statistics_checkpoint=?1 WHERE sequence=3",[observation_codec::encode_admitted(&value).unwrap()]).unwrap();
+    observation_statistics::fold_work();response_start(&store,"after-external-rewrite");
+    assert!(observation_statistics::fold_work().1>=1);
+    assert!(store.observation_statistics(4).is_err());
+    assert!(store.observation_statistics(3).is_err());
+    assert_eq!(store.observation_statistics(2).unwrap().turns,1);
+    assert_eq!(store.load_canonical().unwrap().len(),1);
+    assert_eq!(store.read_events(None,16).unwrap().events.len(),4);
 }
