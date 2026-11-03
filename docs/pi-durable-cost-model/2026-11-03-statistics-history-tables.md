@@ -1237,4 +1237,3 @@ Fresh Rust only; Final candidate: 32 formal + 12 Statistics + 8 columns/WAL prod
 | statistics-512-concurrent | 1 | baseline | append_write_bytes | 34168832.000000 |
 | statistics-512-concurrent | 1 | baseline | read_write_bytes | 2490368.000000 |
 | statistics-512-concurrent | 1 | baseline | full_write_bytes | 37646336.000000 |
-
