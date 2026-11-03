@@ -1225,7 +1225,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "eb23c4ff7491ec4b53825dd9070ad29f87c72d16d6676e7ff50f1a76ad983fb3",
+      "local_sha256": "fed34d843977a720f6603f0f0ed9728a9e2269cada43643722a666e9df817f61",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
@@ -1237,7 +1237,7 @@
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
           "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
           "upstream_sha256": "ed939e63d6e6479b7b240a79c3231ade8c32f55235002ac33fc6a085e0497b60",
-          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization. A native Workflow panel beside the anchored MessageSeat retains the same 16px clearance below the settled Turn divider as a direct flow child."
+          "treatment": "Adapt the current Harness 4px process, 12px response and 16px settled-boundary rhythm, stable running/tail geometry and native anchored seats. Canonical entries and deferred-content sections share the flow layout; content after a nested process header receives the same clearance without a Workflow-only exception. Native seat and reading ownership remain unchanged."
         }
       ]
     },

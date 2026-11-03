@@ -37,7 +37,7 @@ export function workflowRunsFixture(server: Server, current: RuntimeClientSnapsh
     } }];
   current.workflows = { revision: '1', runs, omitted_runs: 0 };
   server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: {
-    cut: { conversation_id: current.conversation_id, journal: '3', transcript: '3', mutation_revision: '0', ledger_through: '3', surface_revision: '1', transcript_total: '3', pending_through: '0', pending_total: '0' },
+    cut: { conversation_id: current.conversation_id, journal: '3', transcript: server.snapshots.get('A')!.transcript.entries!.at(-1)!.cursor, mutation_revision: '0', ledger_through: '3', surface_revision: '1', transcript_total: String(server.snapshots.get('A')!.transcript.entries!.length), pending_through: '0', pending_total: '0' },
     offset: 0, total: '1', turns: [{ id: { conversation_id: owner.conversation_id, attempt_id: owner.attempt_id, attempt_id_source: null }, ordinal: 1, cursor: '2', prompt: '运行两次工作流', response: '两次调用的结果' }],
   } }));
 }

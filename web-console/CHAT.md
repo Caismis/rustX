@@ -1,3 +1,14 @@
+# Chat spacing audit (2026-11-03)
+
+Canonical entries and deferred original-content sections now use the existing
+flow layout. This gives an ordinary Tool followed by a native Workflow its 4px
+process spacing, and puts 16px below a deferred Turn header rather than letting
+the answer touch its divider. Deferred final responses use the native completion
+identity for their 12px response spacing. The settled boundary after a nested
+MessageSeat applies to following content generally, replacing the Workflow-only
+selector. Native order, source reads, disclosure visibility and scroll ownership
+remain unchanged.
+
 # Composer and Workflow display refresh (2026-11-03)
 
 Read-only reference: sibling DeepSeek Harness at

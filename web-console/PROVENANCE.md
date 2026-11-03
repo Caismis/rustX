@@ -1,3 +1,39 @@
+## Chat spacing audit (2026-11-03)
+
+Read-only reference remains Harness `ce7073d51254c26cd63b22a60835b8f948deb447`,
+`ui-chat/ChatView.module.css`, `ChatGroupSeat.module.css` and
+`TurnProcessNodeView.module.css`: 4px process rows, 12px response separation and
+16px settled boundaries. Browser plugin not available; the repository's pinned
+Playwright Chromium container renders desktop 1440px and touch-enabled 390px in
+both themes. A temporary audit outside the repository inspects settled/live
+reasoning, Tool success/failure and expanded bodies, approval/questionnaire,
+compaction and its next Turn, Workflow, delivered files and workspace changes.
+No spacing changes are needed for the ordinary reasoning/Tool, annotation,
+summary, delivery or following-User paths.
+
+The audit reproduced 0px between an ordinary Tool and a Workflow in one native
+entry, and 0px between a deferred canonical Turn header and its answer. Deferred
+sections also missed the normal heading and final-response spacing. Canonical
+entry and deferred-section containers now reuse the shared flow layout; native
+final identity supplies the response role. The boundary following an anchored
+MessageSeat is generic rather than a Workflow-only exception. No new layout
+state, rendering authority, dependency or scroll owner is introduced.
+
+`chat-spacing.spec.ts` exercises mixed Tool/Workflow entries, deferred plain and
+Tool-bearing replies, and FreshInbound/PostToolBatch status annotations. It
+checks 4/12/16px geometry, expanded Tool bodies, folded processes, disclosure
+focus, console health, page identity, overlays and horizontal overflow. Captures
+are outside the repository at `/tmp/rustx-chat-spacing-{case}-{width}-{theme}.png`.
+
+Validation passes all 3,919 WebUI unit tests (four existing skips) and 55 browser
+cases: the 16 new boundary cases, flow and composer checks, bilingual compaction
+and retry disclosures, inline/deferred deliveries, workspace changes, seven
+existing Agent reference cases and the real native Workflow child through
+settlement/reload. Existing screenshot references pass without updates or relaxed
+comparison policies. TypeScript, localization ownership, production build, all
+336 source records and notices for 340 packages pass. Firefox, Safari and real
+mobile hardware are outside this Chromium run.
+
 ## Composer and Workflow display audit (2026-11-03)
 
 Follow-up: the supplied image exposed a 0px gap between the settled Turn's

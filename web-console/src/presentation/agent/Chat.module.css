@@ -81,8 +81,8 @@
 .column > .flowItem:has([data-turn-process]),
 .column > [data-chat-flow-kind="turn-process"] + :not([hidden]):not(:empty),
 .flow > [data-turn-process] + :not([hidden]):not(:empty):not([role="status"]),
-/* Native Workflow panels sit beside their anchored MessageSeat. */
-.flowItem > .flow:has(> [data-turn-process]) + [data-workflow-run-id] {
+/* Anchored process headers may be inside the preceding MessageSeat. */
+.flow > .flow:has(> [data-turn-process]) + :not([hidden]):not(:empty) {
   margin-top: 16px;
 }
 
