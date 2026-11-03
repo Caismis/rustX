@@ -15,7 +15,7 @@ fn stored_tool_update_detaches_only_matching_domains_and_keeps_old_seed() {
         item: RuntimeClientTranscriptItem::Message {
             message: compactable_user("shared-tool-entry"),
         },
-    }]
+    }.into()]
     .into();
     for (descriptor, transcript) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut current = source.clone();
@@ -25,7 +25,7 @@ fn stored_tool_update_detaches_only_matching_domains_and_keeps_old_seed() {
                 .block_index = ContentBlockIndex::new(99);
         }
         if !transcript {
-            current.transcript.entries[0].tool_calls[0]
+            Arc::make_mut(&mut current.transcript.entries[0]).tool_calls[0]
                 .occurrence
                 .block_index = ContentBlockIndex::new(99);
         }
@@ -61,7 +61,7 @@ fn stored_tool_update_detaches_only_matching_domains_and_keeps_old_seed() {
         }
         if transcript {
             assert_eq!(
-                current.transcript.entries[0].tool_calls[0].name,
+                Arc::make_mut(&mut current.transcript.entries[0]).tool_calls[0].name,
                 format!("updated-{}", visits.len())
             );
         }
@@ -301,7 +301,7 @@ fn transcript_replay_pages_share_immutable_arrays_and_detach_on_mutation() {
         turn_process: None, response_pending: false, completed_response: None,
         tool_calls: vec![], cursor: RuntimeClientTranscriptCursor::new(999),
         item: RuntimeClientTranscriptItem::Message { message: compactable_user("new-shared-page") },
-    });
+    }.into());
     assert!(!later.entries.same_owner(&page.entries));
     assert!(later.content.same_owner(&page.content));
     assert!(later.collections.same_owner(&page.collections));

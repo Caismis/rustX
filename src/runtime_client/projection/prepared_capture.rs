@@ -383,18 +383,8 @@ impl<S: FnOnce() -> crate::runtime_client::RuntimeClientSnapshot> CapturedCheckp
             snapshot: (self.snapshot)(),
             cursor: self.cursor,
             read_cut: self.metadata.read_cut,
-            content: self
-                .metadata
-                .content
-                .into_iter()
-                .map(checkpoint::MetadataFragment::into_owned)
-                .collect(),
-            collections: self
-                .metadata
-                .collections
-                .into_iter()
-                .map(checkpoint::MetadataFragment::into_owned)
-                .collect(),
+            content: self.metadata.content,
+            collections: self.metadata.collections,
         }
     }
 }

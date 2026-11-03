@@ -90,8 +90,8 @@ pub struct RuntimeClientCheckpoint {
     pub snapshot: RuntimeClientSnapshot,
     pub cursor: RuntimeClientCursor,
     pub read_cut: CheckpointReadCut,
-    pub content: Vec<ContentBinding>,
-    pub collections: Vec<CollectionFrontier>,
+    pub content: Vec<MetadataFragment<ContentBinding>>,
+    pub collections: Vec<MetadataFragment<CollectionFrontier>>,
 }
 /// Final complete checkpoint budget, after off-lock source enrichment. Only
 /// loaded read caches are evicted; authoritative cuts, descriptors, current
@@ -103,8 +103,8 @@ pub(crate) fn fit_checkpoint(
 }
 
 pub(super) fn sort_metadata(
-    collections: &mut [CollectionFrontier],
-    content: &mut [ContentBinding],
+    collections: &mut [MetadataFragment<CollectionFrontier>],
+    content: &mut [MetadataFragment<ContentBinding>],
 ) {
     collections.sort_by(|left, right| left.domain.cmp(&right.domain));
     content.sort_by(|left, right| left.path.cmp(&right.path));
@@ -237,18 +237,21 @@ fn defer_pending_bodies(checkpoint: &mut RuntimeClientCheckpoint) {
             frontier.loaded = 0;
             frontier.next_offset = Some(0);
         } else {
-            checkpoint.collections.push(CollectionFrontier {
-                domain,
-                revision: checkpoint
-                    .read_cut
-                    .domain_revisions
-                    .get("pending_interactions")
-                    .copied()
-                    .unwrap_or(checkpoint.read_cut.revision),
-                total: 1,
-                loaded: 0,
-                next_offset: Some(0),
-            });
+            checkpoint.collections.push(
+                CollectionFrontier {
+                    domain,
+                    revision: checkpoint
+                        .read_cut
+                        .domain_revisions
+                        .get("pending_interactions")
+                        .copied()
+                        .unwrap_or(checkpoint.read_cut.revision),
+                    total: 1,
+                    loaded: 0,
+                    next_offset: Some(0),
+                }
+                .into(),
+            );
         }
     }
     checkpoint
@@ -2257,13 +2260,16 @@ mod budget_tests {
                     },
                 ));
         }
-        checkpoint.collections.push(CollectionFrontier {
-            domain: "pending_interactions".into(),
-            revision: 0,
-            total: 32,
-            loaded: 32,
-            next_offset: None,
-        });
+        checkpoint.collections.push(
+            CollectionFrontier {
+                domain: "pending_interactions".into(),
+                revision: 0,
+                total: 32,
+                loaded: 32,
+                next_offset: None,
+            }
+            .into(),
+        );
         checkpoint
     }
 

@@ -15,6 +15,7 @@ struct Row {
     body: Arc<body::Owner>,
     decoration: body::Decoration,
     prepared: OnceLock<PreparedCapture<Option<CapturedRow>>>,
+    native: Arc<RuntimeClientTranscriptEntry>,
 }
 
 /// Internal evidence, never part of the public page or its wire schema.
@@ -35,13 +36,22 @@ impl PartialEq for PreparedTranscriptRow {
     }
 }
 impl PreparedTranscriptRow {
-    pub(crate) fn new(conversation: ConversationId, value: RuntimeClientTranscriptEntry) -> Self {
-        let (body, decoration) = body::Owner::new(conversation, value);
+    pub(crate) fn new(
+        conversation: ConversationId,
+        value: Arc<RuntimeClientTranscriptEntry>,
+    ) -> Self {
+        let (body, decoration) = body::Owner::new(conversation, Arc::clone(&value));
         Self(Arc::new(Row {
             body,
             decoration,
             prepared: OnceLock::new(),
+            native: value,
         }))
+    }
+    /// Called after the native reader has revalidated body and response proof.
+    /// This exact immutable row is shared with current and retained read pages.
+    pub(crate) fn native_entry(&self) -> Arc<RuntimeClientTranscriptEntry> {
+        Arc::clone(&self.0.native)
     }
     #[cfg(test)]
     pub(crate) fn value(&self) -> RuntimeClientTranscriptEntry {
@@ -54,11 +64,12 @@ impl PreparedTranscriptRow {
     }
     /// Called only after a native reader proved the current body bytes again.
     /// Current response decoration never inherits the older owner's authority.
-    pub(crate) fn with_decoration(&self, value: &RuntimeClientTranscriptEntry) -> Self {
+    pub(crate) fn with_decoration(&self, value: &Arc<RuntimeClientTranscriptEntry>) -> Self {
         Self(Arc::new(Row {
             body: self.0.body.clone(),
             decoration: body::Decoration::from_entry(value),
             prepared: OnceLock::new(),
+            native: Arc::clone(value),
         }))
     }
     #[cfg(test)]
@@ -156,14 +167,13 @@ impl PreparedTranscriptHead {
     }
     pub(crate) fn from_entries(
         conversation: &ConversationId,
-        entries: &[RuntimeClientTranscriptEntry],
+        entries: &[Arc<RuntimeClientTranscriptEntry>],
     ) -> Self {
         Self(Arc::new(Head {
             rows: entries
                 .iter()
                 .take(CHECKPOINT_PAGE_ITEMS)
-                .cloned()
-                .map(|entry| PreparedTranscriptRow::new(conversation.clone(), entry))
+                .map(|entry| PreparedTranscriptRow::new(conversation.clone(), Arc::clone(entry)))
                 .collect(),
             total: entries.len(),
             prepared: OnceLock::new(),
@@ -247,7 +257,7 @@ impl PreparedTranscriptHead {
 
 pub(crate) struct CapturedTranscript<'a>(Cow<'a, CapturedRows>);
 impl CapturedTranscript<'_> {
-    pub(crate) fn into_owned(self) -> Vec<RuntimeClientTranscriptEntry> {
+    pub(crate) fn into_entries(self) -> Vec<Arc<RuntimeClientTranscriptEntry>> {
         match self.0 {
             Cow::Borrowed(rows) => rows.iter().map(|row| row.entry()).collect(),
             Cow::Owned(rows) => rows

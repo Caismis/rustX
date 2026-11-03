@@ -203,7 +203,7 @@ pub struct RuntimeClientSnapshot {
     /// current Surface working set, while historical Ledger pages remain
     /// available through `ConversationStore` APIs.
     pub messages: Vec<MessageBlock>,
-    pub message_descriptors: Vec<RuntimeClientMessageDescriptor>,
+    pub message_descriptors: Vec<std::sync::Arc<RuntimeClientMessageDescriptor>>,
     /// Native projection-selected settlement head; retained audit bodies remain in storage.
     #[serde(default)]
     pub publication_settlements: Vec<RuntimeClientPublicationSettlementRecord>,
@@ -363,7 +363,8 @@ pub struct RuntimeClientTranscriptPage {
     pub statistics: Option<super::response::ConversationStatistics>,
     /// Items in chronological order within this page.
     #[serde(default)]
-    pub entries: super::checkpoint::MetadataFragment<Vec<RuntimeClientTranscriptEntry>>,
+    pub entries:
+        super::checkpoint::MetadataFragment<Vec<std::sync::Arc<RuntimeClientTranscriptEntry>>>,
     /// The exclusive cursor for the next older page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<RuntimeClientTranscriptCursor>,
@@ -528,7 +529,11 @@ pub(crate) fn transcript_page_view(
         deferred_entries: Vec::new().into(),
         inherited_through: Some(page.inherited_through.into()),
         statistics: None,
-        entries: entries.into(),
+        entries: entries
+            .into_iter()
+            .map(std::sync::Arc::new)
+            .collect::<Vec<_>>()
+            .into(),
         next_cursor: page.next_cursor.map(Into::into),
     })
 }
@@ -547,7 +552,7 @@ pub(crate) fn transcript_header_view(
         if let Some(mut display) = header.display {
             display.tool_calls = header.tool_calls;
             let index = result.entries.len();
-            result.entries.push(display);
+            result.entries.push(std::sync::Arc::new(display));
             for mut binding in header.content {
                 if binding
                     .path

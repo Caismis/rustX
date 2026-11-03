@@ -15,6 +15,23 @@ pub(super) struct Value {
     item: RuntimeClientTranscriptItem,
 }
 
+/// Serialize the three immutable body fields without copying the native row.
+#[derive(Serialize)]
+struct BodyFields<'a> {
+    tool_calls: &'a [ForegroundToolExecution],
+    cursor: RuntimeClientTranscriptCursor,
+    item: &'a RuntimeClientTranscriptItem,
+}
+impl<'a> From<&'a RuntimeClientTranscriptEntry> for BodyFields<'a> {
+    fn from(value: &'a RuntimeClientTranscriptEntry) -> Self {
+        Self {
+            tool_calls: &value.tool_calls,
+            cursor: value.cursor,
+            item: &value.item,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Decoration {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,8 +65,8 @@ pub(super) struct Inline<T> {
     required: usize,
     safe: Option<usize>,
 }
-fn inline<T: Serialize + serde::de::DeserializeOwned>(
-    value: &T,
+fn inline<S: Serialize, T: Serialize + serde::de::DeserializeOwned>(
+    value: &S,
     raw_limit: usize,
 ) -> Option<Inline<T>> {
     // The body has already consumed its exact conservative part of the whole
@@ -77,7 +94,7 @@ fn inline<T: Serialize + serde::de::DeserializeOwned>(
 
 pub(super) struct Owner {
     conversation: ConversationId,
-    value: Value,
+    value: Arc<RuntimeClientTranscriptEntry>,
     inline: OnceLock<Option<Inline<Arc<Normalized>>>>,
     fallback: OnceLock<PreparedCapture<Option<Arc<Normalized>>>>,
 }
@@ -107,32 +124,17 @@ fn measure(value: &impl Serialize, limit: usize) -> Option<(usize, usize)> {
 impl Owner {
     pub(super) fn new(
         conversation: ConversationId,
-        value: RuntimeClientTranscriptEntry,
+        value: Arc<RuntimeClientTranscriptEntry>,
     ) -> (Arc<Self>, Decoration) {
-        let RuntimeClientTranscriptEntry {
-            tool_calls,
-            cursor,
-            item,
-            turn_process,
-            response_pending,
-            completed_response,
-        } = value;
+        let decoration = Decoration::from_entry(&value);
         (
             Arc::new(Self {
                 conversation,
-                value: Value {
-                    tool_calls,
-                    cursor,
-                    item,
-                },
+                value,
                 inline: OnceLock::new(),
                 fallback: OnceLock::new(),
             }),
-            Decoration {
-                turn_process,
-                response_pending,
-                completed_response,
-            },
+            decoration,
         )
     }
     fn inline(&self) -> Option<&Inline<Arc<Normalized>>> {
@@ -140,7 +142,11 @@ impl Owner {
             .get_or_init(|| {
                 #[cfg(test)]
                 record_body_work(0);
-                inline(&self.value, super::super::CHECKPOINT_ITEM_BYTES).map(|part| Inline {
+                inline(
+                    &BodyFields::from(self.value.as_ref()),
+                    super::super::CHECKPOINT_ITEM_BYTES,
+                )
+                .map(|part: Inline<Value>| Inline {
                     value: Arc::new(Normalized {
                         value: part.value,
                         measured: Some((part.encoded, part.required)),
@@ -155,7 +161,11 @@ impl Owner {
     }
     #[cfg(test)]
     pub(super) fn entry(&self, decoration: &Decoration) -> RuntimeClientTranscriptEntry {
-        self.value.entry(decoration)
+        let mut value = self.value.as_ref().clone();
+        value.turn_process = decoration.turn_process.clone();
+        value.response_pending = decoration.response_pending;
+        value.completed_response = decoration.completed_response.clone();
+        value
     }
     pub(super) fn undecorated_entry(&self) -> RuntimeClientTranscriptEntry {
         RuntimeClientTranscriptEntry {
@@ -168,7 +178,10 @@ impl Owner {
         }
     }
     pub(super) fn equal(&self, other: &Self) -> bool {
-        self.conversation == other.conversation && self.value == other.value
+        self.conversation == other.conversation
+            && self.value.cursor == other.value.cursor
+            && self.value.tool_calls == other.value.tool_calls
+            && self.value.item == other.value.item
     }
     fn fallback(&self, capture: &mut Capture) -> Option<Arc<Normalized>> {
         #[cfg(test)]
@@ -227,6 +240,7 @@ impl Value {
 pub(super) struct Captured {
     body: Arc<Normalized>,
     decoration: Decoration,
+    entry: OnceLock<Arc<RuntimeClientTranscriptEntry>>,
 }
 impl Serialize for Captured {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -249,13 +263,20 @@ impl Serialize for Captured {
     }
 }
 impl Captured {
-    pub(super) fn entry(&self) -> RuntimeClientTranscriptEntry {
-        self.body.value.entry(&self.decoration)
+    pub(super) fn entry(&self) -> Arc<RuntimeClientTranscriptEntry> {
+        Arc::clone(
+            self.entry
+                .get_or_init(|| Arc::new(self.body.value.entry(&self.decoration))),
+        )
     }
-    pub(super) fn into_entry(self) -> RuntimeClientTranscriptEntry {
-        Arc::unwrap_or_clone(self.body)
-            .value
-            .into_entry(self.decoration)
+    pub(super) fn into_entry(self) -> Arc<RuntimeClientTranscriptEntry> {
+        self.entry.into_inner().unwrap_or_else(|| {
+            Arc::new(
+                Arc::unwrap_or_clone(self.body)
+                    .value
+                    .into_entry(self.decoration),
+            )
+        })
     }
 }
 
@@ -291,6 +312,7 @@ pub(super) fn capture(
             Some(Arc::new(Captured {
                 body: body.value.clone(),
                 decoration: decoration.value,
+                entry: OnceLock::new(),
             })),
             safe,
         );
@@ -303,7 +325,11 @@ pub(super) fn capture(
         return (None, Some(4));
     };
     let decoration = decoration.fallback();
-    let projected = Captured { body, decoration };
+    let projected = Captured {
+        body,
+        decoration,
+        entry: OnceLock::new(),
+    };
     let limit = capture.item_budget();
     let measured = projected.body.measured.zip(measure(
         &projected.decoration,

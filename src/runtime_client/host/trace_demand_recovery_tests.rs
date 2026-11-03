@@ -51,6 +51,7 @@ fn original_content_reference(
     checkpoint
         .content
         .iter()
+        .map(std::ops::Deref::deref)
         .chain(
             checkpoint
                 .snapshot

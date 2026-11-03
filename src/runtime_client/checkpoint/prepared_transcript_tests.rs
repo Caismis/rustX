@@ -26,7 +26,7 @@ fn entry(cursor: u64, bytes: usize) -> RuntimeClientTranscriptEntry {
     }
 }
 fn row(cursor: u64, bytes: usize) -> PreparedTranscriptRow {
-    PreparedTranscriptRow::new(conversation(), entry(cursor, bytes))
+    PreparedTranscriptRow::new(conversation(), (entry(cursor, bytes)).into())
 }
 
 // Original page algorithm, independent of the row-owner replay and its index
@@ -70,7 +70,7 @@ fn compare(
     let mut actual = Capture::new(revision);
     actual.remaining = remaining;
     let (rows, budget) = head.capture(&mut actual);
-    let rows = rows.into_owned();
+    let rows = rows.into_entries();
     let mut expected = Capture::new(revision);
     expected.remaining = remaining;
     let wanted = original(&mut expected, entries);
@@ -128,7 +128,7 @@ fn running_process(messages: u32, text: usize) -> crate::runtime_client::respons
 fn transcript_body_owner_reuses_normalization_with_current_running_decoration() {
     for bytes in [512, CHECKPOINT_ITEM_BYTES * 3] {
         let value = entry(1, bytes);
-        let original = PreparedTranscriptRow::new(conversation(), value.clone());
+        let original = PreparedTranscriptRow::new(conversation(), (value.clone()).into());
         let old = PreparedTranscriptHead::new(vec![original.clone()]);
         compare(
             &old,
@@ -139,7 +139,7 @@ fn transcript_body_owner_reuses_normalization_with_current_running_decoration() 
         let mut changed = value.clone();
         changed.response_pending = true;
         changed.turn_process = Some(running_process(2, 24));
-        let current = original.with_decoration(&changed);
+        let current = original.with_decoration(&Arc::new(changed.clone()));
         assert!(original.same_body(&current));
         assert!(!original.same_owner(&current));
         body::take_body_work();
@@ -174,12 +174,12 @@ fn transcript_body_owner_reuses_normalization_with_current_running_decoration() 
 #[test]
 fn transcript_body_owner_preserves_whole_row_threshold_and_decorated_fallback() {
     for bytes in [512, CHECKPOINT_ITEM_BYTES - 768, CHECKPOINT_ITEM_BYTES * 2] {
-        let original = PreparedTranscriptRow::new(conversation(), entry(1, bytes));
+        let original = PreparedTranscriptRow::new(conversation(), (entry(1, bytes)).into());
         for failure_bytes in [0, 128, 2048, 16_384] {
             let mut value = entry(1, bytes);
             value.turn_process = Some(running_process(1, failure_bytes));
             value.response_pending = failure_bytes % 3 == 0;
-            let row = original.with_decoration(&value);
+            let row = original.with_decoration(&Arc::new(value.clone()));
             assert!(row.same_body(&original));
             let head = PreparedTranscriptHead::new(vec![row]);
             for remaining in [
@@ -207,7 +207,7 @@ fn transcript_body_rejects_impossible_inline_decoration_before_normalization() {
         (CHECKPOINT_ITEM_BYTES - 1024, 2048),
     ] {
         let value = entry(1, bytes);
-        let original = PreparedTranscriptRow::new(conversation(), value.clone());
+        let original = PreparedTranscriptRow::new(conversation(), (value.clone()).into());
         compare(
             &PreparedTranscriptHead::new(vec![original.clone()]),
             &[value],
@@ -222,7 +222,8 @@ fn transcript_body_rejects_impossible_inline_decoration_before_normalization() {
                 .is_none(),
             "the original whole-row inline branch cannot admit this value"
         );
-        let head = PreparedTranscriptHead::new(vec![original.with_decoration(&changed)]);
+        let head =
+            PreparedTranscriptHead::new(vec![original.with_decoration(&Arc::new(changed.clone()))]);
         body::take_inline_normalizations();
         compare(
             &head,
@@ -264,7 +265,7 @@ fn transcript_body_combined_inline_budget_keeps_exact_threshold_and_metadata() {
         );
         let head = PreparedTranscriptHead::new(vec![PreparedTranscriptRow::new(
             conversation(),
-            value.clone(),
+            (value.clone()).into(),
         )]);
         body::take_inline_normalizations();
         compare(
@@ -290,13 +291,13 @@ fn transcript_row_owners_moving_eight_row_head_prepares_only_new_row() {
     let old = PreparedTranscriptHead::new(rows.clone());
     take_work();
     let mut capture = Capture::new(1);
-    let retained = old.capture(&mut capture).0.into_owned();
+    let retained = old.capture(&mut capture).0.into_entries();
     assert_eq!(take_work(), 8);
     let mut moved = rows[1..].to_vec();
     moved.push(row(9, 512));
     let next = PreparedTranscriptHead::new(moved.clone());
     let mut capture = Capture::new(99);
-    let captured = next.capture(&mut capture).0.into_owned();
+    let captured = next.capture(&mut capture).0.into_entries();
     assert_eq!(
         take_work(),
         1,
@@ -304,7 +305,7 @@ fn transcript_row_owners_moving_eight_row_head_prepares_only_new_row() {
     );
     assert_eq!(captured.len(), 8);
     compare(&next, &values(&moved), CHECKPOINT_TARGET_BYTES / 8, 99);
-    assert_eq!(old.capture(&mut Capture::new(1)).0.into_owned(), retained);
+    assert_eq!(old.capture(&mut Capture::new(1)).0.into_entries(), retained);
 }
 
 #[test]
@@ -373,11 +374,11 @@ fn transcript_row_owners_keep_opaque_numbers_order_and_current_decoration() {
                 arguments: argument,
             },
         )];
-        let row = PreparedTranscriptRow::new(conversation(), value.clone());
+        let row = PreparedTranscriptRow::new(conversation(), (value.clone()).into());
         let head = PreparedTranscriptHead::new(vec![row.clone()]);
         compare(&head, &[value.clone()], CHECKPOINT_TARGET_BYTES / 8, 1);
         value.response_pending = true;
-        let changed = PreparedTranscriptRow::new(conversation(), value.clone());
+        let changed = PreparedTranscriptRow::new(conversation(), (value.clone()).into());
         assert!(!row.same_owner(&changed));
         compare(
             &PreparedTranscriptHead::new(vec![changed]),
@@ -388,14 +389,20 @@ fn transcript_row_owners_keep_opaque_numbers_order_and_current_decoration() {
     }
     let wide = entry(u64::MAX, 4);
     compare(
-        &PreparedTranscriptHead::from_entries(&conversation(), std::slice::from_ref(&wide)),
+        &PreparedTranscriptHead::from_entries(
+            &conversation(),
+            std::slice::from_ref(&Arc::new(wide.clone())),
+        ),
         &[wide],
         CHECKPOINT_TARGET_BYTES / 8,
         1,
     );
     let entries: Vec<_> = (1..=40).map(|cursor| entry(cursor, 4)).collect();
     compare(
-        &PreparedTranscriptHead::from_entries(&conversation(), &entries),
+        &PreparedTranscriptHead::from_entries(
+            &conversation(),
+            &entries.iter().cloned().map(Arc::new).collect::<Vec<_>>(),
+        ),
         &entries,
         CHECKPOINT_TARGET_BYTES / 8,
         1,
@@ -409,7 +416,7 @@ fn transcript_page_capture_reuses_same_owners_without_row_reindex_or_rebuild() {
     take_work();
     take_page_work();
     let mut first = Capture::new(7);
-    let retained = head.capture(&mut first).0.into_owned();
+    let retained = head.capture(&mut first).0.into_entries();
     assert!(!first.content.is_empty());
     assert_eq!(take_work(), 2);
     assert_eq!(take_page_work(), [1, 0, 1, 1]);
@@ -432,7 +439,7 @@ fn transcript_page_capture_reuses_same_owners_without_row_reindex_or_rebuild() {
     assert_eq!(take_work(), 0, "moving rows reuse their normalization");
     assert_eq!(take_page_work(), [1, 0, 1, 1]);
     let mut previous = Capture::new(7);
-    assert_eq!(old.capture(&mut previous).0.into_owned(), retained);
+    assert_eq!(old.capture(&mut previous).0.into_entries(), retained);
     assert_eq!(previous.collections, first.collections);
     assert_eq!(
         serde_json::to_vec(&previous.content).unwrap(),
@@ -441,7 +448,7 @@ fn transcript_page_capture_reuses_same_owners_without_row_reindex_or_rebuild() {
 
     // DTO equality is preserved for callers, but never grants cache identity.
     let equal = head.clone();
-    rows[0] = PreparedTranscriptRow::new(conversation(), rows[0].value());
+    rows[0] = PreparedTranscriptRow::new(conversation(), (rows[0].value()).into());
     let replacement = PreparedTranscriptHead::new(rows.clone());
     assert_eq!(equal, replacement);
     assert!(!equal.same_owners(&replacement));
@@ -476,10 +483,13 @@ fn transcript_page_capture_budget_boundary_preserves_oracle_and_warm_certificate
     // Unsafe native integers disable the fit certificate, not byte-exact
     // capture reuse; the caller must still use structural final admission.
     let wide = entry(u64::MAX, 4);
-    let head = PreparedTranscriptHead::from_entries(&conversation(), std::slice::from_ref(&wide));
+    let head = PreparedTranscriptHead::from_entries(
+        &conversation(),
+        std::slice::from_ref(&Arc::new(wide.clone())),
+    );
     compare(
         &head,
-        std::slice::from_ref(&wide),
+        std::slice::from_ref(&Arc::new(wide.clone())),
         CHECKPOINT_TARGET_BYTES / 8,
         1,
     );
@@ -541,4 +551,41 @@ fn transcript_page_capture_preserves_empty_and_truncated_cardinality() {
     assert_eq!(take_work(), 0);
     assert_eq!(take_page_work(), [1, 0, 1, CHECKPOINT_PAGE_ITEMS - 1]);
     compare(&old, &values(&rows[..33]), CHECKPOINT_TARGET_BYTES / 8, 3);
+}
+
+#[test]
+fn captured_rows_share_bodies_across_repeated_and_extended_checkpoint_heads() {
+    let original = row(1, 1024);
+    let first_head = PreparedTranscriptHead::new(vec![original.clone()]);
+    let mut capture = Capture::new(1);
+    let first = first_head.capture(&mut capture).0.into_entries();
+    let frozen = serde_json::to_vec(&first).unwrap();
+    let mut capture = Capture::new(2);
+    let repeated = first_head.capture(&mut capture).0.into_entries();
+    assert!(Arc::ptr_eq(&first[0], &repeated[0]));
+
+    let later_head = PreparedTranscriptHead::new(vec![original.clone(), row(2, 2048)]);
+    let mut capture = Capture::new(3);
+    let mut later = later_head.capture(&mut capture).0.into_entries();
+    assert!(Arc::ptr_eq(&first[0], &later[0]));
+    Arc::make_mut(&mut later[0]).response_pending = true;
+    assert!(!Arc::ptr_eq(&first[0], &later[0]));
+    assert_eq!(serde_json::to_vec(&first).unwrap(), frozen);
+    assert!(!first[0].response_pending);
+}
+
+#[test]
+fn native_row_owner_is_shared_only_with_the_exact_proven_decoration() {
+    let original = row(1, 1024);
+    let first = original.native_entry();
+    assert!(Arc::ptr_eq(&first, &original.clone().native_entry()));
+    let frozen = serde_json::to_vec(&first).unwrap();
+    let mut changed = original.value();
+    changed.response_pending = true;
+    let updated = original
+        .with_decoration(&Arc::new(changed.clone()))
+        .native_entry();
+    assert!(!Arc::ptr_eq(&first, &updated));
+    assert!(updated.response_pending);
+    assert_eq!(serde_json::to_vec(&first).unwrap(), frozen);
 }

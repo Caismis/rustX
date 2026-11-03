@@ -633,28 +633,14 @@ impl PublicationDraft {
                     snapshot: snapshot.take().expect("capture materialized once")(),
                     cursor,
                     read_cut: metadata.read_cut,
-                    content: metadata
-                        .content
-                        .into_iter()
-                        .map(super::checkpoint::MetadataFragment::into_owned)
-                        .collect(),
-                    collections: metadata
-                        .collections
-                        .into_iter()
-                        .map(super::checkpoint::MetadataFragment::into_owned)
-                        .collect(),
+                    content: metadata.content,
+                    collections: metadata.collections,
                 };
                 let fitted = super::checkpoint::fit_checkpoint_with_budget(&mut owned, fit_budget)?;
                 metadata = ProjectionMetadata {
                     read_cut: owned.read_cut.clone(),
-                    content: std::mem::take(&mut owned.content)
-                        .into_iter()
-                        .map(Into::into)
-                        .collect(),
-                    collections: std::mem::take(&mut owned.collections)
-                        .into_iter()
-                        .map(Into::into)
-                        .collect(),
+                    content: std::mem::take(&mut owned.content),
+                    collections: std::mem::take(&mut owned.collections),
                 };
                 // Eviction may change frontier option tags/charges. The original
                 // certificate describes the unmodified capture only.
@@ -1199,7 +1185,7 @@ impl CheckpointSeed {
                         deferred_entries: transcript_deferred_entries.into_owned().into(),
                         inherited_through: source.transcript.inherited_through,
                         statistics: transcript_statistics.into_owned(),
-                        entries: transcript_entries.into_owned().into(),
+                        entries: transcript_entries.into_entries().into(),
                         next_cursor: source.transcript.next_cursor,
                     },
                     trace: super::trace::TracePage {
@@ -1319,12 +1305,8 @@ impl CheckpointSeed {
                 snapshot,
                 cursor: self.cursor,
                 read_cut: self.checkpoint_read_cut(),
-                content: capture
-                    .content
-                    .into_iter()
-                    .map(super::checkpoint::MetadataFragment::into_owned)
-                    .collect(),
-                collections: capture.collections,
+                content: capture.content,
+                collections: capture.collections.into_iter().map(Into::into).collect(),
             },
             capture.evicted,
         ))
@@ -1340,19 +1322,19 @@ impl CheckpointSeed {
     fn capture_message_descriptors(
         &self,
         capture: &mut super::checkpoint::Capture,
-    ) -> Vec<super::snapshot::RuntimeClientMessageDescriptor> {
+    ) -> Vec<Arc<super::snapshot::RuntimeClientMessageDescriptor>> {
         self.snapshot
             .message_descriptors
             .iter()
             .map(|source| {
-                let mut descriptor = source.as_ref().clone();
+                let mut descriptor = Arc::clone(source);
                 while super::checkpoint::bounded_len(&descriptor, 16_384).is_none() {
-                    let Some(removed) = descriptor.tool_calls.pop() else {
+                    let Some(removed) = Arc::make_mut(&mut descriptor).tool_calls.pop() else {
                         break;
                     };
                     capture.evicted = true;
                     let loaded = descriptor.tool_calls.len();
-                    descriptor.content.retain(|binding| {
+                    Arc::make_mut(&mut descriptor).content.retain(|binding| {
                         binding
                             .path
                             .first()
@@ -1364,7 +1346,7 @@ impl CheckpointSeed {
                                 .is_some_and(|index| index < loaded)
                     });
                     let domain = format!("messages.{}.tools", descriptor.locator.key());
-                    if let Some(frontier) = descriptor
+                    if let Some(frontier) = Arc::make_mut(&mut descriptor)
                         .collections
                         .iter_mut()
                         .find(|frontier| frontier.domain == domain)
@@ -1402,7 +1384,18 @@ impl CheckpointSeed {
                 )
                 .flatten(),
             entries: capture
-                .transcript_page(&source.transcript.entries, &source.conversation_id)
+                .transcript_page(
+                    &source
+                        .transcript
+                        .entries
+                        .iter()
+                        .map(|row| row.as_ref().clone())
+                        .collect::<Vec<_>>(),
+                    &source.conversation_id,
+                )
+                .into_iter()
+                .map(Arc::new)
+                .collect::<Vec<_>>()
                 .into(),
             next_cursor: source.transcript.next_cursor,
         }
@@ -1866,13 +1859,12 @@ impl CheckpointSeed {
                 |item: &crate::tools::todo::TodoTask| item.id.to_string()
             ),
             "messages" => self.checkpoint_messages_page(cut, domain, offset, limit),
-            "transcript.entries" => list!(
-                &source.transcript.entries,
-                |entry: &super::snapshot::RuntimeClientTranscriptEntry| entry
-                    .cursor
-                    .get()
-                    .to_string()
-            ),
+            "transcript.entries" => list!(&source.transcript.entries, |entry: &Arc<
+                super::snapshot::RuntimeClientTranscriptEntry,
+            >| entry
+                .cursor
+                .get()
+                .to_string()),
             "pending_interactions" => self.checkpoint_pending_page(cut, domain, offset, limit),
             "agents" => list!(
                 &source.agents,
@@ -6594,8 +6586,8 @@ impl RuntimeClientProjection {
         if let Ok(checkpoint) = self.checkpoint_candidate() {
             super::checkpoint::ProjectionMetadata {
                 read_cut: checkpoint.read_cut,
-                collections: checkpoint.collections.into_iter().map(Into::into).collect(),
-                content: checkpoint.content.into_iter().map(Into::into).collect(),
+                collections: checkpoint.collections,
+                content: checkpoint.content,
             }
         } else {
             let mut read_cut = self.checkpoint_read_cut();
@@ -8242,7 +8234,7 @@ fn update_stored_tool_slots(
             .transcript
             .entries
             .iter_mut()
-            .flat_map(|entry| &mut entry.tool_calls)
+            .flat_map(|entry| &mut Arc::make_mut(entry).tool_calls)
         {
             if &slot.occurrence == occurrence {
                 update(slot);
@@ -9097,18 +9089,8 @@ mod tests {
             folded.snapshot.workflows.clone_from(replacement);
             folded.cursor = record.cursor;
             folded.read_cut.clone_from(&metadata.read_cut);
-            folded.collections = metadata
-                .collections
-                .iter()
-                .cloned()
-                .map(super::super::checkpoint::MetadataFragment::into_owned)
-                .collect();
-            folded.content = metadata
-                .content
-                .iter()
-                .cloned()
-                .map(super::super::checkpoint::MetadataFragment::into_owned)
-                .collect();
+            folded.collections = metadata.collections.clone();
+            folded.content = metadata.content.clone();
             assert_eq!(folded, projection.checkpoint_candidate().unwrap());
             projection
                 .validate_checkpoint_cut(&initial.read_cut)
@@ -13586,18 +13568,8 @@ mod tests {
         assert_eq!(checkpoint.cursor, *cursor);
         let mut folded = checkpoint.as_ref().clone();
         folded.read_cut.clone_from(&metadata.read_cut);
-        folded.content = metadata
-            .content
-            .iter()
-            .cloned()
-            .map(super::super::checkpoint::MetadataFragment::into_owned)
-            .collect();
-        folded.collections = metadata
-            .collections
-            .iter()
-            .cloned()
-            .map(super::super::checkpoint::MetadataFragment::into_owned)
-            .collect();
+        folded.content = metadata.content.clone();
+        folded.collections = metadata.collections.clone();
         assert_eq!(
             folded,
             projection.checkpoint_candidate().unwrap(),

@@ -287,7 +287,7 @@ fn checkpoint_complete_rows_reuse_only_verified_body_and_response_owners() {
     assert!(!original.transcript_rows[0].same_owner(&changed.transcript_rows[0]));
     assert_ne!(original.transcript_rows[0].value(), changed.transcript_rows[0].value());
     assert_eq!(changed, checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap());
-    assert_eq!(original.transcript_rows[0].value(), original.transcript.entries[0], "an old owner still discloses its original body");
+    assert_eq!(original.transcript_rows[0].value(), *original.transcript.entries[0], "an old owner still discloses its original body");
     store.lock().unwrap().execute("UPDATE observation_headers SET header_json=x'7b' WHERE ledger_position=1", []).unwrap();
     let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap_err();
     let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap_err();
@@ -451,6 +451,6 @@ fn checkpoint_descriptor_reuse_keeps_running_decoration_and_exact_current_bytes(
     assert_eq!(actual.to_string(), expected.to_string());
     assert_eq!(
         running.transcript_rows[0].value(),
-        running.transcript.entries[0]
+        *running.transcript.entries[0]
     );
 }

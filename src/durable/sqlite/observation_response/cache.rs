@@ -399,7 +399,7 @@ impl Owner {
     pub(in crate::durable::sqlite) fn transcript_row(
         &self,
         conversation: &crate::runtime::identity::ConversationId,
-        value: &crate::runtime_client::snapshot::RuntimeClientTranscriptEntry,
+        value: &Arc<crate::runtime_client::snapshot::RuntimeClientTranscriptEntry>,
         header: Option<super::super::observation::TranscriptRowProof>,
         response: Option<&Arc<ResponsePageItem>>,
     ) -> Result<crate::runtime_client::checkpoint::PreparedTranscriptRow, ConversationStoreError>

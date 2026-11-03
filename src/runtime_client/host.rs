@@ -3856,42 +3856,52 @@ impl ClientInner {
         bindings: &mut [super::checkpoint::ContentBinding],
     ) -> Result<(), RuntimeClientError> {
         for binding in bindings {
-            if matches!(
-                binding.content_ref.source,
-                super::content::ContentSource::LivePublicationPrefix { .. }
-            ) {
-                continue;
+            if let Some(reference) = self.materialize_content_binding(binding)? {
+                binding.content_ref = reference;
             }
-            let raw = if matches!(
-                binding.content_ref.source,
-                super::content::ContentSource::CanonicalMessageBlock { .. }
-            ) && binding
-                .path
-                .last()
-                .is_some_and(|field| field == "arguments")
-            {
-                self.store
-                    .content_descriptor(
-                        &binding.content_ref.source,
-                        super::content::ContentRepresentation::RawJsonUtf8,
-                    )
-                    .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?
-            } else {
-                None
-            };
-            binding.content_ref = match raw {
-                Some(reference) => reference,
-                None => self
-                    .store
-                    .content_descriptor(
-                        &binding.content_ref.source,
-                        binding.content_ref.representation,
-                    )
-                    .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?
-                    .ok_or(RuntimeClientError::ContentSourceUnavailable)?,
-            };
         }
         Ok(())
+    }
+
+    /// Always validate the current store before sharing a resolved display owner.
+    fn materialize_content_binding(
+        &self,
+        binding: &super::checkpoint::ContentBinding,
+    ) -> Result<Option<super::content::ContentRef>, RuntimeClientError> {
+        if matches!(
+            binding.content_ref.source,
+            super::content::ContentSource::LivePublicationPrefix { .. }
+        ) {
+            return Ok(None);
+        }
+        let raw = if matches!(
+            binding.content_ref.source,
+            super::content::ContentSource::CanonicalMessageBlock { .. }
+        ) && binding
+            .path
+            .last()
+            .is_some_and(|field| field == "arguments")
+        {
+            self.store
+                .content_descriptor(
+                    &binding.content_ref.source,
+                    super::content::ContentRepresentation::RawJsonUtf8,
+                )
+                .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?
+        } else {
+            None
+        };
+        Ok(Some(match raw {
+            Some(reference) => reference,
+            None => self
+                .store
+                .content_descriptor(
+                    &binding.content_ref.source,
+                    binding.content_ref.representation,
+                )
+                .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?
+                .ok_or(RuntimeClientError::ContentSourceUnavailable)?,
+        }))
     }
 
     /// Read a bounded checkpoint at one captured native cut. Trace enrichment
@@ -4078,21 +4088,26 @@ impl ClientInner {
             }
         }
         let mut checkpoint = seed.checkpoint_with_read_domains(self.store.as_ref())?;
-        self.materialize_content_bindings(&mut checkpoint.content)?;
+        for binding in &mut checkpoint.content {
+            if let Some(reference) = self.materialize_content_binding(binding)? {
+                *binding = binding.resolve(&reference);
+            }
+        }
         self.materialize_trace(&mut checkpoint.snapshot, &checkpoint.read_cut, records)?;
         if !records.is_empty() {
             checkpoint
                 .collections
                 .retain(|frontier| frontier.domain != "trace_updates");
-            checkpoint
-                .collections
-                .push(super::checkpoint::CollectionFrontier {
+            checkpoint.collections.push(
+                super::checkpoint::CollectionFrontier {
                     domain: "trace_updates".into(),
                     revision: checkpoint.read_cut.through,
                     total: checkpoint.snapshot.trace_updates.len() as u64,
                     loaded: checkpoint.snapshot.trace_updates.len() as u64,
                     next_offset: None,
-                });
+                }
+                .into(),
+            );
         }
         if std::time::Instant::now() >= deadline {
             return Err(RuntimeClientError::ObservationUnavailable {
@@ -11600,8 +11615,7 @@ mod tests {
                 evicted_message_id,
                 ..
             } => {
-                snapshot.message_descriptors =
-                    head.iter().map(|row| row.as_ref().clone()).collect();
+                snapshot.message_descriptors = head.iter().cloned().collect();
                 if let Some(id) = evicted_message_id {
                     snapshot.messages.retain(|message| message.id() != id);
                 }
