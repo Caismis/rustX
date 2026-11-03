@@ -7,6 +7,23 @@ beforeEach(() => { localStorage.clear(); composerPreferences().setBusyEnter('que
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 const props = () => ({ disabled: false, busy: false, active: false, onSend: vi.fn(async () => false), onUpload: vi.fn(async () => []), onCancel: vi.fn(), onCommand: vi.fn() });
 
+it('shows native acceptance pending without allowing duplicate sends and restores an unsent draft', async () => {
+  let finish!: (accepted: boolean) => void;
+  const p = props(), onSend = vi.fn(() => new Promise<boolean>(resolve => { finish = resolve; }));
+  render(<AgentComposer {...p} onSend={onSend}/>);
+  const input = screen.getByLabelText('Message');
+  fireEvent.change(input, { target: { value: 'Keep this draft until accepted' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  const sending = screen.getByRole('button', { name: 'Sending…' });
+  expect(sending).toHaveProperty('disabled', true);
+  expect(sending.getAttribute('aria-busy')).toBe('true');
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(onSend).toHaveBeenCalledOnce();
+  await act(async () => finish(false));
+  expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false);
+  expect(input).toHaveProperty('value', 'Keep this draft until accepted');
+});
+
 it.each(['button', 'Enter', 'Control', 'Meta'])('resolves %s through the same message policy, preserving failed drafts', async gesture => {
   const p = props(); const ui = render(<AgentComposer uploadPolicy={uploadCapabilities.upload_policy} {...p} active />);
   const input = screen.getByLabelText('Message');

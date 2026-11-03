@@ -553,7 +553,7 @@ describe('Queue dock binds the native inbound mailbox', () => {
     server.held.add('turn/start');
     await sendQueued('Queued draft');
     const turn = await server.waitFor('turn/start', 1);
-    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Sending…' })).toHaveProperty('disabled', true);
     expect(screen.queryByText('Awaiting acknowledgement…')).toBeNull();
     expect(screen.getByRole('textbox', { name: 'Message' }).closest('[data-composer-card]')?.getAttribute('aria-busy')).toBe('true');
     // No count header: the in-flight request is not counted as queued.

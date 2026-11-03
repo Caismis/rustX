@@ -261,7 +261,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "d5ad08d67cd9e3058da61489d990efb82ac39235f177b0afbd8d5df05daae450",
+      "local_sha256": "a7bb58b3bbb53c5f24b1d722e4799c6c61f6106f8997a73b1b81cfc9fee48515",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -274,6 +274,12 @@
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "0ad3522921b4ba58346e052fa6ec10e64b514a64d51d8a85d5ac748f5ea8065d",
           "treatment": "Continuable child keeps Send primary and a separate Stop before it; root primary behavior and native delivery/cancellation ownership remain unchanged."
+        },
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "28b657b559745eb2116a024ea32ef864004d4c4c51542c2aacf65650c808e212",
+          "treatment": "Adapt Harness pending-message progress and card-padding focus to rustX native draft and admission owners. A pending acceptance shows the spinner; uncertain and unsent drafts retain their recovery state. Stop, Queue, Steer and IME ownership remain native."
         }
       ]
     },
@@ -1250,7 +1256,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "a481aafb123bd5f1615b749bada8aa3687bbcaff640a533b6dbaba5ca260b355",
+      "local_sha256": "2d93ff4be44dff73d0b90dc308eb86cae17c682ae349f530836874ffec8a66f3",
       "additional_sources": [
         {
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -1263,6 +1269,12 @@
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
           "upstream_sha256": "3d6e405a567b04280dc33566890cce3056a7a36508b91b0abe01a0c53f11337f",
           "treatment": "Match Harness neutral input-card stroke across pointer and keyboard editor focus; remove the rustX-only blue focus stroke for new, parent and child composers."
+        },
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "d1de49be39926d3cb009fb0f23ad6221c62704bd2706739ffc74de33389a70d8",
+          "treatment": "Adopt the coarse-pointer 16px text floor, hover-capability gates and pending-send spinner. Retain rustX native textarea sizing and the existing single scroll/raster owners."
         }
       ]
     },
@@ -2153,7 +2165,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d88ac75e07f97efdcd9f83fd3204e28e2882dc4325db2c526aac178ac9e2e01d",
+      "local_sha256": "4bd25e851b5f4bf12360fc82c42efa0a157925c28584e5c58ad01db9a7def5d4",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
@@ -2165,7 +2177,7 @@
           "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
           "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
           "upstream_sha256": "000d8193ebed80b6ac1d9ff8f8b7ce76e596532065b08003d0033c0ab040501d",
-          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization."
+          "treatment": "Adapt compact process disclosure sizing, keyboard focus and touch inspection. Expose the current Harness contentClassName and contentLayoutClassName so Workflow header base/shimmer content shares its flex sizing and spacing."
         }
       ]
     },
@@ -3934,9 +3946,15 @@
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
           "upstream_sha256": "b2613d81bd95541c28e7433a35b171cea6baa44080e94f89d2f1b0eb3e8503e9",
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
+        },
+        {
+          "upstream": "packages/client/ui-conversation/src/client/locales.ts",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "a268045af56e3bad19efe0aef724f17869e16bed58b3eef18f2cd7c132258600",
+          "treatment": "Add the English/Chinese pending-message label for the Harness-style sending progress, driven by rustX native admission state."
         }
       ],
-      "local_sha256": "9541a38070ff6e351231d0891555dfd7cea1ca1152596682a95097c0a86922b1"
+      "local_sha256": "19fc7d2ddceaccbce9512557927238a6891bdb120ad4e67bfc87cd6dffc1eb62"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -6816,6 +6834,7 @@
         "../../presentation/primitives/DisclosureRow",
         "../../presentation/primitives/StateDot",
         "../../presentation/primitives/icons",
+        "../workflows/ui/icons",
         "./subagent-context",
         "./workflow-state",
         "react"
@@ -6825,7 +6844,15 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "44002fa75f84d9a8d8f2f1e9a3dfd4a75cac7cda541402a7083e9fb10495040f"
+      "local_sha256": "0adde596b4d8b113df5d4af1b6747d749d3c746454d00a1f8570eb0009a519ee",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-workflow-run/src/client/WorkflowRunPanel.tsx",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "7d51903eb8b76579565fdb858271bbd6443e5db49c6c4d92d0b0c337fde78439",
+          "treatment": "Adapt the explicit title, separator, count and trailing-status layout. Reuse rustX offline Iconify node-kind glyphs beside native instance labels and place status dots beside status text. Native admission order, status disclosure and one-shot Agent navigation remain authoritative."
+        }
+      ]
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6841,7 +6868,15 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "b35e8e7724311cc73cbccab51ea704ef1ebceebe5b6d49c98bc68935f3017ae9"
+      "local_sha256": "7d0e8f171539ed35f8b4fd8127079135930a6f806f87d8606dee854224c02977",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-workflow-run/src/client/WorkflowRunPanel.module.css",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "fa04126bf3cd35ed9ba3bc24d8255dc9e602dbd586647ce53753d0542ef67316",
+          "treatment": "Adapt the shared header content sizing and 6px gap, spaced run cards, compact kind-glyph seats and trailing status layout. Preserve bounded long labels and readable budget wrapping on narrow screens."
+        }
+      ]
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",

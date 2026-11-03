@@ -24,6 +24,9 @@ export interface DisclosureRowProps {
   children?: ReactNode
   className?: string | undefined
   rowClassName?: string | undefined
+  /** Header text sizing and shared base/shimmer layout, beside the leading icon. */
+  contentClassName?: string | undefined
+  contentLayoutClassName?: string | undefined
   leadingClassName?: string | undefined
   chevronClassName?: string | undefined
   titleClassName?: string | undefined
@@ -48,6 +51,8 @@ export function DisclosureRow({
   children,
   className,
   rowClassName,
+  contentClassName,
+  contentLayoutClassName,
   leadingClassName,
   chevronClassName,
   titleClassName,
@@ -105,7 +110,7 @@ export function DisclosureRow({
             {leading}
           </span>
         )}
-        <TextShimmer active={running} className={css.content}>
+        <TextShimmer active={running} className={clsx(css.content, contentClassName)} contentClassName={contentLayoutClassName}>
         <TextShimmer className={clsx(css.title, titleClassName)}>{title}</TextShimmer>
         {(keepContentWhenOpen || !open) && collapsedContent}
         </TextShimmer>

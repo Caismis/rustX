@@ -14,6 +14,7 @@ import { turnDeliveriesFixture } from './turn-deliveries';
 import { workspaceChangesFixture } from './workspace-changes';
 import { workflowCatalogFixture } from './workflow-catalog';
 import { chatFlowFixture } from './chat-flow';
+import { workflowRunsFixture } from './workflow-runs';
 import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v63';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
@@ -133,6 +134,7 @@ if (mode === 'turn-deliveries') turnDeliveriesFixture(server, s);
 if (mode === 'workspace-changes') workspaceChangesFixture(server, s);
 if (mode === 'workflow-catalog') workflowCatalogFixture(server, s);
 if (mode === 'chat-flow') chatFlowFixture(server, s);
+if (mode === 'composer' && new URLSearchParams(location.search).has('workflow-runs')) workflowRunsFixture(server, s);
 server.snapshots.set('A', s);
 await server.attached('A');
 localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
@@ -159,6 +161,12 @@ if (mode === 'composer') {
       await server.update('A', next);
     },
     holdCancellation: () => { server.held.add('turn/cancel'); },
+    holdSubmission: () => { server.held.add('turn/start'); server.held.add('turn/steer'); },
+    acknowledgeSubmission: () => {
+      const row = server.requests.filter(({ request }) => request.method === 'turn/start' || request.method === 'turn/steer').at(-1);
+      if (!row) throw new Error('No submission requested');
+      server.held.delete('turn/start'); server.held.delete('turn/steer'); server.reply(row.request, row.socket);
+    },
     // Stands in for the General Settings row, which owns this preference.
     busyEnter: value => composerPreferences().setBusyEnter(value),
     cancellations: () => server.requests.flatMap(row => row.request.method === 'turn/cancel' ? [row.request.params.target] : []),
@@ -175,7 +183,7 @@ if (mode === 'composer') {
 }
 declare global {
  interface Window { compactionFixture: { reply(): Promise<void>; compact(): Promise<void> } }
-  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v63').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; holdSubmission(): void; acknowledgeSubmission(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v63').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

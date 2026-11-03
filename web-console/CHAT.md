@@ -1,3 +1,28 @@
+# Composer and Workflow display refresh (2026-11-03)
+
+Read-only reference: sibling DeepSeek Harness at
+`ce7073d51254c26cd63b22a60835b8f948deb447`, specifically `ui-conversation`'s
+`InputBar.tsx` / `.module.css`, `ui-primitives`'s `DisclosureRow.tsx` and
+`ui-workflow-run`'s `WorkflowRunPanel.tsx` / `.module.css`.
+
+The input card's empty padding focuses the existing textarea without resetting
+its selection or scrolling the reader. Coarse-pointer editors have a 16px font
+floor; pointer hover feedback only applies on devices with hover. The primary
+button shows a full-opacity progress ring and localized sending label while
+native message acceptance is pending. Duplicate sends remain blocked by the
+existing submission owner. Unsent and uncertain drafts stop showing progress
+and retain their existing recovery controls. Queue, Steer, Stop, attachment
+receipts, IME handling and per-Conversation draft ownership remain native.
+
+Workflow summaries use the current Harness disclosure content-layout props:
+title, dot, count and trailing status share explicit flex sizing and 6px gaps.
+Long names truncate beside the count and status, adjacent runs have a 4px gap,
+and budget labels wrap at readable word boundaries. Admitted member rows reuse
+the existing offline Iconify node-kind glyphs, with status dots beside the
+status text. Successful runs collapse on settlement; abnormal runs stay open,
+and focused one-shot Agent links retain their inspection/navigation owner.
+These changes concern Workflow execution inside Chat, not the graph editor.
+
 # Conversation flow refresh (2026-11-03)
 
 Read-only reference: sibling DeepSeek Harness checkout at

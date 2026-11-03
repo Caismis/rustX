@@ -1,3 +1,56 @@
+## Composer and Workflow display audit (2026-11-03)
+
+Read-only reference: sibling `deepseek-harness` at
+[`ce7073d51254c26cd63b22a60835b8f948deb447`](https://github.com/deepseek-ai/deepseek-harness/tree/ce7073d51254c26cd63b22a60835b8f948deb447).
+Inspected `packages/client/ui-conversation/src/client/skeleton/InputBar.tsx` /
+`.module.css`, `ui-conversation/src/client/locales.ts`,
+`packages/client/ui-primitives/src/DisclosureRow.tsx` / `.module.css`, and
+`packages/client/ui-workflow-run/src/client/WorkflowRunPanel.tsx` / `.module.css`.
+Immutable source hashes and retained imports are recorded per file in the source
+inventory; existing MIT attribution remains in place.
+
+| Observed mismatch | Result and native adaptation |
+| --- | --- |
+| Workflow title and node count ran together; trailing status lacked a shared flex layout | Port the current Harness disclosure content/layout props and apply 6px gaps, a 4px inter-run gap, bounded names and a right-aligned status |
+| Members showed only a dot and text, making new node kinds hard to identify | Reuse the editor's existing offline Iconify subset for kind glyphs; pair the status dot with status text |
+| Pending Send looked like a generic disabled button | Use the Harness ring and full-opacity sending seat while native acceptance is pending; uncertain/unsent recovery never spins indefinitely |
+| Input card padding did not focus the editor, and touch text could be smaller than 16px | Focus the native textarea without moving its caret or reader; apply the coarse-pointer font floor and gate hover feedback by device capability |
+
+rustX retains its native textarea, field sizing, submission policy, attachment
+receipts, per-Conversation drafts and single reading/scroll owner. Harness
+Lexical/Host controllers and its execution phases are excluded. Workflow rows
+remain the native admitted sequence; no synthetic progress, graph reconstruction,
+backend protocol, dependency or TUI changes are introduced.
+
+Browser plugin not available; rendered verification uses the repository's pinned
+Playwright Chromium container. The new `composer-workflow.spec.ts` exercises
+1440px desktop English and touch-enabled 390px Chinese in both themes. It checks
+completed/cancelled runs, header spacing and overflow, node glyphs, keyboard
+disclosures, card-padding focus/caret, multiline input, menu dismissal and an
+explicitly held native acceptance followed by Stop. Console, page error and
+overlay checks are clean. Captures are written outside the repository as
+`/tmp/rustx-composer-workflow-{width}-{theme}-{collapsed,expanded,sending}.png`.
+Firefox and Safari are not exercised by this run.
+
+The broader composer reference replay exposed eight stale narrow running-state
+references: the prior flow refresh renders their stack 1px shorter. A controlled
+replay temporarily restored every production source changed in this task from
+`ddc63e8049c79e020e1255bbbcc558ed8312e7e7`, then restored the working source in a
+`finally` block. Its initial light/dark running-empty PNGs were byte-identical
+to the current task's captures. All eight changed references have exactly that
+1px height correction; idle and desktop references are unchanged. Comparator
+tolerances and rasterizer-noise policies are unchanged. Both the prior source
+and the restored current source pass the normal strict replay of all 14 narrow
+composer captures against these references.
+
+Validation: all 3,919 WebUI unit tests pass (four existing platform/opt-in skips),
+as do TypeScript, localization ownership, 336 source records, notices for 340
+production packages and the production build. Browser coverage also includes
+the existing attachment and composer-growth flows, English/Chinese keyboard
+policies, Session draft restoration, model panes and the real native Workflow
+Agent child through Chat, Trace, settlement and reload: 33 distinct scenarios
+pass, including the normal screenshot replay after the baseline correction.
+
 ## Conversation flow audit (2026-11-03)
 
 Read-only source: sibling `deepseek-harness` at
