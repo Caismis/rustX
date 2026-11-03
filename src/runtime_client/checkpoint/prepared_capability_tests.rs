@@ -10,7 +10,7 @@ fn tool() -> RuntimeClientTool {
         id: crate::runtime::identity::ToolId::new("tool-original"),
         name: "original".into(),
         description: "水🙂\\\"\n".into(),
-        input_schema: serde_json::json!({"type":"object","properties":{"n":{"minimum":1}}}),
+        input_schema: serde_json::json!({"type":"object","properties":{"n":{"minimum":1}}}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Parallel,
         approval_policy: ToolApprovalPolicy::Never,
@@ -80,11 +80,11 @@ fn prepared_capability_preserves_large_initial_items_and_exact_rejection_frontie
     let mut giant_id = tool();
     giant_id.id = crate::runtime::identity::ToolId::new("x".repeat(CHECKPOINT_ITEM_BYTES));
     let mut giant_body = tool();
-    giant_body.input_schema = serde_json::json!({"text":"x".repeat(CHECKPOINT_ITEM_BYTES)});
+    giant_body.input_schema = serde_json::json!({"text":"x".repeat(CHECKPOINT_ITEM_BYTES)}).into();
     let mut unsafe_json = tool();
-    unsafe_json.input_schema = serde_json::json!({"integer":u64::MAX});
+    unsafe_json.input_schema = serde_json::json!({"integer":u64::MAX}).into();
     let mut wide = tool();
-    wide.input_schema = serde_json::json!(vec![0; 33]);
+    wide.input_schema = serde_json::json!(vec![0; 33]).into();
     let cases = [
         view(vec![large]),
         view(vec![tool(), giant_id, tool()]),

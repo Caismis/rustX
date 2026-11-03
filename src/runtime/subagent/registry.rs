@@ -5825,7 +5825,7 @@ mod tests {
             id: crate::runtime::identity::ToolId::new("tool-get-issue"),
             name: "get_issue".to_owned(),
             description: "issue".to_owned(),
-            input_schema: serde_json::json!({"type": "object"}),
+            input_schema: serde_json::json!({"type": "object"}).into(),
             execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: crate::tools::types::ToolConcurrencyPolicy::Sequential,
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,

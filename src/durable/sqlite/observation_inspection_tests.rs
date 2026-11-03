@@ -16,19 +16,19 @@ fn inspection_request(
             id: ToolId::new("different-original-tool"),
             name: "Other".into(),
             description: "Other original schema".into(),
-            input_schema: serde_json::json!({"type":"null"}),
+            input_schema: serde_json::json!({"type":"null"}).into(),
         },
         crate::tools::types::ModelToolDefinition {
             id: ToolId::new("same-original-tool"),
             name: format!("Original {retry}"),
             description: description.into(),
-            input_schema: serde_json::json!({"opaque":u64::MAX,"zero":-0.0,"retry":retry}),
+            input_schema: serde_json::json!({"opaque":u64::MAX,"zero":-0.0,"retry":retry}).into(),
         },
         crate::tools::types::ModelToolDefinition {
             id: ToolId::new("same-original-tool"),
             name: "Later duplicate".into(),
             description: "Must never replace the native first definition".into(),
-            input_schema: serde_json::json!({"duplicate":true}),
+            input_schema: serde_json::json!({"duplicate":true}).into(),
         },
     ];
     freeze_test_input(store, &mut request, &[]);

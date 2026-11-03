@@ -10356,7 +10356,9 @@ mod tests {
             id: ToolId::new("tool-echo"),
             name: "echo".to_owned(),
             description: "echoes the call arguments".to_owned(),
-            input_schema: serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}}),
+            input_schema:
+                serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}})
+                    .into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: crate::tools::types::ToolConcurrencyPolicy::default(),
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -10894,7 +10896,7 @@ mod tests {
                 id: ToolId::new(id),
                 name: name.to_owned(),
                 description: description.to_owned(),
-                input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                input_schema: serde_json::json!({"type": "object", "properties": {}}).into(),
                 execution_policy: ToolExecutionPolicy::ForegroundOnly,
                 concurrency_policy: ToolConcurrencyPolicy::default(),
                 approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -11705,7 +11707,8 @@ mod tests {
                 "type": "object",
                 "properties": {"text": {"type": "string"}},
                 "required": ["text"]
-            }),
+            })
+            .into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::default(),
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -15159,7 +15162,8 @@ mod tests {
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
-            }),
+            })
+            .into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -17834,7 +17838,8 @@ mod tests {
                 },
                 "required": ["command"],
                 "additionalProperties": false
-            }),
+            })
+            .into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -17964,7 +17969,7 @@ mod tests {
             id: crate::runtime::identity::ToolId::new(id),
             name: name.to_owned(),
             description: String::new(),
-            input_schema: serde_json::json!({"type": "object"}),
+            input_schema: serde_json::json!({"type": "object"}).into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Parallel,
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,

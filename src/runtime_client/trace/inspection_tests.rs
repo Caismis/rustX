@@ -35,12 +35,12 @@ fn tool_fixture_in(
         id: ToolId::new("tool-bash"),
         name: "original frozen tool".into(),
         description: "original schema description".into(),
-        input_schema: serde_json::json!({"type":"object","properties":{"command":{"type":"string"}}}),
+        input_schema: serde_json::json!({"type":"object","properties":{"command":{"type":"string"}}}).into(),
     };
     if giant {
         definition.description = "original description水🙂".repeat(20_000);
         definition.input_schema =
-            serde_json::json!({"original":"schema\n水🙂".repeat(20_000),"exact":u64::MAX});
+            serde_json::json!({"original":"schema\n水🙂".repeat(20_000),"exact":u64::MAX}).into();
     }
     let frozen = request_with_tools(store.as_ref(), 0, Some(vec![definition]));
     let mut call = bash_call("original-inspection-call");

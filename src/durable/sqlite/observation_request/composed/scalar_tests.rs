@@ -26,7 +26,7 @@ fn snapshot(turn: u32, retry: u32, wide: bool) -> RequestSnapshot {
             id: ToolId::new(format!("stable-tool-{i}")),
             name: format!("stable_tool_{i}"),
             description: "stable tool 水🙂".into(),
-            input_schema: schema.clone(),
+            input_schema: schema.clone().into(),
         })
         .collect();
     RequestSnapshot::new(
@@ -272,7 +272,8 @@ fn shared_scalar_changes_config_exactly_and_preserves_order_and_versions() {
         .request_params
         .insert("temperature".into(), serde_json::json!(0.5));
     versions[4].tool_definitions.swap(0, 1);
-    versions[5].tool_definitions[0].input_schema["revision"] = serde_json::json!(2);
+    std::sync::Arc::make_mut(&mut versions[5].tool_definitions[0].input_schema)["revision"] =
+        serde_json::json!(2);
     versions[6].reasoning_enabled = true;
     for next in versions {
         take_work();
@@ -439,7 +440,7 @@ fn shared_scalar_retains_whole_root_byte_and_depth_admission_boundaries() {
         for _ in 0..depth {
             nested = serde_json::json!([nested]);
         }
-        value.tool_definitions[0].input_schema = nested;
+        value.tool_definitions[0].input_schema = nested.into();
         let connection = Connection::open_in_memory().unwrap();
         super::super::create_schema(&connection).unwrap();
         super::super::install_workspace(&connection).unwrap();

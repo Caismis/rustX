@@ -510,7 +510,7 @@ pub fn compile_model_definition(
     let mut input_schema = definition.input_schema.clone();
     let mut description = definition.description.clone();
     if definition.execution_policy == ToolExecutionPolicy::ModelSelectable {
-        decorate_execution_mode(&mut input_schema);
+        decorate_execution_mode(std::sync::Arc::make_mut(&mut input_schema));
         description = with_execution_mode_reminder(&description);
     }
     Ok(ModelToolDefinition {
@@ -800,6 +800,44 @@ pub fn validate_business_arguments(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn all_supported_drafts_still_validate_schema_and_business_arguments() {
+        for draft in [
+            "http://json-schema.org/draft-04/schema#",
+            "http://json-schema.org/draft-06/schema#",
+            "http://json-schema.org/draft-07/schema#",
+            "https://json-schema.org/draft/2019-09/schema",
+            "https://json-schema.org/draft/2020-12/schema",
+        ] {
+            let mut schema = serde_json::json!({
+                "$schema": draft, "type": "object",
+                "definitions": {"count": {"type": "integer", "minimum": 1}},
+                "properties": {"count": {"$ref": "#/definitions/count"}},
+                "required": ["count"], "additionalProperties": false,
+            });
+            super::validate_canonical_schema(&schema).unwrap();
+            assert!(
+                super::validate_business_arguments(&schema, &serde_json::json!({"count": 2}))
+                    .is_ok()
+            );
+            for invalid in [
+                serde_json::json!({}),
+                serde_json::json!({"count": 0}),
+                serde_json::json!({"count": "2"}),
+                serde_json::json!({"count": 2, "extra": true}),
+            ] {
+                assert!(
+                    super::validate_business_arguments(&schema, &invalid).is_err(),
+                    "{draft}: {invalid}"
+                );
+            }
+            schema["required"] = serde_json::json!(7);
+            assert!(
+                super::validate_canonical_schema(&schema).is_err(),
+                "{draft}"
+            );
+        }
+    }
     use super::{
         EXECUTION_MODE_DESCRIPTION_REMINDER, EXECUTION_MODE_FIELD, compile_model_definition,
         resolve_invocation_metadata, validate_business_arguments, validate_canonical_schema,
@@ -817,7 +855,7 @@ mod tests {
             id: ToolId::new("tool-x"),
             name: "x".to_owned(),
             description: String::new(),
-            input_schema: schema,
+            input_schema: schema.into(),
             execution_policy: policy,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -915,7 +953,8 @@ mod tests {
         let selectable = definition(ToolExecutionPolicy::ModelSelectable, original.clone());
         let compiled = compile_model_definition(&selectable).expect("compile");
         assert_ne!(
-            compiled.input_schema, original,
+            compiled.input_schema.as_ref(),
+            &original,
             "the compiled model-selectable schema is decorated"
         );
         assert_ne!(
@@ -928,11 +967,13 @@ mod tests {
         ))
         .expect("compile");
         assert_eq!(
-            compiled.input_schema, original,
+            compiled.input_schema.as_ref(),
+            &original,
             "the foreground schema is compiled verbatim"
         );
         assert_eq!(
-            selectable.input_schema, original,
+            selectable.input_schema.as_ref(),
+            &original,
             "the canonical schema is never mutated"
         );
     }
@@ -1020,7 +1061,7 @@ mod tests {
                 validate_execution_metadata_contract(policy, schema).expect("fixed policy");
                 let compiled = compile_model_definition(&definition(policy, schema.clone()))
                     .expect("fixed policy compiles verbatim");
-                assert_eq!(&compiled.input_schema, schema);
+                assert_eq!(compiled.input_schema.as_ref(), schema);
             }
         }
     }
@@ -1184,7 +1225,8 @@ mod tests {
                         panic!("root {keyword:?} stays legal under {policy:?}: {error}")
                     });
                 assert_eq!(
-                    &compiled.input_schema, schema,
+                    compiled.input_schema.as_ref(),
+                    schema,
                     "root {keyword:?} is compiled verbatim under {policy:?}"
                 );
             }
@@ -1356,7 +1398,8 @@ mod tests {
                         panic!("references stay legal under {policy:?}: {error}")
                     });
                 assert_eq!(
-                    &compiled.input_schema, schema,
+                    compiled.input_schema.as_ref(),
+                    schema,
                     "a referencing schema is compiled verbatim under {policy:?}"
                 );
             }

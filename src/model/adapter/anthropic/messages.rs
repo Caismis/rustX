@@ -80,7 +80,7 @@ impl AnthropicMessagesAdapter {
             api_key,
             api_base,
             anthropic_version,
-            http_client: http_client.unwrap_or_default(),
+            http_client: http_client.unwrap_or_else(super::super::transport::default_client),
         }
     }
 }

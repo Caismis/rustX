@@ -32,7 +32,7 @@ fn request_span_fixture() -> (SqliteConversationStore, RequestSnapshot, u64) {
         id: ToolId::new("original-span-tool"),
         name: "Original frozen tool".into(),
         description: "Frozen original description".into(),
-        input_schema: schema,
+        input_schema: schema.into(),
     }];
     snapshot.effective_system_prompt = "original prompt水\n".repeat(6_000);
     freeze_test_input(&store, &mut snapshot, &[]);

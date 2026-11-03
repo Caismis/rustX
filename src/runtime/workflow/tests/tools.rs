@@ -94,7 +94,8 @@ fn definition() -> ToolDefinition {
         input_schema: schema(
             json!({"passed":{"type":"boolean"},"label":{"type":"string"}}),
             &["passed", "label"],
-        ),
+        )
+        .into(),
         execution_policy: ToolExecutionPolicy::ModelSelectable,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
         approval_policy: ToolApprovalPolicy::Never,
@@ -838,7 +839,7 @@ async fn normalization_and_schema_rejection_start_zero_executors() {
             registration.normalizer = |_| Err("normalization rejected".into());
         } else {
             registration.definition.input_schema =
-                schema(json!({"missing":{"type":"string"}}), &["missing"]);
+                schema(json!({"missing":{"type":"string"}}), &["missing"]).into();
         }
         let context = context_with_registration(
             &plane,
