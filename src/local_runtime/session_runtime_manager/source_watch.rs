@@ -11,9 +11,12 @@
 //! | Source | Watched |
 //! | --- | --- |
 //! | User document | its directory, non-recursively, for that one file |
-//! | User resources | `~/rustx/.agents`, recursively (its parent until it exists) |
+//! | User resources | `~/rustx/.agents` for `mcp.toml`, and its `agents`, `skills`, `tools` and `workflows`, recursively (the parent until it exists) |
 //! | Workspace document and root guidance | each known Workspace root, non-recursively, for `rustx.toml` and `*.md` |
-//! | Workspace resources | each known Workspace's `.agents`, recursively |
+//! | Workspace resources | each known Workspace's `.agents`, as for the User |
+//!
+//! Anything else under `.agents` — Session uploads in particular — is not a
+//! configuration source and is neither watched nor routed.
 //!
 //! Known Workspaces are the directories that already hold source authority or
 //! are a Session application's configuration directory; an unrelated
@@ -26,6 +29,32 @@ use notify::{RecursiveMode, Watcher};
 
 use super::SessionRuntimeManager;
 use crate::local_runtime::configuration::settings::SourceTarget;
+
+/// The entries of a resource root (`.agents`) that configuration reads.
+const RESOURCE_ENTRIES: [&str; 5] = ["agents", "mcp.toml", "skills", "tools", "workflows"];
+
+/// Whether `path` is `root` itself or lies under one of its source entries.
+fn is_resource(path: &Path, root: &Path) -> bool {
+    path.strip_prefix(root).is_ok_and(|relative| {
+        relative.components().next().is_none_or(|entry| {
+            RESOURCE_ENTRIES
+                .iter()
+                .any(|name| entry.as_os_str() == *name)
+        })
+    })
+}
+
+/// The watches of one existing resource root: the root itself, for its
+/// direct entries, and each source directory recursively.
+fn resource_watches(root: &Path, watches: &mut BTreeMap<PathBuf, RecursiveMode>) {
+    watches.insert(root.to_path_buf(), RecursiveMode::NonRecursive);
+    for name in RESOURCE_ENTRIES {
+        let entry = root.join(name);
+        if entry.is_dir() {
+            watches.insert(entry, RecursiveMode::Recursive);
+        }
+    }
+}
 
 /// The fixed User source locations of one process.
 #[derive(Debug, Clone)]
@@ -41,13 +70,13 @@ pub(super) fn route(
     user: &UserSourceRoots,
     workspaces: &[PathBuf],
 ) -> Option<SourceTarget> {
-    if path == user.document || path.starts_with(&user.resources) {
+    if path == user.document || is_resource(path, &user.resources) {
         return Some(SourceTarget::User);
     }
     workspaces
         .iter()
         .filter(|workspace| {
-            path.starts_with(workspace.join(".agents"))
+            is_resource(path, &workspace.join(".agents"))
                 || (path.parent() == Some(workspace.as_path())
                     && (path.file_name().is_some_and(|name| name == "rustx.toml")
                         || path.extension().is_some_and(|extension| extension == "md")))
@@ -68,7 +97,7 @@ pub(super) fn desired(
         watches.insert(parent.to_path_buf(), RecursiveMode::NonRecursive);
     }
     if user.resources.is_dir() {
-        watches.insert(user.resources.clone(), RecursiveMode::Recursive);
+        resource_watches(&user.resources, &mut watches);
     } else if let Some(parent) = user.resources.parent().filter(|parent| parent.is_dir()) {
         watches
             .entry(parent.to_path_buf())
@@ -80,7 +109,7 @@ pub(super) fn desired(
             .or_insert(RecursiveMode::NonRecursive);
         let resources = workspace.join(".agents");
         if resources.is_dir() {
-            watches.insert(resources, RecursiveMode::Recursive);
+            resource_watches(&resources, &mut watches);
         }
     }
     watches.retain(|path, _| path.is_dir());
@@ -225,6 +254,23 @@ mod tests {
             route(Path::new("/work/a/nested/rustx.toml"), &user, &workspaces),
             workspace("/work/a/nested")
         );
+        // Session uploads and other `.agents` entries are not sources.
+        assert_eq!(
+            route(
+                Path::new("/work/a/.agents/uploads/s/b/note.md"),
+                &user,
+                &workspaces
+            ),
+            None
+        );
+        assert_eq!(
+            route(&home.join("rustx/.agents/uploads/x"), &user, &workspaces),
+            None
+        );
+        assert_eq!(
+            route(&home.join("rustx/.agents"), &user, &workspaces),
+            Some(SourceTarget::User)
+        );
         // Ordinary project files never reach configuration.
         assert_eq!(
             route(Path::new("/work/a/src/main.rs"), &user, &workspaces),
@@ -257,16 +303,28 @@ mod tests {
                 (workspace.path().to_path_buf(), RecursiveMode::NonRecursive),
             ])
         );
-        std::fs::create_dir_all(home.path().join("rustx/.agents")).unwrap();
-        std::fs::create_dir_all(workspace.path().join(".agents")).unwrap();
+        std::fs::create_dir_all(home.path().join("rustx/.agents/skills")).unwrap();
+        std::fs::create_dir_all(workspace.path().join(".agents/uploads")).unwrap();
+        std::fs::create_dir_all(workspace.path().join(".agents/workflows")).unwrap();
         let watches = desired(&user, &workspaces);
         assert_eq!(
             watches.get(&home.path().join("rustx/.agents")),
+            Some(&RecursiveMode::NonRecursive)
+        );
+        assert_eq!(
+            watches.get(&home.path().join("rustx/.agents/skills")),
             Some(&RecursiveMode::Recursive)
         );
         assert_eq!(
-            watches.get(&workspace.path().join(".agents")),
+            watches.get(&workspace.path().join(".agents/workflows")),
             Some(&RecursiveMode::Recursive)
+        );
+        // Uploads are never watched, however many batches they hold.
+        assert!(!watches.contains_key(&workspace.path().join(".agents/uploads")));
+        assert!(
+            watches
+                .keys()
+                .all(|path| !path.starts_with(workspace.path().join(".agents/uploads")))
         );
         assert!(!watches.contains_key(&home.path().join("rustx")));
     }

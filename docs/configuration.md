@@ -945,10 +945,12 @@ generation or rebuild resources.
 
 A bounded native watcher (the `notify` crate) feeds external edits into the same
 path as a native write. Coverage is the User document's directory, for that one
-file; the User resource root `~/rustx/.agents`, recursively (its parent until it
-exists); each Workspace that already holds source authority for a Session, for
-`rustx.toml` and root `*.md` guidance; and that Workspace's `.agents`,
-recursively. A notification is only invalidation: it names the owning source
+file; the User resource root `~/rustx/.agents` for `mcp.toml`, with its
+`agents`, `skills`, `tools` and `workflows` directories recursively (its parent
+until it exists); each Workspace that holds source authority or a Session's
+configuration, for `rustx.toml` and root `*.md` guidance; and that Workspace's
+`.agents` in the same way. Anything else under `.agents`, such as Session
+uploads, is neither watched nor routed. A notification is only invalidation: it names the owning source
 target, notifications coalesce into one capture per target, and the capture
 rereads, fences and validates the files exactly as after `configuration/sourceWrite`.
 An unchanged healthy source is a no-op. Unrelated directories are never watched,
