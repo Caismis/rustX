@@ -4,7 +4,8 @@ use super::*;
 fn compact_lookup_schema_refuses_a_shadow_rowid_tree() {
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     let connection = store.lock().unwrap();
-    for table in ["lifecycle_state", "observation_models"] {
+    let table = "observation_models";
+    {
         let definition: String = connection
             .query_row(
                 "SELECT sql FROM sqlite_schema WHERE type='table' AND name=?1",

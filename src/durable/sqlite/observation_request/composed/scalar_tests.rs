@@ -817,14 +817,14 @@ fn configuration_bound_scalar_schema_refuses_the_previous_encoding_identity() {
     store
         .lock()
         .unwrap()
-        .execute("UPDATE rustx_store SET schema_version=91", [])
+        .execute("UPDATE rustx_store SET schema_version=92", [])
         .unwrap();
     drop(store);
     assert!(matches!(
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
-            stored: 91,
-            expected: 92
+            stored: 92,
+            expected: 93
         })
     ));
 }
