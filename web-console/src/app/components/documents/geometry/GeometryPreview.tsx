@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'rea
 import { Box3, type Object3D } from 'three';
 import { useLocale } from '../../../../locale/react';
 import { en, zh } from '../../../../locale/dictionaries/geometry';
-import type { PreviewViewStateProps } from '../../../../presentation/right-panel/preview-view-state';
+import type { PreviewViewState, PreviewViewStateProps } from '../../../../presentation/right-panel/preview-view-state';
 import { geometryFormat } from './format';
 import { importGlb } from './glb';
 import { parseGeometry } from './parse';
@@ -15,7 +15,8 @@ import { Tooltip } from '../../../../presentation/primitives/Tooltip';
 import { IconChevronRightOutline14, IconChecklistOutline14, IconCloseOutline16, IconFolderClose16 } from '../../../../presentation/primitives/icons';
 import css from './GeometryPreview.module.css';
 
-export default function GeometryPreview({ bytes, name, copyId, signal, current, viewState, onViewStateChange }: PreviewViewStateProps & { bytes: Uint8Array<ArrayBuffer>; name: string; copyId: string; signal: AbortSignal; current: () => boolean }) {
+export interface GeometryPreviewProps extends PreviewViewStateProps { bytes: Uint8Array<ArrayBuffer>; name: string; copyId: string; signal: AbortSignal; current: () => boolean; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
+export default function GeometryPreview({ bytes, name, copyId, signal, current, viewState, onViewStateChange, onGeometryRetire }: GeometryPreviewProps) {
   const locale = useLocale(), t = locale.active === 'zh' ? zh : en;
   const container = useRef<HTMLDivElement>(null), active = useRef<ReturnType<typeof mountGeometry>>(undefined);
   const latest = useRef({ viewState, onViewStateChange, t }); latest.current = { viewState, onViewStateChange, t };
@@ -27,11 +28,18 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
   const format = geometryFormat(name);
   useEffect(() => {
     const controller = new AbortController(); let roots: Object3D[] = [], mounted: ReturnType<typeof mountGeometry> | undefined, release: (() => void) | undefined;
+    let selection: { selected?: string; hidden?: string[] } = {};
     // Capture this copy's predicate, rather than adopting a later render's
     // permission while an earlier import is still completing.
     const ownsCopy = current;
     const live = () => !controller.signal.aborted && !signal.aborted && ownsCopy();
-    const retire = () => { controller.abort(); mounted?.dispose(); if (active.current === mounted) active.current = undefined; mounted = undefined; if (release) { release(); release = undefined; } else disposeScene(roots); roots = []; };
+    const retire = () => {
+      // The visible-body signal may already be aborted. Only the owner can
+      // authorize saving inert metadata for this exact retained content copy.
+      mounted?.flush(patch => onGeometryRetire({ copyId, ...patch }));
+      controller.abort(); mounted?.dispose(); if (active.current === mounted) active.current = undefined; mounted = undefined;
+      if (release) { release(); release = undefined; } else disposeScene(roots); roots = [];
+    };
     signal.addEventListener('abort', retire, { once: true }); setState({}); setPartsOpen(false); setExpanded(new Set()); setMenu(false);
     if (!live()) { retire(); return; }
     void (async () => {
@@ -43,7 +51,10 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
       mounted = mountGeometry(container.current!, object, bounds, saved, props.t, patch => {
         if (!live()) return;
         latest.current.onViewStateChange({ geometry: { copyId, ...patch } });
-        setState(value => ({ ...value, selected: patch.selected, hidden: patch.hidden }));
+        if (selection.selected !== patch.selected || !sameHidden(selection.hidden, patch.hidden)) {
+          selection = { selected: patch.selected, hidden: patch.hidden };
+          setState(value => ({ ...value, ...selection }));
+        }
       }, () => { const publish = live(); retire(); if (publish) setState({ error: 'webgl' }); });
       active.current = mounted;
       setState(value => ({ ...value, parts: mounted!.parts, dimensions: [bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z] }));
@@ -56,10 +67,10 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
   // Names/labels do not own the renderer lifetime.
   useEffect(() => { const canvas = container.current?.querySelector('canvas'); canvas?.setAttribute('aria-label', t.canvas); canvas?.setAttribute('aria-description', t.axes); }, [t]);
   const views: StandardView[] = ['isometric', 'front', 'back', 'left', 'right', 'top', 'bottom'];
-  const number = new Intl.NumberFormat(locale.active, { maximumSignificantDigits: 6 });
-  const dimensions = state.dimensions?.map(value => number.format(value)).join(' × ');
+  const number = useMemo(() => new Intl.NumberFormat(locale.active, { maximumSignificantDigits: 6 }), [locale.active]);
+  const dimensions = useMemo(() => state.dimensions?.map(value => number.format(value)).join(' × '), [state.dimensions, number]);
   const units = format === 'glb' ? t.meter : format === 'step' || format === 'iges' ? t.millimeter : t.unknown;
-  const partCount = state.parts?.filter(part => part.kind === 'mesh').length;
+  const partCount = useMemo(() => state.parts?.filter(part => part.kind === 'mesh').length, [state.parts]);
   const closeParts = () => { setPartsOpen(false); container.current?.querySelector<HTMLButtonElement>('[data-geometry-parts-toggle]')?.focus(); };
   const renderPart = ({ part, ordinal, children }: PartBranch): ReactNode => {
     const name = part.name || `${t.part} ${ordinal}`, visible = !state.hidden?.includes(part.id), open = expanded.has(part.id);
@@ -72,6 +83,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
       {children.length > 0 && open && <ul>{children.map(renderPart)}</ul>}
     </li>;
   };
+  const partRows = useMemo(() => tree.map(renderPart), [tree, state.selected, state.hidden, expanded, t]);
   return <section className={css.root} data-geometry-format={format} aria-label={t.preview} onKeyDown={event => {
     if (!partsOpen || event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault(); event.stopPropagation(); closeParts();
@@ -90,7 +102,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
         </div>
         {state.parts && partsOpen && <div className={css.partsPanel} id={partsId}>
           <header className={css.partsHeader}><span>{t.parts}<span className={css.count}>{number.format(partCount!)}</span></span><Button size="sm" className={css.panelClose} aria-label={t.closeParts} onClick={closeParts}><IconCloseOutline16/></Button></header>
-          <ul className={css.parts} aria-label={t.parts}>{tree.map(renderPart)}</ul>
+          <ul className={css.parts} aria-label={t.parts}>{partRows}</ul>
         </div>}
       </>}
     </div>
@@ -100,6 +112,8 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
     </footer>
   </section>;
 }
+
+function sameHidden(left: string[] | undefined, right: string[] | undefined) { return (left?.length ?? 0) === (right?.length ?? 0) && (left ?? []).every((id, index) => id === right?.[index]); }
 
 interface PartBranch { part: Part; ordinal: number; children: PartBranch[] }
 function partTree(parts: Part[]): PartBranch[] {

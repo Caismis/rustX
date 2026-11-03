@@ -172,6 +172,10 @@ export class FilePreviewCoordinator {
   sourceCurrent(source:PreviewSource):boolean {
     return this.current()&&(!source.owned||source.owned())&&(source.kind==='artifact'||(source.agentId!=null?source.owned!=null:source.conversationId===this.target.conversation_id));
   }
+  retainedCurrent(occurrenceId: number, source: PreviewSource, content: PreviewContentOwner | undefined): boolean {
+    const retained = this.contents.get(occurrenceId);
+    return this.sourceCurrent(source) && !!retained && retained.owner === content && samePreviewSource(retained.source, source);
+  }
   async read(source: PreviewSource, signal: AbortSignal): Promise<PreviewBytes> {
     if (!this.sourceCurrent(source) || signal.aborted) throw new Error('Obsolete file view');
     // Public artifact/read owns its separate ArtifactResources transfer budget;
@@ -251,6 +255,8 @@ export class FilePreviewLease {
   readonly signal = this.abort.signal;
   constructor(private readonly owner: FilePreviewCoordinator, readonly occurrenceId: number, readonly source: PreviewSource, readonly content?: PreviewContentOwner) {}
   current = () => !this.signal.aborted && this.owner.sourceCurrent(this.source);
+  /** Permission for final inert geometry metadata, independent of body visibility. */
+  sourceCurrent = () => this.owner.retainedCurrent(this.occurrenceId, this.source, this.content);
   async readData(signal: AbortSignal): Promise<PreviewBytes> {
     if (!this.current() || signal.aborted) throw new Error('Obsolete file view');
     if (this.reading) throw new Error('File lease capacity reached');

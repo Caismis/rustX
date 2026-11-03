@@ -200,17 +200,20 @@ export class PreviewWorkspaceOwner {
     else this.replace(next);
   }
   split() {
-    const w = this.current(); if (!w || w.panes.length >= PREVIEW_POLICY.panes || w.tabs.length < 2 || !splitFits(this.width)) return;
+    let w = this.current(); if (!w || w.panes.length >= PREVIEW_POLICY.panes || w.tabs.length < 2 || !splitFits(this.width)) return;
     const selected = w.panes[0].selected, newPane = ++this.paneSequence;
     this.leases.get(selected)?.dispose(); this.leases.delete(selected);
+    // Retirement can synchronously save the final geometry camera pose.
+    w = this.current(); if (!w?.tabs.some(tab => tab.id === selected)) return;
     const next = this.without(w, selected);
     this.replace({ ...next, tabs: w.tabs.map(tab => tab.id === selected ? { ...tab, pane: newPane } : tab), panes: [...next.panes, { id: newPane, selected }], activePane: newPane, ratio: .5 });
   }
   move(id: number) {
-    const w = this.current(), tab = w?.tabs.find(tab => tab.id === id);
+    let w = this.current(); const tab = w?.tabs.find(tab => tab.id === id);
     if (!w || !tab || w.panes.length !== 2) return;
     const other = w.panes.find(pane => pane.id !== tab.pane)!;
     this.leases.get(id)?.dispose(); this.leases.delete(id);
+    w = this.current(); if (!w?.tabs.some(tab => tab.id === id)) return;
     const next = this.without(w, id);
     this.replace({ ...next, tabs: w.tabs.map(tab => tab.id === id ? { ...tab, pane: other.id } : tab), activePane: other.id,
       panes: next.panes.map(pane => pane.id === other.id ? { ...pane, selected: id } : pane) });

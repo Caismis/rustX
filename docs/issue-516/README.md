@@ -6,6 +6,20 @@ resource limits. The [performance report](performance.md) includes the measured
 environment, source/fixture digests, raw timing samples, repeated interaction
 distributions, allocation accounting and Docker peak memory.
 
+## Performance follow-up
+
+The [performance follow-up](performance-followup.md) covers bounded camera
+publication with final-pose retention, hidden-subtree picking, cached size/DPR
+updates and canceled HTTP payload materialization. It includes same-host
+before/after raw samples and explicitly retains the unchanged large-STL
+camera bottleneck and higher sampled CAD P95 timings. The original evidence
+below remains attached to its measured implementation baseline.
+
+The follow-up passes 16 fixed-browser functional cases, including a new
+synchronous camera-change burst followed by immediate hide/remount, and both
+repeated large-model performance/retirement cases. The Web suite passes 4003
+tests with four platform skips; final retirement-focused checks pass 117 tests.
+
 ## Executed checks
 
 | Check | Result |

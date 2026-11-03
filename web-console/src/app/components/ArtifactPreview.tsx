@@ -34,6 +34,7 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
   const owner = resources.content!, content = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
   const [image, setImage] = useState<{ url?: string; error?: string }>({});
   const saveViewState: PreviewViewStateProps['onViewStateChange'] = patch => { if (resources.current()) onViewStateChange(patch); };
+  const sameGeometryCopy = () => owner.getSnapshot().revision === content.revision && owner.getSnapshot().version === content.version && owner.getSnapshot().data === content.data;
   useEffect(() => { if (mode) owner.ensure(mode === 'geometry' ? 'geometry' : office ? kind : paged ? 'pages' : 'bytes', viewState.textLoadedLines); }, [owner, kind, office, paged, mode]);
   useEffect(() => {
     if (content.text !== undefined) saveViewState({ textLoadedLines: content.loadedLines });
@@ -60,7 +61,7 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
     hasMore={paged && content.page !== undefined && !content.page.eof} moreLoading={content.loading} onLoadMore={() => owner.more()}
     viewState={viewState} onViewStateChange={saveViewState} onDownload={() => { if (resources.current()) onDownload(); }}
     refresh={() => owner.refresh()} retry={retry}>
-    {mode === 'geometry' ? content.data && <GeometryDocument bytes={content.data} name={artifact.name} copyId={`${content.revision}:${content.version}`} signal={resources.signal} current={() => resources.current() && owner.getSnapshot().revision === content.revision && owner.getSnapshot().data === content.data} viewState={viewState} onViewStateChange={saveViewState}/>
+    {mode === 'geometry' ? content.data && <GeometryDocument bytes={content.data} name={artifact.name} copyId={`${content.revision}:${content.version}`} signal={resources.signal} current={() => resources.current() && sameGeometryCopy()} viewState={viewState} onViewStateChange={saveViewState} onGeometryRetire={geometry => { if (resources.sourceCurrent() && sameGeometryCopy()) onViewStateChange({ geometry }); }}/>
       : mode === 'image' ? image.url && !error ? <ImagePreview url={image.url} name={artifact.name} signal={resources.signal} decodeError={decodeError} viewState={viewState} onViewStateChange={saveViewState}/> : undefined
       : kind && content.data ? <DocumentPreview kind={kind === 'docx' || kind === 'pptx' ? 'pdf' : kind} derived={office} bytes={content.data} resources={resources} viewState={viewState} onViewStateChange={saveViewState} retry={retry}/> : undefined}
   </Preview>;

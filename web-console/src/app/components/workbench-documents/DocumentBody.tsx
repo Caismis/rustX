@@ -31,7 +31,8 @@ export function DocumentBody({ mode, text, bytes, path, view, signal, retry, cal
   const loading = <p role="status">{tx('artifacts:workbench.loading')}</p>;
   if (mode === 'geometry') {
     const owner = view.preview!.owner, snapshot = owner.getSnapshot();
-    return <GeometryDocument bytes={bytes} name={path} copyId={`${snapshot.revision}:${snapshot.version}`} signal={signal} current={() => !signal.aborted && view.current() && owner.getSnapshot().revision === snapshot.revision && owner.getSnapshot().data === bytes} viewState={state} onViewStateChange={patch => { if (!signal.aborted && view.current()) change(patch); }}/>;
+    const sameCopy = () => view.current() && view.preview?.owner === owner && owner.getSnapshot().revision === snapshot.revision && owner.getSnapshot().version === snapshot.version && owner.getSnapshot().data === bytes;
+    return <GeometryDocument bytes={bytes} name={path} copyId={`${snapshot.revision}:${snapshot.version}`} signal={signal} current={() => !signal.aborted && sameCopy()} viewState={state} onViewStateChange={patch => { if (!signal.aborted && sameCopy()) change(patch); }} onGeometryRetire={geometry => { if (sameCopy()) view.document = { ...view.document, geometry }; }}/>
   }
   if (mode === 'markdown') return <DocumentResources.Provider value={{image:(url,alt)=>{const resolved=relativeDocumentPath(path,url);return resolved?<WorkspaceImage key={resolved} path={resolved} alt={alt} dependencies={dependencies}/>:<span>{alt}</span>;},link:(url,children)=>{const resolved=relativeDocumentPath(path,url);return resolved?<a href={url} onClick={event=>{event.preventDefault();onOpen(resolved);}}>{children}</a>:undefined;}}}><div className={css.document} data-document-markdown>
     {split && <div className={css.frontmatter} data-document-frontmatter><FrontmatterFields source={split.source} fallback={<pre className={css.frontmatterSource}>{split.source}</pre>}/></div>}

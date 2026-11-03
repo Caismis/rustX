@@ -190,3 +190,32 @@ for (const view of ['Top', 'Bottom']) test(`${view} horizontal orbit uses the se
   await page.getByRole('button', { name: 'Hide delivery', exact: true }).click(); await page.getByRole('button', { name: 'Show delivery', exact: true }).click(); await ready(page);
   await drag();
 });
+
+test('a burst of camera changes is coalesced and immediate hide saves its final pose', async ({ page }) => {
+  await page.goto(`${origin}/test/fixtures/geometry.html`); await openDelivery(page, 'cube.stl');
+  const canvas = page.locator('[data-geometry-format] canvas'), box = (await canvas.boundingBox())!;
+  await canvas.evaluate(element => element.addEventListener('pointerdown', event => {
+    (window as any).geometryPointerId = (event as PointerEvent).pointerId;
+  }, { once: true }));
+  const start = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(start.x, start.y); await page.mouse.down();
+  const capture = await page.evaluate(start => {
+    const api = (window as any).geometryContract, canvas = document.querySelector('[data-geometry-format] canvas')!;
+    const pose = () => api.snapshot().find((tab: any) => tab.name === 'cube.stl').state.camera;
+    const publications = api.activity.publications;
+    for (let step = 1; step <= 20; step++) canvas.dispatchEvent(new PointerEvent('pointermove', {
+      pointerId: (window as any).geometryPointerId, pointerType: 'mouse', buttons: 1,
+      clientX: start.x + step * 2, clientY: start.y + step, bubbles: true,
+    }));
+    const during = pose();
+    [...document.querySelectorAll('button')].find(button => button.textContent === 'Hide delivery')!.click();
+    return { during, saved: pose(), publications: api.activity.publications - publications };
+  }, start);
+  await page.mouse.up();
+  expect(capture.publications).toBeLessThanOrEqual(3);
+  expect(capture.saved.position).not.toEqual(capture.during.position);
+  await page.getByRole('button', { name: 'Show delivery', exact: true }).click(); await ready(page);
+  const restored = await page.evaluate(() => (window as any).geometryContract.snapshot().find((tab: any) => tab.name === 'cube.stl').state.camera);
+  for (const key of ['position', 'target', 'up'] as const) capture.saved[key].forEach((value: number, index: number) => expect(restored[key][index]).toBeCloseTo(value, 7));
+  expect(await page.evaluate(() => (window as any).geometryContract.reads.filter((read: any) => read.name === 'cube.stl' && !read.probe).length)).toBe(1);
+});

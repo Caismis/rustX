@@ -38,6 +38,17 @@ and hidden IDs are bounded inert occurrence metadata tied to a content copy.
 Hiding a selected part also hides its selection outline.
 Changing or restoring the up axis recreates OrbitControls through its public
 lifecycle so orbit gestures use that axis and old listeners are released.
+Camera-only changes retain the latest pose locally and publish at most once per
+100 ms while moving; interaction end flushes the final pose immediately. Normal
+body retirement also saves a pending pose through a separate inert-metadata path
+that checks the retained occurrence, source authority and exact content copy.
+Revocation, Refresh and occurrence replacement cannot save obsolete view state.
+Initial hidden-part restoration publishes once, and camera-only publications do
+not rebuild the part rows or their derived metadata. Repeating an unchanged
+selection or visibility action does not publish or schedule a draw.
+Picking prunes hidden subtrees before nonrecursive mesh raycasts and resolves
+hits through an occurrence map. Unchanged CSS size and effective DPR cause no
+drawing-buffer update; a changed size/DPR uses one public renderer operation.
 Both entry points mount inside the existing document sidebar, retaining its tabs,
 path header, source actions, split/fullscreen behavior and content ownership.
 The geometry body fills the remaining height without a fixed minimum or a second
@@ -135,6 +146,11 @@ validated typed result buffers leave the Worker. Three.js adopts those arrays
 without another full attribute copy. Visible bodies do not allocate unused
 original-file Blob URLs. GLB loader-created image URLs/bitmaps are separately
 disposed with the scene.
+Canceled HTTP reads still consume and validate the complete bounded multipart
+terminal response before releasing physical admission. Once canceled, a valid
+attachment remains in the parser's Blob without an unused final ArrayBuffer
+copy. Malformed attachments and unknown physical settlement keep their existing
+error precedence; the carrier is not aborted to save that allocation.
 The GLTFLoader texture hook owns partial import results too: decode completion
 after cancellation or parse rejection disposes its texture/bitmap even when no
 scene can be returned.

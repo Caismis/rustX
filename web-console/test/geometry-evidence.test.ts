@@ -9,8 +9,11 @@ it('publishes only finite nonnegative geometry elapsed measurements', () => {
   for (const value of [...timings.flatMap(row => [row.displayMs, row.importMs]), ...native.map(row => row.displayMs), workbench.displayMs, envelope.displayMs, envelope.observedFrameGapMs]) { expect(Number.isFinite(value)).toBe(true); expect(value).toBeGreaterThanOrEqual(0); }
 });
 it('publishes valid repeated samples, nearest-rank percentiles and retired resource counters', () => {
-  for (const name of ['stl-735000-vertices.json', 'cad-96-parts.json']) {
-    const report = JSON.parse(readFileSync(new URL(`../../docs/issue-516/${name}`, import.meta.url), 'utf8'));
+  const followup = JSON.parse(readFileSync(new URL('../../docs/issue-516/performance-followup-samples.json', import.meta.url), 'utf8'));
+  const reports = ['stl-735000-vertices.json', 'cad-96-parts.json'].map(name => JSON.parse(readFileSync(new URL(`../../docs/issue-516/${name}`, import.meta.url), 'utf8')));
+  for (const phase of ['before', 'after']) reports.push(...Object.values(followup[phase]));
+  for (const report of reports) {
+    for (const value of [report.firstDisplayMs, report.twoModelDisplayMs]) { expect(Number.isFinite(value)).toBe(true); expect(value).toBeGreaterThanOrEqual(0); }
     for (const key of ['remount', 'orbit', 'pan', 'picking']) for (const kind of ['elapsedMs', 'frameMs']) {
       const series = report[key][kind], sorted = [...series.samples].sort((a: number, b: number) => a - b);
       expect(sorted.length).toBeGreaterThan(0);

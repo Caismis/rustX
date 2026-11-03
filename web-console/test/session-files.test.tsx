@@ -661,3 +661,15 @@ it('foreign locator source CID is refused before lookup and a retired Child owne
  owned=false;f.reply(0);await rejected;expect(create).not.toHaveBeenCalled();
  expect(samePreviewSource(child,{...child,owned:()=>true})).toBe(false);
 });
+it('allows final inert metadata for a hidden retained occurrence but fences replacement, deletion and authority retirement', async () => {
+  const f = await fixture(); expect(f.lease.sourceCurrent()).toBe(true);
+  f.lease.dispose(); expect(f.lease.current()).toBe(false); expect(f.lease.sourceCurrent()).toBe(true);
+  f.resources.forget(1); expect(f.lease.sourceCurrent()).toBe(false);
+  const next = f.resources.acquire(1, source); expect(next.sourceCurrent()).toBe(true); expect(f.lease.sourceCurrent()).toBe(false);
+  await f.replaceHost(); expect(next.sourceCurrent()).toBe(false);
+});
+it('final metadata cannot outlive a child source permission', async () => {
+  const f = await fixture(); let owned = true;
+  const child = f.resources.acquire(2, { kind: 'artifact', id: 'child', agentId: 'child', owned: () => owned });
+  child.dispose(); expect(child.sourceCurrent()).toBe(true); owned = false; expect(child.sourceCurrent()).toBe(false);
+});
