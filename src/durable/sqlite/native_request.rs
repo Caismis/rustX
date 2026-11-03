@@ -159,6 +159,25 @@ pub(super) struct FreshConfiguration {
     json: String,
 }
 impl FreshConfiguration {
+    pub(super) fn capture(snapshot: &RequestSnapshot) -> Result<Self, ConversationStoreError> {
+        let json = encode(
+            &ConfigurationRef {
+                effective_system_prompt: &snapshot.effective_system_prompt,
+                system_sections: &snapshot.system_sections,
+                tool_definitions: &snapshot.tool_definitions,
+            },
+            MAX_BYTES,
+        )?;
+        Ok(Self {
+            digest: digest(&json),
+            json,
+        })
+    }
+
+    pub(super) fn identity(&self) -> &str {
+        &self.digest
+    }
+
     fn matches(&self, connection: &Connection) -> Result<Option<bool>, ConversationStoreError> {
         #[cfg(test)]
         CONFIGURATION_BYTE_PROBES.with(|count| count.set(count.get() + 1));
@@ -241,29 +260,17 @@ pub(super) fn persist(
     connection: &Connection,
     snapshot: &RequestSnapshot,
 ) -> Result<(String, FreshConfiguration), ConversationStoreError> {
-    let configuration = encode(
-        &ConfigurationRef {
-            effective_system_prompt: &snapshot.effective_system_prompt,
-            system_sections: &snapshot.system_sections,
-            tool_definitions: &snapshot.tool_definitions,
-        },
-        MAX_BYTES,
-    )?;
-    let digest = digest(&configuration);
+    let configuration = FreshConfiguration::capture(snapshot)?;
     let json = encode(
         &MetadataRef {
             snapshot,
-            configuration_digest: &digest,
+            configuration_digest: &configuration.digest,
         },
         MAX_BYTES + REFERENCE_BYTES,
     )?;
-    if materialized_bytes(json.len(), configuration.len())? > MAX_BYTES {
+    if materialized_bytes(json.len(), configuration.json.len())? > MAX_BYTES {
         return Err(invalid("frozen request exceeds storage byte budget"));
     }
-    let configuration = FreshConfiguration {
-        digest,
-        json: configuration,
-    };
     match configuration.matches(connection)? {
         Some(true) => {}
         Some(false) => return Err(invalid("frozen request configuration integrity mismatch")),

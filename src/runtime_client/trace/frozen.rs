@@ -24,6 +24,7 @@ enum Capture {
     Complete,
     Prefix,
     Stable,
+    Binding,
     StablePrefix,
 }
 impl<M> schemars::JsonSchema for RequestInspection<'_, M> {
@@ -52,7 +53,10 @@ impl<M: serde::Serialize> serde::Serialize for RequestInspection<'_, M> {
         // top-level ordinals without encoding any request-specific values.
         macro_rules! prefix_field {
             ($name:literal, $field:expr) => {
-                if matches!(self.capture, Capture::Stable | Capture::StablePrefix) {
+                if matches!(
+                    self.capture,
+                    Capture::Stable | Capture::StablePrefix | Capture::Binding
+                ) {
                     value.serialize_field($name, &None::<u8>)?;
                 } else {
                     value.serialize_field($name, $field)?;
@@ -90,16 +94,19 @@ impl<M: serde::Serialize> serde::Serialize for RequestInspection<'_, M> {
         )?;
         value.serialize_field(
             "effective_system_prompt",
-            &BorrowedText {
+            &(self.capture != Capture::Binding).then_some(BorrowedText {
                 text: &snapshot.effective_system_prompt,
                 truncated: false,
-            },
+            }),
         )?;
         value.serialize_field("predecessor", &TraceRequestPredecessor::NotApplicable)?;
         value.serialize_field("previous_system_prompt", &None::<TraceText>)?;
         value.serialize_field("messages", &self.messages)?;
         value.serialize_field("messages_truncated", &true)?;
-        value.serialize_field("tools", &Tools(snapshot))?;
+        value.serialize_field(
+            "tools",
+            &(self.capture != Capture::Binding).then_some(Tools(snapshot)),
+        )?;
         value.serialize_field("tools_truncated", &false)?;
         value.serialize_field("usage", &None::<crate::model::ModelUsage>)?;
         value.serialize_field("failure", &None::<super::TraceRequestFailure>)?;
@@ -260,6 +267,17 @@ pub(crate) fn request_stable(snapshot: &RequestSnapshot) -> RequestInspection<'_
         snapshot,
         messages: [],
         capture: Capture::Stable,
+    }
+}
+
+/// The independently frozen native configuration already binds the prompt and
+/// tools. The remaining allowlisted scalar fields complete a sharing key; this
+/// representation is never a public Source and never contains configuration bodies.
+pub(crate) fn request_stable_binding(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 0]> {
+    RequestInspection {
+        snapshot,
+        messages: [],
+        capture: Capture::Binding,
     }
 }
 

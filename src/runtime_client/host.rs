@@ -8381,14 +8381,9 @@ mod tests {
                 &previous.source_scalar,
             ),
             (
-                "source_paths",
-                &current.source_paths,
-                &previous.source_paths,
-            ),
-            (
-                "source_length",
-                &current.source_length,
-                &previous.source_length,
+                "source_geometry",
+                &current.source_geometry,
+                &previous.source_geometry,
             ),
             (
                 "context_observe",
@@ -8460,8 +8455,7 @@ mod tests {
             agent.source,
             agent.source_capture,
             agent.source_scalar,
-            agent.source_paths,
-            agent.source_length,
+            agent.source_geometry,
         ] {
             assert_eq!(phase.calls, turns);
         }

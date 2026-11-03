@@ -14,7 +14,7 @@ import { performance } from 'node:perf_hooks';
 const [checkoutArg, scenario, output] = process.argv.slice(2);
 const checkout = resolve(checkoutArg);
 const revision = execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-assert.equal(revision, '90d863f7c1183b965f099855715d6e88c7b8a52c');
+assert.equal(revision, '1cedd32724abfcb0915f76cc61b6827e2c16dbad');
 const load = (path) => import(pathToFileURL(join(checkout, path)).href);
 const { createModels, createProvider } = await load('packages/ai/src/models.ts');
 const { openAICompletionsApi } = await load('packages/ai/src/api/openai-completions.lazy.ts');

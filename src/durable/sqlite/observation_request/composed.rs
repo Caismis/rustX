@@ -55,6 +55,7 @@ pub(crate) struct Work {
     pub new_leaves: usize,
     pub new_nodes: usize,
     pub new_fragment_bytes: usize,
+    pub scalar_encodes: usize,
     pub scalar_captures: usize,
     pub scalar_reuses: usize,
     pub header_decodes: usize,
@@ -67,7 +68,7 @@ pub(crate) struct Work {
     pub width_hole_encodes: usize,
 }
 #[cfg(test)]
-thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,scalar_captures:0,scalar_reuses:0,header_decodes:0,template_loads:0,template_decodes:0,template_reuses:0,node_decodes:0,node_reuses:0,leaf_width_calls:0,width_hole_encodes:0})};}
+thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,scalar_encodes:0,scalar_captures:0,scalar_reuses:0,header_decodes:0,template_loads:0,template_decodes:0,template_reuses:0,node_decodes:0,node_reuses:0,leaf_width_calls:0,width_hole_encodes:0})};}
 #[cfg(test)]
 pub(in crate::durable::sqlite) fn take_work() -> Work {
     WORK.with(|work| work.replace(Work::default()))
@@ -225,6 +226,7 @@ pub(super) fn index_selection(
     input: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
     selection: &manifest::Selection,
+    configuration: &super::super::native_request::FreshConfiguration,
 ) -> Result<(), ConversationStoreError> {
     #[cfg(feature = "issue-387-profile")]
     let mut profile = profile::Request::new(sequence, selection.root.map_or(0, |root| root.count));
@@ -248,38 +250,25 @@ pub(super) fn index_selection(
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourceScalar,
         );
-        scalar::capture(connection, snapshot)?
+        scalar::capture(connection, snapshot, configuration)?
     };
-    let root_node = {
+    let messages_length = {
         #[cfg(feature = "issue-387-profile")]
-        let _profile = profile::Timer::new(profile::Phase::Paths);
+        let _profile = profile::Timer::new(profile::Phase::Geometry);
         #[cfg(test)]
         let _timer = crate::agent::execution::attribution::Timer::new(
-            crate::agent::execution::attribution::Phase::SourcePaths,
+            crate::agent::execution::attribution::Phase::SourceGeometry,
         );
         match (selection.root, captured_root) {
             (Some(native), Some(captured)) => {
                 // Scalar capture writes can trigger changes to the root. Check
-                // actual storage now, then finish every path check before any
-                // length traversal. No writes occur between these two stages.
+                // actual storage now, then share the path/width traversal.
+                // All path errors still precede deferred length errors.
                 let node = captured.into_node(connection, native)?;
-                nodes::validate_node_paths(connection, &node, 0)?;
-                Some(node)
+                add(nodes::geometry(connection, &node, 0, sequence)?, 2)?
             }
-            (None, None) => None,
+            (None, None) => 2,
             _ => return Err(storage("composed selected root unavailable")),
-        }
-    };
-    let messages_length = {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile = profile::Timer::new(profile::Phase::Length);
-        #[cfg(test)]
-        let _timer = crate::agent::execution::attribution::Timer::new(
-            crate::agent::execution::attribution::Phase::SourceLength,
-        );
-        match &root_node {
-            Some(node) => add(nodes::length_from_node(connection, node, 0, sequence)?, 2)?,
-            None => 2,
         }
     };
     let length = add(

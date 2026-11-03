@@ -475,6 +475,7 @@ impl Owner {
         append: Arc<super::append_validation::Owner>,
         response: Arc<super::observation_response::Owner>,
         statistics: Arc<super::observation_statistics::FoldCache>,
+        transaction_writes: Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<Arc<Self>, ConversationStoreError> {
         let owner = Self::new();
         let watched = owner.clone();
@@ -488,6 +489,7 @@ impl Owner {
                     if db != "main" {
                         return;
                     }
+                    transaction_writes.store(true, Ordering::Release);
                     // One SQLite hook dispatches to independent proof owners.
                     append.observe(table, change);
                     response.observe(table, change);

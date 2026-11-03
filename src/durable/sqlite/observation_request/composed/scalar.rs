@@ -1,13 +1,15 @@
-//! Exact, eagerly indexed scalar suffixes shared by immutable request roots.
-//! Identity is the full allowlisted stable encoding, not a live configuration ID.
+//! Exact scalar suffixes prepared once per frozen configuration and scalar view.
+//! A sharing key binds the native configuration and the remaining allowlisted
+//! fields; a hit authenticates current stored bytes without encoding tools again.
 use super::{
     Connection, ConversationStoreError, Fragment, add, bounded, fragments, index, params, storage,
 };
 use crate::model::RequestSnapshot;
-use crate::runtime::read_layout::{EncodedObservationSource, SeekableObservationSource};
+use crate::runtime::read_layout::SeekableObservationSource;
 use crate::runtime_client::trace::frozen;
 use rusqlite::OptionalExtension as _;
 use serde::{Deserialize, Serialize};
+use sha2::Digest as _;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,7 +31,6 @@ pub(super) struct Captured {
     pub nodes: u64,
 }
 fn checksum(bytes: &[u8]) -> index::Hash {
-    use sha2::Digest as _;
     let mut digest = sha2::Sha256::new();
     digest.update(b"rustx-composed-stable-scalar-v1\0");
     digest.update(bytes);
@@ -38,7 +39,6 @@ fn checksum(bytes: &[u8]) -> index::Hash {
 fn load(
     connection: &Connection,
     identity: index::Hash,
-    length: u64,
     expected_start: u64,
 ) -> Result<Option<Stable>, ConversationStoreError> {
     type Row = (Option<Vec<u8>>, Option<Vec<u8>>);
@@ -54,10 +54,10 @@ fn load(
     }
     let stable: Stable = super::record::decode(&bytes)?;
     if stable.identity != identity
-        || stable.encoded_length != length
         || stable.start != expected_start
-        || stable.start >= length
-        || stable.fragment.length != length - stable.start
+        || stable.encoded_length > super::SAFE
+        || stable.start >= stable.encoded_length
+        || stable.fragment.length != stable.encoded_length - stable.start
         || stable.messages_start >= stable.messages_end
         || stable.messages_end - stable.messages_start != 2
         || stable.messages_end > stable.fragment.length
@@ -106,19 +106,33 @@ fn capture_geometry(
 }
 fn capture_stable(
     connection: &Connection,
-    encoded: EncodedObservationSource,
+    snapshot: &RequestSnapshot,
+    identity: index::Hash,
     prefix_length: u64,
     expected_start: u64,
 ) -> Result<(Stable, Option<Vec<u8>>), ConversationStoreError> {
-    let identity = encoded.digest();
-    let encoded_length = encoded.length();
-    if let Some(stable) = load(connection, identity, encoded_length, expected_start)? {
-        let messages_start = add(stable.start, stable.messages_start)?;
-        if encoded
-            .bounded_bytes(messages_start, add(messages_start, 2)?)
-            .map_err(storage)?
-            != b"[]"
-        {
+    if let Some(stable) = load(connection, identity, expected_start)? {
+        let tail = (add(prefix_length, stable.fragment.length)? <= 16384)
+            .then(|| fragments::bytes(connection, &stable.fragment, 0, stable.fragment.length))
+            .transpose()?;
+        let messages = if let Some(tail) = &tail {
+            tail.get(
+                usize::try_from(stable.messages_start)
+                    .map_err(|_| storage("scalar offset exceeds bound"))?
+                    ..usize::try_from(stable.messages_end)
+                        .map_err(|_| storage("scalar offset exceeds bound"))?,
+            )
+            .ok_or_else(|| storage("stable scalar messages geometry differs"))?
+            .to_vec()
+        } else {
+            fragments::bytes(
+                connection,
+                &stable.fragment,
+                stable.messages_start,
+                stable.messages_end,
+            )?
+        };
+        if messages != b"[]" {
             return Err(storage("stable scalar messages geometry differs"));
         }
         #[cfg(test)]
@@ -127,17 +141,20 @@ fn capture_stable(
             value.scalar_reuses += 1;
             work.set(value);
         });
-        let tail = (add(prefix_length, stable.fragment.length)? <= 16384)
-            .then(|| {
-                encoded
-                    .bounded_bytes(stable.start, encoded_length)
-                    .map_err(storage)
-            })
-            .transpose()?;
         return Ok((stable, tail));
     }
+    #[cfg(test)]
+    super::WORK.with(|work| {
+        let mut value = work.get();
+        value.scalar_encodes += 1;
+        work.set(value);
+    });
+    #[cfg(feature = "issue-387-profile")]
+    super::profile::scalar_encoded();
     // Only a new exact encoding builds navigation and authenticated F/C pages.
-    let source = encoded.index().map_err(storage)?;
+    let source =
+        SeekableObservationSource::new(&frozen::request_stable(snapshot)).map_err(storage)?;
+    let encoded_length = source.byte_length();
     #[cfg(test)]
     super::WORK.with(|work| {
         let mut value = work.get();
@@ -178,13 +195,11 @@ fn capture_stable(
 pub(super) fn capture(
     connection: &Connection,
     snapshot: &RequestSnapshot,
+    configuration: &crate::durable::sqlite::native_request::FreshConfiguration,
 ) -> Result<Captured, ConversationStoreError> {
     let source =
         SeekableObservationSource::new(&frozen::request_prefix(snapshot)).map_err(storage)?;
-    let length = source
-        .read(&[], 0, 1)
-        .map_err(|error| storage(error.to_string()))?
-        .readable_end;
+    let length = source.byte_length();
     let end = length
         .checked_sub(1)
         .ok_or_else(|| storage("scalar prefix unavailable"))?;
@@ -192,8 +207,6 @@ pub(super) fn capture(
         .byte_reader()
         .map_err(|error| storage(error.to_string()))?;
     let prefix = fragments::persist_part(connection, &source, &reader, 0, end)?;
-    let encoded =
-        EncodedObservationSource::new(&frozen::request_stable(snapshot)).map_err(storage)?;
     // This tiny all-null prefix uses the same serializer allowlist. Its bytes
     // cannot depend on the snapshot; no structural u64 conversion is involved.
     let fixed_prefix = bounded(&frozen::request_stable_prefix(snapshot), 1024)?;
@@ -201,7 +214,26 @@ pub(super) fn capture(
         .len()
         .checked_sub(1)
         .ok_or_else(|| storage("stable prefix unavailable"))? as u64;
-    let (stable, tail) = capture_stable(connection, encoded, prefix.length, expected_start)?;
+    // The configuration was already frozen and authenticated by native start.
+    // Hash only its identity and the remaining scalar view, directly into the
+    // digest writer; prompt/tools and a second full buffer never enter this key.
+    let mut identity = sha2::Sha256::new();
+    identity.update(b"rustx-composed-stable-binding-v1\0");
+    serde_json::to_writer(
+        &mut identity,
+        &(
+            configuration.identity(),
+            frozen::request_stable_binding(snapshot),
+        ),
+    )
+    .map_err(|error| storage(error.to_string()))?;
+    let (stable, tail) = capture_stable(
+        connection,
+        snapshot,
+        identity.finalize().into(),
+        prefix.length,
+        expected_start,
+    )?;
     // Whole-root validation remains based on this request's exact original bytes.
     // Splitting the source must not weaken serde numeric/depth admission at 16KiB.
     let nodes = if let Some(tail) = tail {

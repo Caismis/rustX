@@ -8,7 +8,7 @@ use crate::model::{
     RequestIdentity, RequestParams, RequestSnapshot,
 };
 use crate::runtime::identity::{AttemptId, CapabilityRevision, ConversationId, ToolId, TurnId};
-use crate::runtime::read_layout::{EncodedObservationSource, SeekableObservationSource};
+use crate::runtime::read_layout::SeekableObservationSource;
 use crate::runtime_client::trace::frozen;
 
 fn snapshot(turn: u32, retry: u32, wide: bool) -> RequestSnapshot {
@@ -60,8 +60,16 @@ fn snapshot(turn: u32, retry: u32, wide: bool) -> RequestSnapshot {
         Vec::new(),
     )
 }
+fn scalar_capture(
+    connection: &Connection,
+    snapshot: &RequestSnapshot,
+) -> Result<scalar::Captured, ConversationStoreError> {
+    let configuration =
+        crate::durable::sqlite::native_request::FreshConfiguration::capture(snapshot)?;
+    scalar::capture(connection, snapshot, &configuration)
+}
 fn captured_root(connection: &Connection, snapshot: &RequestSnapshot) -> Root {
-    let value = scalar::capture(connection, snapshot).unwrap();
+    let value = scalar_capture(connection, snapshot).unwrap();
     Root {
         kind: RootKind::Request,
         sequence: 1,
@@ -217,10 +225,7 @@ fn stable_scalar_first_capture_fuses_geometry_and_reuse_keeps_zero_suffix_walks(
     use crate::runtime::read_layout::take_field_preview_work;
     let snapshot = snapshot(1, 0, true);
     let prefix = SeekableObservationSource::new(&frozen::request_prefix(&snapshot)).unwrap();
-    let stable = EncodedObservationSource::new(&frozen::request_stable(&snapshot))
-        .unwrap()
-        .index()
-        .unwrap();
+    let stable = SeekableObservationSource::new(&frozen::request_stable(&snapshot)).unwrap();
     take_field_preview_work();
     prefix.visit_field_geometry(|_| Ok(())).unwrap();
     let prefix_work = take_field_preview_work();
@@ -230,15 +235,17 @@ fn stable_scalar_first_capture_fuses_geometry_and_reuse_keeps_zero_suffix_walks(
     super::super::create_schema(&connection).unwrap();
     super::super::install_workspace(&connection).unwrap();
     take_work();
-    scalar::capture(&connection, &snapshot).unwrap();
+    scalar_capture(&connection, &snapshot).unwrap();
     assert_eq!(
         take_field_preview_work(),
         (0, prefix_work.1 + stable_work.1)
     );
-    assert_eq!(take_work().scalar_captures, 1);
-    scalar::capture(&connection, &snapshot).unwrap();
+    let initial = take_work();
+    assert_eq!((initial.scalar_captures, initial.scalar_encodes), (1, 1));
+    scalar_capture(&connection, &snapshot).unwrap();
     assert_eq!(take_field_preview_work(), prefix_work);
-    assert_eq!(take_work().scalar_reuses, 1);
+    let reused = take_work();
+    assert_eq!((reused.scalar_reuses, reused.scalar_encodes), (1, 0));
 }
 #[test]
 fn shared_scalar_changes_config_exactly_and_preserves_order_and_versions() {
@@ -374,7 +381,7 @@ fn shared_scalar_corruption_fails_at_registry_reuse_and_authenticated_historical
             "SAVEPOINT scalar_corruption; UPDATE request_source_scalars SET checksum=zeroblob(32)",
         )
         .unwrap();
-    assert!(scalar::capture(&connection, &original).is_err());
+    assert!(scalar_capture(&connection, &original).is_err());
     // Roots retain authenticated references; a damaged reuse directory is not
     // consulted by historical readers and cannot silently alter old fields.
     assert_oracle(&connection, &first, &original);
@@ -415,10 +422,10 @@ fn shared_scalar_retains_whole_root_byte_and_depth_admission_boundaries() {
         let mut value = snapshot(1, 0, false);
         value.effective_system_prompt.clear();
         let source =
-            EncodedObservationSource::new(&frozen::request_detail(&value, Vec::<u8>::new()))
+            SeekableObservationSource::new(&frozen::request_detail(&value, Vec::<u8>::new()))
                 .unwrap();
         value.effective_system_prompt =
-            "p".repeat(length - usize::try_from(source.length()).unwrap());
+            "p".repeat(length - usize::try_from(source.byte_length()).unwrap());
         let connection = Connection::open_in_memory().unwrap();
         super::super::create_schema(&connection).unwrap();
         super::super::install_workspace(&connection).unwrap();
@@ -436,7 +443,7 @@ fn shared_scalar_retains_whole_root_byte_and_depth_admission_boundaries() {
         let connection = Connection::open_in_memory().unwrap();
         super::super::create_schema(&connection).unwrap();
         super::super::install_workspace(&connection).unwrap();
-        let actual = scalar::capture(&connection, &value);
+        let actual = scalar_capture(&connection, &value);
         let oracle = Connection::open_in_memory().unwrap();
         super::super::create_schema(&oracle).unwrap();
         super::super::install_workspace(&oracle).unwrap();
@@ -608,7 +615,7 @@ fn shared_scalar_rejects_rehashed_wrong_identity_and_invalid_geometry_before_reu
             )
             .unwrap();
         assert!(
-            scalar::capture(&connection, &value).is_err(),
+            scalar_capture(&connection, &value).is_err(),
             "must reject changed {field}"
         );
     }
@@ -764,4 +771,60 @@ fn geometry_only_headers_authenticate_raw_chunks_without_changing_native_history
     connection
         .execute_batch("ROLLBACK TO corrupt_geometry; RELEASE corrupt_geometry")
         .unwrap();
+}
+
+#[test]
+fn shared_scalar_reuse_authenticates_current_bytes_without_reencoding() {
+    let connection = Connection::open_in_memory().unwrap();
+    super::super::create_schema(&connection).unwrap();
+    super::super::install_workspace(&connection).unwrap();
+    let mut value = snapshot(1, 0, false);
+    value.tool_definitions.clear();
+    let original = captured_root(&connection, &value);
+    take_work();
+    connection
+        .execute_batch("SAVEPOINT corrupt_shared_scalar_bytes")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE request_source_pages SET bytes=x'00' WHERE hash=?1",
+            [original.scalar.bytes.hash.as_slice()],
+        )
+        .unwrap();
+    assert!(scalar_capture(&connection, &value).is_err());
+    assert_eq!(
+        take_work().scalar_encodes,
+        0,
+        "damaged shared evidence is not an encoding cache miss"
+    );
+    connection
+        .execute_batch(
+            "ROLLBACK TO corrupt_shared_scalar_bytes; RELEASE corrupt_shared_scalar_bytes",
+        )
+        .unwrap();
+    let repeated = captured_root(&connection, &value);
+    let work = take_work();
+    assert_eq!((work.scalar_encodes, work.scalar_reuses), (0, 1));
+    assert_oracle(&connection, &repeated, &value);
+}
+
+#[test]
+fn configuration_bound_scalar_schema_refuses_the_previous_encoding_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("old-source-identity.sqlite");
+    let id = ConversationId::generate();
+    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    store
+        .lock()
+        .unwrap()
+        .execute("UPDATE rustx_store SET schema_version=90", [])
+        .unwrap();
+    drop(store);
+    assert!(matches!(
+        SqliteConversationStore::open_existing(id, &path),
+        Err(ConversationStoreError::SchemaVersionMismatch {
+            stored: 90,
+            expected: 91
+        })
+    ));
 }
