@@ -1,7 +1,6 @@
 import { imageSize } from 'image-size';
 import { validateRaster } from '../../../../client/raster';
 import { LoadingManager, type Object3D, type Texture } from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GEOMETRY_LIMITS as L, requireGeometry as check } from './limits';
 import { disposeScene, validateScene } from './scene-resources';
 
@@ -149,25 +148,27 @@ export async function importGlb(bytes: Uint8Array<ArrayBuffer>, signal: AbortSig
     retired = true; signal.removeEventListener('abort', dispose);
     disposeScene(scenes, pending); scenes = []; pending.clear();
   };
-  const loader = new GLTFLoader(manager).register(parser => ({
-    name: 'rustx_texture_ownership',
-    beforeRoot: () => {
-      signal.throwIfAborted();
-      // Admit all declared texture work before constructing any scene. The
-      // physical import slot survives cancellation until every decode settles.
-      for (let index = 0; index < (parser.json.textures?.length ?? 0); index++) decodes.push(parser.getDependency('texture', index));
-      return Promise.all(decodes).then(() => undefined);
-    },
-    loadTexture: index => parser.loadTexture(index).then(texture => {
-      check(texture);
-      // Decoding is browser-owned and may complete after parse rejection or
-      // cancellation. Own its result even when no scene can be returned.
-      if (retired) disposeScene([], [texture]); else pending.add(texture);
-      return texture;
-    }),
-  }));
   signal.addEventListener('abort', dispose, { once: true });
   try {
+    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+    signal.throwIfAborted();
+    const loader = new GLTFLoader(manager).register(parser => ({
+      name: 'rustx_texture_ownership',
+      beforeRoot: () => {
+        signal.throwIfAborted();
+        // Admit all declared texture work before constructing any scene. The
+        // physical import slot survives cancellation until every decode settles.
+        for (let index = 0; index < (parser.json.textures?.length ?? 0); index++) decodes.push(parser.getDependency('texture', index));
+        return Promise.all(decodes).then(() => undefined);
+      },
+      loadTexture: index => parser.loadTexture(index).then(texture => {
+        check(texture);
+        // Decoding is browser-owned and may complete after parse rejection or
+        // cancellation. Own its result even when no scene can be returned.
+        if (retired) disposeScene([], [texture]); else pending.add(texture);
+        return texture;
+      }),
+    }));
     const loaded = await loader.parseAsync(bytes.slice().buffer, ''); scenes = loaded.scenes;
     signal.throwIfAborted(); check(!retired);
     const bounds = validateScene(loaded.scenes, loaded.scene);

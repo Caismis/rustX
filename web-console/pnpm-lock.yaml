@@ -134,9 +134,6 @@ importers:
       mdast-util-math:
         specifier: 3.0.0
         version: 3.0.0
-      meshoptimizer:
-        specifier: 1.1.1
-        version: 1.1.1
       micromark-core-commonmark:
         specifier: 2.0.3
         version: 2.0.3
@@ -182,6 +179,9 @@ importers:
       react-dom:
         specifier: 19.3.0
         version: 19.3.0(react@19.3.0)
+      robust-predicates:
+        specifier: 3.0.3
+        version: 3.0.3
       saxes:
         specifier: 6.0.0
         version: 6.0.0
@@ -2112,6 +2112,9 @@ packages:
     resolution: {integrity: sha512-uWjbaKIK3T1OSVptzX7Nl6PvQ3qAGtKEtVRjRuazjfL3Bx5eI409VZSqgND+4UNnmzLVdPj9FqFJNPqBZFve4w==}
     deprecated: Rimraf versions prior to v4 are no longer supported
     hasBin: true
+
+  robust-predicates@3.0.3:
+    resolution: {integrity: sha512-NS3levdsRIUOmiJ8FZWCP7LG3QpJyrs/TE0Zpf1yvZu8cAJJ6QMW92H1c7kWpdIHo8RvmLxN/o2JXTKHp74lUA==}
 
   rolldown@1.2.8:
     resolution: {integrity: sha512-Z67nTmhZe7anqnM/EjI392w5i/ANUinjip7QYsOyN37oayduxt3ksdX0hf5OOamkAd53BiIHfbfSzfUmzKFQqQ==}
@@ -4499,6 +4502,8 @@ snapshots:
   rimraf@2.7.1:
     dependencies:
       glob: 7.2.3
+
+  robust-predicates@3.0.3: {}
 
   rolldown@1.2.8:
     dependencies:

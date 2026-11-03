@@ -5,18 +5,11 @@ import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { GEOMETRY_LIMITS } from '../src/app/components/documents/geometry/limits.ts';
 const root = new URL('../', import.meta.url), cad = new URL('./', import.meta.resolve('occt-import-js'));
-const optimizerRoot = new URL('./', import.meta.resolve('meshoptimizer/simplifier'));
 const importer = JSON.parse(readFileSync(new URL('../package.json', cad), 'utf8'));
 const renderer = JSON.parse(readFileSync(new URL('../package.json', import.meta.resolve('three')), 'utf8'));
-const optimizer = JSON.parse(readFileSync(new URL('package.json', optimizerRoot), 'utf8'));
-if (importer.version !== '0.0.23' || renderer.version !== '0.187.0' || optimizer.version !== '1.1.1') throw new Error('Unreviewed geometry dependency version');
+if (importer.version !== '0.0.23' || renderer.version !== '0.187.0') throw new Error('Unreviewed geometry dependency version');
 const assets = Object.fromEntries(['occt-import-js.js', 'occt-import-js.wasm', 'license.occt-import-js.txt', 'license.occt.txt'].map(name => {
   const bytes = readFileSync(new URL(name, cad));
-  return [name, { bytes: bytes.length, gzipBytes: gzipSync(bytes).length, sha256: createHash('sha256').update(bytes).digest('hex') }];
-}));
-// The simplifier embeds its WASM inside this reviewed JS distribution.
-const optimizerAssets = Object.fromEntries(['meshopt_simplifier.js', 'LICENSE.md'].map(name => {
-  const bytes = readFileSync(new URL(name, optimizerRoot));
   return [name, { bytes: bytes.length, gzipBytes: gzipSync(bytes).length, sha256: createHash('sha256').update(bytes).digest('hex') }];
 }));
 const glue = readFileSync(new URL('occt-import-js.js', cad), 'utf8');
@@ -30,9 +23,9 @@ while (at < binary.length) {
   at = end;
 }
 if (maximum !== GEOMETRY_LIMITS.wasmBytes) throw new Error(`WASM memory maximum changed: ${maximum}`);
-const record = { importer: `${importer.name}@${importer.version}`, renderer: `${renderer.name}@${renderer.version}`, optimizer: `${optimizer.name}@${optimizer.version}`,
+const record = { importer: `${importer.name}@${importer.version}`, renderer: `${renderer.name}@${renderer.version}`,
   importerCommit: 'c2148e54b456b571238d35cac037d304053d64b2', occtCommit: 'd2abb6d844231cb8f29be6894440874a4700e4a5',
-  wasmMaximumBytes: maximum, assets, optimizerAssets };
+  wasmMaximumBytes: maximum, assets };
 const path = new URL('geometry-runtime.json', root), content = `${JSON.stringify(record, null, 2)}\n`;
 if (process.argv.includes('--write')) writeFileSync(path, content);
 else if (readFileSync(path, 'utf8') !== content) throw new Error('Geometry runtime drift: inspect release artifacts before regenerating geometry-runtime.json');

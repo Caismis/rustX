@@ -92,6 +92,9 @@ test('interactive HTML packs local assets and executes inside an opaque sandbox'
   await page.evaluate(()=>localStorage.setItem('rustx-html-interactive-v1','false'));
   await page.reload();await page.locator('[data-preview-toggle]').click();
   await expect(panel.locator('iframe')).toHaveAttribute('sandbox','');
+  // The iframe's own button is stable while the containing sidebar is moving.
+  // Gate on the host too so cross-frame hit testing uses settled coordinates.
+  await panel.locator('iframe').click({trial:true});
   await frame.getByRole('button',{name:'Count 0'}).click();
   await expect(frame.getByRole('button',{name:'Count 0'})).toBeVisible();
   await expect(frame.locator('#boundary')).toHaveText('');

@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from FilesBody and TextPreview; see PROVENANCE.md. */
 import { DocumentBody } from './workbench-documents/DocumentBody';
+import { preloadGeometry } from './documents/GeometryDocument';
 import { documentFailure } from './documents/errors';
 import { viewersForPath, loadsBytes, type Viewer } from './workbench-documents/definitions';
 import type { PreviewViewState } from '../../presentation/right-panel/preview-view-state';
@@ -100,7 +101,7 @@ export function WorkspaceFile({ path, call, view, onOpen }: { path: string; call
     view.cache.release(owner); owner.activate();
     return () => { owner.deactivate(); view.cache.retain(owner); };
   }, [owner, view]);
-  useEffect(() => { if (mode) owner.ensure(mode === 'geometry' ? 'geometry' : mode === 'office' ? path.toLowerCase().endsWith('.docx') ? 'docx' : 'pptx' : loadsBytes(mode) ? 'bytes' : 'pages', Math.max(view.document?.textLoadedLines ?? 0, view.line ?? 0)); }, [owner, mode, path]);
+  useEffect(() => { if (mode === 'geometry') preloadGeometry(path); if (mode) owner.ensure(mode === 'geometry' ? 'geometry' : mode === 'office' ? path.toLowerCase().endsWith('.docx') ? 'docx' : 'pptx' : loadsBytes(mode) ? 'bytes' : 'pages', Math.max(view.document?.textLoadedLines ?? 0, view.line ?? 0)); }, [owner, mode, path]);
   useLayoutEffect(() => { const el = scroll.current; if (!el || view.line === undefined || mode !== 'code' || !value.page?.eof && value.loadedLines < view.line) return; el.scrollTop = Math.max(0, view.line - 1) * parseFloat(getComputedStyle(el.querySelector('.line') ?? el).lineHeight); view.top = el.scrollTop; view.line = undefined; }, [view, loaded, mode, value.loadedLines]);
   useLayoutEffect(() => {
     const node = scroll.current; if (!node || mode !== 'code') return;

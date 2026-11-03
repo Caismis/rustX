@@ -52,7 +52,15 @@ export function convertCadResult(value: unknown): GeometryModel {
 
 export async function importCad(bytes: Uint8Array<ArrayBuffer>, format: 'step' | 'iges' | 'brep'): Promise<GeometryModel> {
   check(bytes.length <= L.sourceBytes, 'limit');
+  performance.mark('geometry:cad-initialize');
   const occt = await createOcct({ locateFile: path => { check(path.endsWith('.wasm')); return wasmUrl; } });
+  performance.measure('geometry:cad-initialize', 'geometry:cad-initialize');
   const read = format === 'step' ? occt.ReadStepFile : format === 'iges' ? occt.ReadIgesFile : occt.ReadBrepFile;
-  return convertCadResult(read(bytes, CAD_TRIANGULATION));
+  performance.mark('geometry:cad-read');
+  const result = read(bytes, CAD_TRIANGULATION);
+  performance.measure('geometry:cad-read', 'geometry:cad-read');
+  performance.mark('geometry:cad-convert');
+  const model = convertCadResult(result);
+  performance.measure('geometry:cad-convert', 'geometry:cad-convert');
+  return model;
 }

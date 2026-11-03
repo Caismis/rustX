@@ -1,4 +1,4 @@
-import { Box3, BufferAttribute, BufferGeometry, Color, Group, Material, Mesh, MeshLambertMaterial, Sphere, Texture, Vector3, type Object3D } from 'three';
+import { Box3, BufferAttribute, BufferGeometry, Color, Group, Material, Mesh, MeshStandardMaterial, Sphere, Texture, Vector3, type Object3D } from 'three';
 import { GEOMETRY_LIMITS as L, requireGeometry as check } from './limits';
 import { type GeometryModel, type GeometryNode } from './model';
 
@@ -58,7 +58,12 @@ export function validateScene(roots: Object3D[], selected?: Object3D): Box3 {
       check(triangles <= L.triangles && draws <= L.drawCalls, 'limit');
       if (unique.has(geometry)) return; unique.add(geometry); vertices += position.count;
       check(vertices <= L.vertices, 'limit');
-      if (geometry.index) for (let index = 0; index < geometry.index.count; index++) { const value = geometry.index.getX(index); check(Number.isSafeInteger(value) && value >= 0 && value < position.count); }
+      if (geometry.index) {
+        const attribute = geometry.index;
+        if (attribute instanceof BufferAttribute && !attribute.normalized && (attribute.array instanceof Uint32Array || attribute.array instanceof Uint16Array || attribute.array instanceof Uint8Array)) {
+          for (let index = 0; index < attribute.array.length; index++) check(attribute.array[index] < position.count);
+        } else for (let index = 0; index < attribute.count; index++) { const value = attribute.getX(index); check(Number.isSafeInteger(value) && value >= 0 && value < position.count); }
+      }
       const bounds = position instanceof BufferAttribute && position.array instanceof Float32Array && !position.normalized ? positionBounds(position) : undefined;
       for (const attribute of Object.values(geometry.attributes)) {
         check(attribute.count === position.count && attribute.itemSize >= 1 && attribute.itemSize <= 4);
@@ -110,11 +115,11 @@ export function modelScene(model: GeometryModel): { scene: Group; bounds: Box3 }
   // The main-thread receiver owns model validation. The generated scene still
   // passes independent GPU admission below, without an intervening model scan.
   const root = new Group(), resources = new Group();
-  const palette = new Map<string, MeshLambertMaterial>();
+  const palette = new Map<string, MeshStandardMaterial>();
   const material = (color: Color, vertexColors = false) => {
     const key = `${color.toArray().join(',')}:${vertexColors}`;
     let value = palette.get(key);
-    if (!value) { check(palette.size < L.materials, 'limit'); value = new MeshLambertMaterial({ color, vertexColors }); palette.set(key, value); }
+    if (!value) { check(palette.size < L.materials, 'limit'); value = new MeshStandardMaterial({ color, vertexColors, metalness: 0.05, roughness: 0.65 }); palette.set(key, value); }
     return value;
   };
   try {

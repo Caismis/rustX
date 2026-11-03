@@ -15,7 +15,7 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { splitFrontmatter } from './workbench-documents/frontmatter';
 import { FrontmatterFields } from './workbench-documents/frontmatter-fields';
 import { documentFailure } from './documents/errors';
-import { GeometryDocument } from './documents/GeometryDocument';
+import { GeometryDocument, preloadGeometry } from './documents/GeometryDocument';
 export interface PreviewArtifact { source: PreviewSource; name: string; image: boolean; mimeType?: string }
 export interface PreviewIntents { openPreview: (artifact: PreviewArtifact) => void; download: (artifact: PreviewArtifact) => void }
 export const PreviewContext = createContext<PreviewIntents | undefined>(undefined);
@@ -35,7 +35,7 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
   const [image, setImage] = useState<{ url?: string; error?: string }>({});
   const saveViewState: PreviewViewStateProps['onViewStateChange'] = patch => { if (resources.current()) onViewStateChange(patch); };
   const sameGeometryCopy = () => owner.getSnapshot().revision === content.revision && owner.getSnapshot().version === content.version && owner.getSnapshot().data === content.data;
-  useEffect(() => { if (mode) owner.ensure(mode === 'geometry' ? 'geometry' : office ? kind : paged ? 'pages' : 'bytes', viewState.textLoadedLines); }, [owner, kind, office, paged, mode]);
+  useEffect(() => { if (mode === 'geometry') preloadGeometry(artifact.name); if (mode) owner.ensure(mode === 'geometry' ? 'geometry' : office ? kind : paged ? 'pages' : 'bytes', viewState.textLoadedLines); }, [owner, kind, office, paged, mode, artifact.name]);
   useEffect(() => {
     if (content.text !== undefined) saveViewState({ textLoadedLines: content.loadedLines });
   }, [owner, content.text, content.loadedLines]);

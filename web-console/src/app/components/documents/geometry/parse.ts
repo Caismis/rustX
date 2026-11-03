@@ -40,7 +40,7 @@ export function parseGeometry(bytes: Uint8Array<ArrayBuffer>, format: Exclude<Ge
       } catch { fail('invalid'); }
     };
     signal.addEventListener('abort', abort, { once: true });
-    try { const copy = bytes.slice(); worker.postMessage({ bytes: copy, format }, [copy.buffer]); }
+    try { const copy = bytes.slice(); worker.postMessage({ bytes: copy, format, deadline: performance.timeOrigin + deadline }, [copy.buffer]); }
     catch { fail('worker'); }
   });
 }

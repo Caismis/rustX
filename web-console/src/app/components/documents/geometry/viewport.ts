@@ -12,11 +12,15 @@ let activeContexts = 0;
 export function mountGeometry(container: HTMLElement, object: Object3D, bounds: Box3, saved: Saved | undefined, labels: { canvas: string; axes: string }, change: (state: Omit<Saved, 'copyId'>) => void, lost: () => void) {
   if (activeContexts >= L.owners) throw new GeometryError('capacity');
   let renderer: WebGLRenderer;
-  try { renderer = new WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'high-performance' }); }
+  try { renderer = new WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' }); }
   catch { throw new GeometryError('webgl'); }
+  const context = renderer.getContext();
+  if (!('fenceSync' in context)) { renderer.dispose(); renderer.forceContextLoss(); throw new GeometryError('webgl'); }
+  const gl = context;
   renderer.toneMapping = NeutralToneMapping;
   activeContexts++;
   const canvas = renderer.domElement; canvas.tabIndex = 0; canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', labels.canvas);
+  let pendingDraw: WebGLSync | null = null;
   container.append(canvas);
   const scene = new Scene(), centered = new Group(), camera = new PerspectiveCamera(45, 1, 0.001, 1000);
   const center = bounds.getCenter(new Vector3()), size = bounds.getSize(new Vector3()), radius = Math.max(size.length() / 2, 1e-6);
@@ -34,7 +38,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const highlight = new BoxHelper(object, new Color(0xffbd45)); highlight.visible = false; scene.add(highlight);
   const objects = new Map<string, Object3D>(), occurrenceIds = new Map<Object3D, string>(), parts: Part[] = [], hidden = new Set<string>();
   let selected: string | undefined, frame = 0, disposed = false, initial = true, restoring = true;
-  let cameraDirty = false, lastPublished = -Infinity, publication: ReturnType<typeof setTimeout> | undefined;
+  let cameraDirty = false, interacting = false, lastPublished = -Infinity, publication: ReturnType<typeof setTimeout> | undefined;
   function walk(item: Object3D, id: string, depth: number) {
     if (item instanceof Mesh || item.name) { const name = typeof item.userData.name === 'string' ? item.userData.name : item.name; objects.set(id, item); occurrenceIds.set(item, id); parts.push({ id, name: name.slice(0, 256), depth, kind: item instanceof Mesh ? 'mesh' : 'group' }); }
     item.children.forEach((child, index) => walk(child, `${id}.${index}`, depth + 1));
@@ -48,11 +52,22 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const flush = (publish = change) => { if (cameraDirty) emit(publish); };
   const draw = () => {
     frame = 0; if (disposed) return;
+    // At most one submitted frame per owner. Coalesce new camera poses while
+    // the GPU is busy instead of accumulating obsolete full-resolution frames.
+    if (pendingDraw) {
+      const status = gl.clientWaitSync(pendingDraw, 0, 0);
+      if (status === gl.TIMEOUT_EXPIRED) { frame = requestAnimationFrame(draw); return; }
+      gl.deleteSync(pendingDraw); pendingDraw = null;
+      if (status === gl.WAIT_FAILED) { dispose(); lost(); return; }
+    }
     const { x: width, y: height } = renderer.getSize(new Vector2());
     renderer.setViewport(0, 0, width, height); renderer.autoClear = true; renderer.render(scene, camera);
     renderer.autoClear = false; renderer.clearDepth();
     axisCamera.position.copy(camera.position).sub(controls.target).normalize().multiplyScalar(3.5); axisCamera.up.copy(camera.up); axisCamera.lookAt(0, 0, 0);
     const side = Math.min(80, width, height); renderer.setViewport(8, 8, side, side); renderer.render(axisScene, axisCamera);
+    pendingDraw = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    if (!pendingDraw) { dispose(); lost(); return; }
+    gl.flush();
   };
   const render = () => { if (!disposed && !frame) frame = requestAnimationFrame(draw); };
   const updateHighlight = () => {
@@ -103,19 +118,22 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const changed = () => {
     render(); if (restoring || disposed) return;
     cameraDirty = true;
+    if (interacting) return;
     const remaining = 100 - (performance.now() - lastPublished);
     if (remaining <= 0) emit();
     else publication ??= setTimeout(() => { publication = undefined; flush(); }, remaining);
   };
-  const ended = () => flush();
+  const started = () => { interacting = true; clearTimeout(publication); publication = undefined; };
+  const ended = () => { interacting = false; flush(); };
   controls.addEventListener('change', changed);
+  controls.addEventListener('start', started);
   controls.addEventListener('end', ended);
   function synchronizeOrbit(target: Vector3) {
     if (!orbitUp.equals(camera.up)) {
       // OrbitControls fixes its orbit-axis quaternion at construction time.
       // Recreate through its public lifecycle instead of mutating internals.
-      controls.removeEventListener('change', changed); controls.removeEventListener('end', ended); controls.dispose();
-      controls = new OrbitControls(camera, canvas); orbitUp.copy(camera.up); configureControls(); controls.addEventListener('change', changed); controls.addEventListener('end', ended);
+      controls.removeEventListener('change', changed); controls.removeEventListener('start', started); controls.removeEventListener('end', ended); controls.dispose();
+      controls = new OrbitControls(camera, canvas); orbitUp.copy(camera.up); configureControls(); controls.addEventListener('change', changed); controls.addEventListener('start', started); controls.addEventListener('end', ended);
     }
     controls.target.copy(target); controls.update();
   }
@@ -142,9 +160,10 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     if (disposed) return; flush(); if (disposed) return;
     disposed = true; activeContexts--; clearTimeout(publication); cancelAnimationFrame(frame); observer.disconnect(); resolution.removeEventListener('change', resolutionChanged);
     canvas.removeEventListener('pointerdown', pointerDown); canvas.removeEventListener('pointerup', pointerUp); canvas.removeEventListener('webglcontextlost', contextLost);
-    controls.removeEventListener('change', changed); controls.removeEventListener('end', ended); controls.dispose();
+    controls.removeEventListener('change', changed); controls.removeEventListener('start', started); controls.removeEventListener('end', ended); controls.dispose();
     highlight.geometry.dispose(); highlight.material.dispose(); axes.geometry.dispose();
     for (const material of Array.isArray(axes.material) ? axes.material : [axes.material]) material.dispose();
+    if (pendingDraw) { gl.deleteSync(pendingDraw); pendingDraw = null; }
     renderer.dispose(); renderer.forceContextLoss(); canvas.remove(); centered.remove(object);
   }
   try {

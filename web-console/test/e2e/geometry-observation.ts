@@ -3,16 +3,34 @@ import type { Page } from '@playwright/test';
 export async function instrument(page: Page) {
   await page.addInitScript(() => {
     const counts = { workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 };
-    const drawing = { calls: 0 };
+    const drawing = { calls: 0, modelCalls: 0, scheduled: false };
+    const imports: { vertices: number; triangles: number }[][] = [];
+    const importTimings: { elapsedMs: number; profile: unknown }[] = [];
     for (const method of ['drawArrays', 'drawElements'] as const) {
       const original = WebGL2RenderingContext.prototype[method];
-      Object.defineProperty(WebGL2RenderingContext.prototype, method, { value: function (this: WebGL2RenderingContext, ...args: unknown[]) { drawing.calls++; return Reflect.apply(original, this, args); } });
+      Object.defineProperty(WebGL2RenderingContext.prototype, method, { value: function (this: WebGL2RenderingContext, ...args: unknown[]) {
+        drawing.calls++; const result = Reflect.apply(original, this, args);
+        if (args[0] === this.TRIANGLES) {
+          drawing.modelCalls++;
+          if (!drawing.scheduled) { drawing.scheduled = true; queueMicrotask(() => { drawing.scheduled = false; document.dispatchEvent(new CustomEvent('geometry-test-model-submitted', { detail: this.canvas })); }); }
+        }
+        return result;
+      } });
     }
     const owned = { buffers: new Map<unknown, unknown>(), textures: new Map<unknown, unknown>() };
     const NativeWorker = window.Worker;
     window.Worker = class extends NativeWorker {
       private live = true;
-      constructor(url: string | URL, options?: WorkerOptions) { super(url, options); counts.workers++; }
+      constructor(url: string | URL, options?: WorkerOptions) { const start = performance.now(); super(url, options); counts.workers++;
+        this.addEventListener('message', event => { if (event.data?.ok && Array.isArray(event.data.model?.meshes)) {
+          imports.push(event.data.model.meshes.map((mesh: any) => ({ vertices: mesh.positions.length / 3, triangles: (mesh.indices?.length ?? mesh.positions.length / 3) / 3 })));
+          importTimings.push({ elapsedMs: performance.now() - start, profile: event.data.profile });
+        } });
+      }
+      postMessage(message: any, options?: Transferable[] | StructuredSerializeOptions) {
+        const profiled = message?.bytes ? { ...message, profile: true } : message;
+        if (Array.isArray(options)) super.postMessage(profiled, options); else super.postMessage(profiled, options);
+      }
       terminate() { if (this.live) { this.live = false; counts.workers--; } super.terminate(); }
     };
     const getContext = HTMLCanvasElement.prototype.getContext;
@@ -35,7 +53,65 @@ export async function instrument(page: Page) {
     const createUrl = URL.createObjectURL, revokeUrl = URL.revokeObjectURL, urls = new Set<string>();
     URL.createObjectURL = value => { const url = createUrl(value); urls.add(url); counts.urls++; return url; };
     URL.revokeObjectURL = url => { if (urls.delete(url)) counts.urls--; revokeUrl(url); };
-    Object.assign(window, { geometryResources: counts, geometryDrawCalls: drawing });
+    Object.assign(window, { geometryResources: counts, geometryDrawCalls: drawing, geometryImports: imports, geometryImportTimings: importTimings });
   });
 }
 export const resources = (page: Page) => page.evaluate(() => ({ ...(window as any).geometryResources }));
+
+/** One capture per page; first-frame proxy and trusted input diagnostics. */
+export async function observeGeometryLatency(page: Page, startSelector = 'button[aria-label^="Preview "]') {
+  await page.evaluate(startSelector => {
+    const state = { start: 0, first: 0, firstGpuReady: 0, pending: 0, cancelled: 0, samples: [] as number[], gpuSamples: [] as number[], stages: [] as { dispatch: number; submission: number; gpu: number; renderOpportunity: number }[] };
+    const waiting: { start: number; received: number }[] = [];
+    let firstSubmitted = false;
+    // This test-only event runs at the microtask checkpoint AFTER the actual
+    // model-render callback, including all parts and axes. A busy renderer's
+    // skipped rAF cannot count as the response to a newer camera event.
+    document.addEventListener('geometry-test-model-submitted', event => {
+      const canvas = (event as CustomEvent).detail;
+      if (!(canvas instanceof HTMLCanvasElement) || canvas !== document.querySelector('[data-geometry-format] canvas')) return;
+      const submitted = performance.now(), inputs = waiting.splice(0), first = !firstSubmitted && state.start > 0;
+      if (!first && !inputs.length) return;
+      if (first) firstSubmitted = true;
+      const gl = canvas.getContext('webgl2')!;
+      const fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)!; gl.flush();
+      // A few non-clamped event-loop turns avoid adding an entire Windows timer
+      // quantum to a fast GPU. Bound active probing, then yield to the timer.
+      const channel = new MessageChannel(); let probes = 0;
+      channel.port1.onmessage = () => settled();
+      const settled = () => {
+        const status = gl.clientWaitSync(fence, 0, 0);
+        if (status === gl.TIMEOUT_EXPIRED) { if (probes++ < 8) channel.port2.postMessage(null); else setTimeout(settled, 1); return; }
+        if (status === gl.WAIT_FAILED) {
+          channel.port1.close(); channel.port2.close(); gl.deleteSync(fence);
+          if (!canvas.isConnected || gl.isContextLost()) { state.cancelled += inputs.length; state.pending -= inputs.length; return; }
+          throw new Error('Geometry measurement fence failed');
+        }
+        channel.port1.close(); channel.port2.close();
+        const completed = performance.now();
+        if (first) state.firstGpuReady = completed - state.start;
+        for (const input of inputs) state.gpuSamples.push(completed - input.start);
+        gl.deleteSync(fence);
+        requestAnimationFrame(() => {
+          const frameReady = performance.now();
+          if (first) state.first = frameReady - state.start;
+          for (const input of inputs) {
+            state.samples.push(frameReady - input.start);
+            state.stages.push({ dispatch: input.received - input.start, submission: submitted - input.received, gpu: completed - submitted, renderOpportunity: frameReady - completed });
+          }
+          state.pending -= inputs.length;
+        });
+      };
+      settled();
+    });
+    document.addEventListener('pointerdown', event => {
+      if (event.target instanceof Element && event.target.closest(startSelector)) state.start = event.timeStamp;
+    }, { capture: true });
+    document.addEventListener('pointermove', event => {
+      if (!event.isTrusted || !event.buttons || !(event.target instanceof HTMLCanvasElement)) return;
+      state.pending++;
+      waiting.push({ start: event.timeStamp, received: performance.now() });
+    }, { capture: true });
+    Object.assign(window, { geometryLatency: state });
+  }, startSelector);
+}

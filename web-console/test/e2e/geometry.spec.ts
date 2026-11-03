@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { writeFileSync } from 'node:fs';
 import { instrument, resources } from './geometry-observation';
+import { denseBoxStl, planeAndTinySolidStl } from '../geometry-fixtures';
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 const names = ['cube.glb', 'cube.stl', 'cube-ascii.stl', 'cube.step', 'cube-inch.step', 'cube.iges', 'cube.brep', 'cube-textured.glb'];
 // Playwright's native forwarding keeps fixture URLs on the test runner even
@@ -15,6 +16,23 @@ function measuredDuration(value: number) {
   return Math.round(value * 10) / 10;
 }
 const elapsed = (start: number) => measuredDuration(performance.now() - start);
+
+for (const fixture of [
+  { name: 'near-limit dense closed STL', bytes: denseBoxStl, triangles: 330672, dimensions: '1 × 1 × 1' },
+  { name: 'plane with disconnected tiny zero-normal solid', bytes: planeAndTinySolidStl, triangles: 20012, dimensions: '1 × 1 × 2' },
+]) test(`actual Worker retains ${fixture.name} under its original deadline`, async ({ page }) => {
+  await instrument(page); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  const bytes = fixture.bytes();
+  await page.route('**/test/fixtures/geometry/cube.stl', route => route.fulfill({ body: Buffer.from(bytes), contentType: 'application/octet-stream' }));
+  await page.goto(`${origin}/test/fixtures/geometry.html`);
+  await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click();
+  await expect(page.locator('[data-geometry-format]')).toContainText(fixture.dimensions, { timeout: 20_000 });
+  const imports = await page.evaluate(() => (window as any).geometryImports as { triangles: number }[][]);
+  expect(imports).toHaveLength(1); expect(imports[0].reduce((sum, mesh) => sum + mesh.triangles, 0)).toBe(fixture.triangles);
+  await page.getByRole('button', { name: 'Close preview cube.stl', exact: true }).click();
+  await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
+  expect(errors).toEqual([]);
+});
 
 test('all geometry formats render through actual delivery and Workspace entry points', async ({ page }, info) => {
   await instrument(page); const errors: string[] = [], timings: { entry: string; name: string; displayMs: number; importMs: number }[] = [];

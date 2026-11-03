@@ -4768,6 +4768,7 @@
         "../../presentation/right-panel/use-view-scroll",
         "../../workspaces/desktop",
         "../../workspaces/workbench",
+        "./documents/GeometryDocument",
         "./documents/errors",
         "./workbench-documents/DocumentBody",
         "./workbench-documents/definitions",
@@ -4793,7 +4794,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "f7054a7dd3d26da62e6ba0f951a1c0f26a60c59820c6b5ee04ac868952d44ab1"
+      "local_sha256": "4c025e0dbcf2b6b379c1532f223a7eadbff6a638fad255ee6670e0ae19f54a36"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",

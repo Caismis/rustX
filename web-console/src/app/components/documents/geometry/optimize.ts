@@ -1,58 +1,66 @@
-import { GEOMETRY_LIMITS as L, requireGeometry as check } from './limits';
-import { validateModel, type GeometryMesh, type GeometryModel } from './model';
+import type { GeometryMesh, GeometryModel } from './model';
+import { planarMesh } from './planar';
 
-// A small relative surface error with locked boundaries and authored normal/color
-// seams. Source bytes and occurrence IDs are unchanged.
-export const MESH_RELATIVE_ERROR = 0.00001;
 const MIN_VERTICES = 50_000;
-const UNUSED = 0xffffffff;
 
-/** Disposable Worker work only, after the importer has admitted its raw model. */
-export async function optimizeModel(model: GeometryModel): Promise<GeometryModel> {
-  if (!model.meshes.some(mesh => mesh.positions.length / 3 >= MIN_VERTICES && mesh.groups.length === 0)) return model;
-  const { MeshoptSimplifier: optimizer } = await import('meshoptimizer/simplifier');
-  check(optimizer.supported, 'unsupported'); await optimizer.ready;
-  const compact = (mesh: GeometryMesh, indices: Uint32Array): GeometryMesh => {
-    const [remap, count] = optimizer.compactMesh(indices);
-    const copy = (values: Float32Array | undefined) => {
-      if (!values) return;
-      const result = new Float32Array(count * 3);
-      for (let index = 0; index < remap.length; index++) if (remap[index] !== UNUSED) {
-        const target = remap[index] * 3, source = index * 3;
-        result[target] = values[source]; result[target + 1] = values[source + 1]; result[target + 2] = values[source + 2];
-      }
-      return result;
-    };
-    return { ...mesh, positions: copy(mesh.positions)!, normals: copy(mesh.normals), colors: copy(mesh.colors), indices };
-  };
+/** Budgeted preparation in the disposable Worker. Exact tuple indexing and
+ * certified planar retriangulation preserve surfaces, attributes and parts. */
+export function optimizeModel(model: GeometryModel, deadline = performance.now() + 200): GeometryModel {
   const meshes = model.meshes.map(mesh => {
-    const count = mesh.positions.length / 3;
-    if (count < MIN_VERTICES || mesh.groups.length) return mesh;
-    const remap = optimizer.generatePositionRemap(mesh.positions, 3), seams = new Map<string, number>();
-    const attributes = [mesh.normals, mesh.colors].filter((values): values is Float32Array => values !== undefined);
-    for (let index = 0; index < count; index++) {
-      const canonical = remap[index], source = index * 3, target = canonical * 3;
-      if (attributes.every(values => values[source] === values[target] && values[source + 1] === values[target + 1] && values[source + 2] === values[target + 2])) continue;
-      const key = `${canonical}:${attributes.map(values => `${values[source]},${values[source + 1]},${values[source + 2]}`).join(':')}`;
-      let representative = seams.get(key);
-      if (representative === undefined) { representative = index; seams.set(key, representative); }
-      remap[index] = representative;
-    }
-    const indices = mesh.indices ? Uint32Array.from(mesh.indices, index => remap[index]) : remap;
-    const welded = compact(mesh, indices), stride = attributes.length * 3;
-    let result: Uint32Array, error: number;
-    const targetCount = Math.max(3, Math.floor(indices.length / 300) * 3);
-    if (stride) {
-      const packed = new Float32Array(welded.positions.length / 3 * stride);
-      const streams = [welded.normals, welded.colors].filter((values): values is Float32Array => values !== undefined);
-      for (let vertex = 0; vertex < welded.positions.length / 3; vertex++) for (let stream = 0; stream < streams.length; stream++) for (let component = 0; component < 3; component++) {
-        const value = streams[stream][vertex * 3 + component]; check(Number.isFinite(value) && Math.abs(value) <= L.coordinate);
-        packed[vertex * stride + stream * 3 + component] = value;
-      }
-      [result, error] = optimizer.simplifyWithAttributes(indices, welded.positions, 3, packed, stride, Array(stride).fill(1), null, targetCount, MESH_RELATIVE_ERROR, ['LockBorder']);
-    } else [result, error] = optimizer.simplify(indices, welded.positions, 3, targetCount, MESH_RELATIVE_ERROR, ['LockBorder']);
-    check(Number.isFinite(error) && error <= MESH_RELATIVE_ERROR * 1.001);
-    return compact(welded, result);
+    if (mesh.positions.length / 3 < MIN_VERTICES || performance.now() > deadline) return mesh;
+    return planarMesh(indexMesh(mesh, deadline), deadline);
   });
-  const optimized = { ...model, meshes }; validateModel(optimized); return optimized;
+  return meshes.every((mesh, index) => mesh === model.meshes[index]) ? model : { ...model, meshes };
+}
+
+function indexMesh(mesh: GeometryMesh, deadline: number): GeometryMesh {
+  const count = mesh.positions.length / 3;
+  // Indexed imports already share vertices. Keep their topology and streams.
+  if (mesh.indices || !mesh.normals || count < MIN_VERTICES || mesh.groups.length) return mesh;
+  const streams = [mesh.positions, mesh.normals, mesh.colors].filter((stream): stream is Float32Array => stream !== undefined);
+  const bits = streams.map(stream => new Uint32Array(stream.buffer, stream.byteOffset, stream.length));
+  let capacity = 1;
+  while (capacity < count * 2) capacity *= 2;
+  if (performance.now() > deadline) return mesh;
+  const table = new Uint32Array(capacity), indices = new Uint32Array(count), representatives = new Uint32Array(count);
+  const mask = capacity - 1;
+  let unique = 0;
+  for (let vertex = 0; vertex < count; vertex++) {
+    if ((vertex & 4095) === 0 && performance.now() > deadline) return mesh;
+    const offset = vertex * 3;
+    let hash = 2166136261;
+    for (const stream of bits) for (let component = 0; component < 3; component++) hash = Math.imul(hash ^ stream[offset + component], 16777619);
+    let slot = (hash ^ (hash >>> 16)) & mask;
+    let probes = 0;
+    for (;;) {
+      // Untrusted tuples must not turn optional indexing into unbounded probing.
+      if (++probes > 32) return mesh;
+      const entry = table[slot];
+      if (!entry) {
+        representatives[unique] = vertex; indices[vertex] = unique++;
+        table[slot] = unique; break;
+      }
+      const canonical = representatives[entry - 1] * 3;
+      let equal = true;
+      for (const stream of bits) for (let component = 0; component < 3; component++) if (stream[offset + component] !== stream[canonical + component]) equal = false;
+      if (equal) { indices[vertex] = entry - 1; break; }
+      slot = (slot + 1) & mask;
+    }
+  }
+  // Do not add an index allocation when the complete decoded result would grow.
+  if (unique * 3 * streams.length * 4 + indices.byteLength >= count * 3 * streams.length * 4) return mesh;
+  const copy = (values: Float32Array | undefined) => {
+    if (!values) return undefined;
+    if (performance.now() > deadline) return undefined;
+    const source = new Uint32Array(values.buffer, values.byteOffset, values.length), result = new Float32Array(unique * 3), output = new Uint32Array(result.buffer);
+    for (let vertex = 0; vertex < unique; vertex++) {
+      if ((vertex & 4095) === 0 && performance.now() > deadline) return undefined;
+      const offset = representatives[vertex] * 3, target = vertex * 3;
+      output[target] = source[offset]; output[target + 1] = source[offset + 1]; output[target + 2] = source[offset + 2];
+    }
+    return result;
+  };
+  const positions = copy(mesh.positions), normals = copy(mesh.normals), colors = copy(mesh.colors);
+  if (!positions || mesh.normals && !normals || mesh.colors && !colors || performance.now() > deadline) return mesh;
+  return { ...mesh, positions, normals, colors, indices };
 }

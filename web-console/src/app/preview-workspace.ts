@@ -222,7 +222,10 @@ export class PreviewWorkspaceOwner {
   updateView(id: number, patch: Partial<PreviewViewState>) {
     const w = this.current(); if (!w?.tabs.some(tab => tab.id === id)) return;
     // A body can flush its last scroll position while hidden, never after occurrence deletion.
-    this.replace({ ...w, tabs: w.tabs.map(tab => tab.id === id ? { ...tab, view: { ...tab.view, ...patch } } : tab) });
+    this.sessions.set(w.scope.sessionId, { ...w, tabs: w.tabs.map(tab => tab.id === id ? { ...tab, view: { ...tab.view, ...patch } } : tab) });
+    // Inert metadata cannot change body admission. In particular, an abort-time
+    // final camera flush must not reacquire panes inside synchronous retirement.
+    this.publish(false);
   }
   toggleFullscreen(commitPresentation: (publish: () => void) => void) {
     const w = this.current(); if (!w) return;

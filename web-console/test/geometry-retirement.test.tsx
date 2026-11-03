@@ -6,7 +6,7 @@ import { fileTabView } from '../src/app/components/WorkbenchFiles';
 import { PreviewContentOwner } from '../src/client/preview-content';
 import type { FilePreviewLease } from '../src/client/session-files';
 const previews = vi.hoisted(() => [] as import('../src/app/components/documents/geometry/GeometryPreview').GeometryPreviewProps[]);
-vi.mock('../src/app/components/documents/GeometryDocument', () => ({ GeometryDocument: (props: import('../src/app/components/documents/geometry/GeometryPreview').GeometryPreviewProps) => { previews.push(props); return <div/>; } }));
+vi.mock('../src/app/components/documents/GeometryDocument', () => ({ preloadGeometry: vi.fn(), GeometryDocument: (props: import('../src/app/components/documents/geometry/GeometryPreview').GeometryPreviewProps) => { previews.push(props); return <div/>; } }));
 const owners: PreviewContentOwner[] = [];
 afterEach(() => { cleanup(); owners.splice(0).forEach(owner => owner.dispose()); previews.length = 0; });
 const camera = { position: [9, 8, 7] as [number, number, number], target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number] };

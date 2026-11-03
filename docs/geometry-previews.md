@@ -22,12 +22,31 @@ face-color ranges and hierarchy survive import. Unnamed parts receive localized
 ordinal labels. The independently exported cube fixtures cover STEP inch-to-mm
 normalization and unitless BREP/STL behavior.
 
+Generated mesh preparation is lossless. Exact float-bit tuples can share a
+vertex only when positions, authored normals and any colors all match; triangle
+order and winding remain intact. Missing normals and material ranges prevent
+this indexing pass. A separate planar pass can replace redundant triangulation
+only for an axis-aligned convex disk with constant attributes. Adaptive exact
+orientation predicates, opposite edge pairings, one convex boundary, area checks
+and unchanged position-derived bounds certify that disk. Unused indexed
+coordinates still contribute to the bounds. Holes, seams, disconnected regions,
+degenerate faces and unproved surfaces keep their admitted triangles.
+
+Preparation has a cooperative 200-ms budget and starts no optional work in the
+final second of the original import deadline. Long scans and copies check that
+budget; individual allocations, garbage collection and sorting cannot be
+preempted by JavaScript. The parent still terminates the Worker at its original
+deadline. The pass preserves original arrays and returns the admitted original
+when optional work cannot finish within its budget. Position/normal/color data,
+hierarchy, occurrence IDs and original source bytes retain their owners.
+
 One scene implementation supplies orbit/pan/zoom, fit, isometric and six standard
 views, an orientation axis indicator, part selection/highlighting and visibility.
 Fit recenters the model without changing the chosen viewing direction; the
 view-angle menu explicitly chooses a standard direction.
-Camera fitting centers a presentation-only parent; original geometry and its
-physical scale remain intact. Bounds are recomputed from admitted coordinates,
+Camera fitting centers a presentation-only parent. The admitted mesh surface,
+position-derived bounds and physical scale remain intact; preparation can remove
+redundant tessellation. Bounds are recomputed from admitted coordinates,
 rather than trusting GLB accessor bounds. Culling/raycast spheres are recomputed
 from the same positions. All loaded GLB scenes share resource admission; the
 selected scene must independently have nonempty, finite, nondegenerate bounds.
@@ -38,8 +57,8 @@ and hidden IDs are bounded inert occurrence metadata tied to a content copy.
 Hiding a selected part also hides its selection outline.
 Changing or restoring the up axis recreates OrbitControls through its public
 lifecycle so orbit gestures use that axis and old listeners are released.
-Camera-only changes retain the latest pose locally and publish at most once per
-100 ms while moving; interaction end flushes the final pose immediately. Normal
+Pointer gestures retain the latest pose locally and flush it at interaction end;
+camera changes outside a gesture publish at most once per 100 ms. Normal
 body retirement also saves a pending pose through a separate inert-metadata path
 that checks the retained occurrence, source authority and exact content copy.
 Revocation, Refresh and occurrence replacement cannot save obsolete view state.
@@ -67,8 +86,17 @@ All product text is localized in the project's concise English/Chinese style.
 
 PBR materials use bounded, fixed studio lighting: a hemisphere light and two
 off-axis directional lights, with neutral tone mapping. No environment-map asset
-or synchronous environment prefiltering is needed. Source materials, geometry and
-coordinates are retained; the lighting belongs to the visible scene.
+or synchronous environment prefiltering is needed. Source material semantics,
+represented mesh surfaces, bounds and scale are preserved; lighting belongs to
+the visible scene. Generated
+materials use the original Standard shading, metalness 0.05 and roughness 0.65;
+renderer MSAA remains enabled.
+
+The renderer owns at most one submitted GPU frame/fence. While it is busy, new
+camera changes replace the pending pose instead of submitting obsolete frames.
+WebGL 2 fences are checked without blocking; initialization/wait failure produces
+the existing WebGL error. Idle views schedule no polling or drawing. Retirement
+deletes the fence with the remaining graphics resources.
 
 GLB supports core static triangle meshes and `KHR_materials_unlit`,
 `KHR_texture_transform`, `KHR_materials_ior`, and
@@ -116,7 +144,10 @@ limits. It does not grant a download above the 32-MiB complete-read limit.
 ## Runtime and resource limits
 
 `GeometryDocument` is the small shared lazy mount. Ordinary startup loads no
-Three.js geometry viewer. GLB uses the main-thread GLTFLoader after preflight.
+Three.js geometry viewer. Explicit geometry demand starts code loading alongside
+the already-authorized source read. Resolved code mounts immediately through
+explicit component state, without a Suspense fallback throttle. GLB loads its
+GLTFLoader only for GLB demand and uses it on the main thread after preflight.
 STL and CAD use separate Worker entry bundles; STL cannot load CAD glue/WASM.
 Workers reuse one protocol, admission owner and cancellation/deadline handler.
 All assets are shipped locally, with no runtime CDN use.
@@ -138,6 +169,7 @@ The following are per visible body unless stated otherwise:
 | STL/CAD Worker deadline | 15 seconds, parent-owned, includes initialization |
 | CAD WASM linear-memory maximum | 2 GiB, verified in both the shipped binary declaration and glue |
 | Aggregate renderer contexts / import Workers | 2 / 2, additionally restricted by existing visible-body ownership |
+| Submitted GPU frames / owned fences | 1 per visible body, 2 aggregate |
 | Physical GLB imports, including retiring image decodes | 2; capacity remains occupied until all declared texture work settles |
 
 Original bytes stay with the content owner. Worker input is a separately charged
@@ -146,6 +178,14 @@ validated typed result buffers leave the Worker. Three.js adopts those arrays
 without another full attribute copy. Visible bodies do not allocate unused
 original-file Blob URLs. GLB loader-created image URLs/bitmaps are separately
 disposed with the scene.
+
+Optional indexing uses at most about 16 MiB of hash/remap/index workspace for
+one million source vertices, plus output arrays whose decoded size must decrease.
+Planar certification can use up to 64 MiB of edge tables, about 4 MiB of vertex
+links and bounded 8,192-vertex boundary/hull lists. Meshes are processed
+sequentially; earlier temporary arrays may remain until collection or Worker
+termination. These transient allocations are additional to source, decoded-model
+and WASM storage, and are not a browser RSS cap.
 Canceled HTTP reads still consume and validate the complete bounded multipart
 terminal response before releasing physical admission. Once canceled, a valid
 attachment remains in the parser's Blob without an unused final ArrayBuffer
@@ -186,7 +226,8 @@ follow physical settlement independently of browser cancellation.
 
 ## Runtime provenance and validation
 
-Three.js is pinned to 0.187.0 (MIT). occt-import-js is pinned to 0.0.23
+Three.js is pinned to 0.187.0 (MIT). The exact orientation predicate is supplied
+by robust-predicates 3.0.3 (Unlicense). occt-import-js is pinned to 0.0.23
 (LGPL-2.1), importer commit `c2148e54b456b571238d35cac037d304053d64b2`, with
 OCCT submodule commit `d2abb6d844231cb8f29be6894440874a4700e4a5` from
 `https://git.dev.opencascade.org/repos/occt.git`.

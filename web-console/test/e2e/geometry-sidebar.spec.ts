@@ -5,6 +5,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { choose, connectRemote, openEmptySession, expectSettled } from './shell-actions';
 import { wireProbe } from './wire-probe';
+import { instrument, observeGeometryLatency } from './geometry-observation';
 
 test.use({ connectOptions: { wsEndpoint: process.env.RUSTX_BROWSER_WS_ENDPOINT ?? '', exposeNetwork: '<loopback>' } });
 
@@ -34,8 +35,10 @@ async function deliveredModel(page: Page) {
 }
 
 test('delivery CAD occupies the existing document sidebar without clipping on a short window', async ({ page }, info) => {
+  await instrument(page);
   const fixture = await deliveredModel(page); let passed = false;
-  const timings: { entry: string; name: string; phase: string; displayMs: number }[] = [];
+  await observeGeometryLatency(page);
+  const timings: { entry: string; name: string; phase: string; displayMs: number; firstFrameReadyProxyMs?: number }[] = [];
   try {
     let start = performance.now();
     await page.getByRole('button', { name: 'Preview mounting-bracket.step in sidebar', exact: true }).click();
@@ -45,7 +48,9 @@ test('delivery CAD occupies the existing document sidebar without clipping on a 
     await expect(sidebar.getByRole('tab', { name: 'mounting-bracket.step', exact: true })).toBeVisible();
     await expect(sidebar.locator('[data-geometry-format] canvas')).toBeVisible();
     await expect(sidebar.locator('[data-geometry-format]')).toContainText('120 × 72 × 80');
-    await painted(page); timings.push({ entry: 'delivery', name: 'mounting-bracket.step', phase: 'first-open', displayMs: displayDuration(start) });
+    await painted(page); const displayMs = displayDuration(start);
+    await expect.poll(() => page.evaluate(() => (window as any).geometryLatency.first), { timeout: 20_000 }).toBeGreaterThan(0);
+    timings.push({ entry: 'delivery', name: 'mounting-bracket.step', phase: 'first-open', displayMs, firstFrameReadyProxyMs: await page.evaluate(() => (window as any).geometryLatency.first) });
     const controls = sidebar.getByRole('toolbar', { name: 'Model controls', exact: true });
     await expect(controls).toHaveAttribute('aria-orientation', 'vertical');
     const toolsBox = (await controls.boundingBox())!, canvasBox = (await sidebar.locator('[data-geometry-format] canvas').boundingBox())!;
@@ -107,16 +112,20 @@ test('delivery CAD occupies the existing document sidebar without clipping on a 
 });
 
 test('Workbench CAD uses the shared document body and defaults to revealing the original file', async ({ page }, info) => {
+  await instrument(page);
   const fixture = await deliveredModel(page); let passed = false;
   try {
     await page.locator('[data-preview-toggle]').click();
     const workbench = page.locator('[data-workbench]');
     await workbench.getByRole('button', { name: /Workspace files/ }).click();
+    await observeGeometryLatency(page, '[data-files-path="mounting-bracket.step"] > button');
     const start = performance.now(); await workbench.getByRole('button', { name: 'mounting-bracket.step', exact: true }).click();
     const file = workbench.locator('[data-workbench-file="mounting-bracket.step"]');
     await expect(file.locator('[data-geometry-format] canvas')).toBeVisible();
     await painted(page);
-    writeFileSync(info.outputPath('native-workbench-display.json'), JSON.stringify({ entry: 'workbench', name: 'mounting-bracket.step', phase: 'first-open', displayMs: displayDuration(start) }, null, 2));
+    const displayMs = displayDuration(start);
+    await expect.poll(() => page.evaluate(() => (window as any).geometryLatency.first), { timeout: 20_000 }).toBeGreaterThan(0);
+    writeFileSync(info.outputPath('native-workbench-display.json'), JSON.stringify({ entry: 'workbench', name: 'mounting-bracket.step', phase: 'first-open', displayMs, firstFrameReadyProxyMs: await page.evaluate(() => (window as any).geometryLatency.first) }, null, 2));
     await page.screenshot({ path: info.outputPath('geometry-workbench.png'), animations: 'disabled' });
     await expect(file.getByRole('button', { name: 'Open file location', exact: true })).toBeVisible();
     await expect(file.getByRole('button', { name: 'Choose application', exact: true })).toBeVisible();

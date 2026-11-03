@@ -60,6 +60,25 @@ function WorkspaceNotice({ owner }: { owner: PreviewWorkspaceOwner }) {
   const snapshot = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
   return <PreviewWorkspaceNotice snapshot={snapshot} dismiss={() => owner.dismissProblem()}/>;
 }
+it('saves a retiring camera at full real body capacity before replacing its pane without reentering admission', async () => {
+  const f = await fixture(), owner = new PreviewWorkspaceOwner(server.client, f.host, f.authority), stop = owner.start();
+  owner.selectSession('A');
+  const errors: unknown[] = [], error = (event: ErrorEvent) => { errors.push(event.error); event.preventDefault(); };
+  window.addEventListener('error', error);
+  try {
+    const open = (id: string) => owner.openPreview({ name: `${id}.glb`, image: false, source: { kind: 'artifact', id } })!;
+    const a = open('a'), b = open('b'); owner.measure(1200, owner.getSnapshot().geometryEpoch); owner.split();
+    const c = open('c'); owner.selectTab(b);
+    const old = owner.getSnapshot().leases.get(b)!; expect(owner.getSnapshot().leases.size).toBe(2);
+    let retired = false;
+    const geometry: NonNullable<import('../src/presentation/right-panel/preview-view-state').PreviewViewState['geometry']> = { copyId: 'copy', camera: { position: [9,8,7], target: [0,0,0], up: [0,1,0] } };
+    old.signal.addEventListener('abort', () => { owner.updateView(b, { geometry }); retired = true; }, { once: true });
+    owner.selectTab(c);
+    expect(errors).toEqual([]); expect(retired).toBe(true); expect(old.signal.aborted).toBe(true);
+    expect(owner.getSnapshot().leases.size).toBe(2); expect(owner.getSnapshot().leases.has(a)).toBe(true); expect(owner.getSnapshot().leases.has(c)).toBe(true);
+    expect(owner.getSnapshot().workspace!.tabs.find(tab => tab.id === b)!.view.geometry).toEqual(geometry);
+  } finally { window.removeEventListener('error', error); stop(); }
+});
 it.each(['valid', 'Session', 'attachment', 'Host'] as const)('independent Download failure after the final preview closes reports only its %s scope', async scope => {
   const f = await fixture(), owner = new PreviewWorkspaceOwner(server.client, f.host, f.authority), stop = owner.start(); owner.selectSession('A');
   const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {}), ui = render(<><WorkspaceBody owner={owner}/><WorkspaceNotice owner={owner}/></>);
