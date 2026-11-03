@@ -347,7 +347,7 @@ fn count_conversation_store_open() {
 /// Version 87 removes redundant trailing sequence keys from rowid event indexes.
 /// Version 90 stores independent statistical contributions with sparse checkpoints.
 /// Version 91 binds shared Request Source preparation to frozen native configuration.
-pub const SQLITE_SCHEMA_VERSION: i64 = 92;
+pub const SQLITE_SCHEMA_VERSION: i64 = 93;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -8951,7 +8951,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE TABLE IF NOT EXISTS lifecycle_state (
                 lifecycle_key TEXT PRIMARY KEY,
                 terminal_event_id TEXT
-            ) WITHOUT ROWID;
+            );
             CREATE INDEX IF NOT EXISTS message_ledger_append_position_idx ON message_ledger(position,first_append_revision) WHERE first_append_revision IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_todo_idx ON message_ledger(position) WHERE native_todo=1;
             CREATE INDEX IF NOT EXISTS message_ledger_opening_idx ON message_ledger(position) WHERE ordinary_user=1;
@@ -9003,21 +9003,20 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
 
 #[allow(clippy::too_many_lines)] // One required-shape table, one place.
 fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreError> {
-    // Compact noninteger identities are the storage key itself, rather than a
-    // second primary-key B-tree beside a hidden rowid table.
-    for table in ["lifecycle_state", "observation_models"] {
-        let clustered: bool = connection
-            .query_row(
-                "SELECT wr FROM pragma_table_list WHERE schema='main' AND name=?1 AND type='table'",
-                [table],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(error.to_string()))?;
-        if !clustered {
-            return Err(ConversationStoreError::IncompatibleSchema(format!(
-                "compact primary tree required for {table}"
-            )));
-        }
+    // The small model lookup uses its native identity as the storage key.
+    // Lifecycle rows retain rowid locality: clustering their terminal updates
+    // increases repeated dirty-page work in long-history conversations.
+    let clustered: bool = connection
+        .query_row(
+            "SELECT wr FROM pragma_table_list WHERE schema='main' AND name='observation_models' AND type='table'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    if !clustered {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "compact primary tree required for observation_models".into(),
+        ));
     }
     content::verify_binary_schema(connection)?;
     provenance::verify_turn_header_shape(connection)?;
@@ -19836,7 +19835,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 92);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 93);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19905,7 +19904,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 92);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 93);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
