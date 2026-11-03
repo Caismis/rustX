@@ -1544,7 +1544,7 @@ and Attempt capture. Explicit context adoption requires an idle Session and the
 inspected candidate/binding revision. Existing Attempts and every derived request,
 Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
-[configuration application](configuration.md#save-automatic-application-and-session-adoption).
+[configuration application](configuration.md#save-and-automatic-application).
 
 Session Model/Profile selection has a separate commit responsibility. It resolves
 a complete selection against the Session's published catalog off the commit lock,
@@ -2422,7 +2422,7 @@ and Attempt capture. Explicit context adoption requires an idle Session and the
 inspected candidate/binding revision. Existing Attempts and every derived request,
 Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
-[configuration application](configuration.md#save-automatic-application-and-session-adoption).
+[configuration application](configuration.md#save-and-automatic-application).
 
 The two Skill roots are `~/rustx/.agents/skills` and
 `<workspace>/.agents/skills`. Whole-package shadowing occurs before validation.
@@ -4895,7 +4895,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v62
+       App Server protocol v63
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4911,15 +4911,15 @@ JSONL and WebSocket in #36 bind App Server, including its standalone process ent
 point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
-The current internal envelope is Runtime Client v79. It removes speculative
-cached-Connecting source state; App Server v62 records first-submission intent
+The current internal envelope is Runtime Client v80. It removes speculative
+cached-Connecting source state; App Server v63 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v62, the only external product control protocol, and
+console speak App Server v63, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -5044,11 +5044,13 @@ conversation_runtime.rs       ConversationRuntime: the conversation
                               model_selection, controls, history,
                               observer and probe (test hooks), each with
                               its domain tests (<domain>/tests.rs)
-runtime/adoption.rs           native configuration-adoption contracts:
-                              PreparedConfiguration, AdoptionEligibility,
-                              AdoptionError, the AdmittedConfiguration an
-                              Attempt freezes, ConfigurationCut, and the
-                              one cache-impact rule
+runtime/configuration_commit.rs
+                              native automatic configuration commit:
+                              PreparedConfiguration, the staged candidate
+                              and its DesiredApplication fence, the
+                              AdmittedConfiguration an Attempt freezes,
+                              ConfigurationCut, and the bounded
+                              ConfigurationChange fact
 runtime/resources.rs          immutable RuntimeResourceSnapshot
                               generations; RuntimeConfiguration (execution
                               bindings plus an inert AuthoredConfiguration)
@@ -6011,7 +6013,7 @@ and Attempt capture. Explicit context adoption requires an idle Session and the
 inspected candidate/binding revision. Existing Attempts and every derived request,
 Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
-[configuration application](configuration.md#save-automatic-application-and-session-adoption).
+[configuration application](configuration.md#save-and-automatic-application).
 
 Session persistence owns cwd and explicit model intent. Runtime recreation restores the process-local adopted binding; a new process
 resolves current sources while preserving the durable selected model. `SessionRuntimeManager` owns
@@ -6025,10 +6027,11 @@ as future authority.
 ### Layer 9: TUI and Web
 
 Both are thin App Server v35 clients. TUI `/settings` authors User/Workspace
-sources, `/session settings` inspects Session state, `/session adopt` submits the
-inspected candidate, and `/model` changes Session intent. Web Settings separates
-source authoring from Session adoption. Save automatically transfers work to the
-native coordinator; the focused Session header owns explicit adoption. Preparation
+sources, `/session settings` inspects Session state, and `/model` changes Session
+intent. Save automatically transfers work to the native coordinator, which
+commits at the Session's safe boundary; the focused Session header and the TUI
+footer show only pending, failed or restart status, and committed changes appear
+in the transcript and Trace. Preparation
 failure and process restart can appear together. Conflicts preserve target-scoped
 drafts; uncertain outcomes trigger reads, never blind replay. Web and TUI allow a
 valid model/Profile selection while execution is active and label the selected
@@ -7452,7 +7455,7 @@ See [Model contracts and examples](workflow-programs.md#direct-model-nodes-issue
 
 ## Scheduler product projection
 
-App Server v62 provides a bounded, read-only task catalog over the existing
+App Server v63 provides a bounded, read-only task catalog over the existing
 Session catalog and exact-node schedule readers. Keyset traversal, instruction
 search and unavailable-source reporting stay native; the browser does not walk
 Session trees or load runtimes to discover tasks. A coalesced native watch hint

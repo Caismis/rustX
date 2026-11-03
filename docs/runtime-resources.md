@@ -16,24 +16,25 @@ configuration a generation carries (`generation`); its single preparation worker
 (`application`) serializes publication. It runs off-side resource preparation
 itself and hands the runtime finished values: a prepared resource candidate, a
 `ContextBinding`, or a unit composition over the exact base generation the runtime
-selects under its coordinator lock. The runtime (`runtime::adoption`) owns the
-prepared candidate, adoption eligibility and refusal, the configuration each
-admitted Attempt froze, and the one cache-impact rule; it never reads, redacts or
-composes authored documents.
+selects under its coordinator lock. The runtime (`runtime::configuration_commit`)
+owns the staged candidate, its safe-boundary commit and fence, the configuration
+each admitted Attempt froze, and the bounded change fact each commit records; it
+never reads, redacts or composes authored documents.
 
-See the [configuration reference](configuration.md#save-automatic-application-and-session-adoption).
+See the [configuration reference](configuration.md#save-and-automatic-application).
 The native configuration coordinator captures immutable input bytes and a stable
 manifest before preparation. Required definitions, registries, guidance, resource
 bindings and leases form one complete capability closure. Preparation is off-side
 and bounded; a failed closure leaves its prior effective snapshot available.
-Independent policy can apply while another closure fails or awaits adoption.
+Independent policy can apply while another closure fails or waits for the
+Session's safe boundary.
 
 The source/application fence and runtime gate order publication with new desired
 input and Attempt admission. Preserved closures can publish while old Attempts
-continue using old leases. Context-changing or unproven candidates require explicit
-Session adoption. Retired resources close after lease settlement. Runtime
-recreation restores the Session adopted binding and reprepares stale physical
-candidates; it does not adopt pending context.
+continue using old leases. Context, capability and model candidates commit
+automatically at the Session's safe boundary. Retired resources close after lease
+settlement. Runtime recreation restores the Session's committed binding and
+reprepares stale physical candidates as a reallocation.
 
 Unused malformed resources produce bounded ordered diagnostics. A selected invalid
 resource fails resolution or admission. Workspace invalid duplicates shadow User

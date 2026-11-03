@@ -562,7 +562,7 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 82 binds request fingerprints to the native JSON Schema capability
+SQLite schema 83 binds request fingerprints to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
 change fingerprints for text requests. Schema 82 also admits bounded native
 `WorkflowNodeWaiting` Journal facts and reserved Auxiliary Call identities.
@@ -1569,11 +1569,12 @@ never interaction facts.
 
 Native configuration application publishes independently valid, complete units.
 The source/application fence and runtime gate order publication against new input
-and Attempt capture. Explicit context adoption requires an idle Session and the
-inspected candidate/binding revision. Existing Attempts and every derived request,
+and Attempt capture. Prepared context, capability and model candidates commit
+automatically at the Session's safe boundary under the admission lock, fenced by
+the scope's desired application epoch. Existing Attempts and every derived request,
 Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
-[configuration application](configuration.md#save-automatic-application-and-session-adoption).
+[configuration application](configuration.md#save-and-automatic-application).
 
 The one control-capable Runtime Client attachment is the 0.1 interaction
 provider; read-only inspection attachments never provide interaction
@@ -3263,24 +3264,22 @@ the authority for rejecting stale MCP candidates.
 
 Native configuration application publishes independently valid, complete units.
 The source/application fence and runtime gate order publication against new input
-and Attempt capture. Explicit context adoption requires an idle Session and the
-inspected candidate/binding revision. Existing Attempts and every derived request,
+and Attempt capture. Prepared context, capability and model candidates commit
+automatically at the Session's safe boundary under the admission lock, fenced by
+the scope's desired application epoch. Existing Attempts and every derived request,
 Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
-[configuration application](configuration.md#save-automatic-application-and-session-adoption).
-
-Configuration application and adoption eligibility are separate domains:
+[configuration application](configuration.md#save-and-automatic-application).
 
 ```text
 ConfigurationApplication publication is configuration-domain state.
-Configuration adoption eligibility is runtime-domain advisory state, published
-by the live runtime on its Runtime Client snapshot only when it changes.
+A superseded candidate never commits after a newer desired application.
+Every committed binding change records exactly one configuration_applied fact.
 Runtime Client snapshot identity is never a configuration invalidation signal.
-Native adoption revalidates eligibility at the actual commit boundary.
 Ordinary streaming Runtime Client deltas cause no Session-configuration RPC.
 ```
 
-See [Session configuration adoption eligibility](app-server-protocol.md#session-configuration-adoption-eligibility-v35).
+See [Automatic Session configuration commit](app-server-protocol.md#automatic-session-configuration-commit-v63).
 
 Session/Node/Conversation/ToolExecution identities are typed UUIDv7, allocated with
 collision/no-overwrite checks. Semantic order uses explicit metadata. The fixed

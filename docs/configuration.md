@@ -388,7 +388,7 @@ bindings. A resource-only child materializes its selected source even with zero
 ordinary Tools. Parent permissions and later configuration changes never expand
 that frozen set. A replacement connection that loses Resources fails a frozen
 Resource call before dispatch; current Attempts retain their declared Tool set
-until the existing safe capability adoption boundary.
+until the existing safe capability commit boundary.
 
 An empty source map replaces no named source entries; set a particular source
 to `[]` to override its inherited selection. The Agent allowlist is a complete
@@ -631,34 +631,32 @@ Deadline expiry cancels and retires pending initialization. That same attempt
 cannot later publish success. Resource counts and occupied preparation permits
 remain until physical settlement; timeout alone is not cleanup evidence.
 Successful supported runtime retry/reconnect/catalog reconciliation under an
-unchanged adopted binding publishes automatically at the native idle/admission
-boundary. No Reload, Retry or Adopt Configuration action is needed for normal
-success. An active Attempt keeps its complete capability snapshot throughout
+unchanged committed binding publishes automatically at the native idle/admission
+boundary. No Reload or Retry action is needed for normal success. An active Attempt keeps its complete capability snapshot throughout
 later model steps; the next eligible Attempt captures the published update.
 Readiness alone starts no model request and changes no canonical history. A Busy
 native lifecycle grant retains the result and defers existing admission; the
 worker awaits the actual commit frontier outside the coordinator lock, keeping
 native controls responsive. Per-source continuity rejects old X→Y→X completions
-while unrelated Todo/context/model and sibling changes remain adopted. Pure
+while unrelated Todo/context/model and sibling changes remain committed. Pure
 rebase keeps an eligible recovered source together with those current resources
 without another discovery.
 
-Runtime publication reports actual request-shape/cache effects and cannot adopt
-unrelated pending authored instructions, source selection, environment or model
-intent. Existing pending candidates are preserved and revalidated against the new
-baseline. Ordinary explicit authored-configuration adoption remains supported.
+Runtime publication cannot commit unrelated pending authored instructions,
+source selection, environment or model intent. A staged authored candidate is
+kept and revalidated against the new baseline before its own automatic commit.
 A failed refresh retains the last successfully committed snapshot, including an
 empty catalog, and reports the failure honestly. Explicit reconciliation can
 retry an invalidated or Unavailable source; it does not create an automatic retry
 loop. Managed Python source admission remains strict. A failed explicit refresh's
 source-scoped diagnostic survives older queued success, unrelated sibling success
-and context adoption. A newer successful explicit whole-batch refresh clears it;
+and a context commit. A newer successful explicit whole-batch refresh clears it;
 superseded source authority cannot install its old result or diagnostic.
 Public Reconcile treats a retained failure under current source authority as a
 reason for that explicit retry, even when an older success has already restored
 Ready and the catalog epoch. It does not schedule automatic retries.
 
-## Save, automatic application and Session adoption
+## Save and automatic application
 
 `configuration/sourceWrite` is a typed source CAS operation. The native writer
 checks the exact byte revision, validates and canonicalizes TOML, stages and syncs
@@ -784,12 +782,22 @@ together. Candidate preparation happens off-side with one active preparation and
 latest pending work per Session. Preparation has a bounded deadline. Failures do
 not roll back independently applied units or mutate resources leased by old work.
 
-Each Session retains its adopted binding across runtime unload/load and reconnect
-within an App Server process. Comparison uses that Session's actual adopted
-provider request shape. Adapter-built system contributions, ordered Tool schemas,
-provider/model namespace and request parameters determine impact. Natural history
-growth is excluded. Preserved means configuration preserves the relevant prefix;
-it does not promise a provider cache hit. Unproven changes require adoption.
+Each Session retains its committed binding across runtime unload/load and
+reconnect within an App Server process. A prepared candidate — instructions,
+context policy, capability closure, Skills, model invocations and approval mode
+together — is staged in the resident runtime and committed automatically at the
+Session's next safe boundary, under the same coordinator lock as Attempt
+admission. The boundary is narrower than idleness: a current or scheduled
+Attempt, manual compaction, a manual tail, a durability failure, and background
+or Subagent work that still holds the old configuration block the commit; a
+pending inbox, a Goal continuation or a recovered continuation does not, so the
+commit lands before that work's next Attempt captures. An admitted Attempt keeps
+its frozen snapshot, fencing and resource settlement unchanged. Each scope's
+desired application identity is an epoch fence: a superseded candidate can never
+commit after a newer one, and a candidate whose baseline or owner moved is
+superseded and prepared again. Nothing is ever asked of a client, and there is no
+cache-impact consent: a commit can change the provider request prefix, which the
+change fact makes explicit.
 
 Whether a model or catalog edit reaches an existing Session at all is decided by
 the effective invocations an Attempt of that Session would freeze — its primary
@@ -800,9 +808,9 @@ Profile, output budget and request parameters. An omitted
 `profile` and an explicit `profile` naming the default resolve to the same
 invocation, and an edited, added or removed Profile that no such selection
 resolves through changes nothing for the Session's invocation: it prepares and
-adopts nothing, exactly as for an unselected Model.
+commits nothing, exactly as for an unselected Model.
 
-Catalog publication is a separate contract from invocation adoption. A valid
+Catalog publication is a separate contract from invocation commit. A valid
 source generation's Model Catalog — the Provider unit: `models`, `providers` and
 the new-Session default `agent.model` the catalog is validated with — is the
 authority for future selection. It is published to an existing Session without
@@ -811,17 +819,16 @@ Session's own configured Model or Profile is one the new catalog no longer
 admits: the catalog is what the replacement is chosen from, and a stale Session
 selection never makes a valid catalog unpublishable. The Provider unit settles on
 its own: an Instructions, context or Capability change in the same generation
-neither holds it back nor is adopted by it. That includes the named Agents Root
-admits and their definitions, which are the Capability unit's until it adopts: a
-newly admitted Agent is not an invocation of the adopted closure, and an Agent
+neither holds it back nor is committed by it. That includes the named Agents Root
+admits and their definitions, which are the Capability unit's until it commits: a
+newly admitted Agent is not an invocation of the committed closure, and an Agent
 naming no model inherits the invoking Attempt's. What publication must preserve
-is each adopted Agent's own explicit selection, which resolves against the
+is each committed Agent's own explicit selection, which resolves against the
 published catalog. Those units are then prepared as
-usual against the binding just published, and their candidate waits for
-adoption as before, so the Session can discover and select a replacement first.
-An explicit selection committed meanwhile recaptures the generation over the new
-selection; the older candidate's expected binding no longer matches and it
-cannot adopt. Under the gate Attempt
+usual against the binding just published, and their candidate commits at the
+next safe boundary like any other. An explicit selection committed meanwhile
+recaptures the generation over the new selection; the older staged candidate's
+baseline no longer matches, so it is superseded and never commits. Under the gate Attempt
 admission takes, the Session's selection authority, the catalog its configuration
 generation carries and its retained binding are committed together, all or
 nothing, and the configuration generation advances, while the current resolved
@@ -833,8 +840,8 @@ keeps the snapshot and registry it froze. A failed or overtaken generation never
 publishes, so the last good catalog remains the authority; a catalog the source
 document cannot validate fails that generation's context units with it. When the
 edit changes an invocation the Session can still resolve — its own, or what an
-adopted named Agent's explicit selection resolves to — the catalog arrives with
-that change's adoption,
+committed named Agent's explicit selection resolves to — the catalog arrives with
+that change's commit,
 together with any capability or context change of the same generation. A cold
 Session receives the catalog when it next becomes resident. New Sessions start
 from the Workspace's published creation catalog.
@@ -853,17 +860,22 @@ make the Session busy for the correction. The correction is an ordinary
 catalog admits, primary and explicit auxiliary selections alike; it commits through the usual
 fence and admits held work with exactly the new selection.
 
-The adopted generation's `source_revisions` stay the source manifest its context
+The committed generation's `source_revisions` stay the source manifest its context
 was resolved from. Independently published units — execution policy, shared
 capacity and the Model Catalog's Provider unit — carry their own component
 revision with their values and provenance, so a source file that also holds
-unrelated, not yet applied changes never makes those changes look adopted.
+unrelated, not yet applied changes never makes those changes look committed.
 
-`session/adoptConfiguration` addresses a concrete ready candidate and expected
-Session binding revision. It returns typed Busy, NotReady or Conflict, or commits
-the complete binding atomically under the same gate as Attempt admission. It never
-cancels work, edits history, compacts, invokes a model or changes the selected model.
-A ready candidate is not an adopted binding.
+Every commit that changes the Session binding records exactly one typed
+`configuration_applied` fact in the Event Journal: its reason (source, model
+selection or reallocation), the previous and new binding revisions, the changed
+domains, and bounded added/removed/changed Tool and Skill names (16 names each,
+with exact totals). The fact is a transcript row and a Trace anchor, released in
+Journal order; it never enters model context. A commit never cancels work, edits
+history, compacts or invokes a model. A durable append failure is an absorbing
+`record_configuration_change` durability failure and reports the commit as
+uncertain. A `ready` unit is prepared and waiting for that boundary; it is not a
+committed binding.
 
 An independent Attempt captures complete execution configuration once. Requests,
 Steps, retries, recovery, Tool batches, Subagents and Workflow children inherit
@@ -881,8 +893,8 @@ coordinator gate serializes that commit with independent Attempt admission: a
 selection committed first is captured by the new Attempt; an Attempt admitted
 first retains its complete previous snapshot. Concurrent or superseded candidates
 fail instead of overwriting newer authority. Model selection never imports pending
-instructions, capabilities or other source changes. Explicit context adoption
-retains its separate readiness, cache-impact and idle-safety rules.
+instructions, capabilities or other source changes; a staged source candidate
+whose baseline it replaces is superseded and prepared again.
 
 The whole `SessionModelConfig` is replaced together. A same-Model Profile choice
 preserves request overrides, output override and Summary and Title policies; native
@@ -929,10 +941,22 @@ a source-application scope when the Session has no source application to reconsi
 `configuration/reconcile` rescans external files or retries failed preparation.
 Stable changed inputs create a new desired revision; retrying unchanged inputs
 creates a new application attempt. Healthy semantic no-ops do not advance runtime
-generation or rebuild resources. There is no filesystem watcher.
+generation or rebuild resources.
+
+A bounded native watcher (the `notify` crate) feeds external edits into the same
+path as a native write. Coverage is the User document's directory, for that one
+file; the User resource root `~/rustx/.agents`, recursively (its parent until it
+exists); each Workspace that already holds source authority for a Session, for
+`rustx.toml` and root `*.md` guidance; and that Workspace's `.agents`,
+recursively. A notification is only invalidation: it names the owning source
+target, notifications coalesce into one capture per target, and the capture
+rereads, fences and validates the files exactly as after `configuration/sourceWrite`.
+An unchanged healthy source is a no-op. Unrelated directories are never watched,
+and a platform without a watcher keeps working through `configuration/reconcile`.
 
 Effective and source projections report simultaneous per-unit results: applied,
-preparing, ready for adoption, failed, and process restart required. Actual process
+preparing, ready (waiting for the safe boundary), failed, uncertain, and process
+restart required. Actual process
 bindings are separate from desired state. Connection/residency admission limits
 apply through their owners; the process drain deadline waits for restart. Fixed
 startup storage/transport bindings remain process-owned. Notifications identify
@@ -1096,10 +1120,10 @@ boundaries admit their own. Once a scope is admitted, User and Workspace remain
 independent transactions: a later failure of one never rolls back the other.
 
 `rustx config check`, `rustx config show --sources`, `configuration/sourcesRead`
-and every client navigation stay read-only. There is no watcher and no periodic
-check. A committed repair is handed to the configuration coordinator exactly like a
+and every client navigation stay read-only. The bounded source watcher only
+invalidates; there is no periodic check. A committed repair is handed to the configuration coordinator exactly like a
 committed `configuration/sourceWrite`, under the same lock, so one commit is
-captured once and application, preparation and Session adoption keep their
+captured once and application, preparation and automatic commit keep their
 existing contracts: a repaired file is desired state, not proof that anything was
 applied. A receipt never enters canonical history, the Event Journal or model
 context.
@@ -1219,13 +1243,16 @@ owns only durable Session selections/status. User and Workspace edit native stru
 selection, policies, Plugins, MCP definitions and complete named-Agent profiles.
 The User config pathname and fixed User resource root are shown separately.
 Save starts native application automatically. Settings presents independent
-application, failure/retry and actual-versus-desired process state. The only ordinary
-Web adoption surface is below the focused Session title, using the runtime's published adoption eligibility.
+application, failure/retry and actual-versus-desired process state. Below the
+focused Session title, a compact status line appears only while a change is
+preparing, waiting for current work, failed (previous configuration kept), uncertain
+or waiting for a restart; Chat shows committed Tool additions and removals as
+DisclosureRow facts, and Trace shows every committed change.
 CAS conflicts preserve drafts. Rescan is a diagnostics action.
 
 TUI `/settings` authors explicit User/Workspace sources; `/session settings` inspects
-Session selections and application, and `/session adopt` submits the inspected
-candidate and binding. `/model` changes Session selection. Neither client parses,
+Session selections and application; the footer shows the same transient status
+and the transcript shows each committed change as a concise notice. `/model` changes Session selection. Neither client parses,
 merges or classifies configuration. App Server protocol 16 is generated from Rust; obsolete
 development protocols are rejected without compatibility decoding.
 
