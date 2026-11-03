@@ -1029,6 +1029,11 @@
           "description": "Adopted input from runtime, Agent or mixed sources; never a human row.",
           "type": "string",
           "const": "context"
+        },
+        {
+          "description": "A Session configuration commit between Attempts. It owns no Attempt;\nthe first request that used it shows that in its own request state.",
+          "type": "string",
+          "const": "configuration"
         }
       ]
     },
@@ -2860,6 +2865,17 @@
             "$ref": "#/$defs/TraceArtifact"
           }
         },
+        "configuration": {
+          "description": "The committed change of a `configuration` record, as recorded.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfigurationChange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "has_detail": {
           "description": "Whether this record has heavy detail available for inspection.",
           "type": "boolean"
@@ -3841,6 +3857,145 @@
     "WorkflowId": {
       "description": "The configured workflow identity.\n\nThis is both the catalog key and the eventual model-facing Tool name. It\nis deliberately not repeated inside YAML.",
       "type": "string"
+    },
+    "ConfigurationChange": {
+      "description": "The typed semantic summary of one actual configuration commit.\n\nRecorded once per commit that changed something; never for preparation,\na file notification or a commit with no effective semantic change. It\nnames what changed, not the bodies: the exact prompt and Tool schemas a\nrequest used remain in that request's own immutable snapshot.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/ConfigurationChangeReason"
+        },
+        "previous_binding_revision": {
+          "description": "The Session binding revision this commit replaced.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "binding_revision": {
+          "description": "The Session binding revision this commit installed.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "domains": {
+          "description": "The changed domains, in their stable order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigurationDomain"
+          }
+        },
+        "tools": {
+          "$ref": "#/$defs/NamedChanges"
+        },
+        "skills": {
+          "$ref": "#/$defs/NamedChanges"
+        }
+      },
+      "required": [
+        "reason",
+        "previous_binding_revision",
+        "binding_revision",
+        "domains",
+        "tools",
+        "skills"
+      ]
+    },
+    "ConfigurationChangeReason": {
+      "description": "Why the Session's configuration changed.",
+      "oneOf": [
+        {
+          "description": "A saved or externally edited authored source.",
+          "type": "string",
+          "const": "source"
+        },
+        {
+          "description": "An explicit Session model selection reconsidered the source.",
+          "type": "string",
+          "const": "model_selection"
+        },
+        {
+          "description": "The runtime allocation was rebuilt and reprepared its sources.",
+          "type": "string",
+          "const": "reallocation"
+        }
+      ]
+    },
+    "ConfigurationDomain": {
+      "description": "One configuration domain a commit changed.",
+      "oneOf": [
+        {
+          "description": "The effective system instructions, project guidance or Agent profile.",
+          "type": "string",
+          "const": "instructions"
+        },
+        {
+          "description": "The context budgeting/projection policy.",
+          "type": "string",
+          "const": "context_policy"
+        },
+        {
+          "description": "The model-facing Tool catalog.",
+          "type": "string",
+          "const": "tools"
+        },
+        {
+          "description": "The Skill catalog.",
+          "type": "string",
+          "const": "skills"
+        },
+        {
+          "description": "The effective model of future work.",
+          "type": "string",
+          "const": "model"
+        },
+        {
+          "description": "The approval mode future Attempts freeze.",
+          "type": "string",
+          "const": "approval_mode"
+        }
+      ]
+    },
+    "NamedChanges": {
+      "description": "Named-item differences of one catalog. A same-name item whose definition\nchanged is `changed`, never a removal plus an addition.",
+      "type": "object",
+      "properties": {
+        "added": {
+          "$ref": "#/$defs/BoundedNames"
+        },
+        "removed": {
+          "$ref": "#/$defs/BoundedNames"
+        },
+        "changed": {
+          "$ref": "#/$defs/BoundedNames"
+        }
+      },
+      "required": [
+        "added",
+        "removed",
+        "changed"
+      ]
+    },
+    "BoundedNames": {
+      "description": "A bounded, ordered list of names with its exact total.",
+      "type": "object",
+      "properties": {
+        "names": {
+          "description": "At most [`CONFIGURATION_CHANGE_NAME_LIMIT`] names in sorted order.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "total": {
+          "description": "The exact number of names in this category.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "names",
+        "total"
+      ]
     },
     "TraceInspectionContent": {
       "description": "The closed native inspection families. Request bodies use their existing indexed layout.",
@@ -9482,40 +9637,6 @@
               "additionalProperties": false,
               "required": [
                 "session_id"
-              ]
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "method": {
-              "type": "string",
-              "const": "session/adoptConfiguration"
-            },
-            "params": {
-              "type": "object",
-              "properties": {
-                "session_id": {
-                  "$ref": "#/$defs/SessionId"
-                },
-                "candidate": {
-                  "$ref": "#/$defs/ApplicationIdentity"
-                },
-                "expected_binding": {
-                  "type": "string",
-                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "session_id",
-                "candidate",
-                "expected_binding"
               ]
             }
           },
@@ -15997,26 +16118,6 @@
         "byte_length"
       ]
     },
-    "ApplicationIdentity": {
-      "description": "Source attempt identity is independent of both content and execution version.",
-      "type": "object",
-      "properties": {
-        "input_revision": {
-          "description": "None means immutable input capture failed; no source revision is fabricated.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "attempt": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        }
-      },
-      "required": [
-        "attempt"
-      ]
-    },
     "Response": {
       "description": "Success and failure are exclusive, including on deserialization.",
       "anyOf": [
@@ -22362,6 +22463,36 @@
             "interaction_id",
             "settlement"
           ]
+        },
+        {
+          "description": "A Session configuration commit between Attempts. It is presentation\nof a native fact, never canonical conversation content.",
+          "type": "object",
+          "properties": {
+            "event_id": {
+              "description": "Durable Event Journal event identity.",
+              "$ref": "#/$defs/EventId"
+            },
+            "timestamp": {
+              "description": "Event timestamp.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "change": {
+              "description": "The bounded semantic summary of the commit.",
+              "$ref": "#/$defs/ConfigurationChange"
+            },
+            "type": {
+              "type": "string",
+              "const": "configuration_applied"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "event_id",
+            "timestamp",
+            "change"
+          ]
         }
       ]
     },
@@ -23738,10 +23869,6 @@
           "description": "The authoritative mode used by the current attempt boundary.",
           "$ref": "#/$defs/ApprovalMode"
         },
-        "configuration_adoption_eligibility": {
-          "description": "Whether this live runtime could adopt a prepared Session configuration\nnow. Runtime-domain advisory state published by the runtime with its\nadoption gate's idle rule over in-memory owners, and changed only by the\n`configuration_adoption_eligibility_changed` event; it describes no\ncandidate and is never configuration application state. `unavailable` until the runtime runs, after it stops, and for a\ndurable inspection projection. `session/adoptConfiguration` revalidates\nthe real gate at its commit boundary.",
-          "$ref": "#/$defs/AdoptionEligibility"
-        },
         "durability_failure": {
           "description": "The runtime's durable-authority failure, when it has entered the\nexplicit degraded state. While set, no new durable admission/execution\nwork may begin.",
           "anyOf": [
@@ -23912,7 +24039,6 @@
         "conversation_id",
         "shutting_down",
         "effective_approval_mode",
-        "configuration_adoption_eligibility",
         "messages",
         "message_descriptors",
         "transcript",
@@ -24413,47 +24539,6 @@
           "description": "It ran `loop_count` rounds.",
           "type": "string",
           "const": "loop_completed"
-        }
-      ]
-    },
-    "AdoptionEligibility": {
-      "description": "Whether a live runtime could adopt a prepared configuration now.\n\nRuntime-domain advisory state, published by the runtime through its Runtime\nClient projection; it is never part of a `ConfigurationApplication`.\nAdoption always revalidates the native admission gate.",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "eligible"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "busy"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "unavailable"
-            }
-          },
-          "required": [
-            "status"
-          ]
         }
       ]
     },
@@ -28823,24 +28908,6 @@
           "additionalProperties": false
         },
         {
-          "description": "The live runtime's configuration-adoption eligibility changed.\n\nPublished only on an actual change of the native derivation, never for\nordinary streaming. Advisory: `session/adoptConfiguration` revalidates\nthe real gate at its commit boundary.",
-          "type": "object",
-          "properties": {
-            "eligibility": {
-              "$ref": "#/$defs/AdoptionEligibility"
-            },
-            "type": {
-              "type": "string",
-              "const": "configuration_adoption_eligibility_changed"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "eligibility"
-          ]
-        },
-        {
           "description": "Bounded authoritative durable Goal view. Every emission follows a\ncommitted durable transition; there is no activation-only form.",
           "type": "object",
           "properties": {
@@ -29127,6 +29194,30 @@
           "required": [
             "type",
             "audit",
+            "transcript_cursor"
+          ]
+        },
+        {
+          "description": "A Session configuration commit became visible in the transcript. It is\npresentation of a native fact, never canonical conversation content.",
+          "type": "object",
+          "properties": {
+            "item": {
+              "description": "The bounded configuration change item.",
+              "$ref": "#/$defs/RuntimeClientTranscriptConfigurationApplied"
+            },
+            "transcript_cursor": {
+              "description": "The durable transcript position of this change.",
+              "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+            },
+            "type": {
+              "type": "string",
+              "const": "configuration_applied"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "item",
             "transcript_cursor"
           ]
         },
@@ -30431,6 +30522,30 @@
         "settlement"
       ]
     },
+    "RuntimeClientTranscriptConfigurationApplied": {
+      "description": "One live-published Session configuration change projection.",
+      "type": "object",
+      "properties": {
+        "event_id": {
+          "description": "Durable Event Journal event identity.",
+          "$ref": "#/$defs/EventId"
+        },
+        "timestamp": {
+          "description": "Event timestamp.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "change": {
+          "description": "The bounded semantic summary of the commit.",
+          "$ref": "#/$defs/ConfigurationChange"
+        }
+      },
+      "required": [
+        "event_id",
+        "timestamp",
+        "change"
+      ]
+    },
     "RuntimeClientToolCall": {
       "description": "Finite proposal metadata; exact provider identifiers and arguments can be deferred.",
       "type": "object",
@@ -31561,16 +31676,6 @@
             }
           },
           "additionalProperties": false
-        },
-        "candidate": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AvailableConfiguration"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "required": [
@@ -31579,6 +31684,26 @@
         "version",
         "desired",
         "units"
+      ]
+    },
+    "ApplicationIdentity": {
+      "description": "Source attempt identity is independent of both content and execution version.",
+      "type": "object",
+      "properties": {
+        "input_revision": {
+          "description": "None means immutable input capture failed; no source revision is fabricated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attempt": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "required": [
+        "attempt"
       ]
     },
     "UnitApplication": {
@@ -31608,22 +31733,20 @@
           ]
         },
         {
+          "description": "Prepared and staged; the runtime commits it automatically once the\nexecution that owns the current configuration settles.",
           "type": "object",
           "properties": {
-            "impact": {
-              "$ref": "#/$defs/CacheImpact"
-            },
             "status": {
               "type": "string",
               "const": "ready"
             }
           },
           "required": [
-            "status",
-            "impact"
+            "status"
           ]
         },
         {
+          "description": "The previous configuration of this unit remains in use.",
           "type": "object",
           "properties": {
             "diagnostic": {
@@ -31632,6 +31755,23 @@
             "status": {
               "type": "string",
               "const": "failed"
+            }
+          },
+          "required": [
+            "status",
+            "diagnostic"
+          ]
+        },
+        {
+          "description": "The resources were published but the commit could not be recorded;\nnative recovery reconciles from durable authority.",
+          "type": "object",
+          "properties": {
+            "diagnostic": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "uncertain"
             }
           },
           "required": [
@@ -31651,35 +31791,6 @@
             "status"
           ]
         }
-      ]
-    },
-    "CacheImpact": {
-      "type": "string",
-      "enum": [
-        "preserved",
-        "prefix_changed",
-        "cache_namespace_changed",
-        "unproven"
-      ]
-    },
-    "AvailableConfiguration": {
-      "type": "object",
-      "properties": {
-        "identity": {
-          "$ref": "#/$defs/ApplicationIdentity"
-        },
-        "expected_binding": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "impact": {
-          "$ref": "#/$defs/CacheImpact"
-        }
-      },
-      "required": [
-        "identity",
-        "expected_binding",
-        "impact"
       ]
     },
     "RuntimeLayer": {
@@ -34677,21 +34788,18 @@
           ]
         },
         {
+          "description": "A newer Session binding superseded the model selection's fence.",
           "type": "object",
           "properties": {
-            "rejection": {
-              "$ref": "#/$defs/AdoptionError"
-            },
             "kind": {
               "type": "string",
-              "const": "configuration_adoption"
+              "const": "model_selection_conflict"
             }
           },
-          "additionalProperties": false,
           "required": [
-            "kind",
-            "rejection"
-          ]
+            "kind"
+          ],
+          "additionalProperties": false
         },
         {
           "description": "The Session's published Model Catalog does not admit its configured\nselection, so no work is accepted until `session/setModel` commits a\nselection it does admit. Nothing falls back to a default.",
@@ -35429,62 +35537,6 @@
         "too_large",
         "capacity",
         "read_failed"
-      ]
-    },
-    "AdoptionError": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "busy"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "not_ready"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "conflict"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "diagnostic": {
-              "type": "string"
-            },
-            "status": {
-              "type": "string",
-              "const": "failed"
-            }
-          },
-          "required": [
-            "status",
-            "diagnostic"
-          ]
-        }
       ]
     },
     "SessionArchivePrepareError": {
