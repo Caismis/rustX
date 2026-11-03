@@ -1766,7 +1766,7 @@ impl SqliteConversationStore {
 }
 
 impl ConversationStore for SqliteConversationStore {
-    fn reclaim_idle_cache(&self) -> Result<(), ConversationStoreError> {
+    fn reclaim_idle_cache(&self) -> Result<bool, ConversationStoreError> {
         self.conn.reclaim_idle_cache(std::time::Instant::now())
     }
 
