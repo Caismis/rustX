@@ -74,7 +74,7 @@ export function validateScene(roots: Object3D[]): Box3 {
 }
 
 /** Geometry stays in source coordinates; only camera framing changes. */
-export function modelScene(model: GeometryModel): Group {
+export function modelScene(model: GeometryModel): { scene: Group; bounds: Box3 } {
   validateModel(model);
   const root = new Group(), resources = new Group();
   const palette = new Map<string, MeshStandardMaterial>();
@@ -111,6 +111,6 @@ export function modelScene(model: GeometryModel): Group {
       for (const index of item.meshes) group.add(meshes[index].clone());
       for (const child of item.children) node(child, group);
     }
-    node(model.root, root); validateScene([root]); return root;
+    node(model.root, root); return { scene: root, bounds: validateScene([root]) };
   } catch (error) { disposeScene([resources, root]); throw error; }
 }

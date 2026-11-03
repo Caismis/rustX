@@ -3959,7 +3959,7 @@
           "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ],
-      "local_sha256": "a396cd6458aceaa2884d73b990e90c8e5a435d8151d98c7b5b2b90076d33aefa"
+      "local_sha256": "452e41c390a9d2c4b36709da7c9368d44af10eba97be93ec69fb7333bd3b1281"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4793,7 +4793,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "f7371fc06febe15d56a84a56bb302681780391ae52769ef54eafbd0311218a60"
+      "local_sha256": "f7054a7dd3d26da62e6ba0f951a1c0f26a60c59820c6b5ee04ac868952d44ab1"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",

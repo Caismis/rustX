@@ -439,6 +439,18 @@ def web_preview_workspace() -> Scenario:
 SCENARIOS['web_preview_workspace'] = web_preview_workspace
 
 
+def web_geometry_previews() -> Scenario:
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Inspect the CAD model',))
+    files = [{'path': name} for name in ['mounting-bracket.step', 'mounting-bracket.glb', 'notes.md']]
+    return Scenario('web_geometry_previews',
+        Step(expected, Stream(ToolCall('geometry-present', 'present', json.dumps({'files': files})), Finish('tool_calls'))),
+        Step(expected, Stream(Text('The model files are ready to inspect.'), Finish())),
+    )
+
+
+SCENARIOS['web_geometry_previews'] = web_geometry_previews
+
+
 SCENARIOS['web_artifact_document'] = lambda: Scenario('web_artifact_document')
 
 

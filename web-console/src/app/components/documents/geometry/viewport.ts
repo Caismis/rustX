@@ -1,11 +1,11 @@
-import { AxesHelper, BoxHelper, Color, Group, Mesh, PerspectiveCamera, Raycaster, Scene, Vector2, Vector3, WebGLRenderer, HemisphereLight, DirectionalLight, type Object3D, type Box3 } from 'three';
+import { AxesHelper, BoxHelper, Color, Group, Mesh, NeutralToneMapping, PerspectiveCamera, Raycaster, Scene, Vector2, Vector3, WebGLRenderer, HemisphereLight, DirectionalLight, type Object3D, type Box3 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { PreviewViewState } from '../../../../presentation/right-panel/preview-view-state';
 import { GEOMETRY_LIMITS as L, GeometryError } from './limits';
 
 type Saved = NonNullable<PreviewViewState['geometry']>;
 export type StandardView = 'isometric' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
-export interface Part { id: string; name: string; depth: number }
+export interface Part { id: string; name: string; depth: number; kind: 'mesh' | 'group' }
 let activeContexts = 0;
 
 /** Mounted view owns every graphics resource. Source bytes belong to the content owner. */
@@ -14,6 +14,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   let renderer: WebGLRenderer;
   try { renderer = new WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' }); }
   catch { throw new GeometryError('webgl'); }
+  renderer.toneMapping = NeutralToneMapping;
   activeContexts++;
   const canvas = renderer.domElement; canvas.tabIndex = 0; canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', labels.canvas);
   container.append(canvas);
@@ -21,7 +22,9 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const center = bounds.getCenter(new Vector3()), size = bounds.getSize(new Vector3()), radius = Math.max(size.length() / 2, 1e-6);
   centered.position.copy(center).negate(); centered.add(object); scene.add(centered);
   centered.updateMatrixWorld(true);
-  scene.add(new HemisphereLight(0xffffff, 0x667080, 2)); const light = new DirectionalLight(0xffffff, 3); scene.add(light);
+  scene.add(new HemisphereLight(0xffffff, 0x667080, 0.6));
+  const light = new DirectionalLight(0xffffff, 3); light.position.set(-3, 6, 4); scene.add(light);
+  const fill = new DirectionalLight(0xdce9ff, 1.5); fill.position.set(4, 2, -3); scene.add(fill);
   let controls = new OrbitControls(camera, canvas);
   const orbitUp = camera.up.clone();
   const configureControls = () => { controls.enableDamping = false; controls.minDistance = radius / 100; controls.maxDistance = radius * 100; controls.listenToKeyEvents(canvas); };
@@ -32,14 +35,13 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const objects = new Map<string, Object3D>(), parts: Part[] = [], hidden = new Set<string>();
   let selected: string | undefined, frame = 0, disposed = false, initial = true;
   function walk(item: Object3D, id: string, depth: number) {
-    if (item instanceof Mesh || item.name) { const name = typeof item.userData.name === 'string' ? item.userData.name : item.name; objects.set(id, item); parts.push({ id, name: name.slice(0, 256), depth }); }
+    if (item instanceof Mesh || item.name) { const name = typeof item.userData.name === 'string' ? item.userData.name : item.name; objects.set(id, item); parts.push({ id, name: name.slice(0, 256), depth, kind: item instanceof Mesh ? 'mesh' : 'group' }); }
     item.children.forEach((child, index) => walk(child, `${id}.${index}`, depth + 1));
   }
   walk(object, '0', 0);
   const emit = () => { if (!disposed) change({ camera: { position: camera.position.toArray(), target: controls.target.toArray(), up: camera.up.toArray() }, selected, hidden: [...hidden] }); };
   const draw = () => {
     frame = 0; if (disposed) return;
-    light.position.copy(camera.position);
     const { x: width, y: height } = renderer.getSize(new Vector2());
     renderer.setViewport(0, 0, width, height); renderer.autoClear = true; renderer.render(scene, camera);
     renderer.autoClear = false; renderer.clearDepth();
@@ -57,11 +59,12 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     selected = id && objects.has(id) ? id : undefined;
     updateHighlight(); render(); emit();
   };
-  const fit = (view: StandardView = 'isometric') => {
+  const fit = (view?: StandardView) => {
     const directions: Record<StandardView, [number, number, number]> = { isometric: [1, 1, 1], front: [0, 0, 1], back: [0, 0, -1], left: [-1, 0, 0], right: [1, 0, 0], top: [0, 1, 0], bottom: [0, -1, 0] };
     const distance = radius / Math.sin(Math.PI / 8) / Math.min(1, camera.aspect) * 1.1;
-    camera.position.fromArray(directions[view]).normalize().multiplyScalar(distance);
-    camera.up.set(0, view === 'top' || view === 'bottom' ? 0 : 1, view === 'top' ? -1 : view === 'bottom' ? 1 : 0);
+    const direction = view ? new Vector3().fromArray(directions[view]) : camera.position.clone().sub(controls.target);
+    camera.position.copy(direction).normalize().multiplyScalar(distance);
+    if (view) camera.up.set(0, view === 'top' || view === 'bottom' ? 0 : 1, view === 'top' ? -1 : view === 'bottom' ? 1 : 0);
     camera.near = Math.max(radius / 10_000, 1e-9); camera.far = radius * 1000; camera.updateProjectionMatrix(); synchronizeOrbit(new Vector3()); render(); emit();
   };
   const visibility = (id: string, visible: boolean) => {
@@ -74,7 +77,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     const width = Math.max(1, Math.min(container.clientWidth, 4096)), height = Math.max(1, Math.min(container.clientHeight, 4096));
     renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2, Math.sqrt(L.canvasPixels / (width * height)))); renderer.setSize(width, height);
     camera.aspect = width / height; camera.updateProjectionMatrix();
-    if (initial) { initial = false; fit();
+    if (initial) { initial = false; fit('isometric');
       const pose = saved?.camera;
       if (pose && [pose.position, pose.target, pose.up].every(values => values.length === 3 && values.every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate))) {
         const position = new Vector3().fromArray(pose.position), target = new Vector3().fromArray(pose.target), up = new Vector3().fromArray(pose.up);

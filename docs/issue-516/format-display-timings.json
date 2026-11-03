@@ -2,81 +2,97 @@
   {
     "entry": "delivery",
     "name": "cube.glb",
-    "displayMs": 891
+    "displayMs": 1176,
+    "importMs": 0.7
   },
   {
     "entry": "delivery",
     "name": "cube.stl",
-    "displayMs": 842.6
+    "displayMs": 856.8,
+    "importMs": 472.4
   },
   {
     "entry": "delivery",
     "name": "cube-ascii.stl",
-    "displayMs": 837.6
+    "displayMs": 857.8,
+    "importMs": 471.6
   },
   {
     "entry": "delivery",
     "name": "cube.step",
-    "displayMs": 948.5
+    "displayMs": 1365.2,
+    "importMs": 936.2
   },
   {
     "entry": "delivery",
     "name": "cube-inch.step",
-    "displayMs": 891.2
+    "displayMs": 1889.2,
+    "importMs": 887.8
   },
   {
     "entry": "delivery",
     "name": "cube.iges",
-    "displayMs": 853.3
+    "displayMs": 1462,
+    "importMs": 687.1
   },
   {
     "entry": "delivery",
     "name": "cube.brep",
-    "displayMs": 824.1
+    "displayMs": 902.6,
+    "importMs": 584.1
   },
   {
     "entry": "delivery",
     "name": "cube-textured.glb",
-    "displayMs": 164.7
+    "displayMs": 186.1,
+    "importMs": 58.5
   },
   {
     "entry": "workspace",
     "name": "cube.glb",
-    "displayMs": 156.4
+    "displayMs": 159.3,
+    "importMs": 0.7
   },
   {
     "entry": "workspace",
     "name": "cube.stl",
-    "displayMs": 835.8
+    "displayMs": 892.8,
+    "importMs": 462.6
   },
   {
     "entry": "workspace",
     "name": "cube-ascii.stl",
-    "displayMs": 821.5
+    "displayMs": 879.6,
+    "importMs": 461.2
   },
   {
     "entry": "workspace",
     "name": "cube.step",
-    "displayMs": 835.1
+    "displayMs": 1376.8,
+    "importMs": 916.7
   },
   {
     "entry": "workspace",
     "name": "cube-inch.step",
-    "displayMs": 834.9
+    "displayMs": 1537.5,
+    "importMs": 918
   },
   {
     "entry": "workspace",
     "name": "cube.iges",
-    "displayMs": 831.1
+    "displayMs": 1461.7,
+    "importMs": 661.6
   },
   {
     "entry": "workspace",
     "name": "cube.brep",
-    "displayMs": 833.4
+    "displayMs": 900.9,
+    "importMs": 578.3
   },
   {
     "entry": "workspace",
     "name": "cube-textured.glb",
-    "displayMs": 132.6
+    "displayMs": 192.4,
+    "importMs": 2.6
   }
 ]

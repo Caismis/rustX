@@ -1,5 +1,5 @@
 /** Actual delivery/workspace presentation and source owners; deterministic source bytes. */
-import { useState, useSyncExternalStore } from 'react';
+import { Profiler, useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DeliveryCards } from '../../src/app/components/Artifact';
 import { PreviewContext } from '../../src/app/components/ArtifactPreview';
@@ -10,6 +10,7 @@ import { WorkspaceAuthority } from '../../src/workspaces/authority';
 import { WorkspaceHostError, type ProductHostWorkspaces } from '../../src/workspaces/host';
 import { localeController } from '../../src/locale/controller';
 import { applyTheme } from '../../src/app/appearance';
+import { geometryFormat } from '../../src/app/components/documents/geometry/format';
 import { Server } from '../fixture';
 import type { SessionFileReference } from '../../../protocol/app-server/v62';
 import '../../src/presentation/theme/base.css';
@@ -44,6 +45,8 @@ const host: ProductHostWorkspaces = { ...server.workspaceHost,
 };
 const authority = new WorkspaceAuthority(host); await authority.observe();
 const owner = new PreviewWorkspaceOwner(server.client, host, authority); owner.start(); owner.selectSession('A');
+const activity = { publications: 0, commits: 0 };
+owner.subscribe(() => { activity.publications++; });
 const workspaceViews = new Map(names.map(name => [name, fileTabView(undefined, () => available)]));
 const call: WorkbenchCall = Object.assign(async (request: Parameters<WorkbenchCall>[0]) => {
   if (request.kind === 'preview') return { cwd: '/workspace', preview: await source(request.path, request.read.kind === 'bytes' && !!request.read.range) };
@@ -70,7 +73,17 @@ function Fixture() {
   </PreviewContext.Provider>;
 }
 Object.assign(window, { geometryContract: {
-  reads, source: (name: string) => [...files.get(name)!.data],
+  reads, activity, source: (name: string) => [...files.get(name)!.data],
+  async measureImport(name: string) {
+    const bytes = files.get(name)!.data, format = geometryFormat(name), signal = new AbortController().signal;
+    if (format === 'glb') {
+      const { importGlb } = await import('../../src/app/components/documents/geometry/glb');
+      const start = performance.now(), result = await importGlb(bytes, signal), elapsed = performance.now() - start;
+      result.dispose(); return elapsed;
+    }
+    const { parseGeometry } = await import('../../src/app/components/documents/geometry/parse');
+    const start = performance.now(); await parseGeometry(bytes, format, signal); return performance.now() - start;
+  },
   replace(name: string, data: number[]) { files.set(name, { data: new Uint8Array(data), version: (files.get(name)?.version ?? 0) + 1 }); hints.forEach(changed => changed()); },
   grid(side: number) {
     if (!Number.isSafeInteger(side) || side < 1 || side > 350) throw new Error('Invalid benchmark size');
@@ -90,4 +103,4 @@ Object.assign(window, { geometryContract: {
   },
   snapshot: () => owner.getSnapshot().workspace?.tabs.map(tab => ({ name: tab.artifact.name, state: tab.view.geometry })),
 } });
-createRoot(document.getElementById('root')!).render(<Fixture/>);
+createRoot(document.getElementById('root')!).render(<Profiler id="geometry-fixture" onRender={() => { activity.commits++; }}><Fixture/></Profiler>);

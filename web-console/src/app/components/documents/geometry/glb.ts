@@ -1,6 +1,6 @@
 import { imageSize } from 'image-size';
 import { validateRaster } from '../../../../client/raster';
-import { LoadingManager, type Object3D, type Texture } from 'three';
+import { Box3, LoadingManager, type Object3D, type Texture } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GEOMETRY_LIMITS as L, requireGeometry as check } from './limits';
 import { disposeScene, validateScene } from './scene-resources';
@@ -170,7 +170,7 @@ export async function importGlb(bytes: Uint8Array<ArrayBuffer>, signal: AbortSig
   try {
     const loaded = await loader.parseAsync(bytes.slice().buffer, ''); scenes = loaded.scenes;
     signal.throwIfAborted(); check(!retired); validateScene(loaded.scenes);
-    return { scene: loaded.scene, scenes: loaded.scenes, dispose };
+    return { scene: loaded.scene, scenes: loaded.scenes, bounds: new Box3().setFromObject(loaded.scene), dispose };
   } catch (error) { dispose(); throw error; }
   finally { void Promise.allSettled(decodes).then(() => { for (const url of imageUrls) releaseUrl(url); glbImports--; }); }
 }

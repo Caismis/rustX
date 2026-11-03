@@ -2,16 +2,16 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { BoxGeometry, Group, Mesh, MeshStandardMaterial } from 'three';
 import GeometryPreview from '../src/app/components/documents/geometry/GeometryPreview';
-import { disposeScene } from '../src/app/components/documents/geometry/scene-resources';
+import { disposeScene, validateScene } from '../src/app/components/documents/geometry/scene-resources';
 const imports = vi.hoisted(() => ({ pending: [] as { resolve: (value: unknown) => void; reject: (reason: unknown) => void }[], mounts: [] as { fit: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; publish: (patch: unknown) => void }[] }));
 vi.mock('../src/app/components/documents/geometry/glb', () => ({ importGlb: () => new Promise((resolve, reject) => { imports.pending.push({ resolve, reject }); }) }));
 vi.mock('../src/app/components/documents/geometry/viewport', () => ({ mountGeometry: (_element: unknown, _object: unknown, _bounds: unknown, _saved: unknown, _labels: unknown, publish: (patch: unknown) => void) => {
-  const control = { fit: vi.fn(), dispose: vi.fn(), publish, select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0 }] }; imports.mounts.push(control); return control;
+  const control = { fit: vi.fn(), dispose: vi.fn(), publish, select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }] }; imports.mounts.push(control); return control;
 } }));
 afterEach(() => { cleanup(); imports.pending = []; imports.mounts = []; });
 function graph() {
   const scene = new Group(), geometry = new BoxGeometry(10, 10, 10); scene.add(new Mesh(geometry, new MeshStandardMaterial()));
-  const disposed = vi.spyOn(geometry, 'dispose'); return { value: { scene, scenes: [scene], dispose: () => disposeScene([scene]) }, disposed };
+  const disposed = vi.spyOn(geometry, 'dispose'); return { value: { scene, scenes: [scene], bounds: validateScene([scene]), dispose: () => disposeScene([scene]) }, disposed };
 }
 it('copy retirement fences an import before React unmount and disposes its late graph', async () => {
   let owned = true; const changed = vi.fn(), source = graph();

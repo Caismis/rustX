@@ -2,7 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, it, vi } from 'vitest';
-import { Frustum, Matrix4, Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Vector2 } from 'three';
+import { Frustum, Matrix4, Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Vector2, Vector3 } from 'three';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { admitGlb, importGlb } from '../src/app/components/documents/geometry/glb';
 import { importStl } from '../src/app/components/documents/geometry/stl';
 import { importCad, convertCadResult } from '../src/app/components/documents/geometry/cad';
@@ -11,6 +12,25 @@ import { viewersForPath, loadsBytes } from '../src/app/components/workbench-docu
 
 vi.mock('occt-import-js/dist/occt-import-js.wasm?url', async () => ({ default: (await import('node:url')).fileURLToPath(new URL('../node_modules/occt-import-js/dist/occt-import-js.wasm', import.meta.url)) }));
 const fixture = (name: string) => new Uint8Array(readFileSync(fileURLToPath(new URL(`./fixtures/geometry/${name}`, import.meta.url))));
+it('adopts whole STL parser buffers without copying the Worker-owned input or attributes', () => {
+  const source = fixture('cube.stl'), geometry = new STLLoader().parse(source.buffer);
+  const position = geometry.getAttribute('position').array, normal = geometry.getAttribute('normal').array;
+  const parse = vi.spyOn(STLLoader.prototype, 'parse').mockReturnValue(geometry);
+  try {
+    const model = importStl(source);
+    expect(parse.mock.calls[0][0]).toBe(source.buffer);
+    expect(model.meshes[0].positions).toBe(position); expect(model.meshes[0].normals).toBe(normal);
+  } finally { parse.mockRestore(); }
+});
+it('bounds STL group backing buffers and preserves exact input views', () => {
+  const source = fixture('cube.stl'), padded = new Uint8Array(source.length + 64); padded.fill(255); padded.set(source, 32);
+  const model = importStl(padded.subarray(32, 32 + source.length)); expect(model.meshes[0].positions.length).toBe(108);
+  const text = new TextDecoder().decode(fixture('cube-ascii.stl'));
+  const grouped = importStl(new TextEncoder().encode(text + text.replaceAll('cube', 'second')));
+  expect(grouped.meshes).toHaveLength(2);
+  for (const mesh of grouped.meshes) { expect(mesh.positions.byteLength).toBe(432); expect(mesh.positions.buffer.byteLength).toBe(mesh.positions.byteLength); }
+  expect(grouped.meshes[0].positions.buffer).not.toBe(grouped.meshes[1].positions.buffer);
+});
 it.each(['      ', '\n\t        ', 'uppercase'])('ASCII STL admission and loading agree with prefix %j without excessive allocation', prefix => {
   const source = new TextDecoder().decode(fixture('cube-ascii.stl')).replaceAll('cube', 'MixedCasePart');
   const text = prefix === 'uppercase' ? source.replace(/^(solid|endsolid|facet normal|outer loop|vertex|endloop|endfacet)\b/gm, token => token.toUpperCase()) : prefix + source;
@@ -34,9 +54,9 @@ it.each(['GLB', 'stl', 'STP', 'step', 'IGES', 'igs', 'BREP'])('registers %s as a
   expect(viewersForPath(`part.${extension}`)).toEqual(['geometry']); expect(loadsBytes('geometry')).toBe(true);
 });
 it.each(['cube.stl', 'cube-ascii.stl'])('imports the analytic cube from %s with outward normals and preserved scale', name => {
-  const model = importStl(fixture(name)), object = modelScene(model);
+  const model = importStl(fixture(name)), admitted = modelScene(model), object = admitted.scene;
   try {
-    const bounds = validateScene([object]); expect(bounds.min.toArray()).toEqual([0, 0, 0]); expect(bounds.max.toArray()).toEqual([10, 10, 10]);
+    const bounds = admitted.bounds; expect(bounds.min.toArray()).toEqual([0, 0, 0]); expect(bounds.max.toArray()).toEqual([10, 10, 10]);
     expect(model.meshes[0].positions.length).toBe(108);
     const { positions, normals } = model.meshes[0];
     for (let at = 0; at < positions.length; at += 9) {
@@ -47,15 +67,28 @@ it.each(['cube.stl', 'cube-ascii.stl'])('imports the analytic cube from %s with 
   } finally { disposeScene([object]); }
 });
 it.each([['cube.step', 'step'], ['cube-inch.step', 'step'], ['cube.iges', 'iges'], ['cube.brep', 'brep']] as const)('imports %s against the independent analytic 10-unit reference', async (name, format) => {
-  const model = await importCad(fixture(name), format), object = modelScene(model);
-  try { const bounds = validateScene([object]); bounds.min.toArray().forEach(value => expect(value).toBeCloseTo(0, 5)); bounds.max.toArray().forEach(value => expect(value).toBeCloseTo(10, 5)); }
+  const model = await importCad(fixture(name), format), admitted = modelScene(model), object = admitted.scene;
+  try { const bounds = admitted.bounds; bounds.min.toArray().forEach(value => expect(value).toBeCloseTo(0, 5)); bounds.max.toArray().forEach(value => expect(value).toBeCloseTo(10, 5)); }
   finally { disposeScene([object]); }
+}, 30_000);
+it.each(['step', 'glb'] as const)('imports the named twelve-part product assembly from %s with correct units', async format => {
+  const bytes = fixture(`mounting-bracket.${format}`);
+  const loaded = format === 'glb' ? await importGlb(bytes, new AbortController().signal) : undefined;
+  const object = loaded?.scene ?? modelScene(await importCad(bytes, 'step')).scene;
+  try {
+    const unit = format === 'glb' ? 0.001 : 1, bounds = validateScene([object]), names: string[] = [];
+    bounds.min.toArray().forEach((value, index) => expect(value).toBeCloseTo([-60, 0, -40][index] * unit, 5));
+    bounds.max.toArray().forEach((value, index) => expect(value).toBeCloseTo([60, 72, 40][index] * unit, 5));
+    let meshes = 0;
+    object.traverse(part => { names.push(part.userData.name ?? part.name); if (part instanceof Mesh) meshes++; });
+    expect(meshes).toBe(12); expect(names).toContain('Mounting bracket'); expect(names).toContain('Base plate'); expect(names).toContain('Bolt 4');
+  } finally { if (loaded) loaded.dispose(); else disposeScene([object]); }
 }, 30_000);
 it('imports GLB hierarchy, color and translated coordinates', async () => {
   const bytes = modifyGlb(json => { json.nodes[0].translation = [5, 6, 7]; });
   const loaded = await importGlb(bytes, new AbortController().signal);
   try {
-    const bounds = validateScene([loaded.scene]); expect(bounds.min.toArray()).toEqual([5, 6, 7]); expect(bounds.max.toArray()).toEqual([15, 16, 17]);
+    const bounds = loaded.bounds; expect(bounds.min.toArray()).toEqual([5, 6, 7]); expect(bounds.max.toArray()).toEqual([15, 16, 17]);
     expect(loaded.scene.getObjectByName('Cube_assembly')).toBeDefined();
     const mesh = loaded.scene.getObjectByName('Analytic_cube'); expect(mesh).toBeInstanceOf(Mesh);
     expect((mesh as Mesh).material).toBeInstanceOf(MeshStandardMaterial);
@@ -80,10 +113,17 @@ it('preserves ASCII solid names and separate selectable geometry', () => {
 });
 it('preserves CAD hierarchy, base colors and face-color ranges', () => {
   const model = convertCadResult({ success: true, root: { name: 'Assembly', meshes: [], children: [{ name: 'Part', meshes: [0], children: [] }] }, meshes: [{ name: 'Body', color: [1, 0, 0], attributes: { position: { array: [0,0,0, 1,0,0, 0,1,0] } }, index: { array: [0,1,2] }, brep_faces: [{ first: 0, last: 0, color: [0,0,1] }] }] });
-  const object = modelScene(model);
+  const object = modelScene(model).scene;
   try { expect(object.getObjectByName('Assembly')).toBeDefined(); expect(object.getObjectByName('Part')).toBeDefined(); expect(model.meshes[0].color).toEqual([1,0,0]); expect(model.meshes[0].groups).toEqual([{ start: 0, count: 3, color: [0,0,1] }]); }
   finally { disposeScene([object]); }
 });
+it('admits the 96-part CAD assembly within the existing geometry budgets', async () => {
+  const model = await importCad(fixture('bracket-array.step'), 'step'), admitted = modelScene(model);
+  try {
+    expect(admitted.bounds.getSize(new Vector3()).toArray()).toEqual([570, 72, 190]);
+    let meshes = 0; admitted.scene.traverse(part => { if (part instanceof Mesh) meshes++; }); expect(meshes).toBe(96);
+  } finally { disposeScene([admitted.scene]); }
+}, 30_000);
 it.each(['https://example.com/private.bin', '../private.bin', '/product-host/file-read', 'file:///private.bin', 'blob:model-url', 'data:image/svg+xml;base64,PHN2Zz4='])('rejects model-directed resource %s before any loader runs', uri => {
   expect(() => admitGlb(modifyGlb(json => { json.buffers[0].uri = uri; }))).toThrowError('external');
 });

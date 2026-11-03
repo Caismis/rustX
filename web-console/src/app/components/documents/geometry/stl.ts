@@ -26,15 +26,22 @@ export function importStl(bytes: Uint8Array<ArrayBuffer>): GeometryModel {
     input = new TextEncoder().encode(normalized); check(input.length >= 84);
     expectedVertices = vertices;
   }
-  const geometry = new STLLoader().parse(input.slice().buffer);
+  const buffer = input.byteOffset === 0 && input.byteLength === input.buffer.byteLength ? input.buffer : input.slice().buffer;
+  const geometry = new STLLoader().parse(buffer);
   try {
     const positions = geometry.getAttribute('position'), normals = geometry.getAttribute('normal'), colors = geometry.getAttribute('color');
     check(positions.count === expectedVertices);
     const groups = geometry.groups.length ? geometry.groups : [{ start: 0, count: positions.count }];
     check(groups.length <= L.parts, 'limit');
+    const pack = (values: typeof positions.array, start: number, end: number) => {
+      // Whole parser-owned arrays can transfer directly. Groups get one exact,
+      // independently accounted backing buffer instead of retaining a subview.
+      if (values instanceof Float32Array && start === 0 && end === values.length && values.byteOffset === 0 && values.byteLength === values.buffer.byteLength) return values;
+      return Float32Array.from(values.subarray(start, end));
+    };
     const meshes = groups.map((group, index) => {
       const start = group.start * 3, end = start + group.count * 3, label: unknown = geometry.userData.groupNames?.[index];
-      return { name: typeof label === 'string' ? label.trim().slice(0, 256) : '', positions: new Float32Array(positions.array.slice(start, end)), normals: new Float32Array(normals.array.slice(start, end)), colors: colors ? new Float32Array(colors.array.slice(start, end)) : undefined, groups: [] };
+      return { name: typeof label === 'string' ? label.trim().slice(0, 256) : '', positions: pack(positions.array, start, end), normals: pack(normals.array, start, end), colors: colors ? pack(colors.array, start, end) : undefined, groups: [] };
     });
     const model: GeometryModel = { meshes, root: { name: '', meshes: meshes.map((_, index) => index), children: [] } };
     validateModel(model); return model;

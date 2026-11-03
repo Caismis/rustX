@@ -1,46 +1,13 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { writeFileSync } from 'node:fs';
+import { instrument, resources } from './geometry-observation';
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 const names = ['cube.glb', 'cube.stl', 'cube-ascii.stl', 'cube.step', 'cube-inch.step', 'cube.iges', 'cube.brep', 'cube-textured.glb'];
 // Playwright's native forwarding keeps fixture URLs on the test runner even
 // when the pinned browser runs behind Docker Desktop's separate network.
 test.use({ connectOptions: { wsEndpoint: process.env.RUSTX_BROWSER_WS_ENDPOINT ?? '', exposeNetwork: '<loopback>' } });
 
-async function instrument(page: Page) {
-  await page.addInitScript(() => {
-    const counts = { workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 };
-    const owned = { buffers: new Map<unknown, unknown>(), textures: new Map<unknown, unknown>() };
-    const NativeWorker = window.Worker;
-    window.Worker = class extends NativeWorker {
-      private live = true;
-      constructor(url: string | URL, options?: WorkerOptions) { super(url, options); counts.workers++; }
-      terminate() { if (this.live) { this.live = false; counts.workers--; } super.terminate(); }
-    };
-    const getContext = HTMLCanvasElement.prototype.getContext;
-    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { value: function (this: HTMLCanvasElement, ...args: unknown[]) {
-      const value = Reflect.apply(getContext, this, args);
-      if (value && args[0] === 'webgl2' && !this.dataset.countedGeometryContext) { this.dataset.countedGeometryContext = 'true'; counts.contexts++; this.addEventListener('webglcontextlost', () => {
-        counts.contexts--;
-        // Context loss releases Three.js's internal fallback textures as well
-        // as objects already explicitly deleted during renderer disposal.
-        for (const key of ['buffers', 'textures'] as const) for (const [item, context] of owned[key]) if (context === value) { owned[key].delete(item); counts[key]--; }
-      }, { once: true }); }
-      return value;
-    } });
-    for (const [create, remove, key] of [['createBuffer', 'deleteBuffer', 'buffers'], ['createTexture', 'deleteTexture', 'textures']] as const) {
-      const live = owned[key], prototype = WebGL2RenderingContext.prototype;
-      const originalCreate = prototype[create], originalRemove = prototype[remove];
-      Object.defineProperty(prototype, create, { value: function (...args: unknown[]) { const value = Reflect.apply(originalCreate, this, args); if (value) { live.set(value, this); counts[key]++; } return value; } });
-      Object.defineProperty(prototype, remove, { value: function (...args: unknown[]) { if (live.delete(args[0])) counts[key]--; return Reflect.apply(originalRemove, this, args); } });
-    }
-    const createUrl = URL.createObjectURL, revokeUrl = URL.revokeObjectURL, urls = new Set<string>();
-    URL.createObjectURL = value => { const url = createUrl(value); urls.add(url); counts.urls++; return url; };
-    URL.revokeObjectURL = url => { if (urls.delete(url)) counts.urls--; revokeUrl(url); };
-    Object.assign(window, { geometryResources: counts });
-  });
-}
-const resources = (page: Page) => page.evaluate(() => ({ ...(window as any).geometryResources }));
 const ready = (page: Page) => expect(page.locator('[data-geometry-format]')).toContainText('10 × 10 × 10', { timeout: 20_000 });
 async function openDelivery(page: Page, name: string) { await page.getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).click(); await ready(page); }
 function measuredDuration(value: number) {
@@ -50,7 +17,8 @@ function measuredDuration(value: number) {
 const elapsed = (start: number) => measuredDuration(performance.now() - start);
 
 test('all geometry formats render through actual delivery and Workspace entry points', async ({ page }, info) => {
-  await instrument(page); const errors: string[] = [], timings: { entry: string; name: string; displayMs: number }[] = [];
+  await instrument(page); const errors: string[] = [], timings: { entry: string; name: string; displayMs: number; importMs: number }[] = [];
+  let navigations = 0; page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations++; });
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${origin}/test/fixtures/geometry.html`);
   await page.getByRole('button', { name: 'Show all 8 delivered files', exact: true }).click();
@@ -58,7 +26,8 @@ test('all geometry formats render through actual delivery and Workspace entry po
     const start = performance.now();
     if (entry === 'delivery') await openDelivery(page, name);
     else { await page.getByRole('button', { name: `Workspace ${name}`, exact: true }).click(); await ready(page); }
-    timings.push({ entry, name, displayMs: elapsed(start) });
+    const displayMs = elapsed(start), importMs = measuredDuration(await page.evaluate(name => (window as any).geometryContract.measureImport(name), name));
+    timings.push({ entry, name, displayMs, importMs });
     if (entry === 'delivery') expect(await page.evaluate(name => (window as any).geometryContract.snapshot().find((item: any) => item.name === name).state.camera.up, name)).toEqual([0, 1, 0]);
     await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(1);
     await expect.poll(async () => (await resources(page)).workers).toBe(0);
@@ -67,7 +36,7 @@ test('all geometry formats render through actual delivery and Workspace entry po
   await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('cad-preview.png') });
   writeFileSync(info.outputPath('format-display-timings.json'), JSON.stringify(timings, null, 2));
   await info.attach('format-display-timings', { body: JSON.stringify(timings, null, 2), contentType: 'application/json' });
-  expect(errors).toEqual([]);
+  expect(errors).toEqual([]); expect(navigations).toBe(1);
 });
 
 test('production startup defers geometry and the STL envelope remains responsive', async ({ page }, info) => {
@@ -85,7 +54,19 @@ test('production startup defers geometry and the STL envelope remains responsive
   const start = performance.now(); await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click();
   await expect(page.locator('[data-geometry-format]')).toContainText('350 × 350 × 0', { timeout: 20_000 });
   const measurement = { triangles: 245000, vertices: 735000, sourceBytes: 12250084, displayMs: elapsed(start),
-    observedFrameGapMs: measuredDuration(await page.evaluate(() => Math.max(...(window as any).geometryFrameDelays))), resources: await resources(page) };
+    observedFrameGapMs: measuredDuration(await page.evaluate(() => Math.max(...(window as any).geometryFrameDelays))), resources: await resources(page),
+    browser: await page.locator('[data-geometry-format] canvas').evaluate((canvas: HTMLCanvasElement) => {
+      const context = canvas.getContext('webgl2')!, debug = context.getExtension('WEBGL_debug_renderer_info');
+      return { userAgent: navigator.userAgent, renderer: context.getParameter(debug?.UNMASKED_RENDERER_WEBGL ?? context.RENDERER), vendor: context.getParameter(debug?.UNMASKED_VENDOR_WEBGL ?? context.VENDOR), version: context.getParameter(context.VERSION), devicePixelRatio };
+    }),
+    idleDrawCalls: 0 };
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  measurement.idleDrawCalls = await page.evaluate(async () => {
+    const counter = (window as any).geometryDrawCalls, start = counter.calls;
+    // A defined one-second sampling window, after first paint, measures demand rendering.
+    await new Promise(resolve => setTimeout(resolve, 1000)); return counter.calls - start;
+  });
+  expect(measurement.idleDrawCalls).toBe(0);
   expect(runtime.filter(url => /cad-worker|occt-import-js/.test(url))).toEqual([]);
   await page.getByRole('button', { name: 'Fit view', exact: true }).click();
   await page.getByRole('button', { name: 'Close preview cube.stl', exact: true }).click();
@@ -112,6 +93,7 @@ test('fixed copies survive source changes and hide/show; Refresh and original Do
 
 test('selection, visibility, keyboard views, split/fullscreen and narrow localized layouts preserve ownership', async ({ page }, info) => {
   await instrument(page); await page.goto(`${origin}/test/fixtures/geometry.html`); await openDelivery(page, 'cube.glb');
+  await page.getByRole('button', { name: /^Parts/ }).click();
   const part = page.getByRole('list', { name: 'Parts', exact: true }).getByRole('button').last(); await part.click(); await expect(part).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: 'View angle', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Front', exact: true }).focus(); await page.keyboard.press('Enter');

@@ -29,3 +29,22 @@ uv run --no-project --with cadquery-ocp-novtk==7.9.3.1.1 python web-console/test
 Python and the native exporter are test-authoring tools only. Runtime previews
 use the locally packaged browser assets. STEP exporter header timestamps can
 differ on regeneration; tests assert geometry and unit semantics.
+
+## Product sidebar assembly
+
+`mounting-bracket.step` and `mounting-bracket.glb` are original, named and colored
+12-part assemblies: a drilled base plate, an upright with a circular opening,
+two gussets, four washers and four bolts. Their Y-up bounds are
+`120 × 72 × 80 mm`; the GLB stores the same coordinates in meters. The STEP uses
+XCAF assembly labels and colors. The GLB uses independently exported OCCT
+triangles and PBR materials. Both exercise the actual production sidebar with
+the native App Server, committed delivery, Workbench, part hierarchy and
+mixed Markdown/model tabs.
+
+`bracket-array.step` repeats the same assembly eight times as 96 parts, with
+analytic bounds `570 × 72 × 190 mm`. It exercises repeated imports, camera input,
+picking and the shared two-body resource budget under the unchanged CAD settings.
+
+```sh
+uv run --no-project --with cadquery-ocp-novtk==7.9.3.1.1 python web-console/test/fixtures/geometry/generate-showcase.py
+```

@@ -119,7 +119,7 @@ export function WorkspaceFile({ path, call, view, onOpen }: { path: string; call
   return <section className={css.root} data-workbench-file={path}>
     <div className={css.header}><PathLabel path={fullPath} className={css.path}/>{viewersForPath(path).length > 1 && <Menu open={menu} onClose={() => setMenu(false)} align="end" dense autoFocus selectedId={mode} items={viewersForPath(path).map(id => ({ id, label: tx(`artifacts:workbench.${id}`) }))} onSelect={id => { view.mode = id as Viewer; setMode(view.mode); setMenu(false); }} anchor={<button type="button" className={`${css.tool} ${css.viewer}`} aria-label={tx('artifacts:workbench.viewer')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>{tx(`artifacts:workbench.${mode}`)}</button>}/>}<button hidden={mode !== 'text' && mode !== 'code'} type="button" className={css.tool} aria-label={tx('artifacts:artifact-preview.wrap-lines')} aria-pressed={wrap} title={tx('artifacts:artifact-preview.wrap-lines')} onClick={() => { view.wrap = !wrap; setWrap(!wrap); }}><IconWrapLinesOutline16/></button><Reload reload={() => owner.refresh()}/><OpenFileApp call={call} path={path} directory={false}/></div>
     {failure !== undefined && <div className={css.note} role="alert"><p>{tx(`artifacts:document.${failure}`)}</p>{!['source_missing','source_unavailable','authorization_revoked','obsolete'].includes(failure) && !(failure === 'too_large' && value.text === undefined) && <Button onClick={() => owner.retry()}>{tx('artifacts:artifact-preview.retry-preview')}</Button>}</div>}
-    {!owner.automaticRefresh && <p className={css.note} role="note">{tx(mode === 'geometry' ? 'artifacts:document.fixed-copy' : 'artifacts:document.manual-refresh')}</p>}
+    {mode !== 'geometry' && !owner.automaticRefresh && <p className={css.note} role="note">{tx('artifacts:document.manual-refresh')}</p>}
     {value.text === '' && value.page?.eof && <p className={css.note}>{tx('artifacts:document.empty')}</p>}
     {!mode ? <p className={css.note}>{tx('artifacts:artifact-preview.this-artifact-has-no-supported-inline-viewer')}</p> : !loaded ? error === undefined && <p className={css.note} role="status">{tx('artifacts:workbench.loading')}</p> : mode !== 'text' && mode !== 'code' ? <div ref={scroll} className={css.document} onScroll={reading.onScroll}><DocumentBody key={mode} call={call} onOpen={onOpen} mode={mode} text={value.text ?? ''} bytes={bytes} path={path} view={view} signal={lifetime.signal} retry={() => owner.retry()}/>{more}</div> : mode === 'code' ? <div className={css.renderer} data-wrap={wrap}><CodeBlock className={css.code} contentRef={scroll} code={value.text ?? ''} lang={languageForPath(path)} lineNumbers copyLabel={tx('common:search-block.copy')} copiedLabel={tx('common:search-block.copied')} toolbarLabel={tx('artifacts:workbench.code')}/>{more}</div> : <div ref={scroll} className={css.plainText} data-wrap={wrap} onScroll={event => {
       const node = event.currentTarget; reading.onScroll(event);
@@ -134,7 +134,8 @@ function OpenFileApp({ call, path, directory }: { call: WorkbenchCall; path: str
   useEffect(() => { live.current = true; const abort = new AbortController(); void call({ kind: 'applications' }, abort.signal).then(result => {
     if (!abort.signal.aborted) setApps(result.applications?.available ? result.applications.applications.filter(app => app.id !== 'terminal') : []);
   }, cause => { if (!abort.signal.aborted) setError(String(cause)); }); return () => { live.current = false; abort.abort(); }; }, [call]);
-  const app = apps.find(app => app.id === selected) ?? apps.find(app => app.id === (directory ? 'files' : 'code')) ?? apps[0];
+  const app = apps.find(app => app.id === selected) ?? apps.find(app => app.id === 'files');
+  const label = app?.id === 'code' ? tx('artifacts:workbench.open-with', { p0: app.label }) : tx(directory ? 'agent:desktop.open' : 'artifacts:workbench.open-file-location');
   const launch = async (id = app?.id) => {
     if (!id || id === 'terminal' || pending.current) return;
     pending.current = true; setBusy(true); setError('');
@@ -144,7 +145,7 @@ function OpenFileApp({ call, path, directory }: { call: WorkbenchCall; path: str
   };
   return <div className={css.openApp}>
     <Menu open={menu} onClose={() => setMenu(false)} align="end" dense autoFocus items={apps.map(a => ({ id: a.id, label: a.label }))} selectedId={app?.id} onSelect={id => { setSelected(id); setMenu(false); void launch(id as 'files' | 'code'); }} anchor={<div className={css.split}>
-      <button type="button" disabled={!app || busy} aria-label={tx('agent:desktop.open')} title={app?.label ?? tx('agent:desktop.applications')} onClick={() => void launch()}>{app?.id === 'code' ? <IconCodeOutline16/> : <IconFolderOpenOutline16/>}</button><button type="button" disabled={!apps.length || busy} aria-label={tx('agent:desktop.choose')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><IconChevronDownOutline14 size={10}/></button>
+      <button type="button" disabled={!app || busy} aria-label={label} title={label} onClick={() => void launch()}>{app?.id === 'code' ? <IconCodeOutline16/> : <IconFolderOpenOutline16/>}</button><button type="button" disabled={!apps.length || busy} aria-label={tx(directory ? 'agent:desktop.choose' : 'artifacts:workbench.choose-application')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><IconChevronDownOutline14 size={10}/></button>
     </div>}/>{error && <span role="alert" className={css.launchError}>{error}</span>}
   </div>;
 }

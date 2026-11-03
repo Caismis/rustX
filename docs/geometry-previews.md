@@ -24,6 +24,8 @@ normalization and unitless BREP/STL behavior.
 
 One scene implementation supplies orbit/pan/zoom, fit, isometric and six standard
 views, an orientation axis indicator, part selection/highlighting and visibility.
+Fit recenters the model without changing the chosen viewing direction; the
+view-angle menu explicitly chooses a standard direction.
 Camera fitting centers a presentation-only parent; original geometry and its
 physical scale remain intact. Bounds are recomputed from admitted coordinates,
 rather than trusting GLB accessor bounds. Culling/raycast spheres are recomputed
@@ -32,10 +34,24 @@ and hidden IDs are bounded inert occurrence metadata tied to a content copy.
 Hiding a selected part also hides its selection outline.
 Changing or restoring the up axis recreates OrbitControls through its public
 lifecycle so orbit gestures use that axis and old listeners are released.
-The controls reuse the DSH floating zoom toolbar stylesheet, shared Button/Menu
-primitives and existing theme tokens. Standard views live in one view-angle menu.
-Product copy follows the existing concise preview vocabulary, and fixed-copy
-previews show a refresh hint rather than claiming file notifications are missing.
+Both entry points mount inside the existing document sidebar, retaining its tabs,
+path header, source actions, split/fullscreen behavior and content ownership.
+The geometry body fills the remaining height without a fixed minimum or a second
+outer scroll area. The compact left operator bar shares its presentation module
+with the Workflow canvas. Its fit, view-angle and parts controls use DSH tokens,
+tooltips and the existing menu facilities.
+
+The part tree is an overlay inside the viewport, closed by default, with initially
+collapsed branches. It supports selection and visibility through the same scene
+owner. Its bounded list scrolls independently; Escape closes it and returns focus
+to its trigger. Format, dimensions and units occupy a compact footer. There is no
+permanent Refresh explanation; the existing document-header action remains.
+All product text is localized in the project's concise English/Chinese style.
+
+PBR materials use bounded, fixed studio lighting: a hemisphere light and two
+off-axis directional lights, with neutral tone mapping. No environment-map asset
+or synchronous environment prefiltering is needed. Source materials, geometry and
+coordinates are retained; the lighting belongs to the visible scene.
 
 GLB supports core static triangle meshes and `KHR_materials_unlit`,
 `KHR_texture_transform`, `KHR_materials_ior`, and
@@ -71,8 +87,12 @@ replacement's controls. Camera/part metadata is fenced by copy ID, including a
 Refresh that returns the same source version.
 
 Delivery Download independently reads the currently authorized original. It may
-therefore differ from an older displayed copy. Workbench retains its existing
-source actions; a Workspace path is never converted into a delivery coordinate.
+therefore differ from an older displayed copy. Workbench's existing split action
+defaults to opening the file location through the Host's admitted `files` action.
+The adjacent application chooser remains available for an explicit alternative;
+the chosen application's name labels subsequent opens. A missing file manager
+does not silently select an editor. A Workspace path is never converted into a
+delivery coordinate.
 Viewer rejection preserves applicable source actions under their original byte
 limits. It does not grant a download above the 32-MiB complete-read limit.
 
@@ -97,6 +117,7 @@ The following are per visible body unless stated otherwise:
 | Textures / dimension / aggregate source-image pixels | 8 / 2,048 per side / 8,388,608 pixels |
 | Coordinate / matrix magnitude | Finite, absolute value at most 1e12; resulting world bounds are checked too |
 | Canvas backing pixels / CSS dimension / pixel ratio | 4,194,304 / 4,096 per side / at most 2, reduced to fit the pixel budget |
+| Viewer lighting | One hemisphere and two directional lights per body; no environment render targets or shadow maps |
 | STL/CAD Worker deadline | 15 seconds, parent-owned, includes initialization |
 | CAD WASM linear-memory maximum | 2 GiB, verified in both the shipped binary declaration and glue |
 | Aggregate renderer contexts / import Workers | 2 / 2, additionally restricted by existing visible-body ownership |
@@ -135,7 +156,8 @@ cannot be preempted by a timer. Measurements must describe these distinctions.
 
 Idle scenes have no continuous animation loop. Close, hide, supersession and
 authority retirement dispose controls/listeners, geometry, materials, textures,
-image bitmaps, axes/highlight resources and the renderer, then lose the context.
+image bitmaps, axes/highlight resources and the renderer,
+then lose the context.
 Context loss releases Three.js's internal fallback textures as well. A stale
 completion also disposes its unmounted graph. Native read admission continues to
 follow physical settlement independently of browser cancellation.
