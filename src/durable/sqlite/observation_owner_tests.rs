@@ -58,7 +58,7 @@ fn owner_completed_view(
     member_source_page(store, cut)
         .entries
         .into_iter()
-        .find_map(|entry| entry.completed_response)
+        .find_map(|entry| entry.completed_response.clone())
         .unwrap()
 }
 #[test]

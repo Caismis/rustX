@@ -47,18 +47,8 @@ fn baseline_encode(
     path.forced = draft.replacement;
     let metadata = ProjectionMetadata {
         read_cut: checkpoint.read_cut.clone(),
-        collections: checkpoint
-            .collections
-            .clone()
-            .into_iter()
-            .map(Into::into)
-            .collect(),
-        content: checkpoint
-            .content
-            .clone()
-            .into_iter()
-            .map(Into::into)
-            .collect(),
+        collections: checkpoint.collections.clone(),
+        content: checkpoint.content.clone(),
     };
     let mut event = RuntimeClientEvent::ProjectionTransition {
         events: draft.events,
@@ -523,13 +513,8 @@ fn assembled_publication_budget_is_conservative_at_all_admission_boundaries() {
         let owned = captured.materialize();
         let metadata = ProjectionMetadata {
             read_cut: owned.read_cut.clone(),
-            collections: owned
-                .collections
-                .clone()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            content: owned.content.clone().into_iter().map(Into::into).collect(),
+            collections: owned.collections.clone(),
+            content: owned.content.clone(),
         };
         let mut inner = owned;
         inner.content.clear();

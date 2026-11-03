@@ -149,7 +149,7 @@ fn transcript_capture_seed() -> CheckpointSeed {
                 tool_calls: Vec::new(),
             },
         )
-        .collect::<Vec<_>>().into();
+        .map(std::sync::Arc::new).collect::<Vec<_>>().into();
     seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
     seed.transcript_head = checkpoint::PreparedTranscriptHead::from_entries(
         &seed.snapshot.conversation_id,
@@ -260,7 +260,7 @@ fn incremental_transcript_statistics_and_deferred_rows_have_independent_admissio
         compare_original(seed);
     }
     let changed = change_transcript_seed(&original, |seed| {
-        seed.snapshot.transcript.entries[0].response_pending = true;
+        std::sync::Arc::make_mut(&mut seed.snapshot.transcript.entries[0]).response_pending = true;
     });
     assert!(
         !changed
@@ -329,7 +329,7 @@ fn incremental_transcript_row_ownership_keeps_opaque_json_encoding_exact() {
         ),
         (serde_json::json!(0), serde_json::json!(u64::MAX)),
     ] {
-        original.snapshot.transcript.entries[0].item = argument(before);
+        std::sync::Arc::make_mut(&mut original.snapshot.transcript.entries[0]).item = argument(before);
         original.prepared = super::super::prepared_capture::PreparedCaptures::default();
         original.transcript_head = checkpoint::PreparedTranscriptHead::from_entries(
             &original.snapshot.conversation_id,
@@ -337,7 +337,7 @@ fn incremental_transcript_row_ownership_keeps_opaque_json_encoding_exact() {
         );
         original.checkpoint_candidate().unwrap();
         let changed = change_transcript_seed(&original, |seed| {
-            seed.snapshot.transcript.entries[0].item = argument(after);
+            std::sync::Arc::make_mut(&mut seed.snapshot.transcript.entries[0]).item = argument(after);
         });
         assert!(
             !changed
@@ -347,4 +347,25 @@ fn incremental_transcript_row_ownership_keeps_opaque_json_encoding_exact() {
         compare_original(&changed);
         compare_original(&original);
     }
+}
+
+#[test]
+fn checkpoint_descriptor_and_metadata_rows_keep_the_admitted_owner() {
+    let (mut projection, store) = initialized_source_projection();
+    let receipt = store.append_canonical(&compactable_user("shared-checkpoint-row")).unwrap();
+    publish_source_fact(&mut projection, |projection| {
+        projection.apply(ConversationObservation::CanonicalCommitted { attempt_id: None, receipt });
+    });
+    let seed = projection.checkpoint_seed();
+    let first = seed.checkpoint_prepared().unwrap().0;
+    let frozen = serde_json::to_vec(&first).unwrap();
+    let mut later = seed.checkpoint_prepared().unwrap().0;
+    assert!(!first.snapshot.message_descriptors.is_empty());
+    assert!(std::sync::Arc::ptr_eq(&first.snapshot.message_descriptors[0], &later.snapshot.message_descriptors[0]));
+    assert_eq!(first.content.len(), later.content.len());
+    assert!(first.content.iter().zip(&later.content).all(|(left,right)| left.same_owner(right)));
+    assert!(first.collections.iter().zip(&later.collections).all(|(left,right)| left.same_owner(right)));
+    if let Some(frontier) = later.collections.first_mut() { frontier.loaded = 0; }
+    std::sync::Arc::make_mut(&mut later.snapshot.message_descriptors[0]).role = "changed".into();
+    assert_eq!(serde_json::to_vec(&first).unwrap(), frozen);
 }

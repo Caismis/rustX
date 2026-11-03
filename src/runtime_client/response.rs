@@ -289,6 +289,7 @@ pub(crate) fn decorate_window(
 #[cfg(test)]
 fn clear_response_readings(page: &mut RuntimeClientTranscriptPage) {
     for entry in &mut page.entries {
+        let entry = std::sync::Arc::make_mut(entry);
         entry.completed_response = None;
         entry.turn_process = None;
         entry.response_pending = false;
@@ -337,6 +338,7 @@ fn decorate_projection(
         models,
     } = project(store, &wanted, &terminal_attempts, through, scopes)?;
     for entry in &mut page.entries {
+        let entry = std::sync::Arc::make_mut(entry);
         if let RuntimeClientTranscriptItem::AttemptTerminal { turn } = &mut entry.item {
             if turn.conversation_id == *store.conversation_id()
                 && let Some(owner) = turn
@@ -475,6 +477,7 @@ pub(crate) fn apply_page_items<'a>(
 ) -> Result<(), ConversationStoreError> {
     validate_decoration_cut(page, through)?;
     for entry in &mut page.entries {
+        let entry = std::sync::Arc::make_mut(entry);
         let facts = items.next().expect("one result per bounded selection");
         if let RuntimeClientTranscriptItem::AttemptTerminal { turn } = &mut entry.item
             && let Some(owner) = &facts.process
@@ -595,6 +598,7 @@ fn decorate_numeric_legacy(
         ));
     }
     for entry in &mut page.entries {
+        let entry = std::sync::Arc::make_mut(entry);
         let process = store.observation_transcript_process(&cut, entry.cursor.get())?;
         if let RuntimeClientTranscriptItem::AttemptTerminal { turn } = &mut entry.item
             && let Some(owner) = &process

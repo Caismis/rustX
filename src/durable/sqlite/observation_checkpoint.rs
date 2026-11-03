@@ -35,7 +35,7 @@ pub(super) fn read(
     let occupancy = super::observation_occupancy::read(connection, through)?;
     let trace_total = super::observation_statistics::trace_total(connection, through)?;
     let projection_head = super::observation_projection::read(connection, through)?;
-    let transcript_rows = transcript
+    let transcript_rows: Vec<_> = transcript
         .entries
         .iter()
         .zip(&facts.items)
@@ -47,6 +47,11 @@ pub(super) fn read(
             response_owner.transcript_row(conversation, entry, header, response.owner.as_ref())
         })
         .collect::<Result<_, _>>()?;
+    transcript.entries = transcript_rows
+        .iter()
+        .map(crate::runtime_client::checkpoint::PreparedTranscriptRow::native_entry)
+        .collect::<Vec<_>>()
+        .into();
     Ok(CheckpointHead {
         transcript,
         transcript_rows,

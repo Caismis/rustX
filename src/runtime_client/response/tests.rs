@@ -524,7 +524,7 @@ fn published_read_cut_does_not_observe_a_later_completion() {
     finish(&store, "a");
     let mut old = page(&store, None, 64);
     for entry in &mut old.entries {
-        entry.completed_response = None;
+        std::sync::Arc::make_mut(entry).completed_response = None;
     }
     native_oracle_decorate_through(&store, &mut old, through).unwrap();
     assert!(tails(&old).is_empty());

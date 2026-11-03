@@ -186,7 +186,6 @@ impl From<RuntimeClientSnapshot> for SharedSnapshot {
             messages: messages.into(),
             message_descriptors: message_descriptors
                 .into_iter()
-                .map(Arc::new)
                 .collect::<RuntimeClientMessageDescriptorHead>()
                 .into(),
             publication_settlements: publication_settlements.into(),
@@ -222,11 +221,7 @@ impl SharedSnapshot {
             configuration_adoption_eligibility: self.configuration_adoption_eligibility.clone(),
             durability_failure: self.durability_failure.owned(),
             messages: self.messages.owned(),
-            message_descriptors: self
-                .message_descriptors
-                .iter()
-                .map(|row| row.as_ref().clone())
-                .collect(),
+            message_descriptors: self.message_descriptors.iter().cloned().collect(),
             publication_settlements: self.publication_settlements.owned(),
             transcript: self.transcript.owned(),
             trace: self.trace.owned(),
@@ -261,7 +256,7 @@ impl PartialEq<SharedSnapshot> for RuntimeClientSnapshot {
             && self
                 .message_descriptors
                 .iter()
-                .eq(other.message_descriptors.iter().map(Arc::as_ref))
+                .eq(other.message_descriptors.iter())
             && self.publication_settlements == *other.publication_settlements
             && other.transcript == self.transcript
             && other.trace == self.trace
@@ -301,7 +296,7 @@ pub(crate) struct SharedTranscript {
     pub(crate) inherited_through: Option<RuntimeClientTranscriptCursor>,
     pub(crate) statistics: CowDomain<Option<super::super::response::ConversationStatistics>>,
     pub(crate) entries:
-        super::super::checkpoint::MetadataFragment<Vec<RuntimeClientTranscriptEntry>>,
+        super::super::checkpoint::MetadataFragment<Vec<Arc<RuntimeClientTranscriptEntry>>>,
     pub(crate) next_cursor: Option<RuntimeClientTranscriptCursor>,
 }
 impl From<RuntimeClientTranscriptPage> for SharedTranscript {
