@@ -3677,7 +3677,7 @@ impl RuntimeClientProjection {
                     if let Some(descriptor) = descriptor {
                         events.push(RuntimeClientEvent::MessageDescriptorCommitted {
                             attempt_id,
-                            descriptor,
+                            descriptor: Box::new(descriptor),
                             head: self.snapshot.message_descriptors.owned(),
                             transcript_cursor,
                             evicted_message_id,
@@ -3687,7 +3687,7 @@ impl RuntimeClientProjection {
                     if let Some(descriptor) = descriptor {
                         events.push(RuntimeClientEvent::MessageDescriptorCommitted {
                             attempt_id: attempt_id.clone(),
-                            descriptor,
+                            descriptor: Box::new(descriptor),
                             head: self.snapshot.message_descriptors.owned(),
                             transcript_cursor,
                             evicted_message_id: evicted_message_id.clone(),
@@ -5807,7 +5807,7 @@ impl RuntimeClientProjection {
             self.install_todo_head(todos);
             events.push(RuntimeClientEvent::ReadDomainsUpdated {
                 projection_head: self.snapshot.context.projection_head.clone(),
-                transcript: self.snapshot.transcript.owned(),
+                transcript: Box::new(self.snapshot.transcript.owned()),
                 trace: None,
                 occupancy: self.snapshot.context.occupancy.clone(),
                 todos: self.snapshot.todos.owned(),
@@ -5924,7 +5924,7 @@ impl RuntimeClientProjection {
         let transcript_cursor = transcript_cursor.map(RuntimeClientTranscriptCursor::from);
         events.push(RuntimeClientEvent::MessageDescriptorCommitted {
             attempt_id: attempt_id.clone(),
-            descriptor,
+            descriptor: Box::new(descriptor),
             head: self.snapshot.message_descriptors.owned(),
             transcript_cursor,
             evicted_message_id: evicted_message_id.clone(),
@@ -7886,8 +7886,8 @@ impl RuntimeClientProjection {
             if publish {
                 self.publish(RuntimeClientEvent::ReadDomainsUpdated {
                     projection_head,
-                    transcript,
-                    trace: trace_changed.then_some(trace).flatten(),
+                    transcript: Box::new(transcript),
+                    trace: trace_changed.then_some(trace).flatten().map(Box::new),
                     occupancy,
                     todos: self.snapshot.todos.owned(),
                 });

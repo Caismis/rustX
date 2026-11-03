@@ -76,10 +76,10 @@ pub enum RuntimeClientEvent {
     /// when durable facts change, never for publication text/argument suffixes.
     ReadDomainsUpdated {
         projection_head: Option<super::snapshot::RuntimeClientProjectionHeadView>,
-        transcript: super::snapshot::RuntimeClientTranscriptPage,
+        transcript: Box<super::snapshot::RuntimeClientTranscriptPage>,
         /// A supplied native Trace head replaces the loaded cache. None leaves
         /// its issued cut/pins intact; native facts advertise independent Trace reads.
-        trace: Option<super::trace::TracePage>,
+        trace: Option<Box<super::trace::TracePage>>,
         occupancy: Option<super::occupancy::RuntimeClientContextOccupancy>,
         todos: Option<crate::tools::todo::TodoSnapshot>,
     },
@@ -373,7 +373,7 @@ pub enum RuntimeClientEvent {
     /// read-only.
     MessageDescriptorCommitted {
         attempt_id: Option<AttemptId>,
-        descriptor: super::snapshot::RuntimeClientMessageDescriptor,
+        descriptor: Box<super::snapshot::RuntimeClientMessageDescriptor>,
         head: Vec<super::snapshot::RuntimeClientMessageDescriptor>,
         transcript_cursor: Option<RuntimeClientTranscriptCursor>,
         evicted_message_id: Option<MessageId>,

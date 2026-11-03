@@ -253,7 +253,7 @@ mod scale {
         let issued = cached.read_cut.as_ref().unwrap().clone();
         assert_eq!(issued, initial.read_cut);
         assert!(projection.replay.back().unwrap().1.facts().iter().any(|event| {
-            matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace: Some(trace),..} if trace == &cached)
+            matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace: Some(trace),..} if trace.as_ref() == &cached)
         }));
         let held_fence = projection.read_domain_fence();
         let held_read = held_fence.read(&store).unwrap();
@@ -335,8 +335,8 @@ fn t08_t14_cached_trace_cut_is_not_retagged_by_todo_or_unchanged_installation() 
     publish_source_fact(&mut projection, |projection| {
         projection.publish(RuntimeClientEvent::ReadDomainsUpdated {
             projection_head: projection.snapshot.context.projection_head.clone(),
-            transcript: projection.snapshot.transcript.owned(),
-            trace: Some(projection.snapshot.trace.owned()),
+            transcript: Box::new(projection.snapshot.transcript.owned()),
+            trace: Some(Box::new(projection.snapshot.trace.owned())),
             occupancy: projection.snapshot.context.occupancy.clone(),
             todos: projection.snapshot.todos.owned(),
         });
@@ -346,6 +346,6 @@ fn t08_t14_cached_trace_cut_is_not_retagged_by_todo_or_unchanged_installation() 
         cached
     );
     assert!(projection.replay.back().unwrap().1.facts().iter().any(|event| {
-        matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace: Some(trace),..} if trace == &cached)
+        matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace: Some(trace),..} if trace.as_ref() == &cached)
     }));
 }
