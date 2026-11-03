@@ -347,7 +347,7 @@ fn count_conversation_store_open() {
 /// Version 87 removes redundant trailing sequence keys from rowid event indexes.
 /// Version 90 stores independent statistical contributions with sparse checkpoints.
 /// Version 91 binds shared Request Source preparation to frozen native configuration.
-pub const SQLITE_SCHEMA_VERSION: i64 = 93;
+pub const SQLITE_SCHEMA_VERSION: i64 = 94;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -8559,7 +8559,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
                 message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
                 PRIMARY KEY(ledger_position,block_index),UNIQUE(message_id,block_index)
-            ) WITHOUT ROWID;
+            );
             CREATE TABLE IF NOT EXISTS audit_observation_blocks (
                 transcript_position INTEGER NOT NULL REFERENCES transcript_order(position) ON DELETE CASCADE,
                 ordinal INTEGER NOT NULL CHECK(ordinal>=0),header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
@@ -19837,7 +19837,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 93);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 94);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19906,7 +19906,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 93);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 94);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
