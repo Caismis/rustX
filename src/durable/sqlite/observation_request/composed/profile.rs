@@ -12,8 +12,8 @@ struct Summary {
     capture_us: u128,
     scalar_us: u128,
     lookup_us: u128,
-    paths_us: u128,
-    length_us: u128,
+    geometry_us: u128,
+    scalar_encodes: u64,
     lookup_calls: u64,
     source_node_loads: u64,
 }
@@ -88,8 +88,7 @@ pub(super) enum Phase {
     Capture,
     Scalar,
     Lookup,
-    Paths,
-    Length,
+    Geometry,
 }
 pub(super) struct Timer {
     phase: Phase,
@@ -114,12 +113,14 @@ impl Drop for Timer {
                 Phase::Capture => &mut active.summary.capture_us,
                 Phase::Scalar => &mut active.summary.scalar_us,
                 Phase::Lookup => &mut active.summary.lookup_us,
-                Phase::Paths => &mut active.summary.paths_us,
-                Phase::Length => &mut active.summary.length_us,
+                Phase::Geometry => &mut active.summary.geometry_us,
             };
             *value += elapsed;
         });
     }
+}
+pub(super) fn scalar_encoded() {
+    record(|active| active.summary.scalar_encodes += 1);
 }
 pub(super) fn lookup_call() {
     record(|active| active.summary.lookup_calls += 1);
@@ -142,8 +143,8 @@ mod tests {
             capture_us: u128::MAX,
             scalar_us: u128::MAX,
             lookup_us: u128::MAX,
-            paths_us: u128::MAX,
-            length_us: u128::MAX,
+            geometry_us: u128::MAX,
+            scalar_encodes: u64::MAX,
             lookup_calls: u64::MAX,
             source_node_loads: u64::MAX,
         };

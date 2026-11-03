@@ -286,9 +286,106 @@ pub(super) fn get(
     Err(storage("fragment lookup exceeds bounded depth"))
 }
 
+/// One operation's at most nine adjacent byte chunks share each authenticated
+/// ancestor and leaf. Nothing is retained across calls or storage snapshots.
+pub(super) fn get_many(
+    connection: &Connection,
+    root: &Reference,
+    keys: &[String],
+) -> Result<Vec<Option<Vec<u8>>>, ConversationStoreError> {
+    if keys.is_empty()
+        || keys.len() > 9
+        || keys.iter().any(|key| key.len() > 4160)
+        || !keys.windows(2).all(|pair| pair[0] < pair[1])
+    {
+        return Err(storage("fragment batch keys exceed bound or repeat"));
+    }
+    let mut output = vec![None; keys.len()];
+    select_many(connection, root, keys, &mut output)?;
+    Ok(output)
+}
+
+fn select_many(
+    connection: &Connection,
+    reference: &Reference,
+    keys: &[String],
+    output: &mut [Option<Vec<u8>>],
+) -> Result<(), ConversationStoreError> {
+    match load(connection, reference)? {
+        Page::Leaf { entries } => {
+            for (key, value) in entries {
+                if let Ok(at) = keys.binary_search(&key) {
+                    output[at] = Some(value);
+                }
+            }
+        }
+        Page::Branch { children } => {
+            let mut start = 0;
+            for child in children {
+                let end = start + keys[start..].partition_point(|key| key <= &child.last);
+                if end > start {
+                    select_many(
+                        connection,
+                        &child,
+                        &keys[start..end],
+                        &mut output[start..end],
+                    )?;
+                }
+                start = end;
+                if start == keys.len() {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batched_chunk_reads_share_pages_and_revalidate_each_operation() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE request_source_pages(hash BLOB PRIMARY KEY,bytes BLOB NOT NULL)",
+            )
+            .unwrap();
+        let mut builder = Builder::new(&connection);
+        for i in 0_u64..200 {
+            builder
+                .push(format!("{i:020}"), i.to_le_bytes().to_vec())
+                .unwrap();
+        }
+        let root = builder.finish().unwrap().unwrap();
+        let keys = [1, 2, 63, 64, 65, 127, 128, 199, 999].map(|i| format!("{i:020}"));
+        super::super::take_work();
+        let expected = keys
+            .iter()
+            .map(|key| get(&connection, &root, key).unwrap())
+            .collect::<Vec<_>>();
+        let individual = super::super::take_work().index_pages;
+        assert_eq!(get_many(&connection, &root, &keys).unwrap(), expected);
+        let batch = super::super::take_work().index_pages;
+        assert_eq!(batch, 5);
+        assert!(batch < individual);
+        assert!(get_many(&connection, &root, &vec![String::new(); 10]).is_err());
+        assert!(get_many(&connection, &root, &["b".into(), "a".into()]).is_err());
+        connection.execute_batch("SAVEPOINT damage_batch").unwrap();
+        connection
+            .execute(
+                "UPDATE request_source_pages SET bytes=x'00' WHERE hash=?1",
+                [root.hash.as_slice()],
+            )
+            .unwrap();
+        assert!(get_many(&connection, &root, &keys).is_err());
+        connection
+            .execute_batch("ROLLBACK TO damage_batch; RELEASE damage_batch")
+            .unwrap();
+        assert_eq!(get_many(&connection, &root, &keys).unwrap(), expected);
+    }
 
     #[test]
     fn cached_fragment_writes_preserve_rollback_tamper_and_schema_failure() {

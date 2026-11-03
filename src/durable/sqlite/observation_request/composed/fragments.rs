@@ -587,10 +587,15 @@ pub(super) fn bytes(
         usize::try_from(end - start).map_err(|_| storage("fragment byte range exceeds bound"))?,
     );
     let mut offset = start;
-    while offset < end {
+    if start == end {
+        return Ok(output);
+    }
+    let keys = (start / CHUNK..=(end - 1) / CHUNK)
+        .map(|chunk| chunk_key(chunk * CHUNK))
+        .collect::<Vec<_>>();
+    for bytes in index::get_many(connection, &fragment.bytes, &keys)? {
         let chunk_start = offset / CHUNK * CHUNK;
-        let bytes = index::get(connection, &fragment.bytes, &chunk_key(chunk_start))?
-            .ok_or_else(|| storage("original fragment segment unavailable"))?;
+        let bytes = bytes.ok_or_else(|| storage("original fragment segment unavailable"))?;
         let expected = (fragment.length - chunk_start).min(CHUNK);
         if bytes.len() as u64 != expected {
             return Err(storage("original fragment segment length differs"));

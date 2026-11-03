@@ -117,4 +117,42 @@ fn borrowed_root_geometry_preserves_path_error_before_left_length_overflow() {
     let staged = validate_node_paths(&connection, &checked, 9)
         .and_then(|()| length_from_node(&connection, &checked, 9, 1));
     assert_eq!(staged.unwrap_err().to_string(), old_path);
+    assert_eq!(
+        geometry(&connection, &checked, 9, 1)
+            .unwrap_err()
+            .to_string(),
+        old_path
+    );
+}
+
+#[test]
+fn fused_root_geometry_reads_shared_boundary_nodes_once() {
+    let connection = Connection::open_in_memory().unwrap();
+    manifest::create_schema(&connection).unwrap();
+    super::super::create_schema(&connection).unwrap();
+    let a = leaf(&connection, 1, None, 0);
+    let b = leaf(&connection, 2, None, 0);
+    let c = leaf(&connection, 3, None, 0);
+    let left = branch(&connection, 4, &a, &b);
+    let root = branch(&connection, 5, &left, &c);
+    super::super::take_work();
+    validate_node_paths(&connection, &root, 9).unwrap();
+    let expected = length_from_node(&connection, &root, 9, 1).unwrap();
+    let staged = super::super::take_work();
+    assert_eq!(geometry(&connection, &root, 9, 1).unwrap(), expected);
+    let fused = super::super::take_work();
+    assert_eq!((staged.native_nodes, staged.source_nodes), (8, 8));
+    assert_eq!((fused.native_nodes, fused.source_nodes), (4, 4));
+    for sequence in [0, 1, 9, 10, 99, 100, u64::MAX] {
+        for rank in [0, 8, 9, 10, 98, 99, 100, 998, 999, 1000, 8189, 8190] {
+            let expected = validate_node_paths(&connection, &root, rank)
+                .and_then(|()| length_from_node(&connection, &root, rank, sequence))
+                .map_err(|error| error.to_string());
+            assert_eq!(
+                geometry(&connection, &root, rank, sequence).map_err(|error| error.to_string()),
+                expected,
+                "sequence {sequence}, rank {rank}"
+            );
+        }
+    }
 }

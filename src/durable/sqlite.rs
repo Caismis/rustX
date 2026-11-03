@@ -346,7 +346,8 @@ fn count_conversation_store_open() {
 /// Version 86 stores bounded binary Statistics and Execution tuples with unchanged JSON admission.
 /// Version 87 removes redundant trailing sequence keys from rowid event indexes.
 /// Version 90 stores independent statistical contributions with sparse checkpoints.
-pub const SQLITE_SCHEMA_VERSION: i64 = 90;
+/// Version 91 binds shared Request Source preparation to frozen native configuration.
+pub const SQLITE_SCHEMA_VERSION: i64 = 91;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -482,6 +483,9 @@ struct ConnectionOwner {
     append_validation: Arc<append_validation::Owner>,
     response: Arc<observation_response::Owner>,
     event_guard: event_insert::Guard,
+    /// Main-database writes since the current transaction/lease boundary.
+    /// Read-only ROLLBACK must not invalidate committed immutable evidence.
+    transaction_writes: Arc<AtomicBool>,
 }
 impl ConnectionOwner {
     #[cfg(test)]
@@ -619,6 +623,15 @@ impl Drop for ConnectionLease<'_> {
         // Preserve the original connection mutex's fail-closed panic semantics.
         if std::thread::panicking() {
             self.owner.poisoned.store(true, Ordering::Release);
+        }
+        if self
+            .connection
+            .as_ref()
+            .is_some_and(Connection::is_autocommit)
+        {
+            self.owner
+                .transaction_writes
+                .store(false, Ordering::Release);
         }
         *self.owner.available.lock().expect("connection slot") = self.connection.take();
         self.owner.wake.notify_all();
@@ -912,12 +925,16 @@ impl SqliteConversationStore {
             .map_err(|error| storage(format!("configure stable SQLite plans: {error}")))?;
         let append_validation = append_validation::Owner::new(&connection)?;
         let statistics = observation_statistics::FoldCache::new(&connection)?;
+        let transaction_writes = Arc::new(AtomicBool::new(false));
+        let rollback_writes = Arc::clone(&transaction_writes);
         let statistics_rollback = Arc::clone(&statistics);
         let rollback = Arc::clone(&append_validation);
         connection
             .rollback_hook(Some(move || {
-                rollback.invalidate();
-                statistics_rollback.invalidate();
+                if rollback_writes.swap(false, Ordering::AcqRel) {
+                    rollback.invalidate();
+                    statistics_rollback.invalidate();
+                }
             }))
             .map_err(|error| storage(format!("install canonical rollback observer: {error}")))?;
         let response = observation_response::Owner::new(&connection)?;
@@ -926,6 +943,7 @@ impl SqliteConversationStore {
             Arc::clone(&append_validation),
             Arc::clone(&response),
             Arc::clone(&statistics),
+            Arc::clone(&transaction_writes),
         )?;
         let event_guard = event_insert::Guard::new(&connection, statistics);
         Ok(Self::from_connection_owner(
@@ -936,6 +954,7 @@ impl SqliteConversationStore {
                 append_validation,
                 response,
                 event_guard,
+                transaction_writes,
                 wake: Condvar::new(),
                 poisoned: AtomicBool::new(false),
             }),
@@ -1439,6 +1458,7 @@ impl SqliteConversationStore {
             transaction,
             &self.conversation_id,
             snapshot,
+            &configuration,
             &source_input,
             selection,
             retry_message_id.as_ref(),
@@ -6243,6 +6263,7 @@ fn index_request_read_layouts(
     transaction: &Transaction<'_>,
     scope: &ConversationId,
     snapshot: &RequestSnapshot,
+    configuration: &native_request::FreshConfiguration,
     input: &crate::model::SelectedModelInput,
     selection: &manifest::Selection,
     retry_message_id: Option<&MessageId>,
@@ -6282,6 +6303,7 @@ fn index_request_read_layouts(
             input,
             snapshot,
             selection,
+            configuration,
         )
     });
     let _ = optional_display_layout(transaction, || {
@@ -19798,7 +19820,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 90);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 91);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19867,7 +19889,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 90);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 91);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -21810,6 +21832,7 @@ mod executor_wait_tests {
             append_validation: append_validation::Owner::uninstalled(),
             response: observation_response::Owner::uninstalled(),
             event_guard: event_insert::Guard::uninstalled(),
+            transaction_writes: Arc::new(AtomicBool::new(false)),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -21845,6 +21868,7 @@ mod presentation_cancellation_tests {
             append_validation: append_validation::Owner::uninstalled(),
             response: observation_response::Owner::uninstalled(),
             event_guard: event_insert::Guard::uninstalled(),
+            transaction_writes: Arc::new(AtomicBool::new(false)),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -21891,6 +21915,7 @@ mod presentation_cancellation_tests {
             append_validation: append_validation::Owner::uninstalled(),
             response: observation_response::Owner::uninstalled(),
             event_guard: event_insert::Guard::uninstalled(),
+            transaction_writes: Arc::new(AtomicBool::new(false)),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),

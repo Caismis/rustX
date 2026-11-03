@@ -455,6 +455,65 @@ pub(super) fn select(
 
 // Full producer paths include the current occurrence prefix. Width crossings
 // recurse at most the fixed decimal thresholds through the native AVL tree.
+/// Path and byte-width traversals split at exactly the same rank-digit boundaries
+/// for one fixed sequence. Read/authenticate each node once. Length errors stay
+/// deferred until every path check succeeds, preserving the staged error order.
+pub(super) fn geometry(
+    connection: &Connection,
+    node: &Augmentation,
+    rank: u64,
+    sequence: u64,
+) -> Result<u64, ConversationStoreError> {
+    geometry_paths(connection, node, rank, sequence)?
+}
+type CheckedLength = Result<u64, ConversationStoreError>;
+fn geometry_paths(
+    connection: &Connection,
+    node: &Augmentation,
+    rank: u64,
+    sequence: u64,
+) -> Result<CheckedLength, ConversationStoreError> {
+    let last = rank
+        .checked_add(node.native.count)
+        .and_then(|end| end.checked_sub(1))
+        .ok_or_else(|| storage("request rank range invalid"))?;
+    let width = weights::class(sequence, rank)
+        .and_then(|first| weights::class(sequence, last).map(|_| first));
+    if weights::digits(rank) == weights::digits(last) {
+        let prefix =
+            super::super::encoded_path(&["messages".into(), rank.to_string()])?.len() as u64;
+        if node.max_path + prefix - 1 > 3600
+            || node.max_key_path > 0 && node.max_key_path + prefix - 1 > 4096
+        {
+            return Err(storage("original request field path exceeds bound"));
+        }
+        return Ok(width.and_then(|class| node.widths.length(class)));
+    }
+    let Content::Branch {
+        left,
+        left_hash,
+        right,
+        right_hash,
+    } = &node.content
+    else {
+        return Err(storage("request path width interval invalid"));
+    };
+    let a = geometry_paths(
+        connection,
+        &load(connection, *left, *left_hash)?,
+        rank,
+        sequence,
+    )?;
+    let b = geometry_paths(
+        connection,
+        &load(connection, *right, *right_hash)?,
+        rank + left.count,
+        sequence,
+    )?;
+    Ok(width.and_then(|_| add(add(a?, b?)?, 1)))
+}
+
+#[cfg(test)]
 fn validate_paths(
     connection: &Connection,
     native: manifest::NodeRef,
@@ -463,7 +522,8 @@ fn validate_paths(
 ) -> Result<(), ConversationStoreError> {
     validate_node_paths(connection, &load(connection, native, digest)?, rank)
 }
-pub(super) fn validate_node_paths(
+#[cfg(test)]
+fn validate_node_paths(
     connection: &Connection,
     node: &Augmentation,
     rank: u64,

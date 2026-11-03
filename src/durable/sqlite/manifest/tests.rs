@@ -39,6 +39,7 @@ fn native_preupdate_identity_uses_logical_ordinals_across_virtual_columns() {
         super::super::append_validation::Owner::uninstalled(),
         super::super::observation_response::Owner::uninstalled(),
         super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     owner.journal_frontier.store(1, Ordering::Release);
@@ -87,6 +88,7 @@ fn cached_shape_fixture(capacity: usize) -> (Connection, super::NodeRef, super::
         super::super::append_validation::Owner::uninstalled(),
         super::super::observation_response::Owner::uninstalled(),
         super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     let scope = ConversationId::generate();
@@ -227,6 +229,7 @@ fn native_manifest_rollback_never_certifies_absent_or_reused_row_ids() {
         super::super::append_validation::Owner::uninstalled(),
         super::super::observation_response::Owner::uninstalled(),
         super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     let scope = ConversationId::generate();
@@ -268,6 +271,7 @@ fn native_manifest_append_persists_only_delta_paths_and_retains_old_roots() {
         super::super::append_validation::Owner::uninstalled(),
         super::super::observation_response::Owner::uninstalled(),
         super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     let scope = ConversationId::generate();
@@ -309,6 +313,7 @@ fn native_mutation_certificate_covers_trigger_replace_delete_and_external_commit
         super::super::append_validation::Owner::uninstalled(),
         super::super::observation_response::Owner::uninstalled(),
         super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     owner.frontier.store(1, Ordering::Release);
@@ -350,6 +355,7 @@ fn native_selected_leaf_corruption_and_logical_byte_limit_are_explicit() {
         super::super::append_validation::Owner::uninstalled(),
         super::super::observation_response::Owner::uninstalled(),
         super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     let selected = SelectedInputManifest::from_messages(&ConversationId::generate(), &[message(1)]);
@@ -403,6 +409,7 @@ fn native_journal_certificate_distinguishes_new_append_from_old_fact_or_auxiliar
         super::super::append_validation::Owner::uninstalled(),
         super::super::observation_response::Owner::uninstalled(),
         super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     owner.journal_frontier.store(1, Ordering::Release);
@@ -444,6 +451,7 @@ fn actual_only_model_input_is_rejected_before_native_sql_persistence() {
         super::super::append_validation::Owner::uninstalled(),
         super::super::observation_response::Owner::uninstalled(),
         super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     let input: crate::model::SelectedModelInput = vec![message(1)].into();
@@ -474,6 +482,7 @@ fn wal_external_invalidation_tracks_the_pinned_snapshot() {
         super::super::append_validation::Owner::uninstalled(),
         super::super::observation_response::Owner::uninstalled(),
         super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     let before = owner.capture(&connection).unwrap();

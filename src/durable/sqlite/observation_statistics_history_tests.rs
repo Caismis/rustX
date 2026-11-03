@@ -412,3 +412,38 @@ fn statistics_normal_nonstatistical_batch_keeps_the_provisional_prefix() {
     assert_eq!(observation_statistics::read_work().0, 0);
     assert_eq!(store.observation_statistics(4).unwrap().steps, 1);
 }
+
+#[test]
+fn read_only_rollback_keeps_committed_statistics_but_write_rollback_cannot_seat_it() {
+    use self::observation_response_tests::{response_message, response_start};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = response_start(&store, "statistics-read-rollback");
+    observation_statistics::fold_work();
+    for i in 0..3 {
+        assert_eq!(store.observation_statistics(i + 1).unwrap().turns, 1);
+        response_message(&store, &attempt, &format!("after-statistics-read-{i}"));
+    }
+    assert_eq!(observation_statistics::fold_work(), (3, 0));
+    {
+        let connection = store.lock().unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        let mut event = envelope(
+            store.conversation_id(),
+            "rolled-back-statistics-read",
+            Some(attempt.clone()),
+            RuntimeEvent::TurnStarted,
+        );
+        event.turn_id = Some(TurnId::new("rolled-back-only"));
+        persist_event_tx(
+            &store.conn.event_guard,
+            &transaction,
+            &store.conversation_id,
+            event,
+        )
+        .unwrap();
+        transaction.rollback().unwrap();
+    }
+    response_message(&store, &attempt, "after-statistics-write-rollback");
+    assert_eq!(store.observation_statistics(5).unwrap().steps, 0);
+}
