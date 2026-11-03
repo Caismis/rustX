@@ -8267,7 +8267,9 @@ fn configure_connection(
 ) -> Result<(), ConversationStoreError> {
     register_native_functions(connection)?;
     connection
-        .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
+        .execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA page_size = 2048;",
+        )
         .map_err(|error| storage(format!("configure SQLite: {error}")))?;
     writer_busy_policy(connection)
         .map_err(|error| storage(format!("configure SQLite busy policy: {error}")))?;
