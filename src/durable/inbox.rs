@@ -1644,6 +1644,12 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
 ///   been durably accepted the answer stays `true` forever.
 #[allow(clippy::missing_errors_doc)]
 pub trait ConversationStore: Send + Sync + 'static {
+    /// Best-effort maintenance of reconstructible connection caches. In-memory
+    /// backends have no such cache. This never changes facts or read proofs.
+    fn reclaim_idle_cache(&self) -> Result<(), ConversationStoreError> {
+        Ok(())
+    }
+
     /// Finite typed facts from original native J rows at one authentic cut.
     fn observation_trace_facts(
         &self,

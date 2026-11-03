@@ -11600,7 +11600,8 @@ mod tests {
                 evicted_message_id,
                 ..
             } => {
-                snapshot.message_descriptors.clone_from(head);
+                snapshot.message_descriptors =
+                    head.iter().map(|row| row.as_ref().clone()).collect();
                 if let Some(id) = evicted_message_id {
                     snapshot.messages.retain(|message| message.id() != id);
                 }

@@ -3,7 +3,7 @@
 use super::super::snapshot::{
     AgentStatusView, CapabilityView, InboundDiagnostics, RuntimeClientAgent,
     RuntimeClientContextView, RuntimeClientInteractionHeader, RuntimeClientJob,
-    RuntimeClientMessageDescriptor, RuntimeClientModelStatus,
+    RuntimeClientMessageDescriptorHead, RuntimeClientModelStatus,
     RuntimeClientPublicationSettlementRecord, RuntimeClientResourcesView, RuntimeClientSnapshot,
     RuntimeClientTranscriptCursor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage,
     RuntimeDurabilityFailure,
@@ -124,7 +124,7 @@ pub(crate) struct SharedSnapshot {
         crate::local_runtime::configuration::application::AdoptionEligibility,
     pub(crate) durability_failure: CowDomain<Option<RuntimeDurabilityFailure>>,
     pub(crate) messages: CowDomain<Vec<MessageBlock>>,
-    pub(crate) message_descriptors: CowDomain<Vec<RuntimeClientMessageDescriptor>>,
+    pub(crate) message_descriptors: CowDomain<RuntimeClientMessageDescriptorHead>,
     pub(crate) publication_settlements: CowDomain<Vec<RuntimeClientPublicationSettlementRecord>>,
     pub(crate) transcript: SharedTranscript,
     pub(crate) trace: SharedTrace,
@@ -184,7 +184,11 @@ impl From<RuntimeClientSnapshot> for SharedSnapshot {
             configuration_adoption_eligibility,
             durability_failure: durability_failure.into(),
             messages: messages.into(),
-            message_descriptors: message_descriptors.into(),
+            message_descriptors: message_descriptors
+                .into_iter()
+                .map(Arc::new)
+                .collect::<RuntimeClientMessageDescriptorHead>()
+                .into(),
             publication_settlements: publication_settlements.into(),
             transcript: transcript.into(),
             trace: trace.into(),
@@ -218,7 +222,11 @@ impl SharedSnapshot {
             configuration_adoption_eligibility: self.configuration_adoption_eligibility.clone(),
             durability_failure: self.durability_failure.owned(),
             messages: self.messages.owned(),
-            message_descriptors: self.message_descriptors.owned(),
+            message_descriptors: self
+                .message_descriptors
+                .iter()
+                .map(|row| row.as_ref().clone())
+                .collect(),
             publication_settlements: self.publication_settlements.owned(),
             transcript: self.transcript.owned(),
             trace: self.trace.owned(),
@@ -250,7 +258,10 @@ impl PartialEq<SharedSnapshot> for RuntimeClientSnapshot {
             && self.configuration_adoption_eligibility == other.configuration_adoption_eligibility
             && self.durability_failure == *other.durability_failure
             && self.messages == *other.messages
-            && self.message_descriptors == *other.message_descriptors
+            && self
+                .message_descriptors
+                .iter()
+                .eq(other.message_descriptors.iter().map(Arc::as_ref))
             && self.publication_settlements == *other.publication_settlements
             && other.transcript == self.transcript
             && other.trace == self.trace
@@ -279,12 +290,18 @@ impl PartialEq<RuntimeClientSnapshot> for SharedSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct SharedTranscript {
     pub(crate) source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    pub(crate) content: CowDomain<Vec<super::super::checkpoint::ContentBinding>>,
-    pub(crate) collections: CowDomain<Vec<super::super::checkpoint::CollectionFrontier>>,
-    pub(crate) deferred_entries: CowDomain<Vec<super::super::checkpoint::CheckpointPageItem>>,
+    pub(crate) content:
+        super::super::checkpoint::MetadataFragment<Vec<super::super::checkpoint::ContentBinding>>,
+    pub(crate) collections: super::super::checkpoint::MetadataFragment<
+        Vec<super::super::checkpoint::CollectionFrontier>,
+    >,
+    pub(crate) deferred_entries: super::super::checkpoint::MetadataFragment<
+        Vec<super::super::checkpoint::CheckpointPageItem>,
+    >,
     pub(crate) inherited_through: Option<RuntimeClientTranscriptCursor>,
     pub(crate) statistics: CowDomain<Option<super::super::response::ConversationStatistics>>,
-    pub(crate) entries: CowDomain<Vec<RuntimeClientTranscriptEntry>>,
+    pub(crate) entries:
+        super::super::checkpoint::MetadataFragment<Vec<RuntimeClientTranscriptEntry>>,
     pub(crate) next_cursor: Option<RuntimeClientTranscriptCursor>,
 }
 impl From<RuntimeClientTranscriptPage> for SharedTranscript {
@@ -301,12 +318,12 @@ impl From<RuntimeClientTranscriptPage> for SharedTranscript {
         } = value;
         Self {
             source_cut,
-            content: content.into(),
-            collections: collections.into(),
-            deferred_entries: deferred_entries.into(),
+            content,
+            collections,
+            deferred_entries,
             inherited_through,
             statistics: statistics.into(),
-            entries: entries.into(),
+            entries,
             next_cursor,
         }
     }
@@ -315,35 +332,35 @@ impl SharedTranscript {
     pub(super) fn install(&mut self, transcript: &RuntimeClientTranscriptPage) {
         self.source_cut.clone_from(&transcript.source_cut);
         if self.content != transcript.content {
-            self.content.replace_from(&transcript.content);
+            self.content.clone_from(&transcript.content);
         }
         if self.collections != transcript.collections {
-            self.collections.replace_from(&transcript.collections);
+            self.collections.clone_from(&transcript.collections);
         }
         // Nonempty payloads can contain ordered JSON or signed zero, so
         // PartialEq cannot authorize keeping their old immutable owners.
         if !self.deferred_entries.is_empty() || !transcript.deferred_entries.is_empty() {
             self.deferred_entries
-                .replace_from(&transcript.deferred_entries);
+                .clone_from(&transcript.deferred_entries);
         }
         self.inherited_through = transcript.inherited_through;
         if self.statistics.is_some() || transcript.statistics.is_some() {
             self.statistics.replace_from(&transcript.statistics);
         }
         if !self.entries.is_empty() || !transcript.entries.is_empty() {
-            self.entries.replace_from(&transcript.entries);
+            self.entries.clone_from(&transcript.entries);
         }
         self.next_cursor = transcript.next_cursor;
     }
     pub(crate) fn owned(&self) -> RuntimeClientTranscriptPage {
         RuntimeClientTranscriptPage {
             source_cut: self.source_cut.clone(),
-            content: self.content.owned(),
-            collections: self.collections.owned(),
-            deferred_entries: self.deferred_entries.owned(),
+            content: self.content.clone(),
+            collections: self.collections.clone(),
+            deferred_entries: self.deferred_entries.clone(),
             inherited_through: self.inherited_through,
             statistics: self.statistics.owned(),
-            entries: self.entries.owned(),
+            entries: self.entries.clone(),
             next_cursor: self.next_cursor,
         }
     }
@@ -351,12 +368,12 @@ impl SharedTranscript {
 impl PartialEq<RuntimeClientTranscriptPage> for SharedTranscript {
     fn eq(&self, other: &RuntimeClientTranscriptPage) -> bool {
         self.source_cut == other.source_cut
-            && *self.content == other.content
-            && *self.collections == other.collections
-            && *self.deferred_entries == other.deferred_entries
+            && self.content == other.content
+            && self.collections == other.collections
+            && self.deferred_entries == other.deferred_entries
             && self.inherited_through == other.inherited_through
             && *self.statistics == other.statistics
-            && *self.entries == other.entries
+            && self.entries == other.entries
             && self.next_cursor == other.next_cursor
     }
 }

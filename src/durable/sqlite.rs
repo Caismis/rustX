@@ -475,8 +475,11 @@ impl std::fmt::Debug for SqliteConversationStore {
 
 /// A connection lease owns SQL, not the condition mutex. Cancellation can
 /// therefore wake a waiting presentation reader without waiting for SQL.
+mod idle_cache;
+use idle_cache::ConnectionSlot;
+
 struct ConnectionOwner {
-    available: Mutex<Option<Connection>>,
+    available: Mutex<ConnectionSlot>,
     wake: Condvar,
     poisoned: AtomicBool,
     manifest: Arc<manifest::Owner>,
@@ -507,7 +510,7 @@ impl ConnectionOwner {
             if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
                 return Err(storage("presentation read cancelled"));
             }
-            if let Some(connection) = slot.take() {
+            if let Some(connection) = slot.connection.take() {
                 return Ok(ConnectionLease {
                     connection: Some(connection),
                     owner: self,
@@ -633,7 +636,11 @@ impl Drop for ConnectionLease<'_> {
                 .transaction_writes
                 .store(false, Ordering::Release);
         }
-        *self.owner.available.lock().expect("connection slot") = self.connection.take();
+        self.owner
+            .available
+            .lock()
+            .expect("connection slot")
+            .returned(self.connection.take());
         self.owner.wake.notify_all();
     }
 }
@@ -949,7 +956,7 @@ impl SqliteConversationStore {
         Ok(Self::from_connection_owner(
             conversation_id,
             Arc::new(ConnectionOwner {
-                available: Mutex::new(Some(connection)),
+                available: Mutex::new(ConnectionSlot::new(connection)),
                 manifest,
                 append_validation,
                 response,
@@ -1759,6 +1766,10 @@ impl SqliteConversationStore {
 }
 
 impl ConversationStore for SqliteConversationStore {
+    fn reclaim_idle_cache(&self) -> Result<(), ConversationStoreError> {
+        self.conn.reclaim_idle_cache(std::time::Instant::now())
+    }
+
     fn observation_trace_facts(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
@@ -21850,7 +21861,7 @@ mod executor_wait_tests {
             response: observation_response::Owner::uninstalled(),
             event_guard: event_insert::Guard::uninstalled(),
             transaction_writes: Arc::new(AtomicBool::new(false)),
-            available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
+            available: Mutex::new(ConnectionSlot::new(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
         });
@@ -21886,7 +21897,7 @@ mod presentation_cancellation_tests {
             response: observation_response::Owner::uninstalled(),
             event_guard: event_insert::Guard::uninstalled(),
             transaction_writes: Arc::new(AtomicBool::new(false)),
-            available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
+            available: Mutex::new(ConnectionSlot::new(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
         });
@@ -21933,7 +21944,7 @@ mod presentation_cancellation_tests {
             response: observation_response::Owner::uninstalled(),
             event_guard: event_insert::Guard::uninstalled(),
             transaction_writes: Arc::new(AtomicBool::new(false)),
-            available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
+            available: Mutex::new(ConnectionSlot::new(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
         });

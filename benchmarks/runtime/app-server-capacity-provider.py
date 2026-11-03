@@ -16,11 +16,12 @@ async def main():
     p.add_argument('--seed-requests', type=int, required=True)
     p.add_argument('--widths', required=True)
     p.add_argument('--rounds', type=int, required=True)
+    p.add_argument('--cache-probe-requests', type=int, default=0)
     a = p.parse_args()
     expect = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='capacity-model',
                     body_contains=('capacity turn',))
     steps = [Step(expect, Stream(Text('capacity response'), Finish()))
-             for _ in range(a.seed_requests)]
+             for _ in range(a.seed_requests + a.cache_probe_requests)]
     for width in map(int, a.widths.split(',')):
         for turn in range(a.rounds):
             for i in range(width):
