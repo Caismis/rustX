@@ -1,6 +1,7 @@
 {
   "importer": "occt-import-js@0.0.23",
   "renderer": "three@0.187.0",
+  "optimizer": "meshoptimizer@1.1.1",
   "importerCommit": "c2148e54b456b571238d35cac037d304053d64b2",
   "occtCommit": "d2abb6d844231cb8f29be6894440874a4700e4a5",
   "wasmMaximumBytes": 2147483648,
@@ -24,6 +25,18 @@
       "bytes": 26936,
       "gzipBytes": 9507,
       "sha256": "090f8eb6ba63e72887c1f89b009fb1656cfda02d83b6e9805b20468520a5d77f"
+    }
+  },
+  "optimizerAssets": {
+    "meshopt_simplifier.js": {
+      "bytes": 55154,
+      "gzipBytes": 15220,
+      "sha256": "d2e80c60a84c700947f97ab4678cc222a5b9ab409a0745eef2dcaa79bb1ef922"
+    },
+    "LICENSE.md": {
+      "bytes": 1079,
+      "gzipBytes": 666,
+      "sha256": "f03037ca7bad1e3eb7f4a63fa6084a8baabd5ba30d3c239a9a7f35705d873e26"
     }
   }
 }

@@ -12,7 +12,7 @@ let activeContexts = 0;
 export function mountGeometry(container: HTMLElement, object: Object3D, bounds: Box3, saved: Saved | undefined, labels: { canvas: string; axes: string }, change: (state: Omit<Saved, 'copyId'>) => void, lost: () => void) {
   if (activeContexts >= L.owners) throw new GeometryError('capacity');
   let renderer: WebGLRenderer;
-  try { renderer = new WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' }); }
+  try { renderer = new WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'high-performance' }); }
   catch { throw new GeometryError('webgl'); }
   renderer.toneMapping = NeutralToneMapping;
   activeContexts++;
@@ -147,9 +147,11 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     for (const material of Array.isArray(axes.material) ? axes.material : [axes.material]) material.dispose();
     renderer.dispose(); renderer.forceContextLoss(); canvas.remove(); centered.remove(object);
   }
-  resize();
-  for (const id of (saved?.hidden ?? []).slice(0, L.nodes)) visibility(id, false);
-  select(saved?.selected);
-  restoring = false; emit();
+  try {
+    resize();
+    for (const id of (saved?.hidden ?? []).slice(0, L.nodes)) visibility(id, false);
+    select(saved?.selected);
+    restoring = false; emit();
+  } catch (error) { dispose(); throw error; }
   return { parts, fit, select, visibility, flush, dispose };
 }

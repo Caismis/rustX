@@ -1,6 +1,6 @@
-import { Box3, BufferAttribute, BufferGeometry, Color, Group, Material, Mesh, MeshStandardMaterial, Texture, type Object3D } from 'three';
+import { Box3, BufferAttribute, BufferGeometry, Color, Group, Material, Mesh, MeshLambertMaterial, Sphere, Texture, Vector3, type Object3D } from 'three';
 import { GEOMETRY_LIMITS as L, requireGeometry as check } from './limits';
-import { validateModel, type GeometryModel, type GeometryNode } from './model';
+import { type GeometryModel, type GeometryNode } from './model';
 
 function materials(root: Object3D[]): Set<Material> {
   const values = new Set<Material>();
@@ -30,6 +30,18 @@ function validateBounds(bounds: Box3): Box3 {
   check(Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z) > 1e-12, 'empty');
   return bounds;
 }
+function positionBounds(position: BufferAttribute): Box3 {
+  const values = position.array;
+  let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let index = 0; index < values.length; index += 3) {
+    const x = values[index], y = values[index + 1], z = values[index + 2];
+    check(Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)
+      && Math.abs(x) <= L.coordinate && Math.abs(y) <= L.coordinate && Math.abs(z) <= L.coordinate);
+    minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
+    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
+  }
+  return new Box3(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
+}
 export function validateScene(roots: Object3D[], selected?: Object3D): Box3 {
   const unique = new Set<BufferGeometry>(), mats = materials(roots);
   let vertices = 0, triangles = 0, bytes = 0, nodes = 0, parts = 0, draws = 0, pixels = 0;
@@ -47,17 +59,28 @@ export function validateScene(roots: Object3D[], selected?: Object3D): Box3 {
       if (unique.has(geometry)) return; unique.add(geometry); vertices += position.count;
       check(vertices <= L.vertices, 'limit');
       if (geometry.index) for (let index = 0; index < geometry.index.count; index++) { const value = geometry.index.getX(index); check(Number.isSafeInteger(value) && value >= 0 && value < position.count); }
+      const bounds = position instanceof BufferAttribute && position.array instanceof Float32Array && !position.normalized ? positionBounds(position) : undefined;
       for (const attribute of Object.values(geometry.attributes)) {
         check(attribute.count === position.count && attribute.itemSize >= 1 && attribute.itemSize <= 4);
         bytes += attribute.count * attribute.itemSize * 4;
         check(bytes <= L.decodedBytes, 'limit');
+        if (attribute === position && bounds) continue;
+        if (attribute instanceof BufferAttribute && attribute.array instanceof Float32Array && !attribute.normalized) {
+          const values = attribute.array;
+          for (let index = 0; index < values.length; index++) check(Number.isFinite(values[index]) && Math.abs(values[index]) <= L.coordinate);
+          continue;
+        }
         for (let index = 0; index < attribute.count; index++) for (let component = 0; component < attribute.itemSize; component++) {
           const value = attribute.getComponent(index, component); check(Number.isFinite(value) && Math.abs(value) <= L.coordinate);
         }
       }
       // File-declared accessor bounds are not an authority for framing or size.
-      geometry.computeBoundingBox();
-      geometry.computeBoundingSphere();
+      if (bounds) {
+        geometry.boundingBox = bounds;
+        // The position-derived AABB diagonal conservatively encloses every
+        // vertex; culling and picking never trust file-declared accessor bounds.
+        geometry.boundingSphere = new Sphere(bounds.getCenter(new Vector3()), bounds.getSize(new Vector3()).length() / 2);
+      } else { geometry.computeBoundingBox(); geometry.computeBoundingSphere(); }
       const sphere = geometry.boundingSphere;
       check(sphere && sphere.center.toArray().every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate)
         && Number.isFinite(sphere.radius) && sphere.radius >= 0);
@@ -84,13 +107,14 @@ export function validateScene(roots: Object3D[], selected?: Object3D): Box3 {
 
 /** Geometry stays in source coordinates; only camera framing changes. */
 export function modelScene(model: GeometryModel): { scene: Group; bounds: Box3 } {
-  validateModel(model);
+  // The main-thread receiver owns model validation. The generated scene still
+  // passes independent GPU admission below, without an intervening model scan.
   const root = new Group(), resources = new Group();
-  const palette = new Map<string, MeshStandardMaterial>();
+  const palette = new Map<string, MeshLambertMaterial>();
   const material = (color: Color, vertexColors = false) => {
     const key = `${color.toArray().join(',')}:${vertexColors}`;
     let value = palette.get(key);
-    if (!value) { check(palette.size < L.materials, 'limit'); value = new MeshStandardMaterial({ color, vertexColors, metalness: 0.05, roughness: 0.65 }); palette.set(key, value); }
+    if (!value) { check(palette.size < L.materials, 'limit'); value = new MeshLambertMaterial({ color, vertexColors }); palette.set(key, value); }
     return value;
   };
   try {

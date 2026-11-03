@@ -5,6 +5,12 @@ and canceled-payload opportunities from PR #517. The comparison baseline is
 `47b46025f2d78459cec305a46ccf792051685f8b`. The earlier
 [performance report](performance.md) remains a separate historical measurement.
 
+The subsequent latency-budget work is paused at the user's request. See the
+[2026-11-03 checkpoint](performance-budget-checkpoint.md) for retained changes,
+rejected experiments, raw samples and remaining bottlenecks. The 200 ms camera
+and 500 ms first-display targets have not been met. The results below continue
+to describe the earlier published follow-up.
+
 ## Changes
 
 - Retain the latest camera pose and publish at most once per 100 ms during

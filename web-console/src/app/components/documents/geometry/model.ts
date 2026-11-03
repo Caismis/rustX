@@ -8,6 +8,12 @@ export interface GeometryMesh {
 export interface GeometryNode { name: string; meshes: number[]; children: GeometryNode[] }
 export interface GeometryModel { meshes: GeometryMesh[]; root: GeometryNode }
 
+function finiteValues(values: Float32Array, minimum: number, maximum: number) {
+  for (let index = 0; index < values.length; index++) {
+    const value = values[index]; check(Number.isFinite(value) && value >= minimum && value <= maximum);
+  }
+}
+
 /** Validate output before it crosses the Worker boundary and again before GPU use. */
 export function validateModel(model: GeometryModel): void {
   check(Array.isArray(model.meshes) && model.meshes.length > 0, 'empty');
@@ -18,10 +24,10 @@ export function validateModel(model: GeometryModel): void {
     const count = mesh.positions.length / 3;
     vertices += count; bytes += mesh.positions.byteLength;
     check(count > 0, 'empty');
-    for (const value of mesh.positions) check(Number.isFinite(value) && Math.abs(value) <= L.coordinate);
-    if (mesh.normals) { check(mesh.normals instanceof Float32Array && mesh.normals.length === mesh.positions.length); bytes += mesh.normals.byteLength; for (const value of mesh.normals) check(Number.isFinite(value)); }
-    if (mesh.colors) { check(mesh.colors instanceof Float32Array && mesh.colors.length === mesh.positions.length); bytes += mesh.colors.byteLength; for (const value of mesh.colors) check(Number.isFinite(value) && value >= 0 && value <= 1); }
-    if (mesh.indices) { check(mesh.indices instanceof Uint32Array && mesh.indices.length % 3 === 0); bytes += mesh.indices.byteLength; for (const index of mesh.indices) check(index < count); }
+    finiteValues(mesh.positions, -L.coordinate, L.coordinate);
+    if (mesh.normals) { check(mesh.normals instanceof Float32Array && mesh.normals.length === mesh.positions.length); bytes += mesh.normals.byteLength; finiteValues(mesh.normals, -Infinity, Infinity); }
+    if (mesh.colors) { check(mesh.colors instanceof Float32Array && mesh.colors.length === mesh.positions.length); bytes += mesh.colors.byteLength; finiteValues(mesh.colors, 0, 1); }
+    if (mesh.indices) { check(mesh.indices instanceof Uint32Array && mesh.indices.length % 3 === 0); bytes += mesh.indices.byteLength; for (let index = 0; index < mesh.indices.length; index++) check(mesh.indices[index] < count); }
     else check(count % 3 === 0);
     const elements = mesh.indices?.length ?? count;
     triangles += elements / 3; draws += Math.max(1, mesh.groups.length);

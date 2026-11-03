@@ -134,6 +134,9 @@ importers:
       mdast-util-math:
         specifier: 3.0.0
         version: 3.0.0
+      meshoptimizer:
+        specifier: 1.1.1
+        version: 1.1.1
       micromark-core-commonmark:
         specifier: 2.0.3
         version: 2.0.3
