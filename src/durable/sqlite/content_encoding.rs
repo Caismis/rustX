@@ -64,7 +64,7 @@ impl<'a> SegmentWriter<'a> {
             key,
             revision,
             publication_metadata,
-            buffer: Vec::with_capacity(65_536),
+            buffer: Vec::new(),
             first: None,
             written: 0,
             segment: 0,
@@ -90,12 +90,16 @@ impl<'a> SegmentWriter<'a> {
 }
 impl std::io::Write for SegmentWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if !bytes.is_empty() && self.buffer.capacity() == 0 {
-            // The first chunk keeps its allocation. Allocate the overflow
-            // buffer only when needed, with no amortized growth past 64 KiB.
-            self.buffer.reserve_exact(65_536);
-        }
         let count = bytes.len().min(65_536 - self.buffer.len());
+        let required = self.buffer.len() + count;
+        if required > self.buffer.capacity() {
+            // Most immutable fields are short. Grow only the active chunk,
+            // retaining the same strict 64 KiB limit for fragmented writes.
+            let capacity = required
+                .max(self.buffer.capacity().saturating_mul(2))
+                .clamp(256, 65_536);
+            self.buffer.reserve_exact(capacity - self.buffer.len());
+        }
         self.written = self
             .written
             .checked_add(count as u64)
@@ -163,7 +167,7 @@ mod tests {
         );
         small.write_all(b"one").unwrap();
         small.flush().unwrap();
-        assert_eq!(small.first.as_ref().unwrap().capacity(), 65_536);
+        assert_eq!(small.first.as_ref().unwrap().capacity(), 256);
         assert_eq!(
             small.buffer.capacity(),
             0,

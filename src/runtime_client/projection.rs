@@ -1133,7 +1133,11 @@ impl CheckpointSeed {
         let agents = cached!(agents, |capture| capture.page("agents", &source.agents));
         let statuses = cached!(statuses, |capture| capture
             .page("statuses", &source.statuses));
-        let capabilities = cached!(capabilities, |capture| self.capture_capabilities(capture));
+        // The captured capability generation is immutable. Retained checkpoint
+        // events must share it instead of cloning all tool schemas per cursor.
+        let capabilities = cached!(capabilities, |capture| Arc::new(
+            self.capture_capabilities(capture)
+        ));
         let resources = cached!(resources, |capture| {
             super::snapshot::RuntimeClientResourcesView {
                 revision: source.resources.revision,
@@ -1212,7 +1216,7 @@ impl CheckpointSeed {
                     agents: agents.into_owned(),
                     statuses: statuses.into_owned(),
                     context: context.into_owned(),
-                    capabilities: Arc::new(capabilities.into_owned()),
+                    capabilities: capabilities.into_owned(),
                     resources: resources.into_owned(),
                     model: model.into_owned(),
                     model_status: source.model_status,

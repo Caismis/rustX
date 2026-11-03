@@ -24,6 +24,38 @@ fn leaf_pins(root: &super::super::ContentMetadata) -> usize {
 }
 
 #[test]
+fn retained_checkpoints_share_capability_capture_until_its_owner_changes() {
+    let (projection, _store) = initialized_source_projection();
+    let seed = projection.checkpoint_seed();
+    let first = seed.checkpoint_candidate().unwrap();
+    let original = serde_json::to_vec(&first.snapshot.capabilities).unwrap();
+    let repeated = seed.checkpoint_candidate().unwrap();
+    assert!(Arc::ptr_eq(
+        &first.snapshot.capabilities,
+        &repeated.snapshot.capabilities
+    ));
+
+    let mut changed = projection.capture_working_seed();
+    let mut header = changed.capability_head.header();
+    header.revision = crate::runtime::identity::CapabilityRevision::new(42);
+    changed.capability_head =
+        crate::runtime_client::capability_source::PreparedCapabilityHead::new(&header, Vec::new());
+    changed.snapshot.capabilities = Arc::new(header);
+    changed.prepared =
+        super::super::prepared_capture::PreparedCaptures::inherit(&changed, Some(&seed));
+    let updated = changed.checkpoint_candidate().unwrap();
+    assert!(!Arc::ptr_eq(
+        &first.snapshot.capabilities,
+        &updated.snapshot.capabilities
+    ));
+    assert_eq!(updated.snapshot.capabilities.revision.get(), 42);
+    assert_eq!(
+        serde_json::to_vec(&first.snapshot.capabilities).unwrap(),
+        original
+    );
+}
+
+#[test]
 fn issued_metadata_roots_do_not_clone_historical_leaves_and_survive_working_eviction() {
     let (mut projection, _store) = initialized_source_projection();
     projection.install_content_metadata((1..=4096).map(reference).collect());
