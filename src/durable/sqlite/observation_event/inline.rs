@@ -10,6 +10,10 @@ use sha2::{Digest as _, Sha256};
 
 mod overlay;
 pub(super) const MAX_BYTES: usize = 16_384;
+// The audited families contain at most eleven unsigned scalars (including the
+// envelope), so structural decimal quoting adds at most 22 bytes. Leave 64
+// bytes of headroom without encoding merely to decide whether to defer.
+const MAX_NATIVE_BYTES: usize = MAX_BYTES - 64;
 fn can_defer(event: &crate::events::types::RuntimeEvent) -> bool {
     use crate::events::types::RuntimeEvent as Event;
     matches!(
@@ -29,7 +33,7 @@ pub(super) fn capture_native(
     event: &crate::events::types::RuntimeEvent,
     native: &[u8],
 ) -> Option<Vec<u8>> {
-    (can_defer(event) && !native.is_empty() && native.len() <= MAX_BYTES).then(|| {
+    (can_defer(event) && !native.is_empty() && native.len() <= MAX_NATIVE_BYTES).then(|| {
         let mut record = Vec::with_capacity(33);
         record.push(0);
         record.extend_from_slice(&Sha256::digest(native));
@@ -89,7 +93,7 @@ impl Source {
             .map_err(|error| storage(error.to_string()))?;
         match row {
             Some((Some(record), Some(native))) => match record.split_first() {
-                Some((0, digest)) if digest.len() == 32 => {
+                Some((0, digest)) if digest.len() == 32 && native.len() <= MAX_NATIVE_BYTES => {
                     if Sha256::digest(&native).as_slice() != digest {
                         return Err(storage("native event source digest differs"));
                     }
@@ -317,5 +321,90 @@ impl Source {
             readable_end,
             next_offset: (end_offset < readable_end).then_some(end_offset),
         })
+    }
+}
+
+#[cfg(test)]
+mod native_budget_tests {
+    use super::*;
+    use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+    use crate::runtime::identity::{
+        AttemptId, ConversationId, EventId, MessageId, RequestId, TurnId,
+    };
+    #[test]
+    fn deferred_native_budget_keeps_every_audited_family_below_the_memory_index_bound() {
+        let attempt = AttemptId::new("owner\\\"\n水");
+        let cases = [
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt.clone(),
+            },
+            RuntimeEvent::AttemptTimedOut {
+                attempt_id: attempt.clone(),
+            },
+            RuntimeEvent::TurnStarted,
+            RuntimeEvent::TurnCompleted,
+            RuntimeEvent::ModelRequestStarted {
+                request_id: RequestId::new("request"),
+                model: "model\n水".into(),
+            },
+            RuntimeEvent::InboundTurnAdopted {
+                message_ids: vec![MessageId::new("first"), MessageId::new("second")],
+            },
+            RuntimeEvent::AssistantMessageCommitted {
+                message_id: MessageId::new("message"),
+            },
+            RuntimeEvent::AttemptCompleted {
+                attempt_id: attempt.clone(),
+                finish_reason: crate::model::ModelFinishReason::Other {
+                    reason: "reason\n水".into(),
+                },
+            },
+            RuntimeEvent::ModelRequestCompleted {
+                request_id: RequestId::new("request"),
+                finish_reason: crate::model::ModelFinishReason::Stop,
+                usage: Some(crate::model::ModelUsage {
+                    input_tokens: u64::MAX,
+                    output_tokens: u64::MAX,
+                    total_tokens: u64::MAX,
+                    details: Some(crate::model::types::UsageDetails {
+                        reasoning_tokens: Some(u64::MAX),
+                        cached_input_tokens: Some(u64::MAX),
+                    }),
+                }),
+                generation: Some(crate::model::generation_evidence::GenerationEvidence {
+                    dispatch_after_start_ms: Some(9_007_199_254_740_991),
+                    first_output_ms: Some(9_007_199_254_740_991),
+                    last_output_ms: Some(9_007_199_254_740_991),
+                    terminal_ms: 9_007_199_254_740_991,
+                }),
+            },
+        ];
+        for event in cases {
+            let mut envelope = RuntimeEventEnvelope {
+                schema_version: u16::MAX,
+                event_id: EventId::new(""),
+                sequence: u64::MAX,
+                tool_occurrence: None,
+                observation: None,
+                conversation_id: ConversationId::generate(),
+                attempt_id: Some(attempt.clone()),
+                turn_id: Some(TurnId::new("turn")),
+                timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap(),
+                event,
+            };
+            let base = serde_json::to_vec(&envelope).unwrap().len();
+            envelope.event_id = EventId::new("x".repeat(MAX_NATIVE_BYTES - base));
+            let native = serde_json::to_vec(&envelope).unwrap();
+            assert_eq!(native.len(), MAX_NATIVE_BYTES);
+            assert_eq!(capture_native(&envelope.event, &native).unwrap().len(), 33);
+            let source = SeekableObservationSource::new(&envelope).unwrap();
+            let extent = source.read(&[], 0, 1).unwrap().readable_end;
+            assert!(extent <= MAX_BYTES as u64, "{extent}");
+            assert!(extent <= native.len() as u64 + 64);
+            envelope.event_id = EventId::new("x".repeat(MAX_NATIVE_BYTES - base + 1));
+            assert!(
+                capture_native(&envelope.event, &serde_json::to_vec(&envelope).unwrap()).is_none()
+            );
+        }
     }
 }

@@ -1,4 +1,4 @@
-//! Finite aggregate read layouts attached to the existing native Journal commit.
+//! Independent statistical facts with bounded checkpoint replay in the native commit.
 //! They grant no execution authority and publish neither events nor cursors.
 use super::observation_codec as codec;
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
@@ -6,6 +6,10 @@ use crate::durable::reading::TurnExecution;
 use crate::durable::response::{add_usage, timing::ActivityFold};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime_client::response::{ConversationStatistics, ConversationTurnClock};
+mod contribution;
+mod history;
+mod owner;
+pub(super) use owner::FoldCache;
 #[derive(Default)]
 struct StatisticsLayout {
     statistics: ConversationStatistics,
@@ -162,6 +166,11 @@ fn compact_fields(state: &StatisticsLayout, is_shared: bool) -> impl serde::Seri
     )
 }
 fn encode(state: &StatisticsLayout) -> Result<Vec<u8>, ConversationStoreError> {
+    #[cfg(test)]
+    WRITE_WORK.with(|work| {
+        let (full, facts) = work.get();
+        work.set((full + 1, facts));
+    });
     // Admission uses the original tuple, before JSON's nonfinite-to-null timing
     // conversion. The smaller private encoding cannot admit additional values.
     let is_shared = shared(state);
@@ -206,61 +215,11 @@ fn add_count(total: &mut u64, part: u64) -> Result<(), ConversationStoreError> {
         .ok_or_else(|| storage("native statistics count exceeds representation"))?;
     Ok(())
 }
-#[derive(Default)]
-pub(super) struct FoldCache(super::append_facts::FoldCache<StatisticsLayout>);
 fn layout(
     connection: &Connection,
     through: u64,
 ) -> Result<StatisticsLayout, ConversationStoreError> {
-    layout_cached(connection, through, None)
-}
-fn layout_cached(
-    connection: &Connection,
-    through: u64,
-    cache: Option<&FoldCache>,
-) -> Result<StatisticsLayout, ConversationStoreError> {
-    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (4,5,6,7) AND sequence<=?1)").and_then(|mut statement| statement.query_row([through],|row| row.get(0))).map_err(|error| storage(error.to_string()))?;
-    if missing {
-        return Err(storage("native statistics header unavailable"));
-    }
-    let decode_current = |row: &rusqlite::Row<'_>| {
-        super::append_facts::read_fold(row, cache.map(|cache| &cache.0), |bytes| {
-            #[cfg(test)]
-            READ_WORK.with(|work| {
-                let (rows, total, original) = work.get();
-                work.set((rows + 1, total + bytes.len(), original));
-            });
-            decode(bytes)
-        })
-    };
-    let value = connection
-        .prepare_cached(super::event_heads::STATISTICS)
-        .and_then(|mut statement| statement.query_row([through], decode_current))
-        .optional()
-        .map_err(|error| storage(error.to_string()))?
-        .transpose()?
-        .flatten();
-    let value = match value {
-        Some(value) => Some(value),
-        None => connection
-            .prepare_cached("SELECT observation_statistics FROM rustx_store WHERE id=1")
-            .and_then(|mut statement| statement.query_row([], decode_current))
-            .map_err(|error| storage(error.to_string()))??,
-    };
-    value.map_or_else(
-        || {
-            let initialized: bool = connection
-                .prepare_cached("SELECT bootstrap_initialized FROM rustx_store WHERE id=1")
-                .and_then(|mut statement| statement.query_row([], |row| row.get(0)))
-                .map_err(|error| storage(error.to_string()))?;
-            if initialized {
-                Err(storage("native statistics bootstrap header unavailable"))
-            } else {
-                Ok(StatisticsLayout::default())
-            }
-        },
-        Ok,
-    )
+    Ok(history::layout(connection, through)?.state)
 }
 fn at_cut(
     connection: &Connection,
@@ -284,41 +243,11 @@ pub(super) fn read(
     Ok(at_cut(connection, through)?.statistics)
 }
 /// The native head and the supplied Journal boundary were already checked in
-/// this transaction. Keep layout/hole decoding here, in its original error order.
+/// this transaction. Verify the current checkpoint and its bounded fact suffix.
 pub(super) fn read_validated(
     validated: &super::observation::ValidatedCut<'_, '_>,
 ) -> Result<ConversationStatistics, ConversationStoreError> {
     Ok(layout(validated.connection()?, validated.expected().read.journal)?.statistics)
-}
-/// Reuse the freshly encoded value only after reading its real stored cell and
-/// the same cut/hole evidence as the historical reader. Trigger changes remain
-/// visible and are decoded with the current storage codec.
-pub(super) fn read_prepared(
-    connection: &Connection,
-    through: u64,
-    prepared: Option<&Prepared>,
-) -> Result<ConversationStatistics, ConversationStoreError> {
-    let Some(captured) = prepared.and_then(|prepared| prepared.statistics.as_ref()) else {
-        return read(connection, through);
-    };
-    let (actual, bytes, missing): (u64, Option<Vec<u8>>, bool) = connection
-        .prepare_cached("SELECT next_event_sequence,(SELECT observation_statistics FROM events WHERE sequence=?1),EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (4,5,6,7) AND sequence<=?1) FROM rustx_store WHERE id=1")
-        .and_then(|mut statement| statement.query_row([through], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))
-        .map_err(|error| storage(error.to_string()))?;
-    if through > actual {
-        return Err(ConversationStoreError::InvalidReference(
-            "future native statistics cut".into(),
-        ));
-    }
-    if missing {
-        return Err(storage("native statistics header unavailable"));
-    }
-    match bytes {
-        Some(bytes) => captured
-            .reuse(&bytes)
-            .map_or_else(|| decode(&bytes).map(|layout| layout.statistics), Ok),
-        None => layout(connection, through).map(|layout| layout.statistics),
-    }
 }
 pub(super) fn agent_read(
     connection: &Connection,
@@ -408,25 +337,17 @@ pub(super) fn is_trace_anchor(event: &RuntimeEvent) -> bool {
 pub(super) struct Prepared {
     pub(super) trace_total: Option<u64>,
     pub(super) statistics: Option<super::append_facts::Captured<ConversationStatistics>>,
-    fold: Option<StatisticsLayout>,
+    pub(super) checkpoint: Option<Vec<u8>>,
+    fold: Option<(history::Frame, u64)>,
 }
 impl Prepared {
     pub(super) fn remember(self, cache: &FoldCache) {
-        if let (Some(capture), Some(fold)) = (self.statistics, self.fold) {
-            // All same-event consumers and the native INSERT have finished.
-            // Transfer the one encoding instead of keeping a second byte copy.
-            cache.0.remember_owned(capture.bytes, fold);
+        if let (Some((fold, data)), Some(capture)) = (self.fold, self.statistics) {
+            cache.stage(fold, data, capture.bytes, self.checkpoint);
         }
     }
 }
 
-#[cfg(test)]
-pub(super) fn prepare(
-    connection: &Connection,
-    event: &RuntimeEventEnvelope,
-) -> Result<Prepared, ConversationStoreError> {
-    prepare_cached(connection, event, None)
-}
 pub(super) fn prepare_cached(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
@@ -444,6 +365,7 @@ pub(super) fn prepare_cached(
     let mut prepared = Prepared {
         trace_total,
         statistics: None,
+        checkpoint: None,
         fold: None,
     };
     let Some(attempt) = &event.attempt_id else {
@@ -452,48 +374,31 @@ pub(super) fn prepare_cached(
     if !requires_statistics(event) {
         return Ok(prepared);
     }
-    let mut state = layout_cached(connection, event.sequence.saturating_sub(1), cache)?;
-    let was_shared = shared(&state);
-    let facts = NativeFacts::read(connection, event, attempt)?;
-    let mut activity = ActivityFold::default();
-    activity.absorb(&state.activity);
-    fold_statistics(
-        connection,
-        event,
-        attempt,
-        &facts,
-        &mut state.statistics,
-        &mut activity,
-    )?;
-    state.statistics.timing = activity.summary();
-    activity.record(&mut state.activity);
-    if was_shared {
-        state.local.view.statistics.clone_from(&state.statistics);
-        state.local.activity.clone_from(&state.activity);
-    } else {
-        let mut local_activity = ActivityFold::default();
-        local_activity.absorb(&state.local.activity);
-        fold_statistics(
-            connection,
-            event,
-            attempt,
-            &facts,
-            &mut state.local.view.statistics,
-            &mut local_activity,
-        )?;
-        state.local.view.statistics.timing = local_activity.summary();
-        local_activity.record(&mut state.local.activity);
-    }
-    record_duration(connection, event, &mut state.local)?;
-    let bytes = encode(&state)?;
-    let value = if cache.is_some() {
-        let value = state.statistics.clone();
-        prepared.fold = Some(normalized_fold(state));
-        value
-    } else {
-        state.statistics
+    let through = event.sequence.saturating_sub(1);
+    let (data, cached) = match cache {
+        Some(cache) => cache.take(connection, through)?,
+        None => (0, None),
     };
+    let mut frame = match cached {
+        Some(frame) => frame,
+        None => history::layout(connection, through)?,
+    };
+    let contribution =
+        contribution::Contribution::capture(connection, event, attempt, &frame.state)?;
+    contribution.apply(event.sequence, &mut frame.state)?;
+    frame.state = normalized_fold(frame.state);
+    let (record, checkpoint) =
+        history::Record::capture(&frame, event.sequence, contribution, &frame.state)?;
+    let bytes = record.encode()?;
+    let value = frame.state.statistics.clone();
+    frame.sequence = event.sequence;
+    frame.anchor = record.anchor;
+    frame.distance = record.distance;
+    if cache.is_some() {
+        prepared.fold = Some((frame, data));
+    }
     prepared.statistics = Some(super::append_facts::Captured { bytes, value });
+    prepared.checkpoint = checkpoint;
     Ok(prepared)
 }
 // These are exactly the fields retained by the private tuple decoder.
@@ -547,83 +452,6 @@ impl NativeFacts {
         Ok(facts)
     }
 }
-fn fold_statistics(
-    connection: &Connection,
-    event: &RuntimeEventEnvelope,
-    attempt: &crate::runtime::identity::AttemptId,
-    facts: &NativeFacts,
-    statistics: &mut ConversationStatistics,
-    activity: &mut ActivityFold,
-) -> Result<(), ConversationStoreError> {
-    match &event.event {
-        RuntimeEvent::AttemptStarted { .. } => {
-            add_count(&mut statistics.turns, 1)?;
-            statistics.latest_turn = Some(ConversationTurnClock {
-                attempt_id: (attempt.as_str().len() <= 512).then(|| attempt.clone()),
-                attempt_id_deferred: attempt.as_str().len() > 512,
-                attempt_id_source: if attempt.as_str().len() > 512 {
-                    Some(crate::runtime_client::snapshot::JournalFieldRef {
-                        sequence: event.sequence,
-                        path: vec!["attempt_id".into()],
-                        encoded_bytes: super::observation_request_summary::serialized_bytes(
-                            attempt,
-                        )?,
-                    })
-                } else {
-                    None
-                },
-                started_at: event.timestamp,
-                ended_at: None,
-            });
-        }
-        RuntimeEvent::TurnStarted => add_count(&mut statistics.steps, 1)?,
-        RuntimeEvent::ModelRequestStarted { .. } => add_count(&mut statistics.model_requests, 1)?,
-        RuntimeEvent::ModelRequestCompleted {
-            usage, generation, ..
-        }
-        | RuntimeEvent::ModelRequestFailed {
-            usage, generation, ..
-        } => {
-            if generation
-                .as_ref()
-                .and_then(
-                    crate::model::generation_evidence::GenerationEvidence::time_to_first_output_ms,
-                )
-                .is_some()
-            {
-                let mut reading = TurnExecution::default();
-                activity.record(&mut reading);
-                add_count(&mut reading.ttft_requests, 1)?;
-            }
-            activity.request(generation.as_ref(), usage.as_ref());
-            if let Some(usage) = usage {
-                add_count(&mut statistics.requests_with_usage, 1)?;
-                add_usage(&mut statistics.reported_usage, usage);
-            }
-        }
-        RuntimeEvent::ToolExecutionCompleted { .. } | RuntimeEvent::ToolExecutionFailed { .. } => {
-            if let Some(span) = facts.tool_span {
-                activity.tool_span_ms(span);
-            }
-        }
-        RuntimeEvent::AttemptCompleted { .. } => {
-            add_count(
-                &mut statistics.completed_responses,
-                u64::from(facts.completed_response),
-            )?;
-            close_clock(connection, statistics, attempt, event.timestamp)?;
-        }
-        RuntimeEvent::AttemptCancelled { .. }
-        | RuntimeEvent::AttemptFailed { .. }
-        | RuntimeEvent::AttemptTimedOut { .. }
-        | RuntimeEvent::AttemptLimitExceeded { .. } => {
-            close_clock(connection, statistics, attempt, event.timestamp)?;
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
 fn settle_duration(local: &mut LocalStatisticsLayout, at: chrono::DateTime<chrono::Utc>) {
     if let Some(active) = local.view.duration.active.take() {
         let duration = u64::try_from(
@@ -634,60 +462,6 @@ fn settle_duration(local: &mut LocalStatisticsLayout, at: chrono::DateTime<chron
         local.view.duration.settled_ms = local.view.duration.settled_ms.saturating_add(duration);
     }
     local.active_start = None;
-}
-
-fn record_duration(
-    connection: &Connection,
-    event: &RuntimeEventEnvelope,
-    local: &mut LocalStatisticsLayout,
-) -> Result<(), ConversationStoreError> {
-    use crate::runtime_client::agent_statistics::AgentActiveInterval;
-    if matches!(event.event, RuntimeEvent::AttemptStarted { .. }) {
-        if let Some(active) = &local.view.duration.active {
-            settle_duration(local, active.observed_at);
-        }
-        local.active_start = Some(event.sequence);
-        local.view.duration.active = Some(AgentActiveInterval {
-            started_at: event.timestamp,
-            observed_at: event.timestamp,
-            running: false,
-        });
-        return Ok(());
-    }
-    let Some(start) = local.active_start else {
-        return Ok(());
-    };
-    let same: bool = connection
-        .prepare_cached("SELECT attempt_id=?2 FROM events WHERE sequence=?1")
-        .and_then(|mut statement| {
-            statement.query_row(
-                params![
-                    start,
-                    event
-                        .attempt_id
-                        .as_ref()
-                        .map(crate::runtime::identity::AttemptId::as_str)
-                ],
-                |row| row.get(0),
-            )
-        })
-        .map_err(|error| storage(error.to_string()))?;
-    if same {
-        if let Some(active) = &mut local.view.duration.active {
-            active.observed_at = active.observed_at.max(event.timestamp);
-        }
-        if matches!(
-            event.event,
-            RuntimeEvent::AttemptCompleted { .. }
-                | RuntimeEvent::AttemptCancelled { .. }
-                | RuntimeEvent::AttemptFailed { .. }
-                | RuntimeEvent::AttemptTimedOut { .. }
-                | RuntimeEvent::AttemptLimitExceeded { .. }
-        ) {
-            settle_duration(local, event.timestamp);
-        }
-    }
-    Ok(())
 }
 
 fn tool_settlement(
@@ -728,33 +502,6 @@ fn tool_settlement(
 
     Ok(None)
 }
-fn close_clock(
-    connection: &Connection,
-    statistics: &mut ConversationStatistics,
-    attempt: &crate::runtime::identity::AttemptId,
-    at: chrono::DateTime<chrono::Utc>,
-) -> Result<(), ConversationStoreError> {
-    if let Some(clock) = statistics.latest_turn.as_mut() {
-        let same = if let Some(id) = &clock.attempt_id {
-            id == attempt
-        } else if let Some(source) = &clock.attempt_id_source {
-            connection
-                .prepare_cached("SELECT attempt_id=?2 FROM events WHERE sequence=?1")
-                .and_then(|mut statement| {
-                    statement
-                        .query_row(params![source.sequence, attempt.as_str()], |row| row.get(0))
-                })
-                .map_err(|error| storage(error.to_string()))?
-        } else {
-            return Err(storage("native turn clock identity evidence unavailable"));
-        };
-        if same {
-            clock.ended_at = Some(at);
-        }
-    }
-    Ok(())
-}
-
 pub(super) fn trace_total(
     connection: &Connection,
     through: u64,
@@ -774,6 +521,13 @@ pub(super) fn trace_total(
 #[cfg(test)]
 thread_local! {
     static READ_WORK: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0)) };
+}
+#[cfg(test)]
+fn record_read(rows: usize, bytes: usize) {
+    READ_WORK.with(|work| {
+        let (prior, total, original) = work.get();
+        work.set((prior + rows, total + bytes, original));
+    });
 }
 #[cfg(test)]
 pub(super) fn original_read() {
@@ -919,10 +673,10 @@ mod compact_tests {
             )
             .unwrap();
         assert_eq!(read(&connection, 0).unwrap(), state.statistics);
-        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_statistics) VALUES(1,'wide-statistics',1,'test','time','{}',?1)", [&bytes]).unwrap();
+        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_statistics_checkpoint) VALUES(1,'wide-statistics',1,'test','time','{}',?1)", [&bytes]).unwrap();
         let retained: Vec<u8> = connection
             .query_row(
-                "SELECT observation_statistics FROM events WHERE sequence=1",
+                "SELECT observation_statistics_checkpoint FROM events WHERE sequence=1",
                 [],
                 |row| row.get(0),
             )
@@ -1033,4 +787,15 @@ mod fold_normalization_tests {
             assert!(normalized.local.view.occupancy.is_none());
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {static WRITE_WORK:std::cell::Cell<(usize,usize)>=const{std::cell::Cell::new((0,0))};}
+#[cfg(test)]
+pub(super) fn write_work() -> (usize, usize) {
+    WRITE_WORK.with(|work| work.replace((0, 0)))
+}
+#[cfg(test)]
+pub(super) fn fold_work() -> (usize, usize) {
+    owner::work()
 }

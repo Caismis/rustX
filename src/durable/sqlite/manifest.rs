@@ -474,6 +474,7 @@ impl Owner {
         connection: &Connection,
         append: Arc<super::append_validation::Owner>,
         response: Arc<super::observation_response::Owner>,
+        statistics: Arc<super::observation_statistics::FoldCache>,
     ) -> Result<Arc<Self>, ConversationStoreError> {
         let owner = Self::new();
         let watched = owner.clone();
@@ -490,6 +491,7 @@ impl Owner {
                     // One SQLite hook dispatches to independent proof owners.
                     append.observe(table, change);
                     response.observe(table, change);
+                    statistics.observe(table, change);
                     let invalidates = columns.invalidates(&watched, table, change);
                     if invalidates {
                         watched.invalidate();

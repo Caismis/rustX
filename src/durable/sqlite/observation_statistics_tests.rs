@@ -98,14 +98,14 @@ fn t08_t14_t19_agent_statistics_use_fixed_headers_with_giant_original_bodies() {
     assert_eq!(actual.duration.settled_ms, 5_000);
     assert!(actual.duration.active.is_none());
     let (rows, bytes, original_reads) = observation_statistics::read_work();
-    assert_eq!(rows, 1);
+    assert!((1..=18).contains(&rows));
     assert!(bytes <= 16_384);
     assert_eq!(original_reads, 0);
     let earlier = store
         .observation_agent_statistics(request_start.sequence)
         .unwrap();
     let (rows, bytes, original_reads) = observation_statistics::read_work();
-    assert_eq!(rows, 1);
+    assert!((1..=18).contains(&rows));
     assert!(bytes <= 16_384);
     assert_eq!(original_reads, 0);
     assert_eq!(

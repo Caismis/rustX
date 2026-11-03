@@ -205,7 +205,7 @@ fn start_layout(
             .value
             .turns
     } else {
-        super::observation_statistics::read_prepared(connection, event.sequence, statistics)?.turns
+        super::observation_statistics::read(connection, event.sequence)?.turns
     };
     if ordinal == 0 || ordinal > SAFE {
         return Err(storage("turn ordinal exceeds protocol range"));

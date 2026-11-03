@@ -345,8 +345,8 @@ fn count_conversation_store_open() {
 /// Version 85 stores immutable first content chunks alongside their exact frontier.
 /// Version 86 stores bounded binary Statistics and Execution tuples with unchanged JSON admission.
 /// Version 87 removes redundant trailing sequence keys from rowid event indexes.
-/// Version 89 tags exact inline event sources and defers closed-family navigation.
-pub const SQLITE_SCHEMA_VERSION: i64 = 89;
+/// Version 90 stores independent statistical contributions with sparse checkpoints.
+pub const SQLITE_SCHEMA_VERSION: i64 = 90;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -634,6 +634,7 @@ struct StoreGuard<'a> {
     presentation: bool,
     changes: u64,
     observer: &'a Mutex<Option<(Arc<dyn super::presentation::JournalObserver>, u64)>>,
+    event_guard: &'a event_insert::Guard,
 }
 impl std::ops::Deref for StoreGuard<'_> {
     type Target = Connection;
@@ -661,6 +662,7 @@ impl Drop for StoreGuard<'_> {
                 .expect("restore SQLite progress policy");
             writer_busy_policy(&self.connection).expect("restore SQLite busy policy");
         }
+        self.event_guard.publish_statistics(&self.connection);
         if self.connection.total_changes() == self.changes || !self.connection.is_autocommit() {
             return;
         }
@@ -909,17 +911,23 @@ impl SqliteConversationStore {
             )
             .map_err(|error| storage(format!("configure stable SQLite plans: {error}")))?;
         let append_validation = append_validation::Owner::new(&connection)?;
+        let statistics = observation_statistics::FoldCache::new(&connection)?;
+        let statistics_rollback = Arc::clone(&statistics);
         let rollback = Arc::clone(&append_validation);
         connection
-            .rollback_hook(Some(move || rollback.invalidate()))
+            .rollback_hook(Some(move || {
+                rollback.invalidate();
+                statistics_rollback.invalidate();
+            }))
             .map_err(|error| storage(format!("install canonical rollback observer: {error}")))?;
         let response = observation_response::Owner::new(&connection)?;
         let manifest = manifest::Owner::install(
             &connection,
             Arc::clone(&append_validation),
             Arc::clone(&response),
+            Arc::clone(&statistics),
         )?;
-        let event_guard = event_insert::Guard::new(&connection);
+        let event_guard = event_insert::Guard::new(&connection, statistics);
         Ok(Self::from_connection_owner(
             conversation_id,
             Arc::new(ConnectionOwner {
@@ -1029,6 +1037,7 @@ impl SqliteConversationStore {
             presentation: self.read_cancel.is_some(),
             changes,
             observer: &self.journal_observer,
+            event_guard: &self.conn.event_guard,
         })
     }
 
@@ -8876,6 +8885,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 event_timestamp TEXT NOT NULL,
                 observation_member_anchor INTEGER,
                 observation_statistics BLOB CHECK(observation_statistics IS NULL OR length(observation_statistics)<=49152),
+                observation_statistics_checkpoint BLOB CHECK(observation_statistics_checkpoint IS NULL OR (typeof(observation_statistics_checkpoint)='blob' AND length(observation_statistics_checkpoint)<=49152)),
                 observation_occupancy BLOB CHECK(observation_occupancy IS NULL OR length(observation_occupancy)<=16384),
                 observation_readiness_missing INTEGER NOT NULL DEFAULT 1 CHECK(observation_readiness_missing IN (0,1)),
                 observation_statistics_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_statistics_required IN (0,1)),
@@ -9474,6 +9484,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "observation_kind",
                 "observation_occupancy",
                 "observation_statistics_required",
+                "observation_statistics_checkpoint",
                 "observation_members_required",
                 "observation_member_anchor",
                 "sequence",
@@ -14356,6 +14367,7 @@ mod tests {
     include!("sqlite/observation_inspection_tests.rs");
     include!("sqlite/observation_occupancy_tests.rs");
     include!("sqlite/observation_statistics_tests.rs");
+    include!("sqlite/observation_statistics_history_tests.rs");
     include!("sqlite/observation_member_tests.rs");
     include!("sqlite/observation_owner_tests.rs");
     include!("sqlite/observation_selected_source_tests.rs");
@@ -19786,7 +19798,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 89);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 90);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19855,7 +19867,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 89);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 90);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

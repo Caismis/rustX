@@ -191,7 +191,7 @@ fn checkpoint_read_reuses_one_actual_native_head_for_response_and_statistics() {
         super::super::reading::CUT_SQL,
         "SELECT next_event_sequence,(SELECT COALESCE(MAX(position),0) FROM message_ledger),next_transcript_position FROM rustx_store WHERE id=1",
         "SELECT next_event_sequence FROM rustx_store WHERE id=1",
-        "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (4,5,6,7) AND sequence<=?1)",
+        "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (4,5,6,7) AND sequence>?1 AND sequence<=?2)",
     ];
     {
         let connection = store.lock().unwrap();

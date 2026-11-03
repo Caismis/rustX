@@ -40,7 +40,10 @@ fn event_guard_reuses_only_the_installed_main_and_temp_schema() {
     connection
         .execute_batch("CREATE TABLE target(value INTEGER)")
         .unwrap();
-    let guard = Guard::new(&connection);
+    let guard = Guard::new(
+        &connection,
+        observation_statistics::FoldCache::uninstalled(),
+    );
     assert!(guard.installed.is_some());
     GUARD_SCANS.with(|count| count.set(0));
     for _ in 0..32 {
@@ -64,7 +67,10 @@ fn event_guard_does_not_seat_reused_savepoint_schema_versions() {
     connection
         .execute_batch("CREATE TABLE target(value INTEGER)")
         .unwrap();
-    let guard = Guard::new(&connection);
+    let guard = Guard::new(
+        &connection,
+        observation_statistics::FoldCache::uninstalled(),
+    );
     connection
         .execute_batch("SAVEPOINT change_schema; CREATE TABLE harmless(value INTEGER)")
         .unwrap();
@@ -89,7 +95,10 @@ fn event_guard_observes_external_schema_changes_in_the_current_snapshot() {
     connection
         .execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE target(value INTEGER)")
         .unwrap();
-    let guard = Guard::new(&connection);
+    let guard = Guard::new(
+        &connection,
+        observation_statistics::FoldCache::uninstalled(),
+    );
     let writer = Connection::open(&path).unwrap();
     let transaction = connection.unchecked_transaction().unwrap();
     assert!(guard.can_prepare(&transaction));
@@ -112,7 +121,10 @@ fn event_guard_observes_external_schema_changes_in_the_current_snapshot() {
 fn event_guard_does_not_trust_an_initial_custom_trigger_or_a_cleanup_name() {
     let connection = Connection::open_in_memory().unwrap();
     connection.execute_batch("CREATE TABLE target(value INTEGER); CREATE TEMP TRIGGER event_readiness_source_deleted AFTER INSERT ON main.target BEGIN SELECT NEW.value; END").unwrap();
-    let guard = Guard::new(&connection);
+    let guard = Guard::new(
+        &connection,
+        observation_statistics::FoldCache::uninstalled(),
+    );
     assert!(guard.installed.is_none());
     assert!(!guard.can_prepare(&connection));
     connection

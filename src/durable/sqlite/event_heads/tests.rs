@@ -5,7 +5,7 @@ use crate::runtime::identity::ConversationId;
 use rusqlite::{StatementStatus, types::Value};
 
 const CASES: &[(&str, &str, bool, usize)] = &[
-    (STATISTICS, "observation_statistics", false, 0),
+    (STATISTICS, "observation_statistics", false, 1),
     (TRACE_TOTAL, "observation_trace_total", false, 1),
     (EXECUTION, "observation_execution", true, 0),
     (MEMBERS, "observation_members", true, 0),
