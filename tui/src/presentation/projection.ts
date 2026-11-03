@@ -2,7 +2,7 @@ import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity.t
 import { messageDescriptors } from './message-descriptors.ts';
 import { contentRefKey } from '../../../protocol/app-server/content-identity.ts';
 import { displayInteraction } from './interaction-display.ts';
-import type { ContentBinding } from '../../../protocol/app-server/v62.ts';
+import type { ContentBinding } from '../../../protocol/app-server/v63.ts';
 import { foldRuntimeEvent, checkpointSnapshot, contentBindings, observationCheckpoint, refineToolSlots, statusIdentity, transitionFacts } from '../../../protocol/app-server/projection.ts';
 /**
  * The presentation reducer.
@@ -94,7 +94,6 @@ export function emptyPresentationState(
     goal: null,
     runtimeShutdown: false,
     durabilityFailure: null,
-    adoptionEligibility: "unavailable",
     effectiveApprovalMode: "policy",
   };
 }
@@ -297,6 +296,13 @@ function adaptTranscript(view: TranscriptView, event: RuntimeClientEvent, adapta
         interactionId: event.audit.interaction_id,
         settlement: event.audit.settlement,
       }) };
+    case 'configuration_applied':
+      return { ...view, transcript: appendTranscriptEntry(view.transcript, {
+        kind: 'configuration_applied',
+        key: `configuration:${event.item.event_id}`,
+        cursor: event.transcript_cursor,
+        change: event.item.change,
+      }) };
     case 'assistant_publication_settled':
       // The stream settled without ever becoming a canonical Assistant
       // message, so the in-flight card is dropped exactly as the Rust
@@ -387,7 +393,6 @@ function adaptTranscript(view: TranscriptView, event: RuntimeClientEvent, adapta
     case 'session_model_changed':
     case 'runtime_shutdown':
     case 'runtime_durability_failed':
-    case 'configuration_adoption_eligibility_changed':
       return view;
     default: {
       // The generated event vocabulary is closed and this switch is
@@ -506,7 +511,6 @@ function nativeFields(snapshot: RuntimeClientSnapshot): Omit<PresentationState, 
     settingsEvidence: snapshot.settings_evidence,
     runtimeShutdown: snapshot.shutting_down,
     durabilityFailure: snapshot.durability_failure ?? null,
-    adoptionEligibility: snapshot.configuration_adoption_eligibility.status,
     effectiveApprovalMode: snapshot.effective_approval_mode,
   };
 }
@@ -539,8 +543,8 @@ function mergeNativeTranscript(state: TranscriptView, fresh: TranscriptView): Tr
   };
 }
 
-function boundedDeferred(rows: import('../../../protocol/app-server/v62.ts').CheckpointPageItem[]) {
- const unique=new Map(rows.map(row=>[row.offset,row])),kept:import('../../../protocol/app-server/v62.ts').CheckpointPageItem[]=[];let bytes=0;
+function boundedDeferred(rows: import('../../../protocol/app-server/v63.ts').CheckpointPageItem[]) {
+ const unique=new Map(rows.map(row=>[row.offset,row])),kept:import('../../../protocol/app-server/v63.ts').CheckpointPageItem[]=[];let bytes=0;
  for(const row of [...unique.values()].reverse()){const size=new TextEncoder().encode(JSON.stringify(row)).length;if(kept.length===512||bytes+size>4*1024*1024)break;bytes+=size;kept.push(row);}
  return kept.reverse();
 }
@@ -632,6 +636,13 @@ function transcriptEntryFromWire(
         turnId: entry.item.turn_id,
         interactionId: entry.item.interaction_id,
         settlement: entry.item.settlement,
+      };
+    case "configuration_applied":
+      return {
+        kind: "configuration_applied",
+        key: `configuration:${entry.item.event_id}`,
+        cursor: entry.cursor,
+        change: entry.item.change,
       };
   }
 }

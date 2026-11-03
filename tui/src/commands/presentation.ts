@@ -375,6 +375,6 @@ export function renderSettings(state: PresentationState, configuration?: import(
       `Admitted Attempt: ${JSON.stringify(configuration.admitted_attempt ?? null)}`,
       "Effective configuration and provenance:", JSON.stringify(configuration, null, 2),
     ] : []),
-    "/settings edits User/Workspace sources; /settings repairs shows their automatic repairs. /session settings inspects Session state; /session adopt explicitly adopts the inspected candidate.",
+    "/settings edits User/Workspace sources; /settings repairs shows their automatic repairs. /session settings inspects Session state; saved configuration applies automatically between turns.",
   ].join("\n");
 }

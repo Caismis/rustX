@@ -936,3 +936,16 @@ it('deferred occupancy model keeps native quantities without a guessed identity'
   }}});
   assert.equal(contextLabel(state), 'last context 25.6k/256k · model deferred (/context-model)');
 });
+
+describe("Session configuration status", () => {
+  const application = (status: "applied" | "preparing" | "ready" | "failed") => ({
+    scope: "s", sources: [{ kind: "user" as const }], version: "1", desired: { input_revision: "i", attempt: "1" },
+    units: { execution_policy: { status: "applied" as const }, instructions: status === "failed" ? { status, diagnostic: "bad toml" } : { status } },
+  });
+  it("is silent once applied and names pending or failed work compactly", () => {
+    assert.doesNotMatch(footer(stateOf(), "connected", 160, undefined, undefined, application("applied")), /config/);
+    assert.match(footer(stateOf(), "connected", 160, undefined, undefined, application("preparing")), /config preparing/);
+    assert.match(footer(stateOf(), "connected", 160, undefined, undefined, application("ready")), /config applies after current work/);
+    assert.match(footer(stateOf(), "connected", 160, undefined, undefined, application("failed")), /config failed · previous kept/);
+  });
+});

@@ -125,6 +125,14 @@ export interface TranscriptInteractionSettled {
   settlement: InteractionSettlement;
 }
 
+/** A committed Session configuration change: a concise notice, never a prompt. */
+export interface TranscriptConfigurationApplied {
+  kind: "configuration_applied";
+  key: string;
+  cursor: RuntimeClientTranscriptCursor;
+  change: import("../protocol/app-server.ts").ConfigurationChange;
+}
+
 /** One entry of the rendered transcript. */
 export type TranscriptEntry =
   | { kind: "attempt_terminal"; key: string; cursor: RuntimeClientTranscriptCursor; turn: Extract<import("../protocol/app-server.ts").RuntimeClientTranscriptItem, { type: "attempt_terminal" }>["turn"] }
@@ -132,7 +140,8 @@ export type TranscriptEntry =
   | StreamingMessage
   | TranscriptPublicationAudit
   | TranscriptInteractionRequested
-  | TranscriptInteractionSettled;
+  | TranscriptInteractionSettled
+  | TranscriptConfigurationApplied;
 
 /** The client-visible view of the current or latest attempt. */
 export interface AttemptPresentation {
@@ -169,9 +178,9 @@ export interface PresentationState {
   inbound: InboundDiagnostics;
   /** Runtime-owned live interactions, reconstructed from snapshot/events. */
   pendingInteractions: DisplayInteraction[];
-  publicationSettlements: import("../../../protocol/app-server/v62.ts").RuntimeClientPublicationSettlementRecord[];
-  deferredTranscriptEntries: import("../../../protocol/app-server/v62.ts").CheckpointPageItem[];
-  messageDescriptors: import("../../../protocol/app-server/v62.ts").RuntimeClientMessageDescriptor[];
+  publicationSettlements: import("../../../protocol/app-server/v63.ts").RuntimeClientPublicationSettlementRecord[];
+  deferredTranscriptEntries: import("../../../protocol/app-server/v63.ts").CheckpointPageItem[];
+  messageDescriptors: import("../../../protocol/app-server/v63.ts").RuntimeClientMessageDescriptor[];
   jobs: RuntimeClientJob[];
   agents: RuntimeClientAgent[];
   /**
@@ -193,7 +202,7 @@ export interface PresentationState {
   /** The session's *desired* model configuration. */
   sessionModel: SessionModelView | null;
   /** Availability and deferral published by the native Session model owner. */
-  modelStatus: import("../../../protocol/app-server/v62.ts").RuntimeClientModelStatus | null;
+  modelStatus: import("../../../protocol/app-server/v63.ts").RuntimeClientModelStatus | null;
   /**
    * The attached Agent runtime's frozen native Agent Extension composition.
    *
@@ -213,14 +222,6 @@ export interface PresentationState {
    * and nothing here decides that it has recovered.
    */
   durabilityFailure: import("../protocol/app-server.ts").RuntimeDurabilityFailure | null;
-  /**
-   * Whether the live runtime could adopt a prepared Session configuration now.
-   *
-   * Runtime-domain advisory state the runtime publishes itself — never part of
-   * the configuration application and never derived here from attempts, jobs
-   * or interactions. `/session adopt` still meets the native gate.
-   */
-  adoptionEligibility: import("../protocol/app-server.ts").AdoptionEligibility["status"];
   /**
    * The conversation's task list, as the runtime derived it from canonical
    * history. `undefined` before the first snapshot arrives, and whenever the

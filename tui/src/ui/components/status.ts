@@ -26,6 +26,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 
 import type { PresentationState } from "../../presentation/state.ts";
 import type {
+  ConfigurationApplication,
   ModelInvocationView,
   SessionView,
 } from "../../protocol/app-server.ts";
@@ -210,8 +211,9 @@ export function renderFooter(
   width = 120,
   session?: SessionView,
   conversation?: ConversationContext,
+  application?: ConfigurationApplication,
 ): string {
-  const segments = footerSegments(state, connectionState, session, conversation);
+  const segments = footerSegments(state, connectionState, session, conversation, application);
   return layout(segments, width).join("\n");
 }
 
@@ -220,6 +222,7 @@ interface FooterFacts {
   connection: string;
   session?: SessionView;
   conversation?: ConversationContext;
+  application?: ConfigurationApplication;
 }
 
 /** The shell asks for layout on every render, including terminal-only resizes. */
@@ -231,7 +234,7 @@ export class FooterView {
     const facts = this.#facts();
     if (!facts.state) return [];
     const pad = width > 2 ? " " : "";
-    return renderFooter(facts.state, facts.connection, Math.max(1, width - pad.length * 2), facts.session, facts.conversation)
+    return renderFooter(facts.state, facts.connection, Math.max(1, width - pad.length * 2), facts.session, facts.conversation, facts.application)
       .split("\n").map((line) => `${pad}${line}${pad}`);
   }
 }
@@ -242,6 +245,7 @@ export function footerSegments(
   connectionState: string,
   session?: SessionView,
   conversation?: ConversationContext,
+  application?: ConfigurationApplication,
 ): Segment[] {
   const models = modelSegments(state);
   const segments = models.slice(0, 1);
@@ -258,6 +262,8 @@ export function footerSegments(
   if (connectionState && connectionState !== "connected") {
     segments.push({ text: role.warning(connectionState), priority: 0 });
   }
+  const configuration = configurationSegment(application);
+  if (configuration) segments.push(configuration);
   const context = contextLabel(state);
   if (context) segments.push({ text: role.meta(context), priority: 1 });
   const unavailable = unavailableCapabilities(state).length;
@@ -271,6 +277,23 @@ export function footerSegments(
     segments.push({ text: role.meta(`usage coverage ${state.statistics.requests_with_usage}/${state.statistics.model_requests} requests`), priority: 4 });
   }
   return segments;
+}
+
+/**
+ * The Session configuration status, in Pi's transient-status manner: absent
+ * once everything is applied, a quiet note while a saved change is prepared or
+ * waits for current work, and a warning when native kept the previous
+ * configuration. `/session settings` inspects the details.
+ */
+export function configurationSegment(application?: ConfigurationApplication): Segment | undefined {
+  const states = Object.values(application?.units ?? {}).map(unit => unit?.status);
+  if (states.some(state => state === "failed" || state === "uncertain")) {
+    return { text: role.warning("config failed · previous kept · /session settings"), priority: 0, compact: role.warning("config failed") };
+  }
+  if (states.includes("process_restart")) return { text: role.warning("config needs restart"), priority: 1 };
+  if (states.includes("ready")) return { text: role.meta("config applies after current work"), priority: 1, compact: role.meta("config waiting") };
+  if (states.includes("preparing")) return { text: role.meta("config preparing"), priority: 1 };
+  return undefined;
 }
 
 /**
