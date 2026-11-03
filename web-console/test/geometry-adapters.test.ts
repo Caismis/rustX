@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, it, vi } from 'vitest';
-import { Frustum, Matrix4, Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Vector2, Vector3 } from 'three';
+import { BufferGeometry, Frustum, Material, Matrix4, Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Vector2, Vector3 } from 'three';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { admitGlb, importGlb } from '../src/app/components/documents/geometry/glb';
 import { importStl } from '../src/app/components/documents/geometry/stl';
@@ -50,6 +50,18 @@ function modifyGlb(change: (value: any) => void) {
   next.set(bytes.subarray(0, 12)); header.setUint32(8, next.length, true); header.setUint32(12, padded, true); header.setUint32(16, 0x4e4f534a, true);
   next.fill(32, 20, 20 + padded); next.set(text, 20); next.set(bin, 20 + padded); return next;
 }
+it.each(['empty', 'degenerate'] as const)('rejects an %s selected GLB scene and disposes geometry in other scenes', async kind => {
+  const bytes = modifyGlb(json => {
+    json.scene = 0;
+    if (kind === 'empty') json.scenes = [{ nodes: [] }, json.scenes[0]];
+    else { json.nodes = [{ mesh: 0, scale: [0,0,0] }, { mesh: 0 }]; json.scenes = [{ nodes: [0] }, { nodes: [1] }]; }
+  });
+  const geometry = vi.spyOn(BufferGeometry.prototype, 'dispose'), material = vi.spyOn(Material.prototype, 'dispose');
+  try {
+    await expect(importGlb(bytes, new AbortController().signal)).rejects.toMatchObject({ code: 'empty' });
+    expect(geometry).toHaveBeenCalled(); expect(material).toHaveBeenCalled();
+  } finally { geometry.mockRestore(); material.mockRestore(); }
+});
 it.each(['GLB', 'stl', 'STP', 'step', 'IGES', 'igs', 'BREP'])('registers %s as a geometry byte read without a text fallback', extension => {
   expect(viewersForPath(`part.${extension}`)).toEqual(['geometry']); expect(loadsBytes('geometry')).toBe(true);
 });

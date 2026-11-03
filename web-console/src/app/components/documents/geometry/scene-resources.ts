@@ -24,7 +24,13 @@ export function disposeScene(roots: Object3D[], additionalTextures: Iterable<Tex
   for (const root of roots) { root.traverse(object => { if (object instanceof Mesh) geometry.add(object.geometry); }); root.removeFromParent(); }
   for (const item of geometry) item.dispose();
 }
-export function validateScene(roots: Object3D[]): Box3 {
+function validateBounds(bounds: Box3): Box3 {
+  check(!bounds.isEmpty(), 'empty');
+  check([...bounds.min.toArray(), ...bounds.max.toArray()].every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate));
+  check(Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z) > 1e-12, 'empty');
+  return bounds;
+}
+export function validateScene(roots: Object3D[], selected?: Object3D): Box3 {
   const unique = new Set<BufferGeometry>(), mats = materials(roots);
   let vertices = 0, triangles = 0, bytes = 0, nodes = 0, parts = 0, draws = 0, pixels = 0;
   check(mats.size <= L.materials, 'limit');
@@ -66,11 +72,14 @@ export function validateScene(roots: Object3D[]): Box3 {
     pixels += image.width * image.height;
     check(image.width <= L.textureDimension && image.height <= L.textureDimension && pixels <= L.texturePixels, 'limit');
   }
-  const bounds = new Box3(); for (const root of roots) bounds.union(new Box3().setFromObject(root));
-  check(!bounds.isEmpty(), 'empty');
-  check([...bounds.min.toArray(), ...bounds.max.toArray()].every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate));
-  check(Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z) > 1e-12, 'empty');
-  return bounds;
+  const bounds = new Box3(); let selectedBounds: Box3 | undefined;
+  for (const root of roots) {
+    const box = new Box3().setFromObject(root); bounds.union(box);
+    if (root === selected) selectedBounds = box;
+  }
+  validateBounds(bounds);
+  if (selected === undefined) return bounds;
+  check(selectedBounds); return validateBounds(selectedBounds);
 }
 
 /** Geometry stays in source coordinates; only camera framing changes. */

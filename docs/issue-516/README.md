@@ -14,9 +14,9 @@ distributions, allocation accounting and Docker peak memory.
 | `pnpm build` | Passed, including native Host and production provenance/runtime checks |
 | `pnpm check:provenance` | Passed: 336 source records, 344 production notices and pinned geometry assets |
 | `pnpm check:i18n` | Passed |
-| Focused geometry, source/copy ownership, shared document/preview, file actions and Workflow identity | 173 passed |
+| Focused geometry, source/copy ownership, shared document/preview, file actions and Workflow identity | 175 passed |
 | Native Workbench and desktop Host contracts | 52 passed |
-| Pinned browser geometry acceptance | 11 passed |
+| Pinned browser geometry acceptance | 15 passed |
 | Repeated heavy-model performance and retirement | 2 passed |
 | Existing Workflow keyboard/selection/undo and screenshot reference | Passed |
 | Fake-provider protocol/scenario/server suite | 94 passed |
@@ -34,6 +34,11 @@ Host, file authority, sidebar tabs, path header and source actions. Tests exerci
 short-window layout, orbit, selection/visibility, a default-collapsed tree inside
 the viewport, Escape/focus return, Markdown/model tab switches, Chinese dark
 narrow presentation and the file-location/application action.
+
+Real-loader regressions reject empty or degenerate default GLB scenes even when
+another scene has valid geometry, dispose every loaded scene before renderer
+admission, and preserve authorized original Download. Mixed unnamed branches,
+unequal depths and numeric sibling prefixes preserve actual part ancestry.
 
 The shared browser corpus covers binary/ASCII STL, STEP including inch output,
 IGES, BREP and embedded-texture GLB through both presentation entry points. It
@@ -91,5 +96,8 @@ Focused adapter/content checks:
 pnpm exec vitest run test/geometry-adapters.test.ts test/geometry-worker.test.ts test/geometry-view.test.tsx test/preview-content.test.ts test/geometry-evidence.test.ts test/workbench-file-actions.test.tsx
 ```
 
-The [performance report](performance.md) documents the broader sampling method
+The [performance report](performance.md) records the measured
+`575785d0c7ed29ea933ea8c07722870ba2317e26` baseline and source digests. The
+admission/ancestry corner-case repairs use targeted correctness regressions;
+no new performance gain is claimed. The report documents the broader sampling method
 and observed limitations separately from enforceable source/output/WASM budgets.

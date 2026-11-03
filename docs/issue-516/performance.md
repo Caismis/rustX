@@ -1,6 +1,7 @@
 # CAD sidebar performance report
 
-Measured on 2026-11-03. The [validation report](README.md) records functional checks;
+Measured on 2026-11-03 for implementation
+`575785d0c7ed29ea933ea8c07722870ba2317e26`. The [validation report](README.md) records current functional checks;
 [geometry contracts](../geometry-previews.md) define the unchanged admission limits.
 [Environment and digests](performance-environment.json) identify the source,
 fixture bytes, browser and compiled artifacts used for these measurements.

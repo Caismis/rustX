@@ -29,7 +29,11 @@ view-angle menu explicitly chooses a standard direction.
 Camera fitting centers a presentation-only parent; original geometry and its
 physical scale remain intact. Bounds are recomputed from admitted coordinates,
 rather than trusting GLB accessor bounds. Culling/raycast spheres are recomputed
-from the same positions. Camera, target, up vector, selected part
+from the same positions. All loaded GLB scenes share resource admission; the
+selected scene must independently have nonempty, finite, nondegenerate bounds.
+Its already-computed bounds are returned without repeating the attribute scan.
+Rejection disposes every loaded scene and preserves the original-file action.
+Camera, target, up vector, selected part
 and hidden IDs are bounded inert occurrence metadata tied to a content copy.
 Hiding a selected part also hides its selection outline.
 Changing or restoring the up axis recreates OrbitControls through its public
@@ -42,7 +46,9 @@ with the Workflow canvas. Its fit, view-angle and parts controls use DSH tokens,
 tooltips and the existing menu facilities.
 
 The part tree is an overlay inside the viewport, closed by default, with initially
-collapsed branches. It supports selection and visibility through the same scene
+collapsed branches. Whole segments of occurrence path IDs establish ancestry;
+unnamed intermediate nodes and increasing depths cannot attach unrelated parts.
+It supports selection and visibility through the same scene
 owner. Its bounded list scrolls independently; Escape closes it and returns focus
 to its trigger. Format, dimensions and units occupy a compact footer. There is no
 permanent Refresh explanation; the existing document-header action remains.

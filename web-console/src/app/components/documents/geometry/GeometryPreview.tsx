@@ -105,7 +105,7 @@ interface PartBranch { part: Part; ordinal: number; children: PartBranch[] }
 function partTree(parts: Part[]): PartBranch[] {
   const roots: PartBranch[] = [], parents: PartBranch[] = [];
   parts.forEach((part, index) => {
-    while (parents.length && parents.at(-1)!.part.depth >= part.depth) parents.pop();
+    while (parents.length && !part.id.startsWith(`${parents.at(-1)!.part.id}.`)) parents.pop();
     const branch = { part, ordinal: index + 1, children: [] };
     (parents.at(-1)?.children ?? roots).push(branch); parents.push(branch);
   });
