@@ -164,8 +164,14 @@ async fn selected_child_delivery_with_trace_fault() {
         .join("conversation.sqlite");
     let connection = rusqlite::Connection::open(&path).unwrap();
     let (sequence, header): (u64, Vec<u8>) = connection.query_row("SELECT sequence,observation_trace_fact FROM events WHERE observation_kind='attempt_started' ORDER BY sequence LIMIT 1", [], |row|Ok((row.get(0)?,row.get(1)?))).unwrap();
-    std::str::from_utf8(&header).unwrap();
-    serde_json::from_slice::<serde_json::Value>(&header).unwrap();
+    assert!(!header.is_empty());
+    let facts = child.store.observation_trace_facts(&cut, &crate::durable::observation::TraceFactQuery {
+        scope: crate::durable::observation::TraceFactScope::All,
+        kinds: vec![crate::durable::observation::TraceFactKind::AttemptStarted],
+        before: Some(sequence + 1), after: sequence.saturating_sub(1), ascending: true, limit: 1,
+    }).unwrap();
+    assert_eq!(facts.len(), 1, "the original typed Trace fact is readable");
+    assert_eq!(facts[0].sequence, sequence);
     assert_eq!(
         connection
             .execute(

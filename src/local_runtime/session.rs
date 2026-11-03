@@ -692,7 +692,7 @@ struct CatalogDocument {
     schema_version: u32,
     next_session_ordinal: u64,
     next_node_ordinal: u64,
-    sessions: BTreeMap<SessionId, PersistedSession>,
+    sessions: imbl::OrdMap<SessionId, PersistedSession>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -789,6 +789,8 @@ fn lineage_of(
 }
 
 mod artifacts;
+mod catalog_file;
+use catalog_file::PublishedCatalog;
 pub(crate) mod deletion;
 pub mod uploads;
 
@@ -801,14 +803,14 @@ pub struct SessionCatalog {
     path: PathBuf,
     document: CatalogDocument,
     node_observation_index: Arc<BTreeMap<SessionId, Vec<SessionNodeId>>>,
-    /// Whether `document` has ever been written to `path`.
+    /// The validated bytes and generation last published at `path`.
     ///
     /// A first launch composes against a catalog that exists only in
     /// memory (see [`Self::create_unpublished`]), so an unpublished catalog
     /// has a pending first write even when nothing about the launch changed
     /// it: [`Self::plan_unchanged`] plans that write, and it lands in the
     /// same single startup transaction as every other catalog decision.
-    published: bool,
+    published: Option<Arc<PublishedCatalog>>,
     lifecycle: Option<std::sync::Arc<crate::runtime::local_storage::ProductController>>,
     #[cfg(test)]
     write_fault: Arc<Mutex<Option<CatalogWriteFault>>>,
@@ -827,7 +829,7 @@ pub struct SessionCatalog {
 
 impl SessionCatalog {
     pub(crate) fn is_published(&self) -> bool {
-        self.published
+        self.published.is_some()
     }
     pub(crate) fn empty(
         controller: &crate::runtime::local_storage::ProductController,
@@ -850,9 +852,9 @@ impl SessionCatalog {
                 schema_version: SESSION_CATALOG_SCHEMA_VERSION,
                 next_session_ordinal: 1,
                 next_node_ordinal: 1,
-                sessions: BTreeMap::new(),
+                sessions: imbl::OrdMap::new(),
             },
-            published: false,
+            published: None,
             lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
@@ -1133,30 +1135,18 @@ impl SessionCatalog {
             path: path.clone(),
             detail: error.to_string(),
         })?;
-        let envelope: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|error| SessionError::Catalog {
-                detail: error.to_string(),
-            })?;
-        if envelope
-            .get("schema_version")
-            .and_then(serde_json::Value::as_u64)
-            != Some(u64::from(SESSION_CATALOG_SCHEMA_VERSION))
-        {
-            return Err(SessionError::Catalog { detail: "unsupported session catalog schema; CFG3 requires UUIDv7 identities and Session-owned intent; old development schemas are refused".into() });
-        }
-        let document: CatalogDocument =
-            serde_json::from_slice(&bytes).map_err(|error| SessionError::Catalog {
-                detail: format!("cannot decode {}: {error}", path.display()),
-            })?;
-        validate_document(&document)?;
+        let document = catalog_file::decode(&bytes, &path)?;
         Ok(Some(Self {
             identities: Arc::new(crate::runtime::identity::SystemUuidV7Generator),
             product: guard.clone(),
             root,
             path,
             node_observation_index: Arc::new(observation::node_index(&document)),
+            published: Some(Arc::new(PublishedCatalog {
+                generation: document.generation,
+                bytes,
+            })),
             document,
-            published: true,
             lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
@@ -1317,7 +1307,7 @@ impl SessionCatalog {
         };
         let mut nodes = BTreeMap::new();
         nodes.insert(node_id.clone(), node);
-        let mut sessions = BTreeMap::new();
+        let mut sessions = imbl::OrdMap::new();
         sessions.insert(
             session_id.clone(),
             PersistedSession {
@@ -1353,7 +1343,7 @@ impl SessionCatalog {
             path,
             node_observation_index: Arc::new(observation::node_index(&document)),
             document,
-            published: false,
+            published: None,
             lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
@@ -2431,7 +2421,7 @@ impl SessionCatalog {
             target: target.clone(),
             target_node: self.document.sessions[target].active_node.clone(),
             document: self.document.clone(),
-            changed: !self.published,
+            changed: self.published.is_none(),
         }
     }
 
@@ -2649,10 +2639,9 @@ impl SessionCatalog {
                     detail: e.to_string(),
                 },
             )?;
-        let current = Self::read_under_guard(&self.product)?;
+        let current_generation = self.stored_generation()?;
         if next.generation != self.document.generation
-            || current.as_ref().map(|c| c.document.generation)
-                != self.published.then_some(self.document.generation)
+            || current_generation != self.published.as_ref().map(|_| self.document.generation)
         {
             return Err(SessionError::Catalog {
                 detail: "stale catalog generation".into(),
@@ -2666,30 +2655,41 @@ impl SessionCatalog {
             })?;
         // Assign the catalog commit identity only to newly admitted ownership.
         // Metadata-only commits and repeated selection retain the old generation.
-        for (id, session) in &mut next.sessions {
-            session.ownership_generation = self
-                .document
-                .sessions
-                .get(id)
-                .filter(|old| self.published && old.active_node == session.active_node)
-                .map_or(next.generation, |old| old.ownership_generation);
+        let owners: Vec<_> = next
+            .sessions
+            .iter()
+            .filter_map(|(id, session)| {
+                let generation = self
+                    .document
+                    .sessions
+                    .get(id)
+                    .filter(|old| {
+                        self.published.is_some() && old.active_node == session.active_node
+                    })
+                    .map_or(next.generation, |old| old.ownership_generation);
+                (session.ownership_generation != generation).then(|| (id.clone(), generation))
+            })
+            .collect();
+        for (id, generation) in owners {
+            next.sessions
+                .get_mut(&id)
+                .expect("planned Session")
+                .ownership_generation = generation;
         }
         validate_document(&next)?;
         // Membership evidence belongs to the visibility commit, including
         // uncertain directory durability. Cleanup/recovery commits with unchanged
         // membership emit nothing. This covers creation, copies and deletion.
-        let membership: Vec<_> = self
-            .document
-            .sessions
-            .keys()
-            .filter(|id| self.published && !next.sessions.contains_key(*id))
-            .chain(
-                next.sessions
-                    .keys()
-                    .filter(|id| !self.published || !self.document.sessions.contains_key(*id)),
-            )
-            .cloned()
-            .collect();
+        let membership: Vec<_> =
+            self.document
+                .sessions
+                .keys()
+                .filter(|id| self.published.is_some() && !next.sessions.contains_key(*id))
+                .chain(next.sessions.keys().filter(|id| {
+                    self.published.is_none() || !self.document.sessions.contains_key(*id)
+                }))
+                .cloned()
+                .collect();
         let retired: Vec<_> = self
             .document
             .sessions
@@ -2701,11 +2701,15 @@ impl SessionCatalog {
             })
             .map(|(id, old)| (id.clone(), old.ownership_generation))
             .collect();
-        let committed = self.persist(&next);
+        let bytes = self.encode_catalog(&next)?;
+        let committed = self.persist(&bytes);
         if committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed) {
             self.node_observation_index = Arc::new(observation::node_index(&next));
+            self.published = Some(Arc::new(PublishedCatalog {
+                generation: next.generation,
+                bytes,
+            }));
             self.document = next;
-            self.published = true;
             for (id, generation) in retired {
                 self.summary_invalidations.retire_ownership(&id, generation);
             }
@@ -2716,10 +2720,10 @@ impl SessionCatalog {
         committed
     }
 
-    fn persist(&self, document: &CatalogDocument) -> Result<(), SessionError> {
+    fn encode_catalog(&self, document: &CatalogDocument) -> Result<Vec<u8>, SessionError> {
         let bytes = profile_stage!(
             |times: &mut create_profile::StageTimes| &mut times.catalog_serialize_ns,
-            serde_json::to_vec_pretty(document)
+            serde_json::to_vec(document)
         )
         .map_err(|error| SessionError::CatalogCommit {
             error: CatalogCommitError::NotCommitted {
@@ -2727,10 +2731,14 @@ impl SessionCatalog {
                 detail: format!("cannot encode catalog: {error}"),
             },
         })?;
+        Ok(bytes)
+    }
+
+    fn persist(&self, bytes: &[u8]) -> Result<(), SessionError> {
         #[cfg(test)]
-        let result = atomic_write(&self.path, &bytes, &self.write_fault);
+        let result = atomic_write(&self.path, bytes, &self.write_fault);
         #[cfg(not(test))]
-        let result = atomic_write(&self.path, &bytes);
+        let result = atomic_write(&self.path, bytes);
         result.map_err(SessionError::from)
     }
 }
@@ -5983,6 +5991,31 @@ model = "provider/model"
             .unwrap()
             .unwrap();
         assert_eq!(reopened.summary(&oldest).unwrap().updated_at, time);
+    }
+
+    #[test]
+    fn activity_reuse_checks_changed_bytes_and_keeps_uncommitted_state_out() {
+        let (_directory, mut catalog, _) = open_catalog();
+        let id = first_session(&catalog);
+        let time = chrono::DateTime::parse_from_rfc3339("2100-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let original = std::fs::read(&catalog.path).unwrap();
+        let generation = catalog.document.generation;
+        std::fs::write(&catalog.path, b"{broken").unwrap();
+        assert!(catalog.publish_activity(&id, time).is_err());
+        assert_eq!(catalog.document.generation, generation);
+        std::fs::write(&catalog.path, &original).unwrap();
+        catalog.arm_write_fault_before_rename();
+        assert!(catalog.publish_activity(&id, time).is_err());
+        assert_eq!(catalog.document.generation, generation);
+        assert_eq!(std::fs::read(&catalog.path).unwrap(), original);
+        assert!(catalog.publish_activity(&id, time).unwrap());
+        assert_eq!(catalog.summary(&id).unwrap().updated_at, time);
+        let reopened = SessionCatalog::read_under_guard(&catalog.product)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reopened.summary(&id).unwrap().updated_at, time);
     }
 
     #[test]
