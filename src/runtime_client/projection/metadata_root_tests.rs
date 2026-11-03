@@ -397,3 +397,11 @@ fn indexed_source_frontier_merge_preserves_linear_oracle_with_duplicate_domains(
         }
     }
 }
+
+#[test]
+fn replay_event_layout_does_not_inline_large_optional_read_heads() {
+    assert!(
+        std::mem::size_of::<RuntimeClientEvent>() <= 600,
+        "large read heads must not inflate every scalar replay fact"
+    );
+}
