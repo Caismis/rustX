@@ -9,7 +9,7 @@ use super::*;
 /// selection overrides, explicit Summary overrides and a named Agent's
 /// selection — as JSON-encoded strings, and the reread is the same document.
 /// Reformatting a JSON string (whitespace and key order) is semantically
-/// inert: it publishes no adoption candidate and changes no runtime state.
+/// inert: it stages no candidate and changes no runtime state.
 #[allow(clippy::too_many_lines)] // one complete authoring round trip
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_inert() {
@@ -134,12 +134,8 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
         assert_eq!(wire["user"]["authored"]["agent"]["model"]["profile"], "creative");
 
         // Reach a settled baseline for the existing Session.
-        let application = settled(&fixture, 0).await;
-        if let Some(candidate) = application.candidate {
-            fixture.manager.adopt_configuration(id, &candidate.identity, candidate.expected_binding).unwrap();
-        }
-        let application = settled(&fixture, 0).await;
-        assert!(application.candidate.is_none(), "{application:?}");
+        let application = applied(&fixture, 0).await;
+        assert!(application.units.values().all(|unit| *unit != UnitApplication::Ready), "{application:?}");
         let runtime = fixture.manager.configuration_runtime(id).unwrap();
         let resources = runtime.runtime_resources();
         let model = runtime.model_view();
@@ -168,7 +164,7 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
             .await
             .unwrap();
         let application = settled(&fixture, 0).await;
-        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(application.units.values().all(|unit| *unit != UnitApplication::Ready), "{application:?}");
         assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()));
         assert_eq!(runtime.model_view(), model);
         let after = fixture.manager.source_settings(&SourceTarget::User).await.unwrap();
@@ -210,7 +206,7 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
 /// the invocation they froze, observed on the provider wire.
 #[allow(clippy::too_many_lines)] // one ordered sequence of source edits
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn issue456_effective_invocation_decides_preparation_and_adoption() {
+async fn issue456_effective_invocation_decides_preparation_and_commit() {
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
     use crate::model::catalog::{ModelProfileId, ModelRef};
@@ -274,15 +270,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             ),
         )
         .await;
-        let candidate = settled(&fixture, 0)
-            .await
-            .candidate
-            .expect("selected Model changed");
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
-        assert!(settled(&fixture, 0).await.candidate.is_none());
+        applied(&fixture, 0).await;
         let view = runtime.model_view();
         assert_eq!(view.configured.profile, None);
         assert_eq!(
@@ -304,7 +292,13 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
                 application.desired, previous.desired,
                 "a new source generation was applied"
             );
-            assert!(application.candidate.is_none(), "{application:?}");
+            assert!(
+                application
+                    .units
+                    .values()
+                    .all(|unit| *unit != UnitApplication::Ready),
+                "{application:?}"
+            );
             assert!(
                 application
                     .units
@@ -430,18 +424,11 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             ),
         )
         .await;
-        let candidate = settled(&fixture, 0)
-            .await
-            .candidate
-            .expect("the Summary invocation changed");
+        applied(&fixture, 0).await;
         assert!(
-            Arc::ptr_eq(&resources, &runtime.runtime_resources()),
-            "adoption waits for its owner"
+            !Arc::ptr_eq(&resources, &runtime.runtime_resources()),
+            "the changed Summary invocation was prepared and committed"
         );
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
         let Some(crate::model::session::AuxiliaryModelView::Explicit(summary)) =
             runtime.model_view().summary
         else {
@@ -452,12 +439,10 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
 
         // The selected Profile's parameters change while an Attempt is
         // admitted: the Attempt keeps its frozen invocation on the wire, and
-        // the change is adopted for the next Attempt.
-        let mut eligibility = EligibilityStream::open(&fixture, &id);
+        // the change commits automatically for the next Attempt.
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(input("request-A frozen")).unwrap();
         fixture.gates[0].wait_entered().await;
-        eligibility.until(AdoptionEligibility::Busy).await;
         let balanced_edited = ("balanced", None, json!({"temperature": 0.25, "seed": 7}));
         write(
             &fixture,
@@ -472,38 +457,28 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             ),
         )
         .await;
-        let candidate = settled(&fixture, 0)
-            .await
-            .candidate
-            .expect("the selected Profile changed");
-        assert_eq!(
-            fixture.manager.adopt_configuration(
-                &id,
-                &candidate.identity,
-                candidate.expected_binding
-            ),
-            Err(AdoptionError::Busy)
+        let staged = settled(&fixture, 0).await;
+        assert!(
+            staged
+                .units
+                .values()
+                .any(|unit| *unit == UnitApplication::Ready),
+            "the selected Profile changed: {staged:?}"
         );
         fixture.gates[0].release();
         settlement.wait().await;
-        // Semantic settlement precedes release of the owning Attempt task.
-        // Adoption needs the authoritative idle eligibility transition.
-        eligibility.until(AdoptionEligibility::Eligible).await;
+        applied(&fixture, 0).await;
         let frozen: serde_json::Value =
             serde_json::from_str(&fixture.provider.request_body(0)).unwrap();
         assert_eq!(frozen["temperature"], json!(0.5));
         assert!(frozen.get("seed").is_none());
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
         let mut settlement = SettlementReceiptWait::capture(&runtime);
-        runtime.submit_inbound(input("request-A adopted")).unwrap();
+        runtime
+            .submit_inbound(input("request-A committed"))
+            .unwrap();
         fixture.gates[0].wait_entered().await;
-        eligibility.until(AdoptionEligibility::Busy).await;
         fixture.gates[0].release();
         settlement.wait().await;
-        eligibility.until(AdoptionEligibility::Eligible).await;
         let next: serde_json::Value =
             serde_json::from_str(&fixture.provider.request_body(1)).unwrap();
         assert_eq!(
@@ -525,14 +500,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             ),
         )
         .await;
-        let candidate = settled(&fixture, 0)
-            .await
-            .candidate
-            .expect("the output default changed");
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        applied(&fixture, 0).await;
         assert_eq!(
             runtime
                 .model_view()
@@ -569,15 +537,11 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             )
             .await
             .unwrap();
-        let application = settled(&fixture, 0).await;
-        assert_eq!(
-            application
-                .candidate
-                .expect("the provider endpoint changed")
-                .impact,
-            crate::model::request_shape::CacheImpact::CacheNamespaceChanged
+        applied(&fixture, 0).await;
+        assert!(
+            !Arc::ptr_eq(&resources, &runtime.runtime_resources()),
+            "the provider endpoint change committed; cache impact asks no consent"
         );
-        assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()));
         fixture.close().await;
     }))
     .await;
@@ -923,8 +887,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
         let settings=settings.inline.expect("bounded fixture source");
         let projected = &settings.user.authored.as_ref().unwrap().models.as_ref().unwrap()["local/a"];
         assert_eq!(serde_json::Value::Object(projected.profiles.as_ref().unwrap()[&ModelProfileId::new("p")].request_params.0.clone()), expected);
-        let candidate = settled(&f, 0).await.candidate.expect("the selected Model changed");
-        f.manager.adopt_configuration(&id, &candidate.identity, candidate.expected_binding).unwrap();
+        applied(&f, 0).await;
 
         // A Session override from raw text reaches the provider wire exactly.
         let override_text = r#"{"o1":1.50,"o2":-9007199254740991,"o3":15e-1,"o4":[1e20,{"o5":0.1}]}"#;
@@ -1039,8 +1002,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
             .into(),
         );
         write(&f, 0, ConfigMutation::Model { id: "local/a".into(), authored: Some(model) }).await;
-        let candidate = settled(&f, 0).await.candidate.expect("the selected Model changed");
-        f.manager.adopt_configuration(&id, &candidate.identity, candidate.expected_binding).unwrap();
+        applied(&f, 0).await;
         let resources = runtime.runtime_resources();
         let view = runtime.model_view();
         assert_eq!(view.effective.as_ref().unwrap().request_params, object(json!({KEY: null, "temperature": 0.5})));
@@ -1146,7 +1108,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
             let application = settled(&f, 0).await;
             let text = serde_json::to_string(&application).unwrap();
             quiet(&text);
-            assert!(application.candidate.is_none(), "{text}");
+            assert!(application.units.values().all(|unit| *unit != UnitApplication::Ready), "{text}");
             assert!(text.contains("Model Profile parameter ownership collision"), "{text}");
             assert!(text.contains(expected), "{text}");
             sources_quiet(&connection).await;
@@ -1184,7 +1146,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
         let application = settled(&f, 0).await;
         let text = serde_json::to_string(&application).unwrap();
         quiet(&text);
-        assert!(application.candidate.is_none(), "{text}");
+        assert!(application.units.values().all(|unit| *unit != UnitApplication::Ready), "{text}");
         let UnitApplication::Failed { diagnostic } = &application.units[&ApplyUnit::Capabilities] else {
             panic!("{text}")
         };
@@ -1259,14 +1221,8 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
             }
         };
         write(&f, 0, model("balanced")).await;
-        for (index, id) in [(0, &following), (1, &pinned)] {
-            let candidate = settled(&f, index)
-                .await
-                .candidate
-                .expect("the selected Model changed");
-            f.manager
-                .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
-                .unwrap();
+        for index in [0, 1] {
+            applied(&f, index).await;
         }
         let runtime = |id| f.manager.configuration_runtime(id).unwrap();
         // Pinning the current default records the intent and rebuilds nothing.
@@ -1297,14 +1253,8 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
         // The default moves: only the following Session's invocation changes.
         let following_resources = runtime(&following).runtime_resources();
         write(&f, 0, model("fast")).await;
-        let candidate = settled(&f, 0)
-            .await
-            .candidate
-            .expect("the followed default moved");
-        assert!(
-            settled(&f, 1).await.candidate.is_none(),
-            "the pinned Profile did not move"
-        );
+        applied(&f, 0).await;
+        applied(&f, 1).await;
         // The pinned Session only receives the published catalog.
         let published = runtime(&pinned).runtime_resources();
         assert_eq!(published.revision(), pinned_resources.revision().next());
@@ -1321,13 +1271,11 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
                 .as_deref(),
             Some("fast")
         );
-        assert!(Arc::ptr_eq(
+        // The followed default moved: its invocation was prepared and committed.
+        assert!(!Arc::ptr_eq(
             &following_resources,
             &runtime(&following).runtime_resources()
         ));
-        f.manager
-            .adopt_configuration(&following, &candidate.identity, candidate.expected_binding)
-            .unwrap();
         let (follows, pins) = (
             runtime(&following).model_view(),
             runtime(&pinned).model_view(),

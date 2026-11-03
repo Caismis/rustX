@@ -90,14 +90,6 @@ pub enum RuntimeClientEvent {
     },
     /// Independent Trace invalidation; reread Trace, not the Session snapshot.
     TraceChanged,
-    /// The live runtime's configuration-adoption eligibility changed.
-    ///
-    /// Published only on an actual change of the native derivation, never for
-    /// ordinary streaming. Advisory: `session/adoptConfiguration` revalidates
-    /// the real gate at its commit boundary.
-    ConfigurationAdoptionEligibilityChanged {
-        eligibility: crate::runtime::adoption::AdoptionEligibility,
-    },
     /// Bounded authoritative durable Goal view. Every emission follows a
     /// committed durable transition; there is no activation-only form.
     GoalChanged {
@@ -192,6 +184,14 @@ pub enum RuntimeClientEvent {
         /// The bounded settled audit projection.
         audit: Box<RuntimeClientTranscriptInteractionSettled>,
         /// The durable transcript position of this audit.
+        transcript_cursor: RuntimeClientTranscriptCursor,
+    },
+    /// A Session configuration commit became visible in the transcript. It is
+    /// presentation of a native fact, never canonical conversation content.
+    ConfigurationApplied {
+        /// The bounded configuration change item.
+        item: Box<crate::observation::transcript::RuntimeClientTranscriptConfigurationApplied>,
+        /// The durable transcript position of this change.
         transcript_cursor: RuntimeClientTranscriptCursor,
     },
     /// A context compaction operation began.

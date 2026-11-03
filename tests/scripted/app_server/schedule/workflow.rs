@@ -104,16 +104,7 @@ async fn scheduler85_review_metadata_preserves_v1_after_v2_composition_and_on_co
                 )
                 .await
                 .unwrap();
-            let application = super::super::configuration::settled(&f, 0).await;
-            if let Some(candidate) = application.candidate {
-                f.manager
-                    .adopt_configuration(
-                        &session.id,
-                        &candidate.identity,
-                        candidate.expected_binding,
-                    )
-                    .unwrap();
-            }
+            super::super::configuration::applied(&f, 0).await;
             let second = receipt(
                 f.manager
                     .schedule_command(

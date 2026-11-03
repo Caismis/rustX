@@ -1,0 +1,273 @@
+//! Bounded native observation of the supported configuration sources.
+//!
+//! A filesystem notification is invalidation, never trusted content. It only
+//! names the source target that owns a changed path; the existing capture
+//! path then rereads, fences and validates that target's files exactly as it
+//! does after a native source write, and an unchanged healthy source is a
+//! no-op. Notifications for one target coalesce into one capture.
+//!
+//! Coverage, and nothing else:
+//!
+//! | Source | Watched |
+//! | --- | --- |
+//! | User document | its directory, non-recursively, for that one file |
+//! | User resources | `~/rustx/.agents`, recursively (its parent until it exists) |
+//! | Workspace document and root guidance | each known Workspace root, non-recursively, for `rustx.toml` and `*.md` |
+//! | Workspace resources | each known Workspace's `.agents`, recursively |
+//!
+//! Known Workspaces are the directories that already hold source authority or
+//! are a Session application's configuration directory; an unrelated
+//! directory is never scanned.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use notify::{RecursiveMode, Watcher};
+
+use super::SessionRuntimeManager;
+use crate::local_runtime::configuration::settings::SourceTarget;
+
+/// The fixed User source locations of one process.
+#[derive(Debug, Clone)]
+pub(super) struct UserSourceRoots {
+    pub(super) document: PathBuf,
+    pub(super) resources: PathBuf,
+}
+
+/// The source target that owns a changed `path`, or `None` for a path no
+/// supported source reads.
+pub(super) fn route(
+    path: &Path,
+    user: &UserSourceRoots,
+    workspaces: &[PathBuf],
+) -> Option<SourceTarget> {
+    if path == user.document || path.starts_with(&user.resources) {
+        return Some(SourceTarget::User);
+    }
+    workspaces
+        .iter()
+        .filter(|workspace| {
+            path.starts_with(workspace.join(".agents"))
+                || (path.parent() == Some(workspace.as_path())
+                    && (path.file_name().is_some_and(|name| name == "rustx.toml")
+                        || path.extension().is_some_and(|extension| extension == "md")))
+        })
+        .max_by_key(|workspace| workspace.as_os_str().len())
+        .map(|workspace| SourceTarget::Workspace {
+            directory: workspace.clone(),
+        })
+}
+
+/// The exact watch set for these roots: existing directories only.
+pub(super) fn desired(
+    user: &UserSourceRoots,
+    workspaces: &[PathBuf],
+) -> BTreeMap<PathBuf, RecursiveMode> {
+    let mut watches = BTreeMap::new();
+    if let Some(parent) = user.document.parent() {
+        watches.insert(parent.to_path_buf(), RecursiveMode::NonRecursive);
+    }
+    if user.resources.is_dir() {
+        watches.insert(user.resources.clone(), RecursiveMode::Recursive);
+    } else if let Some(parent) = user.resources.parent().filter(|parent| parent.is_dir()) {
+        watches
+            .entry(parent.to_path_buf())
+            .or_insert(RecursiveMode::NonRecursive);
+    }
+    for workspace in workspaces {
+        watches
+            .entry(workspace.clone())
+            .or_insert(RecursiveMode::NonRecursive);
+        let resources = workspace.join(".agents");
+        if resources.is_dir() {
+            watches.insert(resources, RecursiveMode::Recursive);
+        }
+    }
+    watches.retain(|path, _| path.is_dir());
+    watches
+}
+
+impl SessionRuntimeManager {
+    fn user_source_roots(&self) -> UserSourceRoots {
+        UserSourceRoots {
+            document: self.configuration.sources.config_path.clone(),
+            resources: self
+                .configuration
+                .sources
+                .home_directory
+                .join("rustx/.agents"),
+        }
+    }
+
+    fn known_workspaces(&self) -> Vec<PathBuf> {
+        self.applications.lock().watched_source_directories()
+    }
+
+    /// Observe the supported sources until `stop`. Each batch of notifications
+    /// is routed to its owning targets and captured once per target through
+    /// the same path as a native source write; nothing here reads content.
+    ///
+    /// # Errors
+    ///
+    /// Returns the platform watcher's construction failure.
+    pub async fn run_source_watch(
+        &self,
+        stop: tokio_util::sync::CancellationToken,
+    ) -> Result<(), String> {
+        let (sender, mut paths) = tokio::sync::mpsc::unbounded_channel::<PathBuf>();
+        let mut watcher =
+            notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+                if let Ok(event) = result
+                    && !event.kind.is_access()
+                {
+                    for path in event.paths {
+                        let _ = sender.send(path);
+                    }
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        let mut changes = self.configuration_changes();
+        let mut active = BTreeMap::<PathBuf, RecursiveMode>::new();
+        loop {
+            let user = self.user_source_roots();
+            let workspaces = self.known_workspaces();
+            let desired = desired(&user, &workspaces);
+            for path in active
+                .keys()
+                .filter(|path| !desired.contains_key(path.as_path()))
+            {
+                let _ = watcher.unwatch(path);
+            }
+            for (path, mode) in &desired {
+                if active.get(path) != Some(mode) {
+                    let _ = watcher.unwatch(path);
+                    let _ = watcher.watch(path, *mode);
+                }
+            }
+            active = desired;
+            tokio::select! {
+                () = stop.cancelled() => return Ok(()),
+                result = changes.changed() => if result.is_err() { return Ok(()) },
+                Some(path) = paths.recv() => {
+                    // Coalesce everything already queued into one capture per
+                    // owning target, in a stable order: User composes first.
+                    let mut targets = Vec::new();
+                    let mut next = Some(path);
+                    while let Some(path) = next {
+                        if let Some(target) = route(&path, &user, &workspaces)
+                            && !targets.contains(&target)
+                        {
+                            targets.push(target);
+                        }
+                        next = paths.try_recv().ok();
+                    }
+                    targets.sort_by_key(|target| target.workspace().is_some());
+                    for target in targets {
+                        self.observe_source_change(&target).await;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roots(home: &Path) -> UserSourceRoots {
+        UserSourceRoots {
+            document: home.join("config/rustx.toml"),
+            resources: home.join("rustx/.agents"),
+        }
+    }
+
+    #[test]
+    fn notifications_route_only_supported_sources_to_their_owner() {
+        let home = Path::new("/home/u");
+        let user = roots(home);
+        let workspaces = vec![PathBuf::from("/work/a"), PathBuf::from("/work/a/nested")];
+        let workspace = |directory: &str| {
+            Some(SourceTarget::Workspace {
+                directory: directory.into(),
+            })
+        };
+        assert_eq!(
+            route(&home.join("config/rustx.toml"), &user, &workspaces),
+            Some(SourceTarget::User)
+        );
+        assert_eq!(
+            route(&home.join("config/other.toml"), &user, &workspaces),
+            None
+        );
+        assert_eq!(
+            route(
+                &home.join("rustx/.agents/skills/x/SKILL.md"),
+                &user,
+                &workspaces
+            ),
+            Some(SourceTarget::User)
+        );
+        assert_eq!(
+            route(Path::new("/work/a/rustx.toml"), &user, &workspaces),
+            workspace("/work/a")
+        );
+        assert_eq!(
+            route(Path::new("/work/a/AGENTS.md"), &user, &workspaces),
+            workspace("/work/a")
+        );
+        assert_eq!(
+            route(Path::new("/work/a/.agents/mcp.toml"), &user, &workspaces),
+            workspace("/work/a")
+        );
+        // The most specific known Workspace owns its own sources.
+        assert_eq!(
+            route(Path::new("/work/a/nested/rustx.toml"), &user, &workspaces),
+            workspace("/work/a/nested")
+        );
+        // Ordinary project files never reach configuration.
+        assert_eq!(
+            route(Path::new("/work/a/src/main.rs"), &user, &workspaces),
+            None
+        );
+        assert_eq!(
+            route(Path::new("/work/a/docs/notes.md"), &user, &workspaces),
+            None
+        );
+        assert_eq!(
+            route(Path::new("/elsewhere/rustx.toml"), &user, &workspaces),
+            None
+        );
+    }
+
+    #[test]
+    fn the_watch_set_is_bounded_to_existing_source_directories() {
+        let home = tempfile::tempdir().unwrap();
+        let user = roots(home.path());
+        std::fs::create_dir_all(home.path().join("config")).unwrap();
+        std::fs::create_dir_all(home.path().join("rustx")).unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let workspaces = vec![workspace.path().to_path_buf()];
+        let watches = desired(&user, &workspaces);
+        assert_eq!(
+            watches,
+            BTreeMap::from([
+                (home.path().join("config"), RecursiveMode::NonRecursive),
+                (home.path().join("rustx"), RecursiveMode::NonRecursive),
+                (workspace.path().to_path_buf(), RecursiveMode::NonRecursive),
+            ])
+        );
+        std::fs::create_dir_all(home.path().join("rustx/.agents")).unwrap();
+        std::fs::create_dir_all(workspace.path().join(".agents")).unwrap();
+        let watches = desired(&user, &workspaces);
+        assert_eq!(
+            watches.get(&home.path().join("rustx/.agents")),
+            Some(&RecursiveMode::Recursive)
+        );
+        assert_eq!(
+            watches.get(&workspace.path().join(".agents")),
+            Some(&RecursiveMode::Recursive)
+        );
+        assert!(!watches.contains_key(&home.path().join("rustx")));
+    }
+}

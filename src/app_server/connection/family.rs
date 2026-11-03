@@ -18,7 +18,7 @@ pub(super) enum Family<'a> {
     Catalog,
     /// Bounded historical reads of a Session's committed lineage.
     History,
-    /// Configuration sources, settings and adoption.
+    /// Configuration sources, settings and reconciliation.
     Configuration,
     /// Durable Scheduler storage operations, independent of attachments.
     Scheduler,
@@ -156,8 +156,7 @@ impl Family<'_> {
             | Method::SettingsValueRead { .. }
             | Method::ConfigurationReconcile { .. }
             | Method::SessionApplicationValueRead { .. }
-            | Method::SessionConfiguration { .. }
-            | Method::AdoptConfiguration { .. } => Family::Configuration,
+            | Method::SessionConfiguration { .. } => Family::Configuration,
         }
     }
 }

@@ -772,9 +772,7 @@ async fn receive_read_domain_suffix(
             .iter()
             .all(|event| event.event.facts().iter().any(|fact| matches!(
                 fact,
-                RuntimeClientEvent::TraceChanged
-                    | RuntimeClientEvent::ReadDomainsUpdated { .. }
-                    | RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { .. }
+                RuntimeClientEvent::TraceChanged | RuntimeClientEvent::ReadDomainsUpdated { .. }
             )))
     );
 }
@@ -814,45 +812,10 @@ pub async fn await_model_parked(model: &FakeModel) {
 /// `initialize` admits the attachment with its finite native identity receipt;
 /// a separate checkpoint supplies the complete captured read cut.
 pub async fn initialize_admits_the_attachment(factory: &dyn DriverFactory) {
-    use rustx::runtime::adoption::AdoptionEligibility;
-
     let fixture = ConformanceFixture::builder(&conversation(factory, "init"))
         .build()
         .await;
-    // Join activation's original publication before comparing two reads. The
-    // builder activates the runtime, but its queued Eligible fact can otherwise
-    // arrive between the Stdio checkpoints without either read publishing.
-    let (observer, _) = fixture
-        .host
-        .attach_read_only(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
-        .expect("the startup observer attaches read-only");
-    let subscription = observer
-        .subscribe_events(RuntimeClientCursor::new(0))
-        .expect("the startup observer follows native activation");
-    tokio::time::timeout(LIVENESS_GUARD, async {
-        loop {
-            let EventDelivery::Event(event) = subscription.next().await else {
-                panic!("the startup subscription retains activation's publication");
-            };
-            if event.event.facts().iter().any(|fact| match fact {
-                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
-                    *eligibility == AdoptionEligibility::Eligible
-                }
-                RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
-                    assert_eq!(checkpoint.cursor, event.cursor);
-                    checkpoint.snapshot.configuration_adoption_eligibility
-                        == AdoptionEligibility::Eligible
-                }
-                _ => false,
-            }) {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("activation publishes its native eligible state");
-    drop(subscription);
-    observer.detach();
+    // Join activation's original publication before comparing two reads.
     fixture.host.projection_settled().await;
     let inner = fixture
         .host
@@ -895,10 +858,6 @@ pub async fn initialize_admits_the_attachment(factory: &dyn DriverFactory) {
     assert_eq!(agent_id.as_str(), "agent-a");
     let (snapshot, cursor) = snapshot(&mut *driver, 2).await;
     assert_eq!(snapshot.conversation_id(), &conversation_id);
-    assert_eq!(
-        snapshot.configuration_adoption_eligibility,
-        AdoptionEligibility::Eligible
-    );
 
     // The attachment is live and the snapshot cursor is stable.
     let (_, again) = snapshot_of(&mut *driver, 3).await;

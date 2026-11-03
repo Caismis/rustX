@@ -110,6 +110,7 @@ pub(crate) const ANCHORS: &[&str] = &[
     "subagent_ownership_committed",
     "workflow_started",
     "interaction_requested",
+    "configuration_applied",
 ];
 
 /// Most canonical messages projected for one adopted inbound turn.
@@ -662,5 +663,6 @@ fn anchor_kinds() -> Vec<TraceFactKind> {
         K::SubagentOwnershipCommitted,
         K::WorkflowStarted,
         K::InteractionRequested,
+        K::ConfigurationApplied,
     ]
 }

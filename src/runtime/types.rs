@@ -703,6 +703,11 @@ pub(crate) enum DurableOperation {
     /// read as an empty one. The child therefore fails closed instead of
     /// publishing a terminal it cannot justify.
     ParentGuidanceSeal,
+    /// A committed configuration's change fact could not be made durable.
+    ///
+    /// Non-transient: the generation is already published, so admission is
+    /// fenced rather than letting new work run on an unrecorded generation.
+    RecordConfigurationChange,
 }
 
 impl DurableOperation {
@@ -727,6 +732,7 @@ impl DurableOperation {
             Self::BackgroundTerminalPublication => "background_terminal_publication",
             Self::SubagentTerminalPublication => "subagent_terminal_publication",
             Self::ParentGuidanceSeal => "parent_guidance_seal",
+            Self::RecordConfigurationChange => "record_configuration_change",
         }
     }
 }

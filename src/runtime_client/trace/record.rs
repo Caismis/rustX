@@ -53,6 +53,7 @@ impl TraceProjection<'_> {
             truncated,
             fields,
             collections,
+            configuration,
             ..
         } = facts;
         Ok(TraceRecord {
@@ -76,6 +77,7 @@ impl TraceProjection<'_> {
             truncated,
             fields,
             collections,
+            configuration,
             request: summary,
         })
     }

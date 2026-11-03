@@ -4508,12 +4508,7 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
                 "the child record commits",
             )
             .await;
-            Some(
-                bridge
-                    .as_ref()
-                    .expect("the stalled bridge")
-                    .queued_without_adoption(),
-            )
+            Some(bridge.as_ref().expect("the stalled bridge").queued_total())
         } else {
             None
         };
@@ -4562,11 +4557,11 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
                 "the parked activity lane retains one latest snapshot"
             );
             assert!(
-                bridge.queued_without_adoption() <= baseline + 1,
+                bridge.queued_total() <= baseline + 1,
                 "the parked queue holds the reliable baseline plus at most one coalesced \
                  activity entry — pending observation state is O(active subagents), not \
                  O(activity updates): baseline {baseline}, queued {}",
-                bridge.queued_without_adoption()
+                bridge.queued_total()
             );
         }
 
@@ -4846,7 +4841,7 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
     // asynchronously changes Eligible to Busy after the registry commits
     // Running; it is not a second child progress publication. Its monotonic,
     // change-only delivery is tested by the native adoption tests.
-    let baseline = bridge.queued_without_adoption();
+    let baseline = bridge.queued_total();
 
     // 200 live progress revisions flow while the consumer is stalled. The
     // wire may coalesce intermediates — that is the contract — but the
@@ -4877,9 +4872,9 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
         "200 revisions retain one latest activity snapshot"
     );
     assert!(
-        bridge.queued_without_adoption() <= baseline + 1,
+        bridge.queued_total() <= baseline + 1,
         "200 reported revisions, at most one queued activity entry: baseline {baseline}, queued {}",
-        bridge.queued_without_adoption()
+        bridge.queued_total()
     );
 
     // The stalled consumer resumes: the projection folds the coalesced

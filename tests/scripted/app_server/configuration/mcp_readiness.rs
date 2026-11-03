@@ -270,28 +270,9 @@ async fn wait_runtime_catalog(
     assert!(runtime.runtime_resources().revision().get() > 1);
 }
 
-async fn ready_rebased(
-    fixture: &Fixture,
-    session: &SessionSnapshot,
-    runtime: &crate::runtime::ConversationRuntime,
-) -> crate::local_runtime::configuration::application::AvailableConfiguration {
-    let mut changes = fixture.manager.configuration_changes();
-    loop {
-        if let Some(candidate) = fixture
-            .manager
-            .configuration_application(&session.id)
-            .and_then(|application| application.candidate)
-            && candidate.expected_binding == runtime.configuration_cut().binding_revision
-        {
-            return candidate;
-        }
-        changes.changed().await.unwrap();
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
-async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_intent() {
+async fn live_schema_recovery_preserves_whole_attempt_and_commits_authored_intent_after_it() {
     Box::pin(bounded(async {
         let mcp = McpFixture::start().await;
         let replacement = McpFixture::named("unadopted_tool").await;
@@ -336,8 +317,8 @@ async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_inten
             admitted
         );
 
-        // Capturing a different source and instructions creates an authored
-        // candidate, which live recovery must never pull into the runtime.
+        // Capturing a different source and instructions stages an authored
+        // candidate; neither it nor live recovery reaches the admitted Attempt.
         std::fs::write(
             fixture.workspaces[0].join(".agents/mcp.toml"),
             format!("[mcp_servers.late]\nurl = {:?}\n", replacement.endpoint),
@@ -352,7 +333,12 @@ async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_inten
         )
         .await;
         let pending = settled(&fixture, 0).await;
-        assert!(pending.candidate.is_some());
+        assert!(
+            pending
+                .units
+                .values()
+                .any(|unit| *unit == UnitApplication::Ready)
+        );
         let selected = crate::model::session::SessionModelConfig::of(
             crate::model::catalog::ModelRef::parse("local/b").unwrap(),
         );
@@ -362,7 +348,12 @@ async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_inten
             .await
             .unwrap();
         let pending = settled(&fixture, 0).await;
-        assert!(pending.candidate.is_some());
+        assert!(
+            pending
+                .units
+                .values()
+                .any(|unit| *unit == UnitApplication::Ready)
+        );
         assert_eq!(
             runtime.configuration_cut().admitted_attempt.unwrap(),
             admitted
@@ -372,7 +363,9 @@ async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_inten
         fixture.gates[0].release();
         settlement.wait().await;
         wait_runtime_catalog(&runtime, &mut publications, before).await;
-        let candidate = ready_rebased(&fixture, &session, &runtime).await;
+        // After the frozen Attempt settles, the runtime publishes the live
+        // catalog and commits the authored candidate prepared over it.
+        applied(&fixture, 0).await;
         let requests = fixture.provider.request_bodies();
         assert_eq!(
             requests.len(),
@@ -397,46 +390,6 @@ async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_inten
                 .config
                 .agent
                 .instructions,
-            frozen.configuration().unwrap().config.agent.instructions
-        );
-        assert!(
-            runtime
-                .runtime_resources()
-                .capability()
-                .tool_registry()
-                .definitions()
-                .iter()
-                .all(|tool| tool.name != "unadopted_tool")
-        );
-
-        runtime
-            .submit_inbound(input("request-B: automatic schema publication"))
-            .unwrap();
-        fixture.gates[1].wait_entered().await;
-        let requests = fixture.provider.request_bodies();
-        assert_eq!(tool_schema(&requests[2]).as_deref(), Some("integer"));
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&requests[2]).unwrap()["model"],
-            "b"
-        );
-        assert!(!requests[2].contains("unadopted instructions"));
-        let mut settlement = SettlementReceiptWait::capture(&runtime);
-        fixture.gates[1].release();
-        settlement.wait().await;
-        runtime.wait_for_configuration_admissions().await;
-        fixture
-            .manager
-            .adopt_configuration(&session.id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
-        assert_eq!(runtime.model_view().configured, selected);
-        assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
             "unadopted instructions"
         );
         assert!(
@@ -448,6 +401,20 @@ async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_inten
                 .iter()
                 .any(|tool| tool.name == "unadopted_tool")
         );
+
+        runtime
+            .submit_inbound(input("request-B: committed authored intent"))
+            .unwrap();
+        fixture.gates[1].wait_entered().await;
+        let requests = fixture.provider.request_bodies();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&requests[2]).unwrap()["model"],
+            "b"
+        );
+        assert!(requests[2].contains("unadopted instructions"));
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        fixture.gates[1].release();
+        settlement.wait().await;
         assert_eq!(
             mcp.control.lists.load(Ordering::SeqCst),
             2,
@@ -633,12 +600,7 @@ async fn failed_explicit_runtime_refresh_retains_last_good_without_automatic_ret
             },
         )
         .await;
-        let authored = settled(&fixture, 0).await.candidate.unwrap();
-        runtime.wait_for_configuration_admissions().await;
-        fixture
-            .manager
-            .adopt_configuration(&session.id, &authored.identity, authored.expected_binding)
-            .unwrap();
+        applied(&fixture, 0).await;
         let adopted = runtime.runtime_resources();
         assert_eq!(
             adopted.capability().tool_registry().definitions(),
@@ -1530,7 +1492,8 @@ async fn live_catalog_publication_never_parks_on_background_ownership() {
         let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
         background.install_commit_boundary_hook(hook.clone());
         let _release_commit = ReleaseCommit(hook.clone());
-        let (executor, mut started, release) = super::adoption::GatedBackgroundExecutor::new();
+        let (executor, mut started, release) =
+            super::automatic_commit::GatedBackgroundExecutor::new();
         let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
         let invocation = crate::tools::types::ToolInvocation {
             id: crate::tools::types::ToolInvocationId::Agent {
@@ -1762,12 +1725,7 @@ async fn superseded_refresh_completion_cannot_publish_into_authored_source_bindi
                 },
             )
             .await;
-            let candidate = settled(&fixture, 0).await.candidate.unwrap();
-            runtime.wait_for_configuration_admissions().await;
-            fixture
-                .manager
-                .adopt_configuration(&session.id, &candidate.identity, candidate.expected_binding)
-                .unwrap();
+            applied(&fixture, 0).await;
             let adopted = runtime.configuration_cut();
             assert!(
                 adopted
@@ -1847,12 +1805,7 @@ async fn pending_success_publishes_without_erasing_newer_explicit_refresh_failur
             },
         )
         .await;
-        let candidate = settled(&fixture, 0).await.candidate.unwrap();
-        runtime.wait_for_configuration_admissions().await;
-        fixture
-            .manager
-            .adopt_configuration(&session.id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        applied(&fixture, 0).await;
         assert_eq!(catalog_failure(&runtime).as_ref(), Some(&failure));
         mcp.control.fail.store(false, Ordering::SeqCst);
         let before = *publications.borrow();
@@ -2098,12 +2051,7 @@ async fn completed_recovery_rebases_over_todo_adoption_and_sibling_replacement()
             },
         )
         .await;
-        let candidate = settled(&fixture, 0).await.candidate.unwrap();
-        runtime.wait_for_configuration_admissions().await;
-        fixture
-            .manager
-            .adopt_configuration(&session.id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        applied(&fixture, 0).await;
         let before = *runtime.runtime_catalog_publications().borrow();
         let mut publications = runtime.runtime_catalog_publications();
         drop(release);

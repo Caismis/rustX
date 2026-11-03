@@ -3,12 +3,14 @@
 //! This owner serializes source ingestion and final publication, not execution
 //! admission or resource preparation. A single worker drains the latest desired
 //! attempt; replacing pending work never makes stale work publishable again.
+//! A prepared candidate is staged in its Session's runtime, which commits it
+//! automatically at its own safe boundary; no client confirms it.
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 mod worker;
-use crate::model::request_shape::CacheImpact;
-use crate::runtime::adoption::PreparedConfiguration;
+use crate::runtime::configuration_commit::{ConfigurationChangeReason, DesiredApplication};
 
 #[derive(
     Debug,
@@ -39,8 +41,18 @@ pub enum ApplyUnit {
 pub enum UnitApplication {
     Applied,
     Preparing,
-    Ready { impact: CacheImpact },
-    Failed { diagnostic: String },
+    /// Prepared and staged; the runtime commits it automatically once the
+    /// execution that owns the current configuration settles.
+    Ready,
+    /// The previous configuration of this unit remains in use.
+    Failed {
+        diagnostic: String,
+    },
+    /// The resources were published but the commit could not be recorded;
+    /// native recovery reconciles from durable authority.
+    Uncertain {
+        diagnostic: String,
+    },
     ProcessRestart,
 }
 
@@ -71,26 +83,6 @@ pub struct ConfigurationApplication {
     pub version: u64,
     pub desired: ApplicationIdentity,
     pub units: BTreeMap<ApplyUnit, UnitApplication>,
-    pub candidate: Option<AvailableConfiguration>,
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-pub struct AvailableConfiguration {
-    pub identity: ApplicationIdentity,
-    pub expected_binding: u64,
-    pub impact: CacheImpact,
-}
-
-struct ReadyConfiguration {
-    capture: super::ProspectiveSessionConfig,
-    prepared: Option<PreparedConfiguration>,
-}
-impl std::fmt::Debug for ReadyConfiguration {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReadyConfiguration").finish_non_exhaustive()
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -127,7 +119,10 @@ pub(crate) struct ApplicationState {
     worker_running: bool,
     #[cfg(test)]
     worker_starts: usize,
-    ready: BTreeMap<String, ReadyConfiguration>,
+    // The latest desired attempt per scope, shared with the candidate a
+    // runtime holds staged so a superseded candidate can never commit.
+    fences: BTreeMap<String, Arc<AtomicU64>>,
+    reasons: BTreeMap<String, ConfigurationChangeReason>,
 }
 
 #[cfg(test)]
@@ -137,7 +132,6 @@ pub(crate) struct SelectionApplicationProbe {
     next_attempt: u64,
     worker_starts: usize,
     pending: BTreeMap<String, ApplicationIdentity>,
-    ready: Option<(usize, usize, u64)>,
 }
 
 #[derive(Clone)]
@@ -181,14 +175,20 @@ impl ConfigurationApplications {
         runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     ) -> bool {
         let mut state = self.lock();
-        let obsolete = state
-            .ready
-            .get(scope)
-            .and_then(|ready| ready.prepared.as_ref())
-            .is_some_and(|candidate| !runtime.configuration_allocation_matches(candidate));
+        // A candidate staged in a replaced runtime can never commit into its
+        // successor; the current input is prepared again for this allocation.
+        let obsolete = state.scopes.get(scope).is_some_and(|application| {
+            application
+                .units
+                .values()
+                .any(|unit| *unit == UnitApplication::Ready)
+        });
         if !obsolete && !state.deferred.remove(scope) {
             return false;
         }
+        state
+            .reasons
+            .insert(scope.to_owned(), ConfigurationChangeReason::Reallocation);
         let mut input = state
             .scope_sources
             .get(scope)
@@ -212,8 +212,11 @@ impl ConfigurationApplications {
         state.scope_targets.remove(scope);
         state.pending.remove(scope);
         state.inputs.remove(scope);
-        state.ready.remove(scope);
         state.deferred.remove(scope);
+        state.reasons.remove(scope);
+        if let Some(fence) = state.fences.remove(scope) {
+            fence.store(0, Ordering::SeqCst);
+        }
         state.version = state
             .version
             .checked_add(1)
@@ -233,26 +236,24 @@ impl ConfigurationApplications {
 impl ApplicationState {
     /// Runtime catalog publication changes the native baseline, not authored
     /// intent. Reprepare the latest captured input, including its model choice.
-    pub(crate) fn rebase_runtime_catalog(&mut self, scope: &str, revision: u64) -> bool {
-        let needs_rebase = self
-            .ready
-            .get(scope)
-            .and_then(|ready| ready.prepared.as_ref())
-            .is_some_and(|candidate| candidate.baseline != revision)
-            || self.scopes.get(scope).is_some_and(|application| {
-                [
-                    ApplyUnit::Capabilities,
-                    ApplyUnit::Instructions,
-                    ApplyUnit::Provider,
-                ]
-                .iter()
-                .any(|unit| {
-                    matches!(
-                        application.units.get(unit),
-                        Some(UnitApplication::Preparing)
-                    )
-                })
-            });
+    pub(crate) fn rebase_runtime_catalog(&mut self, scope: &str) -> bool {
+        // A staged candidate prepared against an older binding is superseded
+        // by the runtime itself at its commit point; only in-flight
+        // preparation must be redone against the published catalog.
+        let needs_rebase = self.scopes.get(scope).is_some_and(|application| {
+            [
+                ApplyUnit::Capabilities,
+                ApplyUnit::Instructions,
+                ApplyUnit::Provider,
+            ]
+            .iter()
+            .any(|unit| {
+                matches!(
+                    application.units.get(unit),
+                    Some(UnitApplication::Preparing)
+                )
+            })
+        });
         if !needs_rebase {
             return false;
         }
@@ -264,21 +265,12 @@ impl ApplicationState {
     }
 
     #[cfg(test)]
-    pub(crate) fn selection_probe(&self, scope: &str) -> SelectionApplicationProbe {
+    pub(crate) fn selection_probe(&self) -> SelectionApplicationProbe {
         SelectionApplicationProbe {
             version: self.version,
             next_attempt: self.next_attempt,
             worker_starts: self.worker_starts,
             pending: self.pending.clone(),
-            ready: self.ready.get(scope).and_then(|ready| {
-                ready.prepared.as_ref().map(|prepared| {
-                    (
-                        Arc::as_ptr(&prepared.owner) as usize,
-                        Arc::as_ptr(&prepared.preview) as usize,
-                        prepared.baseline,
-                    )
-                })
-            }),
         }
     }
 
@@ -503,7 +495,6 @@ impl ApplicationState {
                 sources,
                 version: self.version,
                 desired: identity.clone(),
-                candidate: None,
                 units: BTreeMap::from([
                     (ApplyUnit::ExecutionPolicy, UnitApplication::Preparing),
                     (ApplyUnit::Capabilities, UnitApplication::Preparing),
@@ -514,9 +505,32 @@ impl ApplicationState {
                 ]),
             },
         );
-        self.ready.remove(&scope);
+        self.fences
+            .entry(scope.clone())
+            .or_default()
+            .store(identity.attempt, Ordering::SeqCst);
         self.pending.insert(scope, identity.clone());
         identity
+    }
+
+    /// The currency fence a staged candidate of `identity` carries.
+    pub(crate) fn desired(
+        &mut self,
+        scope: &str,
+        identity: &ApplicationIdentity,
+    ) -> DesiredApplication {
+        DesiredApplication::new(
+            self.fences.entry(scope.to_owned()).or_default().clone(),
+            identity.attempt,
+        )
+    }
+
+    /// Why the scope's current application exists.
+    pub(crate) fn reason(&self, scope: &str) -> ConfigurationChangeReason {
+        self.reasons
+            .get(scope)
+            .copied()
+            .unwrap_or(ConfigurationChangeReason::Source)
     }
 
     /// Ingestion is part of the source transaction. The worker receives these
@@ -528,6 +542,8 @@ impl ApplicationState {
         input: Result<CapturedApplication, String>,
     ) -> ApplicationIdentity {
         self.record_source(source, &input);
+        self.reasons
+            .insert(scope.clone(), ConfigurationChangeReason::Source);
         self.scope_sources
             .insert(scope.clone(), source.to_path_buf());
         self.own_scope(&scope, source);
@@ -575,6 +591,8 @@ impl ApplicationState {
         {
             context.input.model = Some(selection);
         }
+        self.reasons
+            .insert(scope.to_owned(), ConfigurationChangeReason::ModelSelection);
         self.capture_binding(scope.to_owned(), input);
     }
 
@@ -639,6 +657,20 @@ impl ApplicationState {
         self.available
             .keys()
             .chain(self.desired_sources.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// Every Workspace directory an external edit can affect: the retained
+    /// source authority plus the configuration directory of each Session
+    /// application scope.
+    pub(crate) fn watched_source_directories(&self) -> Vec<std::path::PathBuf> {
+        self.available
+            .keys()
+            .chain(self.desired_sources.keys())
+            .chain(self.scope_sources.values())
             .cloned()
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -835,7 +867,6 @@ mod tests {
         );
         assert_eq!(identity.input_revision, None);
         assert_eq!(state.view("s").unwrap().desired, identity);
-        assert!(state.ready.is_empty());
     }
 
     #[test]
@@ -893,12 +924,7 @@ mod tests {
         let id = state.desire("s".into(), Some("input".into()));
         for (unit, outcome) in [
             (ApplyUnit::ExecutionPolicy, UnitApplication::Applied),
-            (
-                ApplyUnit::Instructions,
-                UnitApplication::Ready {
-                    impact: CacheImpact::PrefixChanged,
-                },
-            ),
+            (ApplyUnit::Instructions, UnitApplication::Ready),
             (
                 ApplyUnit::Capabilities,
                 UnitApplication::Failed {
@@ -918,10 +944,7 @@ mod tests {
             view.units[&ApplyUnit::ProcessBindings],
             UnitApplication::ProcessRestart
         );
-        assert!(matches!(
-            view.units[&ApplyUnit::Instructions],
-            UnitApplication::Ready { .. }
-        ));
+        assert_eq!(view.units[&ApplyUnit::Instructions], UnitApplication::Ready);
         assert!(matches!(
             view.units[&ApplyUnit::Capabilities],
             UnitApplication::Failed { .. }

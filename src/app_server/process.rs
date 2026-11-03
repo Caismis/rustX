@@ -336,6 +336,18 @@ async fn run(options: Request) -> Result<(), String> {
     let reaper_stop = CancellationToken::new();
     let stop = reaper_stop.clone();
     let reaper = tokio::spawn(async move { reaper_host.manager().run_idle_reaper(stop).await });
+    // External edits of supported sources enter native application without a
+    // client; the watcher stops with the reaper at drain.
+    let watch_manager = host.manager().clone();
+    let watch_stop = reaper_stop.clone();
+    let source_watch = tokio::spawn(async move {
+        if let Err(error) = watch_manager.run_source_watch(watch_stop).await {
+            eprintln!(
+                "rustx app-server: configuration source watch unavailable ({error}); \
+                 external edits apply after configuration/reconcile"
+            );
+        }
+    });
     let schedule_manager = host.manager().clone();
     let mut scheduler = tokio::spawn(async move { schedule_manager.run_schedule_driver().await });
     let mut scheduler_early_result = None;
@@ -376,8 +388,8 @@ async fn run(options: Request) -> Result<(), String> {
                 None => (&mut scheduler).await,
             }
         };
-        let (failures, reaper_result, scheduler_result) =
-            tokio::join!(host.drain(), reaper, scheduler_completion);
+        let (failures, reaper_result, scheduler_result, _) =
+            tokio::join!(host.drain(), reaper, scheduler_completion, source_watch);
         shutdown.cancel();
         if !transport_finished {
             match (&mut serving).await {

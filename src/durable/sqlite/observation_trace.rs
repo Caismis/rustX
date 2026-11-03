@@ -52,6 +52,7 @@ impl TraceFactKind {
             Self::WorkflowCancelled => "workflow_cancelled",
             Self::InteractionRequested => "interaction_requested",
             Self::InteractionSettled => "interaction_settled",
+            Self::ConfigurationApplied => "configuration_applied",
         }
     }
     pub(crate) fn parse(value: &str) -> Option<Self> {
@@ -59,11 +60,12 @@ impl TraceFactKind {
             AssistantMessageCommitted, AttemptCancelled, AttemptCompleted, AttemptFailed,
             AttemptLimitExceeded, AttemptStarted, AttemptTimedOut, BackgroundExecutionCommitted,
             BackgroundTerminalPublished, CompactionCompleted, CompactionFailed, CompactionStarted,
-            InboundTurnAdopted, InteractionRequested, InteractionSettled, ModelRequestCompleted,
-            ModelRequestFailed, ModelRequestStarted, SubagentOwnershipCommitted,
-            SubagentTerminalPublished, SubagentTerminalSettled, ToolExecutionCompleted,
-            ToolExecutionFailed, ToolExecutionStarted, ToolMessageCommitted, TurnCompleted,
-            TurnStarted, WorkflowCancelled, WorkflowCompleted, WorkflowFailed, WorkflowStarted,
+            ConfigurationApplied, InboundTurnAdopted, InteractionRequested, InteractionSettled,
+            ModelRequestCompleted, ModelRequestFailed, ModelRequestStarted,
+            SubagentOwnershipCommitted, SubagentTerminalPublished, SubagentTerminalSettled,
+            ToolExecutionCompleted, ToolExecutionFailed, ToolExecutionStarted,
+            ToolMessageCommitted, TurnCompleted, TurnStarted, WorkflowCancelled, WorkflowCompleted,
+            WorkflowFailed, WorkflowStarted,
         };
         [
             AttemptStarted,
@@ -97,6 +99,7 @@ impl TraceFactKind {
             WorkflowCancelled,
             InteractionRequested,
             InteractionSettled,
+            ConfigurationApplied,
         ]
         .into_iter()
         .find(|kind| kind.as_str() == value)
@@ -115,6 +118,7 @@ impl TraceFactKind {
                 | Self::SubagentOwnershipCommitted
                 | Self::WorkflowStarted
                 | Self::InteractionRequested
+                | Self::ConfigurationApplied
         )
     }
 }

@@ -65,34 +65,7 @@ async fn fixture() -> Fixture {
 }
 
 async fn published_activation(host: &crate::runtime_client::RuntimeClientHost) {
-    use crate::runtime::adoption::AdoptionEligibility;
-    use crate::runtime_client::{EventDelivery, RuntimeClientCursor, RuntimeClientEvent};
-    let (reader, _) = host
-        .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
-        .unwrap();
-    let subscription = reader
-        .subscribe_events(RuntimeClientCursor::new(0))
-        .unwrap();
-    loop {
-        let EventDelivery::Event(event) = subscription.next().await else {
-            panic!("retained original activation publication");
-        };
-        if event.event.facts().iter().any(|fact| match fact {
-            RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
-                *eligibility == AdoptionEligibility::Eligible
-            }
-            RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
-                assert_eq!(checkpoint.cursor, event.cursor);
-                checkpoint.snapshot.configuration_adoption_eligibility
-                    == AdoptionEligibility::Eligible
-            }
-            _ => false,
-        }) {
-            break;
-        }
-    }
-    drop(subscription);
-    reader.detach();
+    host.projection_settled().await;
 }
 
 async fn assert_noop(f: &Fixture, stage: Option<&NoopStage>) {
@@ -136,7 +109,7 @@ async fn assert_noop(f: &Fixture, stage: Option<&NoopStage>) {
     let checkpoint = host.checkpoint().unwrap();
     let (projection, cursor) = (checkpoint.snapshot, checkpoint.cursor);
     let application = f.manager.configuration_application(id);
-    let activity = f.manager.applications.lock().selection_probe(id.as_ref());
+    let activity = f.manager.applications.lock().selection_probe();
     let probe = f.manager.probe(&f.id(0).await);
     let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
     let changes = f.manager.configuration_changes();
@@ -188,7 +161,7 @@ async fn assert_noop(f: &Fixture, stage: Option<&NoopStage>) {
     assert_eq!(after_cursor, cursor, "no runtime observation");
     assert_eq!(f.manager.configuration_application(id), application);
     assert_eq!(
-        f.manager.applications.lock().selection_probe(id.as_ref()),
+        f.manager.applications.lock().selection_probe(),
         activity,
         "no new identity, version, pending work, worker start, or Ready Candidate replacement"
     );
@@ -212,7 +185,7 @@ async fn edit_instructions(f: &Fixture) {
         .or_insert_with(|| toml::Value::Table(toml::map::Map::default()))
         .as_table_mut()
         .unwrap()
-        .insert("instructions".into(), "pending explicit adoption".into());
+        .insert("instructions".into(), "saved Workspace instructions".into());
     std::fs::write(path, toml::to_string(&source).unwrap()).unwrap();
     f.manager
         .reconcile_configuration(&SourceTarget::Workspace {
@@ -246,10 +219,6 @@ async fn identical_explicit_selection_is_inert_during_an_attempt() {
         *work_host.lock().unwrap() = Some(host.clone());
         host.projection_settled().await;
         let baseline = host.checkpoint().unwrap();
-        assert_eq!(
-            baseline.snapshot.configuration_adoption_eligibility,
-            crate::runtime::adoption::AdoptionEligibility::Eligible
-        );
         let (reader, _) = host
             .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
@@ -311,20 +280,12 @@ async fn identical_explicit_selection_is_inert_during_an_attempt() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn identical_explicit_selection_preserves_the_ready_candidate() {
+async fn identical_explicit_selection_is_inert_after_automatic_commit() {
     bounded(async {
         let f = fixture().await;
         edit_instructions(&f).await;
-        let ready = super::configuration::settled(&f, 0).await;
-        let candidate = ready.candidate.unwrap();
+        super::configuration::applied(&f, 0).await;
         assert_noop(&f, None).await;
-        f.manager
-            .adopt_configuration(
-                &f.sessions[0].id,
-                &candidate.identity,
-                candidate.expected_binding,
-            )
-            .unwrap();
         assert_eq!(
             f.manager
                 .configuration_runtime(&f.sessions[0].id)
@@ -335,7 +296,7 @@ async fn identical_explicit_selection_preserves_the_ready_candidate() {
                 .config
                 .agent
                 .instructions,
-            "pending explicit adoption"
+            "saved Workspace instructions"
         );
         f.close().await;
     })
@@ -352,11 +313,11 @@ async fn identical_explicit_selection_is_inert_during_source_publication() {
         probe.before_catalog_publication.entered().await;
         assert_noop(&f, None).await;
         probe.before_catalog_publication.release();
-        assert!(
-            super::configuration::settled(&f, 0)
-                .await
-                .candidate
-                .is_some()
+        let applied = super::configuration::applied(&f, 0).await;
+        assert_eq!(
+            applied.units
+                [&crate::local_runtime::configuration::application::ApplyUnit::Instructions],
+            crate::local_runtime::configuration::application::UnitApplication::Applied
         );
         f.close().await;
     })

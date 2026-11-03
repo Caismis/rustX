@@ -84,12 +84,11 @@ async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_r
             )
             .await
             .unwrap();
-        let success = settled(&fixture, 0).await;
+        let success = applied(&fixture, 0).await;
         assert_eq!(
             success.desired.input_revision,
             failed.desired.input_revision
         );
-        assert!(success.candidate.is_some());
         let after_success = create().await.unwrap().session.id;
         assert_eq!(
             retained(&after_success).config.agent.instructions,
@@ -256,13 +255,15 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
             .instructions,
         "cold desired context"
     );
+    // The resident Session commits; the cold ones stay unloaded.
     loop {
         if fixture
             .manager
             .configuration_application(&ids[0])
             .unwrap()
-            .candidate
-            .is_some()
+            .units
+            .values()
+            .all(|unit| !matches!(unit, UnitApplication::Preparing | UnitApplication::Ready))
         {
             break;
         }
@@ -272,7 +273,7 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
         fixture.manager.registry.0.lock().unwrap().entries.len(),
         before + 1
     );
-    assert_ne!(
+    assert_eq!(
         runtime
             .runtime_resources()
             .configuration()
@@ -337,7 +338,7 @@ async fn t09_t15_new_session_during_preparation_keeps_available_binding_after_su
             before.config.agent.instructions
         );
         probe.before_configuration_prepare.release();
-        assert!(settled(&fixture, 0).await.candidate.is_some());
+        applied(&fixture, 0).await;
         let after = create().await.unwrap().session.id;
         assert_eq!(retained(&after).config.agent.instructions, "P2 available");
         assert_eq!(
@@ -345,50 +346,15 @@ async fn t09_t15_new_session_during_preparation_keeps_available_binding_after_su
             before.component_revisions
         );
         let loaded = fixture.manager.load(&during, None).await.unwrap();
-        assert_eq!(
-            fixture
-                .manager
-                .configuration_runtime(&during)
-                .unwrap()
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
-            before.config.agent.instructions
-        );
         let runtime = fixture.manager.configuration_runtime(&during).unwrap();
         let history = loaded
             .inspect_runtime()
             .unwrap()
             .historical_canonical_history()
             .unwrap();
-        let mut changed = fixture.manager.configuration_changes();
-        let candidate = loop {
-            if let Some(candidate) = fixture
-                .manager
-                .configuration_application(&during)
-                .and_then(|view| view.candidate)
-            {
-                break candidate;
-            }
-            changed.changed().await.unwrap();
-        };
-        assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
-            before.config.agent.instructions
-        );
-        fixture
-            .manager
-            .adopt_configuration(&during, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        // Residency prepares the desired source again and commits it without
+        // a client; canonical history is untouched.
+        session_applied(&fixture, &during).await;
         assert_eq!(
             runtime
                 .runtime_resources()
@@ -447,24 +413,15 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
         .unwrap();
     // The removed selection blocks neither the source generation nor the
     // catalog: the Provider unit publishes at once, reporting the Session's
-    // selection unavailable, while the real capability change is prepared
-    // against that published binding and waits for explicit adoption.
-    let pending = settled(&fixture, 0).await;
-    let candidate = pending
-        .candidate
-        .clone()
-        .expect("prepared capability change");
-    assert_eq!(
-        pending.units[&ApplyUnit::Provider],
-        UnitApplication::Applied,
-        "{pending:?}"
-    );
+    // selection unavailable, and the real capability change prepared against
+    // that published binding commits automatically.
+    let committed = applied(&fixture, 0).await;
     assert!(
-        matches!(
-            pending.units[&ApplyUnit::Capabilities],
-            UnitApplication::Ready { .. }
-        ),
-        "{pending:?}"
+        committed
+            .units
+            .values()
+            .all(|unit| *unit == UnitApplication::Applied),
+        "{committed:?}"
     );
     let view = runtime.model_view();
     assert_eq!(view.configured.model.to_string(), "local/a");
@@ -478,10 +435,6 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
             .collect::<Vec<_>>()
     };
     assert_eq!(references(&runtime), ["local/b"]);
-    assert!(Arc::ptr_eq(
-        old.capability().tool_registry(),
-        runtime.runtime_resources().capability().tool_registry()
-    ));
     let created = fixture
         .manager
         .create_session(SessionPersistentState {
@@ -512,13 +465,8 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
             .approval_policy,
         crate::tools::types::ToolApprovalPolicy::Always
     );
-    assert_eq!(runtime.model_view().configured.model.to_string(), "local/a");
-    // Adoption publishes the capabilities; the old Session keeps its
+    // The commit published the capabilities; the old Session keeps its
     // configured selection, still unavailable, and the published catalog.
-    fixture
-        .manager
-        .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
-        .unwrap();
     let view = runtime.model_view();
     assert_eq!(view.configured.model.to_string(), "local/a");
     assert!(view.unavailable.unwrap().contains("local/a"));
@@ -574,16 +522,15 @@ async fn workflow_only_agent_change(model_change: bool) {
                 name: crate::runtime::subagent::SubagentName::parse("reviewer").unwrap(),
                 authored: Some(crate::local_runtime::agent_resources::parse(&authored).unwrap()),
             }).await.unwrap();
-        let application = settled(&fixture, 0).await;
+        assert_eq!(settled(&fixture, 0).await.units[&ApplyUnit::Capabilities], UnitApplication::Ready);
         assert!(probe.configuration_preparations.load(Ordering::SeqCst) > preparations);
-        assert_ne!(live.runtime_resources().capability().revision(), before.capability().revision());
+        assert_eq!(live.runtime_resources().capability().revision(), before.capability().revision());
         let mut done = SettlementReceiptWait::capture(&live);
         phases.enter("old Workflow settlement");
         fixture.gates[0].release();
         done.wait().await;
-        if let Some(candidate) = application.candidate {
-            fixture.manager.adopt_configuration(id, &candidate.identity, candidate.expected_binding).unwrap();
-        }
+        applied(&fixture, 0).await;
+        assert_ne!(live.runtime_resources().capability().revision(), before.capability().revision());
         let requests = fixture.provider.request_bodies();
         assert!(requests.iter().any(|body| body.contains("reviewer A")), "{requests:?}");
         assert!(!requests.iter().any(|body| body.contains("reviewer B")));
@@ -644,7 +591,7 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
         },
     )
     .await;
-    let application = settled(&fixture, 0).await;
+    settled(&fixture, 0).await;
     let independent =
         crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
             .unwrap();
@@ -687,12 +634,7 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
             .max_concurrent,
         Some(3)
     );
-    let candidate = application.candidate.unwrap();
-    fixture
-        .manager
-        .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
-        .unwrap();
-    let healthy = fixture.manager.configuration_application(id).unwrap();
+    let healthy = applied(&fixture, 0).await;
     assert!(
         healthy
             .units

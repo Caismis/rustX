@@ -280,7 +280,9 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 77 publishes MCP availability only after live preparation settles.
 /// Version 79 combines Scheduled execution/recovery origins with reasoning-free
 /// Workflow, workspace changes and live MCP preparation projections.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 79;
+/// Version 80 removes advisory configuration-adoption eligibility and adds
+/// Session configuration change transcript items and Trace records.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 80;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1015,10 +1017,8 @@ pub struct InteractionFieldItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientError {
-    /// Native Session adoption/model fence refusal.
-    ConfigurationAdoption {
-        rejection: crate::runtime::adoption::AdoptionError,
-    },
+    /// A newer Session binding superseded the model selection's fence.
+    ModelSelectionConflict,
     /// The negotiated protocol version is not supported by this runtime.
     UnsupportedProtocolVersion {
         /// The version this runtime speaks.
@@ -1380,7 +1380,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 79);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 80);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

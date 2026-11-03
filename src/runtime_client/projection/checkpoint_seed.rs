@@ -180,7 +180,6 @@ impl CheckpointSeed {
             conversation_id: source.conversation_id.clone(),
             shutting_down: source.shutting_down,
             effective_approval_mode: source.effective_approval_mode,
-            configuration_adoption_eligibility: source.configuration_adoption_eligibility.clone(),
             durability_failure: source.durability_failure.as_ref().map(|failure| {
                 super::super::snapshot::RuntimeDurabilityFailure {
                     operation: bounded_diagnostic(&failure.operation),

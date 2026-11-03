@@ -39,6 +39,7 @@ pub enum TraceFactKind {
     WorkflowCancelled,
     InteractionRequested,
     InteractionSettled,
+    ConfigurationApplied,
 }
 #[derive(Debug, Clone)]
 pub enum TraceFactScope {
@@ -135,6 +136,10 @@ pub enum TraceFactData {
     },
     InteractionStart {
         native_id: Option<String>,
+    },
+    /// A Session configuration commit; complete and instantaneous.
+    Configuration {
+        change: crate::runtime::configuration_commit::ConfigurationChange,
     },
     CanonicalToolCommit {
         occurrence: Option<crate::events::types::ToolObservationOccurrence>,

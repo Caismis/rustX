@@ -1,5 +1,5 @@
-//! Configuration adoption and source settings for resident runtimes: test
-//! gates, process limits, configuration hosts and applications, adoption,
+//! Configuration application and source settings for resident runtimes: test
+//! gates, process limits, configuration hosts and applications,
 //! reconciliation, and source repair/read/write.
 
 use super::super::session::SessionId;
@@ -106,7 +106,7 @@ impl SessionRuntimeManager {
         {
             binding.binding_revision = revision;
         }
-        let queued = application.rebase_runtime_catalog(session.as_ref(), revision);
+        let queued = application.rebase_runtime_catalog(session.as_ref());
         if queued {
             self.applications.notify(&application);
         }
@@ -285,19 +285,6 @@ impl SessionRuntimeManager {
         self.applications.lock().next_view(versions)
     }
 
-    pub(crate) fn adopt_configuration(
-        &self,
-        session: &SessionId,
-        identity: &super::super::configuration::application::ApplicationIdentity,
-        expected_binding: u64,
-    ) -> Result<
-        super::super::configuration::application::ConfigurationApplication,
-        crate::runtime::adoption::AdoptionError,
-    > {
-        self.applications
-            .adopt(self, session, identity, expected_binding)
-    }
-
     pub(crate) async fn reconcile_configuration(
         &self,
         target: &super::super::configuration::settings::SourceTarget,
@@ -323,6 +310,30 @@ impl SessionRuntimeManager {
                 super::super::configuration::settings::SettingsError::Committed,
             )
         })?
+    }
+
+    /// Capture an externally observed change of `target` exactly like a
+    /// native source write: repair, capture and native application. Unlike
+    /// explicit reconciliation it never retries MCP discovery, so file churn
+    /// cannot become a reconnect loop. An unchanged healthy source is a no-op.
+    pub(super) async fn observe_source_change(
+        &self,
+        target: &super::super::configuration::settings::SourceTarget,
+    ) {
+        let owner = self.clone();
+        let target = target.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if target.validate().is_err() {
+                return;
+            }
+            owner.repair_sources(&target);
+            let mut application = owner.applications.lock();
+            owner.capture_source_consumers(&mut application, &target);
+            owner.applications.notify(&application);
+            drop(application);
+            owner.applications.run(owner.clone());
+        })
+        .await;
     }
 
     async fn coordinate_source(

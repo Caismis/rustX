@@ -127,15 +127,25 @@ fn assert_read_suffix(
 ) {
     match &event.event {
         rustx::runtime_client::RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
-            let attempt = checkpoint.snapshot.attempt.as_ref().expect("retained native Attempt");
+            let attempt = checkpoint
+                .snapshot
+                .attempt
+                .as_ref()
+                .expect("retained native Attempt");
             assert_eq!(attempt.attempt_id.as_ref(), Some(terminal));
-            assert!(matches!(attempt.phase, rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }));
+            assert!(matches!(
+                attempt.phase,
+                rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }
+            ));
         }
-        _ => assert!(event.event.facts().iter().all(|fact| matches!(fact,
-            rustx::runtime_client::RuntimeClientEvent::ReadDomainsUpdated { .. } |
-            rustx::runtime_client::RuntimeClientEvent::TraceChanged |
-            rustx::runtime_client::RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { .. }
-        )), "only read-domain/adoption suffix follows the native terminal"),
+        _ => assert!(
+            event.event.facts().iter().all(|fact| matches!(
+                fact,
+                rustx::runtime_client::RuntimeClientEvent::ReadDomainsUpdated { .. }
+                    | rustx::runtime_client::RuntimeClientEvent::TraceChanged
+            )),
+            "only a read-domain suffix follows the native terminal"
+        ),
     }
 }
 

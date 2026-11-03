@@ -22,9 +22,7 @@ pub(super) fn client_error(error: RuntimeClientError) -> RpcError {
         RuntimeClientError::AgentStopping { agent_id } => ErrorData::AgentStopping { agent_id },
         RuntimeClientError::AgentSettlement { agent_id } => ErrorData::AgentSettlement { agent_id },
         RuntimeClientError::UnknownAgent { agent_id } => ErrorData::UnknownAgent { agent_id },
-        RuntimeClientError::ConfigurationAdoption { rejection } => {
-            ErrorData::ConfigurationAdoption { rejection }
-        }
+        RuntimeClientError::ModelSelectionConflict => ErrorData::ModelSelectionConflict,
         // The App Server selects models through `session/setModel`; a Runtime
         // Client model refusal here is a turn or compaction refused because
         // the published catalog no longer admits the configured selection.
@@ -86,9 +84,7 @@ pub(super) fn model_selection_error(
         ModelSelectionError::Model(ModelUpdateError::Conflict)
         | ModelSelectionError::Persistence(
             crate::local_runtime::session::SessionError::StaleSettings { .. },
-        ) => domain(ErrorData::ConfigurationAdoption {
-            rejection: crate::runtime::adoption::AdoptionError::Conflict,
-        }),
+        ) => domain(ErrorData::ModelSelectionConflict),
         ModelSelectionError::Model(ModelUpdateError::Inactive) => domain(ErrorData::StaleRuntime),
         ModelSelectionError::Model(ModelUpdateError::InvalidConfiguration(diagnostic)) => {
             domain(ErrorData::ModelUnavailable { diagnostic })

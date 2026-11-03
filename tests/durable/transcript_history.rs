@@ -166,6 +166,7 @@ fn page_message_ids(page: &rustx::durable::TranscriptPage) -> Vec<String> {
             TranscriptItem::PublicationAudit { .. }
             | TranscriptItem::InteractionRequested { .. }
             | TranscriptItem::InteractionSettled { .. }
+            | TranscriptItem::ConfigurationApplied { .. }
             | TranscriptItem::AttemptTerminal { .. }
             | TranscriptItem::InheritedTurn { .. } => None,
         })
@@ -188,6 +189,9 @@ fn client_page_message_ids(
                 ..
             }
             | rustx::observation::transcript::RuntimeClientTranscriptItem::InteractionSettled {
+                ..
+            }
+            | rustx::observation::transcript::RuntimeClientTranscriptItem::ConfigurationApplied {
                 ..
             }
             | rustx::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal {
@@ -641,37 +645,6 @@ fn initialized_snapshot(
         .0
 }
 
-async fn await_native_activation(attachment: &rustx::runtime_client::RuntimeAttachment) {
-    use rustx::runtime::adoption::AdoptionEligibility;
-    use rustx::runtime_client::{EventDelivery, RuntimeClientCursor, RuntimeClientEvent};
-    let subscription = attachment
-        .subscribe_events(RuntimeClientCursor::new(0))
-        .expect("subscribe to original activation");
-    tokio::time::timeout(std::time::Duration::from_mins(2), async {
-        loop {
-            let EventDelivery::Event(event) = subscription.next().await else {
-                panic!("startup observer retains the original activation event");
-            };
-            if event.event.facts().iter().any(|fact| match fact {
-                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
-                    *eligibility == AdoptionEligibility::Eligible
-                }
-                RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
-                    assert_eq!(checkpoint.cursor, event.cursor);
-                    checkpoint.snapshot.configuration_adoption_eligibility
-                        == AdoptionEligibility::Eligible
-                }
-                _ => false,
-            }) {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("native activation becomes eligible");
-    drop(subscription);
-}
-
 /// Requirement 5: detaching and reattaching the Runtime Client does not
 /// replace or reset the durable transcript.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -906,6 +879,7 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
             TranscriptItem::Message { .. }
             | TranscriptItem::InteractionRequested { .. }
             | TranscriptItem::InteractionSettled { .. }
+            | TranscriptItem::ConfigurationApplied { .. }
             | TranscriptItem::AttemptTerminal { .. }
             | TranscriptItem::InheritedTurn { .. } => None,
         })
@@ -1147,7 +1121,6 @@ async fn requirement_12_transcript_paging_preserves_runtime_client_cursor_invari
         .expect("attach");
     // Join the producer's startup event before the two pure reads. Paging
     // must not be credited with a later activation publication.
-    await_native_activation(&attachment).await;
     let live_before = runtime
         .host()
         .checkpoint()
@@ -1438,6 +1411,7 @@ fn requirement_16_read_tool_result_is_pageable_after_source_disappears() {
         | TranscriptItem::PublicationAudit { .. }
         | TranscriptItem::InteractionRequested { .. }
         | TranscriptItem::InteractionSettled { .. }
+        | TranscriptItem::ConfigurationApplied { .. }
         | TranscriptItem::AttemptTerminal { .. }
         | TranscriptItem::InheritedTurn { .. } => None,
     });

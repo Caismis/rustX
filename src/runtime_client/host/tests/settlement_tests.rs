@@ -53,53 +53,6 @@ fn start_settlement_waiter(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn projection_settled_joins_drained_activation_before_eligible_baseline() {
-    use crate::runtime::adoption::AdoptionEligibility;
-
-    let (adapter, fixture) = runtime_only_fixture(Vec::new(), ToolRegistry::new(), None).await;
-    let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-        runtime: fixture.runtime.clone(),
-        replay_limit: None,
-    })
-    .unwrap();
-    let inner = host.weak_inner().upgrade().unwrap();
-    let parked = park_publication(&inner, false);
-    let cursor = inner.state.lock().unwrap().projection.cursor();
-    fixture.runtime.activate();
-    parked
-        .entered
-        .recv_timeout(BACKGROUND_LIVENESS_GUARD)
-        .unwrap();
-    assert!(inner.pending.settled(), "the real activation was drained");
-    {
-        let state = inner.state.lock().unwrap();
-        assert_eq!(state.projection.cursor(), cursor);
-        assert_eq!(
-            state
-                .projection
-                .snapshot_ref()
-                .configuration_adoption_eligibility,
-            AdoptionEligibility::Unavailable
-        );
-        assert!(state.projection.read_domain_cut().is_none());
-        state.projection.validate_source_prefix().unwrap();
-    }
-    let (waiter, contended) = start_settlement_waiter(inner.clone());
-    wait_signal(contended).await;
-    drop(parked);
-    waiter.await.unwrap();
-    let checkpoint = host.checkpoint().unwrap();
-    assert_eq!(
-        checkpoint.snapshot.configuration_adoption_eligibility,
-        AdoptionEligibility::Eligible
-    );
-    assert!(checkpoint.cursor > cursor);
-    assert!(adapter.requests().is_empty());
-    fixture.runtime.shutdown().await.unwrap();
-    inner.drain_projection().await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn projection_settled_joins_encoding_before_model_baseline() {
     let (adapter, fixture) = runtime_only_fixture(Vec::new(), ToolRegistry::new(), None).await;
     let host = RuntimeClientHost::new(RuntimeClientHostConfig {

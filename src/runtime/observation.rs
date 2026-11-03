@@ -315,6 +315,12 @@ pub(crate) enum ConversationObservation {
         /// primary conversation and its commit succeeded.
         audit: Option<(RuntimeEventEnvelope, TranscriptCursor)>,
     },
+    /// A Session configuration commit was recorded at its own transcript
+    /// position. Published inside its Journal sequence's `Published` wrapper.
+    ConfigurationApplied {
+        event: Box<RuntimeEventEnvelope>,
+        cursor: TranscriptCursor,
+    },
     /// A child process died while owning one or more live interactions.
     ///
     /// This is a projection removal, not a synthetic interaction settlement:
@@ -351,16 +357,6 @@ pub(crate) enum ConversationObservation {
         /// The human-readable failure diagnostic.
         diagnostic: String,
     },
-    /// The runtime's current configuration-adoption eligibility changed.
-    ///
-    /// Runtime-domain advisory state, never configuration application state:
-    /// it answers whether this live runtime could adopt a prepared
-    /// configuration now, derived by the adoption gate's idle rule over its
-    /// in-memory owners. The runtime publishes it only when the derived value
-    /// differs from its previous publication, so ordinary streaming never
-    /// emits it. `session/adoptConfiguration` still revalidates the real gate
-    /// at its commit boundary.
-    AdoptionEligibility(crate::runtime::adoption::AdoptionEligibility),
 }
 
 /// Streaming traversal of the complete native transition. No payload or
@@ -1845,19 +1841,15 @@ impl PendingObservations {
         state.latest_activity.len() + usize::from(state.latest_offhead_activity.is_some())
     }
 
-    /// Test-only: separate runtime adoption authority from the child activity
-    /// backpressure lane. A child admission can publish Busy asynchronously.
+    /// Test-only: every queued observation across the reliable and
+    /// coalescing lanes.
     #[cfg(test)]
-    pub(crate) fn queued_without_adoption(&self) -> usize {
+    pub(crate) fn queued_total(&self) -> usize {
         let state = self
             .state
             .lock()
             .expect("pending observation queue lock poisoned");
-        state
-            .reliable
-            .iter()
-            .filter(|entry| !matches!(entry, ConversationObservation::AdoptionEligibility(_)))
-            .count()
+        state.reliable.len()
             + state.latest_activity.len()
             + usize::from(state.latest_offhead_activity.is_some())
             + state.latest_progress.len()
@@ -2132,6 +2124,8 @@ pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::TurnCompleted
         | RuntimeEvent::ContextContributionEmitted { .. }
         | RuntimeEvent::ModelRetryScheduled { .. }
+        // A Session configuration commit is its own between-Attempt record.
+        | RuntimeEvent::ConfigurationApplied { .. }
         // Adoption is the canonical linearization point at which inbound
         // became a turn this conversation owes an answer for. Trace projects
         // it as the ledger's User record, so its receipt must be published

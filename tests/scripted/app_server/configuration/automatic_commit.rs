@@ -1,8 +1,21 @@
-//! Adoption of prepared configuration by live Sessions: admitted attempts keep
-//! their capture, candidates conflict and supersede, and the admission gate
-//! orders busy adoption without cancelling work.
+//! Automatic configuration commit by live Sessions: native commits a saved
+//! configuration at its own safe boundary with no client action, admitted
+//! Attempts keep their capture, real owners defer the commit until they
+//! settle, newer desire supersedes staged work, and commit orders against
+//! independent admission.
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
+
+fn instructions(runtime: &crate::runtime::ConversationRuntime) -> String {
+    runtime
+        .runtime_resources()
+        .configuration()
+        .unwrap()
+        .config
+        .agent
+        .instructions
+        .clone()
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue383_disabled_extension_keeps_admitted_configuration_until_settlement() {
@@ -18,13 +31,7 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
             },
         )
         .await;
-        let enabled = settled(&fixture, 0).await;
-        if let Some(candidate) = enabled.candidate {
-            fixture
-                .manager
-                .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
-                .unwrap();
-        }
+        applied(&fixture, 0).await;
         let runtime = fixture.manager.configuration_runtime(id).unwrap();
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
@@ -43,7 +50,14 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
             },
         )
         .await;
-        let disabled = settled(&fixture, 0).await;
+        // Prepared and staged: the running Attempt owns the current generation.
+        let staged = settled(&fixture, 0).await;
+        assert_eq!(
+            staged.units[&ApplyUnit::Capabilities],
+            UnitApplication::Ready,
+            "{staged:?}"
+        );
+        assert!(runtime.has_staged_configuration());
         assert_eq!(
             crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
                 &runtime
@@ -56,7 +70,13 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         fixture.gates[0].release();
         settlement.wait().await;
-        runtime.wait_for_configuration_admissions().await;
+        // Settlement alone commits the staged candidate: no save, click or
+        // message drives it.
+        let committed = applied(&fixture, 0).await;
+        assert_eq!(
+            committed.units[&ApplyUnit::Capabilities],
+            UnitApplication::Applied
+        );
         let requests = fixture.provider.request_bodies();
         assert_eq!(requests.len(), 2);
         for body in &requests {
@@ -67,15 +87,11 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
                     .unwrap()
                     .iter()
                     .any(|tool| tool["function"]["name"] == "todo"),
-                "old admitted steps retain Todo"
+                "every step of the admitted Attempt retains Todo"
             );
         }
-        if let Some(candidate) = disabled.candidate {
-            fixture
-                .manager
-                .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
-                .unwrap();
-        }
+        let change = configuration_changes(&runtime).pop().unwrap();
+        assert_eq!(change.tools.removed.names, ["todo"]);
         runtime.submit_inbound(input("request-B")).unwrap();
         fixture.gates[1].wait_entered().await;
         let future: serde_json::Value =
@@ -96,7 +112,7 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
 }
 
 #[tokio::test]
-async fn t04_session_relative_prefix_and_t09_policy_noop() {
+async fn t04_every_resident_session_commits_and_t09_policy_and_healthy_rescan_are_noops() {
     let fixture = Fixture::new().await;
     for session in &fixture.sessions {
         fixture.manager.load(&session.id, None).await.unwrap();
@@ -109,42 +125,26 @@ async fn t04_session_relative_prefix_and_t09_policy_noop() {
         },
     )
     .await;
-    let s1 = settled(&fixture, 0).await;
-    let s2 = settled(&fixture, 1).await;
-    assert!(s1.candidate.is_some(), "{s1:?}");
-    let candidate = s2.candidate.unwrap();
-    fixture
-        .manager
-        .adopt_configuration(
-            &fixture.sessions[1].id,
-            &candidate.identity,
-            candidate.expected_binding,
-        )
-        .unwrap();
     let runtimes: Vec<_> = fixture
         .sessions
         .iter()
         .map(|s| fixture.manager.configuration_runtime(&s.id).unwrap())
         .collect();
-    let p1 = runtimes[0]
-        .runtime_resources()
-        .configuration()
-        .unwrap()
-        .config
-        .agent
-        .instructions
-        .clone();
-    assert_ne!(p1, "P2");
-    assert_eq!(
-        runtimes[1]
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions,
-        "P2"
-    );
+    for (index, runtime) in runtimes.iter().enumerate() {
+        let view = applied(&fixture, index).await;
+        assert_eq!(
+            view.units[&ApplyUnit::Instructions],
+            UnitApplication::Applied
+        );
+        assert_eq!(instructions(runtime), "P2");
+        let changes = configuration_changes(runtime);
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert_eq!(
+            changes[0].domains,
+            [crate::runtime::configuration_commit::ConfigurationDomain::Instructions]
+        );
+        assert!(changes[0].tools.is_empty());
+    }
     write(
         &fixture,
         0,
@@ -153,29 +153,10 @@ async fn t04_session_relative_prefix_and_t09_policy_noop() {
         },
     )
     .await;
-    settled(&fixture, 0).await;
-    settled(&fixture, 1).await;
-    assert_eq!(
-        runtimes[0]
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions,
-        p1
-    );
-    assert_eq!(
-        runtimes[1]
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions,
-        "P2"
-    );
+    applied(&fixture, 0).await;
+    applied(&fixture, 1).await;
     for runtime in &runtimes {
+        assert_eq!(instructions(runtime), "P2");
         assert_eq!(
             crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(runtime)
                 .unwrap()
@@ -184,6 +165,7 @@ async fn t04_session_relative_prefix_and_t09_policy_noop() {
         );
     }
     let revision = runtimes[1].runtime_resources().revision();
+    let changes = configuration_changes(&runtimes[1]).len();
     fixture
         .manager
         .reconcile_configuration(
@@ -193,140 +175,119 @@ async fn t04_session_relative_prefix_and_t09_policy_noop() {
         )
         .await
         .unwrap();
-    let healthy = settled(&fixture, 1).await;
-    assert!(healthy.candidate.is_none());
+    applied(&fixture, 1).await;
     assert_eq!(runtimes[1].runtime_resources().revision(), revision);
+    assert_eq!(
+        configuration_changes(&runtimes[1]).len(),
+        changes,
+        "an unchanged source records no change"
+    );
+    assert!(
+        fixture.provider.request_bodies().is_empty(),
+        "commit invokes no model"
+    );
     fixture.manager.drain_all_runtimes().await;
 }
 
-#[tokio::test]
-async fn t11_concrete_candidate_conflict_and_t09_healthy_rescan_preserves_candidate() {
-    let fixture = Fixture::with_session_count(None, 1).await;
-    let id = &fixture.sessions[0].id;
-    fixture.manager.load(id, None).await.unwrap();
-    write(
-        &fixture,
-        0,
-        ConfigMutation::Instructions {
-            authored: Some("candidate one".into()),
-        },
-    )
-    .await;
-    let inspected = settled(&fixture, 0).await;
-    let old = inspected.candidate.clone().unwrap();
-    let probe = fixture
-        .manager
-        .probe(&fixture.sessions[0].active_conversation_id);
-    let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
-    fixture
-        .manager
-        .reconcile_configuration(
-            &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
-                directory: fixture.workspaces[0].clone(),
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t11_newer_desire_supersedes_a_staged_candidate_and_rescan_does_not_reprepare() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = &fixture.sessions[0].id;
+        fixture.manager.load(id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(id).unwrap();
+        runtime.submit_inbound(input("request-A")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("candidate one".into()),
             },
         )
-        .await
-        .unwrap();
-    assert_eq!(settled(&fixture, 0).await, inspected);
-    assert_eq!(
-        probe.configuration_preparations.load(Ordering::SeqCst),
-        preparations
-    );
-    write(
-        &fixture,
-        0,
-        ConfigMutation::Instructions {
-            authored: Some("candidate two".into()),
-        },
-    )
+        .await;
+        let staged = settled(&fixture, 0).await;
+        assert_eq!(
+            staged.units[&ApplyUnit::Instructions],
+            UnitApplication::Ready
+        );
+        let probe = fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id);
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: fixture.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(settled(&fixture, 0).await, staged);
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            preparations
+        );
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("candidate two".into()),
+            },
+        )
+        .await;
+        let newer = settled(&fixture, 0).await;
+        assert_ne!(newer.desired, staged.desired);
+        assert_eq!(
+            newer.units[&ApplyUnit::Instructions],
+            UnitApplication::Ready
+        );
+        assert_ne!(instructions(&runtime), "candidate one");
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        fixture.gates[0].release();
+        settlement.wait().await;
+        applied(&fixture, 0).await;
+        assert_eq!(instructions(&runtime), "candidate two");
+        assert_eq!(
+            configuration_changes(&runtime).len(),
+            1,
+            "the superseded candidate never committed"
+        );
+        fixture.close().await;
+    })
     .await;
-    let newer = settled(&fixture, 0).await.candidate.unwrap();
-    assert_ne!(old.identity.input_revision, newer.identity.input_revision);
-    assert_ne!(old.identity.attempt, newer.identity.attempt);
-    assert_eq!(
-        fixture
-            .manager
-            .adopt_configuration(id, &old.identity, old.expected_binding),
-        Err(AdoptionError::Conflict)
-    );
-    assert_eq!(
-        fixture
-            .manager
-            .adopt_configuration(id, &newer.identity, newer.expected_binding + 1),
-        Err(AdoptionError::Conflict)
-    );
-    let applied = fixture
-        .manager
-        .adopt_configuration(id, &newer.identity, newer.expected_binding)
-        .unwrap();
-    assert_eq!(
-        applied.units[&ApplyUnit::Instructions],
-        UnitApplication::Applied
-    );
-    assert!(applied.candidate.is_none());
-    fixture.manager.drain_all_runtimes().await;
 }
 
 #[tokio::test]
-async fn t15_unload_load_does_not_adopt_pending_context() {
+async fn t15_unload_load_retains_the_committed_configuration_without_replay() {
     let fixture = Fixture::with_session_count(None, 1).await;
     let id = &fixture.sessions[0].id;
     let loaded = fixture.manager.load(id, None).await.unwrap();
-    let before = fixture
-        .manager
-        .configuration_runtime(id)
-        .unwrap()
-        .runtime_resources();
     write(
         &fixture,
         0,
         ConfigMutation::Instructions {
-            authored: Some("awaiting adoption".into()),
+            authored: Some("committed before unload".into()),
         },
     )
     .await;
-    let original_candidate = settled(&fixture, 0).await.candidate.unwrap();
+    applied(&fixture, 0).await;
+    let runtime = fixture.manager.configuration_runtime(id).unwrap();
+    assert_eq!(instructions(&runtime), "committed before unload");
+    assert_eq!(configuration_changes(&runtime).len(), 1);
     fixture.manager.unload(&loaded.conversation).await.unwrap();
     fixture.manager.load(id, None).await.unwrap();
+    let reloaded = fixture.manager.configuration_runtime(id).unwrap();
+    assert_eq!(instructions(&reloaded), "committed before unload");
     assert_eq!(
-        fixture
-            .manager
-            .configuration_runtime(id)
-            .unwrap()
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions,
-        before.configuration().unwrap().config.agent.instructions
+        configuration_changes(&reloaded).len(),
+        1,
+        "reconstruction never replays a historical change"
     );
-    let rebound = settled(&fixture, 0).await.candidate.unwrap();
-    assert_eq!(
-        rebound.identity.input_revision,
-        original_candidate.identity.input_revision
-    );
-    assert!(rebound.identity.attempt > original_candidate.identity.attempt);
-    fixture
-        .manager
-        .adopt_configuration(id, &rebound.identity, rebound.expected_binding)
-        .unwrap();
     assert!(
         fixture.provider.request_bodies().is_empty(),
-        "adoption invokes no model"
-    );
-    assert_eq!(
-        fixture
-            .manager
-            .configuration_runtime(id)
-            .unwrap()
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions,
-        "awaiting adoption"
+        "commit and reload invoke no model"
     );
     fixture.manager.drain_all_runtimes().await;
 }
@@ -371,7 +332,6 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
             applied.units[&ApplyUnit::ExecutionPolicy],
             UnitApplication::Applied
         );
-        assert!(applied.candidate.is_none());
         assert_eq!(
             crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
                 &runtime
@@ -461,52 +421,44 @@ async fn t06_offside_preparation_allows_admission_and_t07_new_failure_supersedes
         probe.before_configuration_prepare.release();
         let latest = settled(&fixture, 0).await;
         assert_ne!(latest.desired, old);
-        assert!(
-            latest
-                .units
-                .values()
-                .any(|unit| matches!(unit, UnitApplication::Failed { .. })),
-            "{latest:?}"
-        );
-        // Independent instructions remain valid, but only a newly prepared
-        // candidate under the newest identity can be offered.
-        let candidate = latest.candidate.unwrap();
-        assert_eq!(candidate.identity, latest.desired);
-        assert_ne!(candidate.identity, old);
         assert!(matches!(
             latest.units[&ApplyUnit::Capabilities],
             UnitApplication::Failed { .. }
         ));
+        // The User instructions remain desired and independently valid; they
+        // are staged under the newest identity while the Attempt owns the
+        // generation.
+        assert_eq!(
+            latest.units[&ApplyUnit::Instructions],
+            UnitApplication::Ready
+        );
         assert!(Arc::ptr_eq(&before, &runtime.runtime_resources()));
-        // Armed before the trigger: settlement wakes only registered waiters.
-        let settled = runtime.settlement_signal().notified();
-        tokio::pin!(settled);
-        settled.as_mut().enable();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         fixture.gates[0].release();
-        settled.await;
+        settlement.wait().await;
+        let committed = applied(&fixture, 0).await;
+        assert_eq!(
+            committed.units[&ApplyUnit::Instructions],
+            UnitApplication::Applied
+        );
+        assert!(matches!(
+            committed.units[&ApplyUnit::Capabilities],
+            UnitApplication::Failed { .. }
+        ));
+        assert_eq!(instructions(&runtime), "superseded candidate");
         fixture.close().await;
     })
     .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn t11_admission_gate_orders_busy_adoption_without_cancelling_attempt() {
+async fn t11_ready_candidate_commits_before_racing_independent_admission() {
     bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
         let id = fixture.sessions[0].id.clone();
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("adopt when idle".into()),
-            },
-        )
-        .await;
-        let candidate = settled(&fixture, 0).await.candidate.unwrap();
-        let mut eligibility = EligibilityStream::open(&fixture, &id);
-        eligibility.until(AdoptionEligibility::Eligible).await;
+        // Park the admission pass before it takes the coordinator lock.
         let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
         let release = gate.arm_scoped();
         runtime.install_configuration_admission_gate(gate.clone());
@@ -514,52 +466,31 @@ async fn t11_admission_gate_orders_busy_adoption_without_cancelling_attempt() {
         tokio::task::spawn_blocking(move || gate.wait_entered())
             .await
             .unwrap();
-        let manager = fixture.manager.clone();
-        let adopting_id = id.clone();
-        let adopting_candidate = candidate.clone();
-        let (arrived, arrival) = tokio::sync::oneshot::channel();
-        let adoption = tokio::task::spawn_blocking(move || {
-            arrived.send(()).unwrap();
-            manager.adopt_configuration(
-                &adopting_id,
-                &adopting_candidate.identity,
-                adopting_candidate.expected_binding,
-            )
-        });
-        arrival.await.unwrap();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("committed before admission".into()),
+            },
+        )
+        .await;
+        applied(&fixture, 0).await;
         drop(release);
-        assert_eq!(adoption.await.unwrap(), Err(AdoptionError::Busy));
         fixture.gates[0].wait_entered().await;
-        assert!(
+        // The commit linearized first, so the independent Attempt froze it.
+        let admitted =
             crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
-                &runtime
+                &runtime,
             )
             .unwrap()
             .admitted_attempt
-            .is_some()
-        );
-        // The admitted attempt makes the runtime publish Busy; the
-        // configuration application is untouched by it.
-        eligibility.until(AdoptionEligibility::Busy).await;
+            .unwrap();
+        assert_eq!(admitted.generation, runtime.runtime_resources().revision());
+        let request = fixture.provider.request_bodies().pop().unwrap();
+        assert!(request.contains("committed before admission"), "{request}");
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         fixture.gates[0].release();
         settlement.wait().await;
-        // Settlement publishes Eligible without any configuration read.
-        eligibility.until(AdoptionEligibility::Eligible).await;
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
-        assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
-            "adopt when idle"
-        );
         fixture.close().await;
     })
     .await;
@@ -627,64 +558,67 @@ impl crate::tools::executor::ToolExecutor for GatedBackgroundExecutor {
     }
 }
 
+/// Accept one gated background execution directly on the runtime.
+fn start_background(
+    runtime: &crate::runtime::ConversationRuntime,
+    call: &str,
+) -> (
+    crate::runtime::identity::ToolExecutionId,
+    tokio::sync::watch::Receiver<bool>,
+    tokio::sync::watch::Sender<bool>,
+) {
+    let (executor, started, release) = GatedBackgroundExecutor::new();
+    let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+    let invocation = crate::tools::types::ToolInvocation {
+        id: crate::tools::types::ToolInvocationId::Agent {
+            call_id: crate::runtime::identity::ToolCallId::new(call),
+        },
+        tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+        tool_name: "bash".to_owned(),
+        mode: crate::tools::types::ToolInvocationMode::Background,
+        arguments: serde_json::json!({}),
+    };
+    let background = runtime.tool_runtime().background();
+    let prepared = background
+        .prepare_dispatch(
+            &invocation,
+            &executor,
+            crate::tools::environment::ToolEnvironment::new(),
+        )
+        .unwrap();
+    let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+        background
+            .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
+            .unwrap()
+    else {
+        panic!("background dispatch accepted")
+    };
+    (execution_id, started, release)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn live_model_selection_accepts_background_ownership_without_adopting_pending_context() {
+async fn live_model_selection_supersedes_a_candidate_blocked_by_background_ownership() {
     bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
         let id = fixture.sessions[0].id.clone();
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
-        let instructions = runtime
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions
-            .clone();
-        let (executor, mut started, release) = GatedBackgroundExecutor::new();
-        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
-        let invocation = crate::tools::types::ToolInvocation {
-            id: crate::tools::types::ToolInvocationId::Agent {
-                call_id: crate::runtime::identity::ToolCallId::new("live-selection-background"),
-            },
-            tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
-            tool_name: "bash".to_owned(),
-            mode: crate::tools::types::ToolInvocationMode::Background,
-            arguments: serde_json::json!({}),
-        };
-        let background = runtime.tool_runtime().background();
-        let prepared = background
-            .prepare_dispatch(
-                &invocation,
-                &executor,
-                crate::tools::environment::ToolEnvironment::new(),
-            )
-            .unwrap();
-        let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
-            background
-                .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
-                .unwrap()
-        else {
-            panic!("background dispatch accepted")
-        };
+        let original = instructions(&runtime);
+        let (execution_id, mut started, release) =
+            start_background(&runtime, "live-selection-background");
         started.wait_for(|entered| *entered).await.unwrap();
         write(
             &fixture,
             0,
             ConfigMutation::Instructions {
-                authored: Some("pending context must remain pending".into()),
+                authored: Some("commits after background settles".into()),
             },
         )
         .await;
-        let candidate = settled(&fixture, 0).await.candidate.unwrap();
+        let staged = settled(&fixture, 0).await;
         assert_eq!(
-            fixture.manager.adopt_configuration(
-                &id,
-                &candidate.identity,
-                candidate.expected_binding,
-            ),
-            Err(AdoptionError::Busy)
+            staged.units[&ApplyUnit::Instructions],
+            UnitApplication::Ready
         );
 
         let selected = crate::model::session::SessionModelConfig::of(
@@ -696,106 +630,50 @@ async fn live_model_selection_accepts_background_ownership_without_adopting_pend
             .await
             .unwrap();
         assert_eq!(runtime.model_view().configured, selected);
-        assert_eq!(
-            fixture
-                .manager
-                .sessions
-                .read_settings(&id)
-                .await
-                .unwrap()
-                .1
-                .model,
-            Some(selected)
-        );
+        let background = runtime.tool_runtime().background();
         assert!(
             background.configuration_busy(),
             "selection retains physical background ownership"
         );
+        assert_eq!(instructions(&runtime), original);
+        // Selection superseded the staged candidate; the source is prepared
+        // again over the explicit selection and stays staged.
+        let reprepared = settled(&fixture, 0).await;
+        assert_ne!(reprepared.desired, staged.desired);
         assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
-            instructions
-        );
-        let candidate = settled(&fixture, 0).await.candidate.unwrap();
-        assert_eq!(
-            fixture.manager.adopt_configuration(
-                &id,
-                &candidate.identity,
-                candidate.expected_binding,
-            ),
-            Err(AdoptionError::Busy)
+            reprepared.units[&ApplyUnit::Instructions],
+            UnitApplication::Ready
         );
 
         release.send_replace(true);
         background.wait_until_terminal(&execution_id).await.unwrap();
+        fixture.gates[0].wait_entered().await;
         fixture.gates[0].release();
+        applied(&fixture, 0).await;
+        assert_eq!(instructions(&runtime), "commits after background settles");
+        assert_eq!(
+            runtime.model_view().configured,
+            selected,
+            "configuration application never overwrites explicit selection"
+        );
         fixture.close().await;
     })
     .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn t11_background_execution_busy_settles_into_eligible_adoption() {
+async fn t11_background_ownership_defers_commit_until_it_settles() {
     bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
         let id = fixture.sessions[0].id.clone();
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("adopt after background settles".into()),
-            },
-        )
-        .await;
-        let candidate = settled(&fixture, 0).await.candidate.unwrap();
-        let probe = fixture
-            .manager
-            .probe(&fixture.sessions[0].active_conversation_id);
-        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
-        let mut eligibility = EligibilityStream::open(&fixture, &id);
-        eligibility.until(AdoptionEligibility::Eligible).await;
-        let (executor, mut started, release) = GatedBackgroundExecutor::new();
-        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
-        let invocation = crate::tools::types::ToolInvocation {
-            id: crate::tools::types::ToolInvocationId::Agent {
-                call_id: crate::runtime::identity::ToolCallId::new("call-background-gate"),
-            },
-            tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
-            tool_name: "bash".to_owned(),
-            mode: crate::tools::types::ToolInvocationMode::Background,
-            arguments: serde_json::json!({}),
-        };
-        let prepared = runtime
-            .tool_runtime()
-            .background()
-            .prepare_dispatch(
-                &invocation,
-                &executor,
-                crate::tools::environment::ToolEnvironment::new(),
-            )
-            .unwrap();
-        let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
-            runtime
-                .tool_runtime()
-                .background()
-                .commit_dispatch(
-                    prepared,
-                    &crate::runtime::cancellation::CancellationSignal::new(),
-                )
-                .unwrap()
-        else {
-            panic!("accepted");
-        };
+        let original = instructions(&runtime);
+        let (execution_id, mut started, release) =
+            start_background(&runtime, "call-background-gate");
         started.wait_for(|entered| *entered).await.unwrap();
         // Attribution: no foreground attempt and no subagent owns work; the
-        // background registry alone owns the Busy lifecycle.
+        // background registry alone owns the generation.
         assert!(
             runtime
                 .subagent_registry()
@@ -806,15 +684,24 @@ async fn t11_background_execution_busy_settles_into_eligible_adoption() {
             runtime.idle_epoch(),
             Err(crate::runtime::conversation_runtime::IdleBusyReason::Background)
         );
-        eligibility.until(AdoptionEligibility::Busy).await;
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("commit after background settles".into()),
+            },
+        )
+        .await;
+        let staged = settled(&fixture, 0).await;
         assert_eq!(
-            fixture.manager.adopt_configuration(
-                &id,
-                &candidate.identity,
-                candidate.expected_binding
-            ),
-            Err(AdoptionError::Busy)
+            staged.units[&ApplyUnit::Instructions],
+            UnitApplication::Ready
         );
+        assert_eq!(instructions(&runtime), original);
+        let probe = fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id);
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
         release.send_replace(true);
         let terminal = runtime
             .tool_runtime()
@@ -827,9 +714,21 @@ async fn t11_background_execution_busy_settles_into_eligible_adoption() {
             crate::tools::background::BackgroundLifecycle::Succeeded
         ));
         // The execution's own terminal notification is consumed by one
-        // continuation attempt; it, not the eligibility transition, is the
-        // only model traffic settlement causes.
+        // continuation attempt; it, not the commit, is the only model traffic
+        // settlement causes.
         fixture.gates[0].wait_entered().await;
+        fixture.gates[0].release();
+        let committed = applied(&fixture, 0).await;
+        assert_eq!(
+            committed.units[&ApplyUnit::Instructions],
+            UnitApplication::Applied
+        );
+        assert_eq!(instructions(&runtime), "commit after background settles");
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            preparations,
+            "settlement prepared nothing"
+        );
         let requests = fixture.provider.request_bodies();
         assert_eq!(requests.len(), 1, "{requests:?}");
         assert!(
@@ -837,50 +736,51 @@ async fn t11_background_execution_busy_settles_into_eligible_adoption() {
             "the single request is the background terminal continuation: {}",
             requests[0]
         );
-        // Background settlement can publish an earlier Eligible before the
-        // continuation owns its Attempt. Capture the held continuation's read
-        // cut so its later release cannot consume that obsolete transition.
-        eligibility = EligibilityStream::open(&fixture, &id);
-        assert_eq!(eligibility.current, AdoptionEligibility::Busy);
-        fixture.gates[0].release();
-        // The runtime publishes busy -> idle itself when the last owner
-        // releases its admission; nothing polls.
-        eligibility.until(AdoptionEligibility::Eligible).await;
-        let view = fixture.manager.configuration_application(&id).unwrap();
-        let pending = view.candidate.as_ref().unwrap();
-        assert_eq!(pending.identity, candidate.identity);
-        assert_eq!(pending.expected_binding, candidate.expected_binding);
-        assert_eq!(
-            probe.configuration_preparations.load(Ordering::SeqCst),
-            preparations,
-            "settlement prepared nothing"
-        );
-        assert_eq!(
-            fixture.provider.request_bodies().len(),
-            1,
-            "no model traffic beyond the terminal continuation"
-        );
-        assert_eq!(
-            fixture.manager.adopt_configuration(
-                &id,
-                &candidate.identity,
-                candidate.expected_binding + 1
-            ),
-            Err(AdoptionError::Conflict)
-        );
-        let applied = fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
-        assert_eq!(
-            applied.units[&ApplyUnit::Instructions],
-            UnitApplication::Applied
-        );
-        assert!(applied.candidate.is_none());
-        assert_eq!(
-            fixture.provider.request_bodies().len(),
-            1,
-            "adoption invoked no model"
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// Issue #518: an external edit of a supported Workspace source reaches the
+/// same native path as a Save through the bounded watcher — a notification is
+/// only invalidation — and commits automatically, recording one change fact.
+/// An edit of an ordinary project file in the same Workspace changes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn external_workspace_edit_commits_through_the_bounded_source_watch() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let before = configuration_changes(&runtime).len();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let edit = async {
+            let mut changed = fixture.manager.configuration_changes();
+            std::fs::write(fixture.workspaces[0].join("notes.txt"), "not a source").unwrap();
+            let path = fixture.workspaces[0].join("rustx.toml");
+            let mut config: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            config.as_table_mut().unwrap().insert(
+                "agent".into(),
+                toml::Value::try_from(
+                    serde_json::json!({"instructions": "from an external editor"}),
+                )
+                .unwrap(),
+            );
+            std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+            while instructions(&runtime) != "from an external editor" {
+                changed.changed().await.unwrap();
+            }
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), edit);
+        watched.unwrap();
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), before + 1, "{changes:?}");
+        assert!(
+            changes[before]
+                .domains
+                .contains(&crate::runtime::configuration_commit::ConfigurationDomain::Instructions)
         );
         fixture.close().await;
     })

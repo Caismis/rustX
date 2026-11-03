@@ -138,7 +138,13 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
         .await;
         let application = super::super::configuration::settled(&f, 0).await;
         assert_ne!(application.desired, previous.desired);
-        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(
+            application
+                .units
+                .values()
+                .all(|unit| *unit != UnitApplication::Ready),
+            "{application:?}"
+        );
         assert!(
             application
                 .units
@@ -339,7 +345,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
         // `fast`, the pinned Profile, is removed from a valid catalog.
         write_profiles(&connection, 104, "balanced", &[balanced.clone(), deep.clone()]).await;
         let application = super::super::configuration::settled(&f, 0).await;
-        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(application.units.values().all(|unit| *unit != UnitApplication::Ready), "{application:?}");
         assert!(
             application
                 .units
@@ -558,7 +564,13 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
         )
         .await;
         let application = super::super::configuration::settled(&f, 0).await;
-        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(
+            application
+                .units
+                .values()
+                .all(|unit| *unit != UnitApplication::Ready),
+            "{application:?}"
+        );
         assert!(
             application
                 .units

@@ -133,6 +133,7 @@ impl TraceProjection<'_> {
             E::SubagentOwnershipCommitted { .. } => detail.kind = TraceKind::Subagent,
             E::WorkflowStarted { .. } => detail.kind = TraceKind::Workflow,
             E::InteractionRequested { .. } => detail.kind = TraceKind::Interaction,
+            E::ConfigurationApplied { .. } => detail.kind = TraceKind::Configuration,
             _ => unreachable!("allowlisted anchors only"),
         }
         Ok(detail)

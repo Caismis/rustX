@@ -634,6 +634,11 @@ pub enum TranscriptItem {
         /// The Event Journal envelope that owns the audit body.
         event: RuntimeEventEnvelope,
     },
+    /// A Session-level configuration commit between Attempts.
+    ConfigurationApplied {
+        /// The Event Journal envelope that owns the change summary.
+        event: RuntimeEventEnvelope,
+    },
 }
 
 /// One ordered item in a bounded transcript page.

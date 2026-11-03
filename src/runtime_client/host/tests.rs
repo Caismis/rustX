@@ -420,24 +420,7 @@ async fn child_reading_invalid_limits_precede_ownership_resolution() {
 }
 
 async fn await_fixture_activation(host: &RuntimeClientHost) {
-    let inner = host.weak_inner().upgrade().expect("resident fixture");
-    tokio::task::spawn_blocking(move || {
-        let deadline = std::time::Instant::now() + BACKGROUND_LIVENESS_GUARD;
-        loop {
-            let generation = inner.publication_gate.generation();
-            let (eligibility, cursor) = {
-                let state = inner.lock_published_state();
-                (state.projection.snapshot_ref().configuration_adoption_eligibility.clone(), state.projection.cursor())
-            };
-            if eligibility == crate::runtime::adoption::AdoptionEligibility::Eligible {
-                assert!(cursor.get() > 0, "activation eligibility is actually published");
-                break;
-            }
-            assert!(std::time::Instant::now() < deadline,
-                "native activation eligibility did not publish: cursor={cursor:?}, eligibility={eligibility:?}");
-            inner.publication_gate.wait_after(generation, deadline);
-        }
-    }).await.expect("fixture activation publication wait");
+    host.projection_settled().await;
 }
 
 /// Builds the conversation runtime + host over one conversation with
@@ -2062,7 +2045,7 @@ async fn attachment_lifecycle_and_request_id_scope() {
         panic!("initialized result");
     };
     let first_id = attachment_id.clone();
-    // Activation's first publication is the runtime's adoption eligibility.
+    // Activation of an idle runtime publishes nothing of its own.
     assert_eq!(
         fixture
             .host
@@ -2070,7 +2053,7 @@ async fn attachment_lifecycle_and_request_id_scope() {
             .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
             .unwrap()
             .1,
-        RuntimeClientCursor::new(1)
+        RuntimeClientCursor::new(0)
     );
 
     let second = fixture
@@ -4475,20 +4458,6 @@ async fn background_durable_commit_cannot_publish_a_half_semantic_snapshot() {
             crate::tools::environment::ToolEnvironment::new(),
         )
         .unwrap();
-    // Preparation independently publishes Busy. Include that semantic fact
-    // in the baseline before parking the next Job publication; otherwise it
-    // can advance the cursor while this test expects an unchanged cut.
-    receive_until(&subscription, |event| {
-        event.event.facts().iter().any(|fact| {
-            matches!(
-                fact,
-                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
-                    eligibility: crate::runtime::adoption::AdoptionEligibility::Busy
-                }
-            )
-        })
-    })
-    .await;
     let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
     let _release_commit = ReleaseOnDrop(hook.clone());
     registry.install_publication_hook(hook.clone());

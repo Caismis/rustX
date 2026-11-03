@@ -568,7 +568,7 @@ async fn r05_concurrent_prepared_selection_cannot_overwrite_the_winning_commit()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn r06_catalog_publication_rejects_prepared_selection_without_adopting_context() {
+async fn r06_catalog_publication_rejects_prepared_selection_and_commits_unrelated_context() {
     bounded(async {
         let f = fixture().await;
         let id = &f.sessions[0].id;
@@ -607,8 +607,7 @@ async fn r06_catalog_publication_rejects_prepared_selection_without_adopting_con
             .reconcile_configuration(&SourceTarget::User)
             .await
             .unwrap();
-        let applied = super::configuration::settled(&f, 0).await;
-        assert!(applied.candidate.is_some());
+        super::configuration::applied(&f, 0).await;
         assert!(
             runtime
                 .model_catalog()
@@ -624,25 +623,20 @@ async fn r06_catalog_publication_rejects_prepared_selection_without_adopting_con
         );
         let selected = selection("local/c");
         f.manager.set_model(id, selected.clone()).await.unwrap();
-        super::configuration::settled(&f, 0).await;
+        super::configuration::applied(&f, 0).await;
         assert_authority(&f, &selected).await;
-        assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
-            original_instructions
-        );
-        assert!(
-            f.manager
-                .configuration_application(id)
-                .unwrap()
-                .candidate
-                .is_some()
-        );
+        // The unrelated instructions committed automatically; the rejected
+        // selection fence never decided it, and nothing invoked a model.
+        let instructions = runtime
+            .runtime_resources()
+            .configuration()
+            .unwrap()
+            .config
+            .agent
+            .instructions
+            .clone();
+        assert_ne!(instructions, original_instructions);
+        assert_eq!(instructions, "pending unrelated instructions");
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;
     })

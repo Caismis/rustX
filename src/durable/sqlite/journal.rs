@@ -263,6 +263,38 @@ impl JournalStore for SqliteConversationStore {
         process_death::reach_event("after:interaction", &persisted.event.event);
         Ok((persisted.event, transcript_cursor))
     }
+    fn append_configuration_change(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
+        if !matches!(event.event, RuntimeEvent::ConfigurationApplied { .. })
+            || event.attempt_id.is_some()
+            || event.turn_id.is_some()
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "the configuration change transition accepts only Session-level change facts"
+                    .to_owned(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("configuration change transaction: {error}")))?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage("fault injected: configuration change commit"));
+        }
+        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let transcript_cursor = persisted.transcript_cursor.ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "configuration change did not receive a transcript cursor".to_owned(),
+            )
+        })?;
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("configuration change commit: {error}")))?;
+        Ok((persisted.event, transcript_cursor))
+    }
     fn observe_journal(
         &self,
         observer: Arc<dyn crate::durable::presentation::JournalObserver>,
@@ -725,6 +757,12 @@ pub(super) fn persist_event_tx_internal(
             "interaction_event",
             event.event_id.as_str(),
         )?)
+    } else if matches!(&event.event, RuntimeEvent::ConfigurationApplied { .. }) {
+        Some(append_transcript_reference(
+            transaction,
+            "configuration_event",
+            event.event_id.as_str(),
+        )?)
     } else {
         None
     };
@@ -810,13 +848,12 @@ pub(super) fn enrich_event_transcript(
         observation_event::attach_transcript(transaction, event.sequence, cursor)
     })?
     .is_some();
-    let kind = if matches!(
-        event.event,
-        RuntimeEvent::InteractionRequested { .. } | RuntimeEvent::InteractionSettled { .. }
-    ) {
-        "interaction_event"
-    } else {
-        "attempt_terminal"
+    let kind = match event.event {
+        RuntimeEvent::InteractionRequested { .. } | RuntimeEvent::InteractionSettled { .. } => {
+            "interaction_event"
+        }
+        RuntimeEvent::ConfigurationApplied { .. } => "configuration_event",
+        _ => "attempt_terminal",
     };
     let header = optional_display_layout(transaction, || {
         observation::index::index_native_event(transaction, kind, event, cursor)
@@ -1026,6 +1063,7 @@ pub(super) fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
             | RuntimeEvent::InteractionRequested { .. }
             | RuntimeEvent::InteractionSettled { .. }
+            | RuntimeEvent::ConfigurationApplied { .. }
     )
 }
 

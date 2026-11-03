@@ -897,6 +897,18 @@ pub enum RuntimeEvent {
         /// The bounded terminal settlement.
         settlement: InteractionSettlement,
     },
+    /// The Session's configuration changed: native committed a prepared
+    /// candidate at its safe boundary, between Attempts.
+    ///
+    /// This is a Session-level fact, owned by no Attempt and never canonical
+    /// conversation content. It records the actual commit, not preparation or
+    /// a source notification, and only when future work observes a change.
+    /// Which request first used the committed generation is that request's
+    /// own snapshot evidence, never inferred from this fact.
+    ConfigurationApplied {
+        /// The bounded semantic summary of what changed.
+        change: crate::runtime::configuration_commit::ConfigurationChange,
+    },
 }
 
 impl RuntimeEvent {

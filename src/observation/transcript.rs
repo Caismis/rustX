@@ -132,6 +132,16 @@ pub struct RuntimeClientTranscriptInteractionSettled {
     /// Bounded durable settlement.
     pub settlement: InteractionSettlement,
 }
+/// One live-published Session configuration change projection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RuntimeClientTranscriptConfigurationApplied {
+    /// Durable Event Journal event identity.
+    pub event_id: EventId,
+    /// Event timestamp.
+    pub timestamp: DateTime<Utc>,
+    /// The bounded semantic summary of the commit.
+    pub change: crate::runtime::configuration_commit::ConfigurationChange,
+}
 /// The explicit Runtime Client transcript vocabulary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -178,6 +188,16 @@ pub enum RuntimeClientTranscriptItem {
         interaction_id: InteractionId,
         /// Bounded durable settlement.
         settlement: InteractionSettlement,
+    },
+    /// A Session configuration commit between Attempts. It is presentation
+    /// of a native fact, never canonical conversation content.
+    ConfigurationApplied {
+        /// Durable Event Journal event identity.
+        event_id: EventId,
+        /// Event timestamp.
+        timestamp: DateTime<Utc>,
+        /// The bounded semantic summary of the commit.
+        change: crate::runtime::configuration_commit::ConfigurationChange,
     },
 }
 /// The cursor domain of durable transcript paging.
@@ -341,6 +361,9 @@ fn transcript_entry_view(
                 settlement: audit.settlement,
             }
         }
+        crate::durable::TranscriptItem::ConfigurationApplied { event } => {
+            configuration_applied_view(event)?
+        }
     };
     Ok(RuntimeClientTranscriptEntry {
         turn_process: None,
@@ -353,6 +376,34 @@ fn transcript_entry_view(
             .map(transcript_tool_view)
             .collect(),
         item,
+    })
+}
+/// The client item of one durable Session-level configuration change fact.
+pub(crate) fn configuration_applied_view(
+    event: crate::events::types::RuntimeEventEnvelope,
+) -> Result<RuntimeClientTranscriptItem, String> {
+    let item = configuration_applied_item(event)?;
+    Ok(RuntimeClientTranscriptItem::ConfigurationApplied {
+        event_id: item.event_id,
+        timestamp: item.timestamp,
+        change: item.change,
+    })
+}
+
+/// The live projection of one Session-level configuration change fact.
+pub(crate) fn configuration_applied_item(
+    event: crate::events::types::RuntimeEventEnvelope,
+) -> Result<RuntimeClientTranscriptConfigurationApplied, String> {
+    let crate::events::types::RuntimeEvent::ConfigurationApplied { change } = event.event else {
+        return Err("transcript configuration reference is not a configuration change".into());
+    };
+    if event.attempt_id.is_some() || event.turn_id.is_some() {
+        return Err("a configuration change belongs to no Attempt".into());
+    }
+    Ok(RuntimeClientTranscriptConfigurationApplied {
+        event_id: event.event_id,
+        timestamp: event.timestamp,
+        change,
     })
 }
 fn transcript_tool_view(tool: crate::durable::TranscriptTool) -> ForegroundToolExecution {

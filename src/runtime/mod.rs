@@ -20,13 +20,13 @@
 //! is coordination infrastructure, not a generic process manager and not a
 //! public runtime API.
 
-/// Native configuration-adoption contracts: prepared candidates, adoption
-/// eligibility/refusal, admitted Attempt configuration, and cache impact.
-pub mod adoption;
 pub mod agent_profile;
 pub mod auxiliary;
 pub mod cancellation;
 pub mod capability_inspection;
+/// Native configuration-adoption contracts: prepared candidates, adoption
+/// eligibility/refusal, admitted Attempt configuration, and cache impact.
+pub mod configuration_commit;
 pub mod continuation;
 /// The conversation runtime coordinator (Issue #61): the semantic owner of
 /// conversation coordination — session model state, attempt admission, the

@@ -424,14 +424,21 @@ async fn reconcile_repairs_an_external_edit_once_and_reads_stay_read_only() {
         .await;
         assert_eq!(std::fs::read_to_string(&workspace_file).unwrap(), repaired);
         assert!(connection.next_source_repair().is_none());
-        let settled = super::configuration::settled(&f, 0).await;
+        let settled = super::configuration::applied(&f, 0).await;
         assert_eq!(settled.desired, applied.desired);
         assert_eq!(
             probe.configuration_preparations.load(Ordering::SeqCst),
             before + 1
         );
-        // Repair facts never enter canonical history or reach a provider.
-        assert_eq!(events(&live).len(), journal);
+        // Repair facts never enter canonical history or reach a provider; the
+        // repaired source's own commit is recorded once, as its change fact.
+        let recorded = events(&live);
+        let changes = recorded
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ConfigurationApplied { .. }))
+            .count();
+        assert_eq!(changes, 1);
+        assert_eq!(recorded.len(), journal + changes);
         assert_eq!(f.provider.attempt_count(), requests);
         drop(live);
         f.close().await;

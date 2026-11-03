@@ -169,7 +169,12 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
             .manager
             .configuration_application(&second.id)
             .unwrap();
-        assert!(pending.candidate.is_none());
+        assert!(
+            pending
+                .units
+                .values()
+                .all(|unit| *unit != UnitApplication::Ready)
+        );
         assert_eq!(
             pending.desired.input_revision.as_deref(),
             Some(desired_revision.as_str())
@@ -181,19 +186,9 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
                 .all(|unit| matches!(unit, UnitApplication::Preparing))
         );
         fixture.manager.load(&second.id, None).await.unwrap();
-        let ready = session_settled(&fixture, &second.id).await;
-        let candidate = ready
-            .candidate
-            .expect("cache-impacting instructions candidate");
-        assert_eq!(candidate.identity, ready.desired);
-        assert!(matches!(
-            ready.units[&ApplyUnit::Instructions],
-            UnitApplication::Ready { .. }
-        ));
-        let adopted = fixture
-            .manager
-            .adopt_configuration(&second.id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        // A cache-impacting instructions change needs no consent: residency
+        // prepares the desired source and commits it automatically.
+        let adopted = session_applied(&fixture, &second.id).await;
         assert_eq!(
             adopted.units[&ApplyUnit::Instructions],
             UnitApplication::Applied
@@ -325,7 +320,12 @@ async fn issue385_failed_preparation_after_user_commit_keeps_last_good_available
             failed.units[&ApplyUnit::Instructions],
             UnitApplication::Failed { .. }
         ));
-        assert!(failed.candidate.is_none());
+        assert!(
+            failed
+                .units
+                .values()
+                .all(|unit| *unit != UnitApplication::Ready)
+        );
         // A remains the only available configuration; failed B is retained as
         // desired source, never silently dropped or published.
         {
@@ -549,7 +549,12 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
             .manager
             .configuration_application(&second.id)
             .expect("the unpublished source generation rides this Session scope");
-        assert!(pending.candidate.is_none());
+        assert!(
+            pending
+                .units
+                .values()
+                .all(|unit| *unit != UnitApplication::Ready)
+        );
         assert!(
             pending
                 .units
@@ -562,7 +567,13 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
         let settled = session_settled(&fixture, &second.id).await;
         // B is session-effectively identical to S2: publication applies every
         // unit in place without a candidate and without any preparation.
-        assert!(settled.candidate.is_none(), "{settled:?}");
+        assert!(
+            settled
+                .units
+                .values()
+                .all(|unit| *unit != UnitApplication::Ready),
+            "{settled:?}"
+        );
         assert!(
             settled
                 .units
@@ -719,7 +730,12 @@ async fn issue385_failed_future_default_publication_keeps_last_good_available() 
             .manager
             .configuration_application(&second.id)
             .expect("the unpublished source generation rides this Session scope");
-        assert!(pending.candidate.is_none());
+        assert!(
+            pending
+                .units
+                .values()
+                .all(|unit| *unit != UnitApplication::Ready)
+        );
         assert!(fixture.manager.applications.is_deferred(second.id.as_str()));
         // The Workspace source breaks before publication; the deferred capture
         // fails and last-good A remains the only available configuration.
@@ -739,7 +755,12 @@ async fn issue385_failed_future_default_publication_keeps_last_good_available() 
                 .any(|unit| matches!(unit, UnitApplication::Failed { .. })),
             "{failed:?}"
         );
-        assert!(failed.candidate.is_none());
+        assert!(
+            failed
+                .units
+                .values()
+                .all(|unit| *unit != UnitApplication::Ready)
+        );
         {
             let applications = fixture.manager.applications.lock();
             assert_eq!(

@@ -262,10 +262,15 @@ pub async fn representative_scenario(
                     .inline
                     .as_deref()
                     .expect("bounded fixture application");
-                if application.units.values().all(|unit| !matches!(unit,rustx::local_runtime::configuration::application::UnitApplication::Preparing)) {
-                        assert!(application.candidate.is_none());
-                        break;
-                    }
+                if application.units.values().all(|unit| {
+                    !matches!(
+                        unit,
+                        rustx::local_runtime::configuration::application::UnitApplication::Preparing
+                            | rustx::local_runtime::configuration::application::UnitApplication::Ready
+                    )
+                }) {
+                    break;
+                }
             }
         }
     }

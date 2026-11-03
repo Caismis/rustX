@@ -515,48 +515,11 @@ fn as_response(record: &str) -> RuntimeClientResponse {
     serde_json::from_str(record).expect("the record is a Runtime Client response")
 }
 
-/// Joins activation's actual eligibility publication before opening test I/O.
-async fn await_initial_eligibility(host: &RuntimeClientHost) {
-    use rustx::runtime::adoption::AdoptionEligibility;
-    use rustx::runtime_client::EventDelivery;
-
-    let (attachment, _) = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
-        .expect("the startup observer attaches");
-    let subscription = attachment
-        .subscribe_events(RuntimeClientCursor::new(0))
-        .expect("the startup observer subscribes to native activation");
-    tokio::time::timeout(LIVENESS_GUARD, async {
-        loop {
-            let EventDelivery::Event(event) = subscription.next().await else {
-                panic!("the startup subscription retains activation's publication");
-            };
-            if event.event.facts().iter().any(|fact| match fact {
-                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
-                    *eligibility == AdoptionEligibility::Eligible
-                }
-                RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
-                    assert_eq!(checkpoint.cursor, event.cursor);
-                    checkpoint.snapshot.configuration_adoption_eligibility
-                        == AdoptionEligibility::Eligible
-                }
-                _ => false,
-            }) {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("activation publishes its native eligible state");
-    assert_eq!(
-        host.checkpoint()
-            .expect("the published startup checkpoint")
-            .snapshot
-            .configuration_adoption_eligibility,
-        AdoptionEligibility::Eligible
-    );
-    drop(subscription);
-    attachment.detach();
+/// Joins activation's projection publication before opening test I/O.
+async fn await_initial_activation(host: &RuntimeClientHost) {
+    tokio::time::timeout(LIVENESS_GUARD, host.projection_settled())
+        .await
+        .expect("activation's projection settles");
 }
 
 /// Validates identity-only initialization and the independent wire checkpoint.
@@ -888,7 +851,7 @@ async fn a_partly_read_record_survives_an_event_winning_the_select() {
     let fixture = RuntimeClientFixture::builder("conv_35db73dd-716a-7150-92fc-a523f3847c9d")
         .build()
         .await;
-    await_initial_eligibility(&fixture.host).await;
+    await_initial_activation(&fixture.host).await;
     let sink = CapturingSink::default();
     let input = ScriptedInput::new();
     let endpoint = fixture.host.endpoint();
@@ -929,28 +892,27 @@ async fn a_partly_read_record_survives_an_event_winning_the_select() {
         fixture.host.shutdown().await,
         Ok(RuntimeClientResult::ShutdownCompleted)
     );
-    // Drain publishes `RuntimeShutdown` and then, before its exit
-    // boundary, the runtime's `unavailable` eligibility: the last event.
+    // Drain publishes `RuntimeShutdown` before its exit boundary: the last
+    // event.
     sink.await_record(|record| {
         is_event(record)
-            && as_event(record).event.facts().iter().any(|fact| {
-                matches!(
-                    fact,
-                    RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { .. }
-                )
-            })
+            && as_event(record)
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::RuntimeShutdown))
     })
     .await;
     let written = sink.complete_records();
     assert_eq!(
         written.len(),
-        5,
-        "exactly the three responses and the shutdown events: the partial \
+        4,
+        "exactly the three responses and the shutdown event: the partial \
          record was not answered, fabricated, or split, got {written:?}"
     );
     assert!(
-        is_event(&written[3]) && is_event(&written[4]),
-        "the events overtook a record the transport had already partly read"
+        is_event(&written[3]),
+        "the event overtook a record the transport had already partly read"
     );
 
     // 6/7. Release the suffix. The request the reader was midway through
@@ -968,10 +930,10 @@ async fn a_partly_read_record_survives_an_event_winning_the_select() {
     let records = sink.records();
     assert_eq!(
         records.len(),
-        6,
+        5,
         "the interrupted record produced exactly one response: {records:?}"
     );
-    let response = as_response(&records[5]);
+    let response = as_response(&records[4]);
     assert_eq!(response.id.get(), 7, "the prefix's id survived the drop");
     assert!(
         matches!(
@@ -1702,7 +1664,7 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
         .script(turn("second"))
         .build()
         .await;
-    await_initial_eligibility(&fixture.host).await;
+    await_initial_activation(&fixture.host).await;
     let scripted_events = 6_u64;
 
     let sink = GatedSink::new();

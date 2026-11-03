@@ -940,6 +940,8 @@ impl ConversationRuntime {
                 pending_runtime_catalog: None,
                 catalog_commit_blocked: false,
                 catalog_admission_deferred: false,
+                staged_configuration: None,
+                configuration_commit_waiting: false,
                 runtime_refresh_sequence: 0,
                 runtime_catalog_failure: None,
                 explicit_model: config.explicit_model,
@@ -975,7 +977,6 @@ impl ConversationRuntime {
             }),
             wake: Arc::new(WakeGate::new()),
             worker_started: AtomicBool::new(false),
-            published_eligibility: Mutex::new(None),
             drain: std::sync::OnceLock::new(),
             drain_started: AtomicBool::new(false),
             pending: std::sync::OnceLock::new(),
@@ -1289,10 +1290,6 @@ impl ConversationRuntime {
         if !self.inner.admit_next_scheduled() {
             self.inner.admit_next_attempt();
         }
-        // Activation publishes the first eligibility synchronously: once
-        // `activate` returns, the projection's `unavailable` bootstrap value has
-        // been answered, independent of when the worker first runs.
-        self.inner.publish_adoption_eligibility();
     }
 
     /// Whether this runtime has left the inactive lifecycle, including an

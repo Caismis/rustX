@@ -167,19 +167,6 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             .await
             .unwrap();
         let target = attach(&connection, &f, 0).await;
-        if let Some(candidate) = f
-            .manager
-            .configuration_application(&target.session_id)
-            .and_then(|application| application.candidate)
-        {
-            f.manager
-                .adopt_configuration(
-                    &target.session_id,
-                    &candidate.identity,
-                    candidate.expected_binding,
-                )
-                .unwrap();
-        }
         call(
             &connection,
             101,

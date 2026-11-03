@@ -570,6 +570,9 @@ impl RuntimeClientProjection {
             // Goal journal facts are audit-only. The authoritative bounded
             // view enters through GoalChanged, never replay.
             RuntimeEvent::Goal { .. } => Vec::new(),
+            // A Session-level configuration commit owns no Attempt; its
+            // transcript position is the client's publication.
+            RuntimeEvent::ConfigurationApplied { .. } => Vec::new(),
             // Workflow lifecycle/join facts are best-effort observability;
             // the successful child value and native terminal pair are the
             // separate durable authority. The Runtime Client continues to

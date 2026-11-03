@@ -31,6 +31,7 @@ mod schedule_catalog;
 mod schedule_driver;
 pub use schedule_catalog::{ScheduleCatalogCursor, ScheduleCatalogEntry, ScheduleCatalogPage};
 mod sessions;
+mod source_watch;
 
 pub(crate) use client::ConfigurationObservationSource;
 pub use client::ManagedRuntimeClient;
