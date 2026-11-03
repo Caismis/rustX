@@ -1217,6 +1217,7 @@ mod observation_request_summary;
 mod observation_state;
 mod observation_tools;
 mod observation_trace;
+mod workflow_trace;
 
 /// Optional immutable read layout belongs to the native source transaction.
 /// Only a failure contained by its savepoint may retire the optional layout.

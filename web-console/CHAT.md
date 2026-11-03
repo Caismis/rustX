@@ -1,3 +1,28 @@
+# Workflow nodes in Trajectory (2026-11-03)
+
+Workflow calls now keep their original Tool execution position and use the
+Workflow tag. A disclosure nests all admitted node visits in the existing
+Trajectory ledger, including repeated loop visits, with the same input/result
+columns and Inspector tabs. Tool-owned Workflow lifecycle roots no longer add
+blank duplicate rows. Scheduled runs retain their own named entry.
+
+The parent join requires the native Tool ID, exact call identity and native
+Attempt/Step. Native source headers resolve the parent from the original
+journal; displayed names and neighboring rows never establish ownership.
+Nodes come from original admissions, not the compiled graph or the bounded
+live Workflow snapshot. The collection is read in pages of at most 32 at its
+original cut and reuses the ledger's virtualization and keyboard navigation.
+Expansion retires with the Trace epoch and does not follow the list to its tail.
+
+New executions record the actual input scope (`args` and committed `variables`)
+and actual completion (`value`, `returned`, `port`) or execution failure. Each
+body is capped at 65,536 bytes; oversized capture is explicitly omitted.
+Assigner completion is recorded after the graph accepts its writes. These
+are diagnostic journal events and cannot change execution admission or outcome.
+Historical node admissions remain inspectable; missing original IO is shown as
+not recorded. Details read original advertised fields on demand and preserve
+large JSON integers. The UI never manufactures missing IO or inactive branches.
+
 # Current Harness interaction details (2026-11-03)
 
 The prior change aligned only the compact transcript card. The current sibling

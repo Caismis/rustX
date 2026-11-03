@@ -111,6 +111,21 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await expect(reviewRecord.getByRole('heading', { name: 'Review report' })).toBeVisible();
     await expect(reviewRecord.getByText(locale === 'zh' ? 'Revise' : 'Accept', { exact: true })).toHaveCount(1);
     await page.screenshot({ path: `/tmp/rustx-native-review-question-record-${locale}.png` });
+    // The real native execution is nested at its Tool call, with original node IO.
+    await page.getByRole('tab', { name: copy('Trajectory', '轨迹'), exact: true }).click();
+    const ledger = page.getByRole('table', { name: copy('Trace ledger', '追踪明细'), exact: true });
+    const entry = ledger.locator('[data-workflow-entry]');
+    await expect(entry).toHaveCount(1);
+    await expect(entry).toHaveAttribute('data-kind', 'workflow');
+    await entry.getByRole('button', { name: copy('Expand workflow nodes', '展开工作流节点'), exact: true }).click();
+    await expect.poll(() => ledger.locator('[data-workflow-instance]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-workflow-instance')))).toEqual(['workflow_start', 'review', 'gate', locale === 'zh' ? 'failure' : 'success']);
+    await ledger.locator('[data-workflow-instance="gate"]').click();
+    const details = page.getByRole('complementary', { name: copy('Event details', '事件详情'), exact: true });
+    await expect(details.getByRole('tabpanel')).toContainText('workflow conformance request');
+    await details.getByRole('tab', { name: copy('Result', '结果'), exact: true }).click();
+    await expect(details.getByRole('tabpanel')).toContainText(locale === 'zh' ? 'revise' : 'accept');
+    await page.screenshot({ path: `/tmp/rustx-native-workflow-trajectory-${locale}.png` });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]); passed = true;
   } catch (error) { console.error(fixture.diagnostics()); await page.screenshot({ path: `/tmp/rustx-workflow-failure-${locale}.png` }).catch(() => {}); throw error; }
   finally { await fixture.stop(passed); }

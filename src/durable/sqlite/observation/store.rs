@@ -16,6 +16,17 @@ use rusqlite::{Connection, TransactionBehavior, params};
 use std::sync::Arc;
 
 impl ObservationStore for SqliteConversationStore {
+    fn observation_workflow_nodes(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        start: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::WorkflowTraceNodes, ConversationStoreError> {
+        self.read_at_cut(cut, |connection| {
+            super::super::workflow_trace::page(connection, cut, start, offset, limit)
+        })
+    }
     fn observation_trace_facts(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,

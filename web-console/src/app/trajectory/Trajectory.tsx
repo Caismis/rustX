@@ -13,6 +13,8 @@ import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, vi
 import { searchItems } from './search';
 import { timelineFocus, timelineProjectionRevision, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
 import css from './Trajectory.module.css';
+import { workflowCalls, withWorkflowNodes } from './workflow';
+import { useWorkflowNodes } from './useWorkflowNodes';
 
 const DETAILS_MIN_WIDTH = 320;
 const DETAILS_MAX_WIDTH = 720;
@@ -48,6 +50,8 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   const [mode, setMode] = useState<TrajectoryTimelineMode>('sequence');
   const [collapsedTurns, setCollapsedTurns] = useState<ReadonlySet<string>>(new Set());
   const [calls, setCalls] = useState<ReadonlySet<string>>(new Set());
+  const [workflowExpansion, setWorkflowExpansion] = useState<{ epoch: number; ids: ReadonlySet<string> }>({ epoch: cache.epoch, ids: new Set() });
+  const openedWorkflows = useMemo(() => workflowExpansion.epoch === cache.epoch ? workflowExpansion.ids : new Set<string>(), [workflowExpansion, cache.epoch]);
   const [selection, setSelection] = useState<TrajectorySelection | undefined>(() => {
     const item = cache.selection ? preferredItem(trajectoryItems(tx, projectTrajectory(tx, cache.page.records)), cache.selection.id) : undefined;
     return item ? selectionOf(item) : undefined;
@@ -67,8 +71,11 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   const allItems = useMemo(() => trajectoryItems(tx, projection, cache.page.next_cursor), [tx, projection, cache.page.next_cursor]);
   const matches = useMemo(() => searchItems(projection, query), [projection, query]);
   const visible = useMemo(() => visibleItems(tx, allItems, records, calls, matches), [tx, allItems, records, calls, matches]);
-  const rows = useMemo(() => ledgerRows(tx, projection, visible, collapsedTurns, matches !== null), [tx, projection, visible, collapsedTurns, matches]);
-  const selectionItems = useMemo(() => displayUniverse(allItems, visible), [allItems, visible]);
+  const workflowMap = useMemo(() => workflowCalls(records), [records]);
+  const workflowRoots = useMemo(() => [...new Map([...workflowMap.values()].map(root => [root.id, root])).values()], [workflowMap]);
+  const workflowNodes = useWorkflowNodes(cache, workflowRoots, openedWorkflows);
+  const rows = useMemo(() => withWorkflowNodes(ledgerRows(tx, projection, visible, collapsedTurns, matches !== null), workflowMap, openedWorkflows, workflowNodes), [tx, projection, visible, collapsedTurns, matches, workflowMap, openedWorkflows, workflowNodes]);
+  const selectionItems = useMemo(() => displayUniverse(allItems, [...visible, ...rows.flatMap(row => row.item ? [row.item] : [])]), [allItems, visible, rows]);
   const matchingOwners = useMemo(() => matchedRecordIds(allItems, matches), [allItems, matches]);
   const timelineModel = useMemo(() => trajectoryTimeline(tx, projection, mode), [tx, projection, mode]);
   const executions = useMemo(() => matchingCalls(records), [records]);
@@ -152,7 +159,11 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
       && (candidate.type === 'RequestBoundary' || candidate.type === 'RecordRow'));
     if (item) open(item, facet);
   };
-  const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers };
+  const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers, workflows: workflowMap, openedWorkflows,
+    toggleWorkflow: id => {
+      if (openedWorkflows.has(id) && selectedItem?.type === 'WorkflowNode' && selectedItem.owner_record_id === id) select();
+      setWorkflowExpansion(current => { const ids = new Set(current.epoch === cache.epoch ? current.ids : []); if (!ids.delete(id)) ids.add(id); return { epoch: cache.epoch, ids }; });
+    } };
   // Harness locates a detail by its section and group: "Turn 2 · Step 1".
   const location = (() => {
     const attempt = selected&&traceAttemptKey(selected.location);
@@ -200,6 +211,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
       </div>
     </div>
     {(cache.error || context.error) && <p role="alert" className={css.error}>{cache.error || context.error}</p>}
+    {[...workflowNodes.values()].filter(value => value.error).map(value => <p role="alert" className={css.error} key={value.root.id}>{value.error}</p>)}
     {/* Epoch retires read-domain ownership; the Timeline separately fences
         coordinate interactions by its semantic projection revision. */}
     <TrajectoryTimeline key={cache.epoch} model={timelineModel} mode={mode} range={range}

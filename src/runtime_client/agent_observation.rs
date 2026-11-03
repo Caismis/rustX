@@ -509,6 +509,7 @@ fn historical_selection(cut: &crate::observation::cut::CheckpointReadCut, domain
         && (domain == "trace.records"
             || super::trace_observation::selection(domain).is_some()
             || super::trace_observation::messages_selection(domain).is_some()
+            || super::trace_observation::workflow_selection(domain).is_some()
             || super::trace_observation::canonical_selection(domain)
             || super::trace_observation::context_selection(domain).is_some()
             || super::journal_observation::selection(domain).is_some()

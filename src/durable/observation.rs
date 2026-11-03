@@ -17,6 +17,31 @@ pub use super::trace::{
 pub const HEADER_PAGE_MAX: usize = 32;
 pub const HEADER_ENCODED_MAX: usize = 16_384;
 
+/// Actual admitted nodes at one immutable Journal cut, not the program's nodes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WorkflowTraceNode {
+    pub id: String,
+    pub instance: crate::runtime::workflow::WorkflowNodeInstance,
+    pub kind: Option<crate::runtime::workflow::read_model::WorkflowNodeKind>,
+    pub state: crate::runtime::workflow::read_model::WorkflowState,
+    pub timing: crate::observation::trace::TraceTiming,
+    pub input: Option<crate::observation::trace::TraceFieldSource>,
+    pub output: Option<crate::observation::trace::TraceFieldSource>,
+    pub input_preview: Option<String>,
+    pub output_preview: Option<String>,
+    pub input_omitted: bool,
+    pub output_omitted: bool,
+}
+#[derive(Debug, Clone)]
+pub struct WorkflowTraceNodes {
+    pub revision: u64,
+    pub workflow_id: String,
+    pub parent_sequence: Option<u64>,
+    pub total: u64,
+    pub nodes: Vec<WorkflowTraceNode>,
+    pub next_offset: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ObservationReadCut {
     pub read: super::reading::ConversationReadCut,

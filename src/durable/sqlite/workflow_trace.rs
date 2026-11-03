@@ -1,0 +1,299 @@
+//! Original Workflow node admissions and field selectors at one immutable cut.
+use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use crate::durable::observation::{ObservationReadCut, WorkflowTraceNode, WorkflowTraceNodes};
+use crate::observation::trace::{TraceFieldKind, TraceFieldSource, TraceTiming};
+use crate::runtime::workflow::read_model::WorkflowState;
+
+fn invalid() -> ConversationStoreError {
+    ConversationStoreError::InvalidReference("invalid original Workflow node selection".into())
+}
+
+pub(super) fn page(
+    connection: &Connection,
+    cut: &ObservationReadCut,
+    start: u64,
+    offset: u64,
+    limit: usize,
+) -> Result<WorkflowTraceNodes, ConversationStoreError> {
+    if start == 0 || start > cut.read.journal || limit > 32 {
+        return Err(invalid());
+    }
+    // Only bounded original identity fields are read; a generic J body is never hydrated.
+    let run: Option<String> = connection.query_row(
+        "SELECT CASE WHEN octet_length(json_extract(event_json,'$.event.run_id'))<=8192 THEN json_extract(event_json,'$.event.run_id') END FROM events WHERE sequence=?1 AND json_extract(event_json,'$.event.type')='workflow_started'",
+        [start], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?.flatten();
+    let run = run.ok_or_else(invalid)?;
+    let (workflow_id,call_id):(String,Option<String>)=connection.query_row("SELECT json_extract(event_json,'$.event.workflow_id'),json_extract(event_json,'$.event.tool_call_id') FROM events WHERE sequence=?1",[start],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|storage(error.to_string()))?;
+    let run_id: crate::runtime::workflow::WorkflowRunId =
+        serde_json::from_str(&run).map_err(|error| storage(error.to_string()))?;
+    let mut parents = Vec::new();
+    if let (Some(attempt), Some(call)) = (run_id.origin.attempt_id(), call_id) {
+        let mut query=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_tool_call_scope_kind_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id=?2 AND json_extract(event_json,'$.event.type')='tool_execution_started' AND sequence<=?3 LIMIT 2").map_err(|error|storage(error.to_string()))?;
+        parents = query
+            .query_map(params![call, attempt.as_str(), start], |row| {
+                row.get::<_, u64>(0)
+            })
+            .map_err(|error| storage(error.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| storage(error.to_string()))?;
+    }
+    let parent_sequence = (parents.len() == 1).then(|| parents[0]);
+    let end: Option<u64> = connection.query_row(
+        "SELECT min(sequence) FROM events INDEXED BY events_run_id_kind_idx WHERE json_extract(event_json,'$.event.run_id')=?1 AND json_extract(event_json,'$.event.type') IN ('workflow_completed','workflow_failed','workflow_cancelled') AND sequence>?2 AND sequence<=?3",
+        params![run,start,cut.read.journal], |row| row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let through = end.unwrap_or(cut.read.journal);
+    let predicate = "json_extract(event_json,'$.event.type')='workflow_node_started' AND sequence>?1 AND sequence<=?2 AND json_extract(event_json,'$.event.instance.block.run')=?3";
+    let total: u64 = connection
+        .query_row(
+            &format!("SELECT count(*) FROM events INDEXED BY events_kind_idx WHERE {predicate}"),
+            params![start, through, run],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    let revision:Option<u64>=connection.query_row("SELECT max(sequence) FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type') IN ('workflow_node_started','workflow_node_waiting','workflow_node_settled') AND sequence>?1 AND sequence<=?2 AND json_extract(event_json,'$.event.instance.block.run')=?3",params![start,through,run],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached(&format!("SELECT sequence,event_timestamp,CASE WHEN octet_length(json_extract(event_json,'$.event.instance'))<=8192 THEN json_extract(event_json,'$.event.instance') END FROM events INDEXED BY events_kind_idx WHERE {predicate} ORDER BY sequence LIMIT ?4 OFFSET ?5")).map_err(|error|storage(error.to_string()))?;
+    let starts = statement
+        .query_map(params![start, through, run, limit as u64, offset], |row| {
+            Ok((
+                row.get::<_, u64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .map_err(|error| storage(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(error.to_string()))?;
+    let mut nodes = Vec::with_capacity(starts.len());
+    for (sequence, timestamp, instance) in starts {
+        nodes.push(node(connection, sequence, &timestamp, instance, through)?);
+    }
+    let next = offset.saturating_add(nodes.len() as u64);
+    Ok(WorkflowTraceNodes {
+        revision: revision.unwrap_or(start),
+        workflow_id,
+        parent_sequence,
+        total,
+        nodes,
+        next_offset: (next < total).then_some(next),
+    })
+}
+
+fn node(
+    connection: &Connection,
+    sequence: u64,
+    timestamp: &str,
+    instance: Option<String>,
+    through: u64,
+) -> Result<WorkflowTraceNode, ConversationStoreError> {
+    let instance = instance.ok_or(ConversationStoreError::ObservationCapacityExceeded)?;
+    let input = io(
+        connection,
+        sequence,
+        through,
+        &instance,
+        "workflow_node_input_recorded",
+        TraceFieldKind::Arguments,
+    )?;
+    let output = io(
+        connection,
+        sequence,
+        through,
+        &instance,
+        "workflow_node_output_recorded",
+        TraceFieldKind::Result,
+    )?;
+    let ending:Option<(String,String,Option<String>,Option<String>)>=connection.query_row(
+            "SELECT json_extract(event_json,'$.event.type'),event_timestamp,json_extract(event_json,'$.event.outcome'),json_extract(event_json,'$.event.reason') FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type') IN ('workflow_node_settled','workflow_node_waiting') AND sequence>?1 AND sequence<=?2 AND json_extract(event_json,'$.event.instance')=?3 ORDER BY sequence DESC LIMIT 1",
+            params![sequence,through,instance],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let started_at = timestamp
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .map_err(|error| storage(error.to_string()))?;
+    let (state, ended_at) = match ending {
+        Some((kind, time, outcome, _)) if kind == "workflow_node_settled" => (
+            WorkflowState::Settled {
+                outcome: serde_json::from_value(serde_json::Value::String(
+                    outcome.ok_or_else(invalid)?,
+                ))
+                .map_err(|error| storage(error.to_string()))?,
+            },
+            Some(
+                time.parse::<chrono::DateTime<chrono::Utc>>()
+                    .map_err(|error| storage(error.to_string()))?,
+            ),
+        ),
+        Some((_, _, _, Some(reason))) => (
+            WorkflowState::Waiting {
+                reason: serde_json::from_value(serde_json::Value::String(reason))
+                    .map_err(|error| storage(error.to_string()))?,
+            },
+            None,
+        ),
+        _ => (WorkflowState::Running, None),
+    };
+    Ok(WorkflowTraceNode {
+        id: format!("workflow-node:{sequence}"),
+        instance: serde_json::from_str(&instance).map_err(|error| storage(error.to_string()))?,
+        kind: input
+            .as_ref()
+            .and_then(|io| io.kind.clone())
+            .map(|kind| serde_json::from_value(serde_json::Value::String(kind)))
+            .transpose()
+            .map_err(|error| storage(error.to_string()))?,
+        state,
+        timing: TraceTiming {
+            started_at,
+            ended_at,
+            duration_ms: ended_at
+                .map(|end| u64::try_from((end - started_at).num_milliseconds()).unwrap_or(0)),
+        },
+        input: input.as_ref().and_then(|io| io.field.clone()),
+        output: output.as_ref().and_then(|io| io.field.clone()),
+        input_preview: input.as_ref().and_then(|io| io.preview.clone()),
+        output_preview: output.as_ref().and_then(|io| io.preview.clone()),
+        input_omitted: input.is_some_and(|io| io.field.is_none()),
+        output_omitted: output.is_some_and(|io| io.field.is_none()),
+    })
+}
+
+type IoHeader = (u64, Option<String>, Option<String>, Option<u64>);
+struct Io {
+    field: Option<TraceFieldSource>,
+    preview: Option<String>,
+    kind: Option<String>,
+}
+fn io(
+    connection: &Connection,
+    start: u64,
+    through: u64,
+    instance: &str,
+    event: &str,
+    field: TraceFieldKind,
+) -> Result<Option<Io>, ConversationStoreError> {
+    let row:Option<IoHeader>=connection.query_row(
+        "SELECT sequence,json_extract(event_json,'$.event.kind'),substr(json_extract(event_json,'$.event.value'),1,192),CASE WHEN json_type(event_json,'$.event.value')='text' THEN octet_length(json_quote(json_extract(event_json,'$.event.value'))) END FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')=?1 AND sequence>?2 AND sequence<=?3 AND json_extract(event_json,'$.event.instance')=?4 ORDER BY sequence LIMIT 1",
+        params![event,start,through,instance],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional().map_err(|error|storage(error.to_string()))?;
+    Ok(row.map(|(sequence, kind, preview, length)| Io {
+        kind,
+        preview,
+        field: length.map(|encoded_bytes| TraceFieldSource::Value {
+            field,
+            domain: format!("journal.{sequence}"),
+            item_offset: 0,
+            path: vec!["event".into(), "value".into()],
+            encoded_bytes,
+        }),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::durable::sqlite::test_support::{envelope, store};
+    use crate::durable::{CanonicalStore, ConversationStore, JournalStore, ObservationStore};
+    use crate::events::RuntimeEvent as E;
+    use crate::runtime::workflow::{WorkflowExecutionOutcome as Outcome, WorkflowId};
+
+    #[test]
+    fn workflow_nodes_keep_real_visits_original_cuts_and_bounded_bodies() {
+        let store = store();
+        store.initialize(&[]).unwrap();
+        let mut first = crate::runtime::workflow::test_instance("trace_flow", "transform");
+        first.block.run.conversation_id = store.conversation_id().clone();
+        let run = first.block.run.clone();
+        let workflow_id = WorkflowId::parse("trace_flow").unwrap();
+        let mut ordinal = 0;
+        let mut append = |event| {
+            ordinal += 1;
+            store
+                .append_event(envelope(
+                    store.conversation_id(),
+                    &format!("wf-trace-{ordinal}"),
+                    None,
+                    event,
+                ))
+                .unwrap()
+                .sequence
+        };
+        let start = append(E::WorkflowStarted {
+            tool_call_id: None,
+            workflow_id: workflow_id.clone(),
+            run_id: run.clone(),
+        });
+        append(E::WorkflowNodeStarted {
+            instance: first.clone(),
+        });
+        let before = store.observation_read_cut().unwrap();
+        let input = r#"{"args":{"n":18446744073709551615},"variables":{}}"#.to_owned();
+        append(E::WorkflowNodeInputRecorded {
+            instance: first.clone(),
+            kind: crate::runtime::workflow::read_model::WorkflowNodeKind::Template,
+            value: Some(input.clone()),
+        });
+        append(E::WorkflowNodeOutputRecorded {
+            instance: first.clone(),
+            value: Some(r#"{"value":"rendered"}"#.into()),
+        });
+        append(E::WorkflowNodeSettled {
+            instance: first.clone(),
+            outcome: Outcome::Completed,
+        });
+        let mut second = first.clone();
+        second.block.invocations.push(2);
+        append(E::WorkflowNodeStarted {
+            instance: second.clone(),
+        });
+        append(E::WorkflowNodeInputRecorded {
+            instance: second.clone(),
+            kind: crate::runtime::workflow::read_model::WorkflowNodeKind::Template,
+            value: None,
+        });
+        append(E::WorkflowNodeSettled {
+            instance: second.clone(),
+            outcome: Outcome::Cancelled,
+        });
+        append(E::WorkflowCancelled {
+            workflow_id,
+            run_id: run,
+            reason: crate::runtime::types::CancellationReason::UserRequested,
+        });
+        let cut = store.observation_read_cut().unwrap();
+        let old = store
+            .observation_workflow_nodes(&before, start, 0, 32)
+            .unwrap();
+        assert_eq!(old.total, 1);
+        assert_eq!(old.nodes[0].state, WorkflowState::Running);
+        assert!(old.nodes[0].input.is_none());
+        let first_page = store.observation_workflow_nodes(&cut, start, 0, 1).unwrap();
+        assert_eq!(first_page.total, 2);
+        assert_eq!(first_page.next_offset, Some(1));
+        assert_eq!(first_page.nodes[0].instance, first);
+        assert_eq!(
+            first_page.nodes[0].state,
+            WorkflowState::Settled {
+                outcome: Outcome::Completed
+            }
+        );
+        let Some(TraceFieldSource::Value { encoded_bytes, .. }) = &first_page.nodes[0].input else {
+            panic!("original input selector")
+        };
+        assert_eq!(
+            *encoded_bytes,
+            serde_json::to_vec(&input).unwrap().len() as u64
+        );
+        let last = store.observation_workflow_nodes(&cut, start, 1, 1).unwrap();
+        assert_eq!(last.nodes[0].instance, second);
+        assert!(last.nodes[0].input_omitted);
+        assert!(last.nodes[0].output.is_none());
+        assert_eq!(last.next_offset, None);
+        assert!(
+            store
+                .observation_workflow_nodes(&cut, start, 0, 33)
+                .is_err()
+        );
+        assert!(
+            store
+                .observation_workflow_nodes(&cut, start + 1, 0, 1)
+                .is_err()
+        );
+    }
+}

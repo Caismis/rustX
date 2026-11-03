@@ -1,3 +1,30 @@
+## Workflow visits inside the Trajectory ledger (2026-11-03)
+
+Read-only comparison uses the unchanged sibling Harness checkout at
+`ce7073d51254c26cd63b22a60835b8f948deb447`, especially
+`ui-trajectory/src/client/TrajectoryTable.tsx`, its module CSS and
+`TrajectoryCell.tsx`. The existing adapted 30px ledger rows, inline request and
+result split, selection, virtualization, keyboard navigation and JSON Inspector
+are retained. Workflow nesting is an original rustX extension over native
+Workflow execution; no Harness execution protocol or store is imported.
+
+| Reference / observed mismatch | Treatment |
+| --- | --- |
+| Harness places Tool request and result at the execution's actual row; rustX also appended empty Workflow lifecycle rows | Promote the real native Workflow Tool tag and suppress its duplicate lifecycle root |
+| Existing ledger supports inspectable semantic rows and a shared Inspector | Insert actual Workflow node visits as semantic child rows with input/result previews and original-field details |
+| A compiled graph and process-local Workflow snapshot omit execution history or IO | Page original journal admissions at a frozen cut; loop instances stay distinct and inactive branches stay absent |
+
+Native Workflow headers carry exact parent Step ownership, node collection count
+and semantic lifecycle revision on both initial pages and refresh. Queries use
+existing journal kind/run/Tool indexes within the original run's sequence window;
+no new schema, protocol version, migration or compatibility path is introduced.
+Node headers are finite and bodies remain original advertised value selectors.
+New diagnostic IO strings preserve native JSON integers, serialize through a
+bounded 65,536-byte writer and are read only for selected Inspector facets.
+Missing historical IO and oversized capture have explicit distinct states.
+Original collection/cut checks, epoch fences and field-reader fences remain in
+force; repeated displayed Workflow names cannot establish a parent join.
+
 ## Current Harness interaction details (2026-11-03)
 
 Read-only comparison uses the unchanged sibling Harness checkout at

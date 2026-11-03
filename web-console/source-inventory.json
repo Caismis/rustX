@@ -795,7 +795,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "f599ccc94ec2ffecb2712d4df52aae3a9e3205b8d7b7fb0524a22be3b1cadaf1",
+      "local_sha256": "26970143dc47ff90ba0bef4b1e68e00cece02ecf4c798daec2b1e73eb96a964c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.module.css",
@@ -848,6 +848,8 @@
         "./search",
         "./timeline",
         "./useTraceContexts",
+        "./useWorkflowNodes",
+        "./workflow",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -907,7 +909,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "eaabc0f23e7d634cd1f0a0b59860fe86bdcd7a2a6e83f346bd8f95baba673532"
+      "local_sha256": "b08190c6bdfb987c3d016b5b2e7b14c1e64fb15cd4c8925eece38773e7da6756"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -933,12 +935,14 @@
         "../../presentation/primitives/clipboard",
         "../../presentation/primitives/icons",
         "../../presentation/primitives/json",
+        "../agent/workflow-state",
         "../components/Artifact",
         "./Trajectory.module.css",
         "./TrajectoryCell",
         "./layout",
         "./timeline",
         "./useTraceContent",
+        "./useWorkflowNodeContent",
         "diff",
         "react"
       ],
@@ -982,7 +986,7 @@
           "treatment": "Share semantic between-Turn classification across ledger, Inspector and bilingual search. Preserve compaction/reused-history labels without treating unowned native Agent/Background/Workflow activities as between-Turn material or inventing nearby execution ownership."
         }
       ],
-      "local_sha256": "a96952b29f7fa7eb87742d5902e874b8950f16c1443fb742c036dd54acf65f8f"
+      "local_sha256": "63e5da2ea0ca00f56c12cedaba35f3e52ed926201dd94f55167444f187d785eb"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -1061,7 +1065,8 @@
         "../../../../protocol/app-server/trace-identity",
         "../../../../protocol/app-server/v63",
         "../../bindings/status-labels",
-        "../../locale/translation"
+        "../../locale/translation",
+        "./workflow"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1073,7 +1078,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "173ecd4bb9141457c1b5901c16d867e46f425f51f96bb0677c92bf43d7a4245f",
+      "local_sha256": "1b9357279b5cb95d488c4a3dc734f4e43f312784c36d0795700b919e5e148d3f",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -3315,7 +3320,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "f775ae82dec986b82c3e8f73f77754b11fb57b7ff5a0953dbef263f3530963cb"
+      "local_sha256": "7e8194de6aa11b9bd53bbfac0eef0ad3190bc60451a9649c34959044fe4da7be"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -3420,8 +3425,10 @@
         "../../presentation/markdown/preview",
         "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/icons",
+        "../agent/workflow-state",
         "./Trajectory.module.css",
         "./layout",
+        "./workflow",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3442,7 +3449,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "101bbb711adf806eb77946be786564d1b26bddf4b403df944c8f41300dd4615e"
+      "local_sha256": "c02d829b90e8edc1cdbda51de97c9a060599c9b3ab34e18985d52eb714ae8083"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -4115,7 +4122,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "f6dbf1662264c5f4a16e2b58521d637a842ecc586bbd65561f83cd6a56030bc6"
+      "local_sha256": "59e19c58f77cccf7cf94904a90291043daff4927866dc66f495db7cb7468ebbc"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",
@@ -4173,7 +4180,9 @@
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
+        "../../../../protocol/app-server/v63",
         "../../locale/react",
+        "../../presentation/primitives/icons",
         "./Trajectory.module.css",
         "./TrajectoryCell",
         "./layout",
@@ -4196,7 +4205,7 @@
           "treatment": "Event-cell turn label (full/compact) and active-turn rail adapted onto native Turn/Step/Request controls."
         }
       ],
-      "local_sha256": "b7d8b4f84083d3448b36896859d3c37d91f416eb9edc44e68f72ac84c9d77e34"
+      "local_sha256": "b5e76815b33a94365e72232925772401ecb03d9c0fa64fef49cfdffd1e8e0333"
     },
     {
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
@@ -4226,7 +4235,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "41b6ba4df04aa6e814f3482f20cdb6dab482113a3087dde93ad109f1407b5877"
+      "local_sha256": "46d95e91f0b58e25f729a57d5288d41f0c31f7ef2c583969953a643ede062e7c"
     },
     {
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",

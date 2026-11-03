@@ -4,6 +4,7 @@ import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
 import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v63';
+import type { WorkflowNodes, WorkflowTraceNode } from './workflow';
 
 /** The Harness detail tab identities. Labels follow the locale; ids never do. */
 export type TrajectoryFacet = 'overview' | 'rendered' | 'raw' | 'source' | 'input' | 'output' | 'schema' | 'timing' | 'options' | 'usage' | 'system-prompt' | 'tools' | 'diff';
@@ -38,6 +39,7 @@ export type StructuralDisplayItem =
 /** Only this closed union owns inspectable native records. */
 export type InspectableDisplayItem =
   | (Origin & { type: 'RecordRow' })
+  | (Origin & { type: 'WorkflowNode'; parent_record_id: string; workflowNode: WorkflowTraceNode; workflowSource: WorkflowNodes })
   | (Origin & { type: 'SystemPromptCell' })
   | (Origin & { type: 'ContextRow'; context: TraceContextPresentation })
   | (Origin & { type: 'RequestBoundary' });
@@ -146,7 +148,7 @@ export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]
     // Harness shows Agent interactions as Tool calls and delivered Context.
     // Native activation and interaction lifecycle audits remain in Trace, not
     // as duplicate rows, spans or empty Turns when their Tool is on another page.
-    if (record.kind === 'interaction' || record.kind === 'subagent') continue;
+    if (record.kind === 'interaction' || record.kind === 'subagent' || record.kind === 'workflow' && record.originating_tool_call_id != null) continue;
     const attempt = traceAttemptKey(record.location), step = traceStepKey(record.location);
     if (attempt == null) {
       sections.push({ kind: 'outside', record, cells: cellsOf(tx, record) });

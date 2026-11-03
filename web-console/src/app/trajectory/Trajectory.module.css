@@ -1,5 +1,27 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.module.css and TrajectoryToolbar.module.css; see PROVENANCE.md. */
 
+.workflowToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 24px;
+  margin: 0 4px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+.workflowToggle:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.workflowToggle[aria-expanded='true'] svg { transform: rotate(90deg); }
+.workflowToggle:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); }
+.record[data-workflow-node] .event { padding-left: 18px; }
+.workflowPath { margin-left: 6px; color: var(--dsw-alias-label-tertiary); }
+.kindTag[data-role-kind='workflow_node'] { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
+
 .root {
   display: flex;
   flex: 1;

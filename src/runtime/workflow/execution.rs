@@ -628,6 +628,20 @@ impl WorkflowRuntime {
                         admitting.store(false, std::sync::atomic::Ordering::Release);
                     }
                     if assigner {
+                        self.emit_observability(
+                            run,
+                            RuntimeEvent::WorkflowNodeOutputRecorded {
+                                instance: WorkflowNodeInstance {
+                                    block: instance.clone(),
+                                    node: id.clone(),
+                                    visit: 0,
+                                },
+                                value: match &merged {
+                                    Ok(_) => node_trace_json(&TraceVariables(&values)),
+                                    Err(error) => node_trace_json(&error.to_string()),
+                                },
+                            },
+                        );
                         self.settle_node(
                             run,
                             WorkflowNodeInstance {
@@ -824,6 +838,7 @@ impl WorkflowRuntime {
                 },
             );
             started = true;
+            self.record_node_input(run, &node_instance, node, input, &values);
             // This lease owns the complete admission/settlement future,
             // including approval or staged Agent cleanup. It retires only
             // after the native owner returned; it is not outcome authority.
@@ -1261,6 +1276,7 @@ impl WorkflowRuntime {
         }
         // An Assigner's success is not final until the graph accepts its writes.
         if started && !(result.is_ok() && matches!(node, WorkflowNodeProgram::Assigner { .. })) {
+            self.record_node_output(run, &node_instance, &result);
             self.settle_node(run, node_instance, outcome(&result));
         }
         result
@@ -1276,6 +1292,73 @@ impl WorkflowRuntime {
             view.state = WorkflowState::Settled { outcome };
         });
         self.emit_observability(run, RuntimeEvent::WorkflowNodeSettled { instance, outcome });
+    }
+
+    fn record_node_input(
+        &self,
+        run: &WorkflowRun,
+        instance: &WorkflowNodeInstance,
+        node: &WorkflowNodeProgram,
+        input: &Value,
+        values: &imbl::OrdMap<String, Value>,
+    ) {
+        #[derive(serde::Serialize)]
+        struct Scope<'a> {
+            args: &'a Value,
+            variables: TraceVariables<'a>,
+        }
+        self.emit_observability(
+            run,
+            RuntimeEvent::WorkflowNodeInputRecorded {
+                instance: instance.clone(),
+                kind: WorkflowInstanceView::started(instance, node).kind,
+                value: node_trace_json(&Scope {
+                    args: input,
+                    variables: TraceVariables(values),
+                }),
+            },
+        );
+    }
+
+    fn record_node_output(
+        &self,
+        run: &WorkflowRun,
+        instance: &WorkflowNodeInstance,
+        result: &Result<NodeCompletion<'_>, WorkflowRunError>,
+    ) {
+        #[derive(serde::Serialize)]
+        struct Output<'a> {
+            value: &'a Option<Value>,
+            returned: &'a Option<Value>,
+            port: &'a WorkflowPort,
+        }
+        let value = match result {
+            Ok(output) => node_trace_json(&Output {
+                value: &output.value,
+                returned: &output.returned,
+                port: &output.port,
+            }),
+            Err(error) => node_trace_json(&error.execution_status()),
+        };
+        self.emit_observability(
+            run,
+            RuntimeEvent::WorkflowNodeOutputRecorded {
+                instance: instance.clone(),
+                value,
+            },
+        );
+    }
+}
+
+/// Diagnostic capture cannot exceed a bounded body or alter execution admission.
+fn node_trace_json(value: &impl serde::Serialize) -> Option<String> {
+    crate::observation::bounded::bounded_bytes(value, 65_536)
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+}
+struct TraceVariables<'a>(&'a imbl::OrdMap<String, Value>);
+impl serde::Serialize for TraceVariables<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(self.0.iter())
     }
 }
 

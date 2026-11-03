@@ -4900,3 +4900,120 @@ fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() 
 mod frozen_tests;
 mod header_tests;
 mod inspection_tests;
+
+#[test]
+fn workflow_node_frontiers_refresh_at_the_original_tool_step_without_reading_bodies() {
+    let store = store("conv_a7f34b28-5c91-7e06-8d42-3fb8c0e17d54");
+    start(&store);
+    let frozen = request(&store, 0);
+    let mut call = bash_call("workflow-call");
+    call.tool_id = ToolId::new("tool-workflow-test_flow");
+    call.name = "test_flow".into();
+    propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 2);
+    completion(&store, &frozen, None, None, 2);
+    append(
+        &store,
+        E::ToolExecutionStarted {
+            tool_call_id: ToolCallId::new("workflow-call"),
+            tool_id: ToolId::new("tool-workflow-test_flow"),
+        },
+        2,
+    );
+    let mut instance = crate::runtime::workflow::test_instance("test_flow", "transform");
+    instance.block.run.conversation_id = store.conversation_id().clone();
+    instance.block.run.origin = AttemptId::new("attempt-a").into();
+    append(
+        &store,
+        E::WorkflowStarted {
+            tool_call_id: Some(ToolCallId::new("workflow-call")),
+            workflow_id: crate::runtime::workflow::WorkflowId::parse("test_flow").unwrap(),
+            run_id: instance.block.run.clone(),
+        },
+        3,
+    );
+    let cut = store.observation_read_cut().unwrap();
+    let initial = TraceProjection::at_cut(&store, &cut).unwrap();
+    let root = initial
+        .page(None, 32)
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|record| record.kind == TraceKind::Workflow)
+        .unwrap();
+    let call = initial
+        .page(None, 32)
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|record| record.kind == TraceKind::Tool)
+        .unwrap();
+    assert_eq!(root.location, call.location);
+    assert_eq!(root.collections[0].total, 0);
+    append(
+        &store,
+        E::WorkflowNodeStarted {
+            instance: instance.clone(),
+        },
+        4,
+    );
+    let input = r#"{"args":{"integer":18446744073709551615},"variables":{}}"#;
+    append(
+        &store,
+        E::WorkflowNodeInputRecorded {
+            instance,
+            kind: crate::runtime::workflow::read_model::WorkflowNodeKind::Template,
+            value: Some(input.into()),
+        },
+        5,
+    );
+    let current = store.observation_read_cut().unwrap();
+    let refreshed = TraceProjection::at_cut(&store, &current)
+        .unwrap()
+        .refresh(std::slice::from_ref(&root.position), None)
+        .unwrap();
+    assert_eq!(refreshed[0].location, call.location);
+    assert_eq!(refreshed[0].collections[0].total, 1);
+    let nodes = store
+        .observation_workflow_nodes(&current, root.position.sequence().unwrap(), 0, 32)
+        .unwrap();
+    let Some(TraceFieldSource::Value { domain, path, .. }) = &nodes.nodes[0].input else {
+        panic!("original input selector")
+    };
+    let cut = TraceProjection::at_cut(&store, &current)
+        .unwrap()
+        .history_cut()
+        .unwrap();
+    let body = crate::runtime_client::journal_observation::value_read(
+        &store, &cut, domain, 0, path, 0, 65_536,
+    )
+    .unwrap();
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(body.bytes_base64)
+        .unwrap();
+    assert_eq!(serde_json::from_slice::<String>(&bytes).unwrap(), input);
+    assert!(
+        crate::runtime_client::journal_observation::value_read(
+            &store,
+            &cut,
+            domain,
+            0,
+            &["event".into(), "instance".into()],
+            0,
+            65_536
+        )
+        .is_err()
+    );
+    assert_eq!(
+        initial
+            .record(
+                &initial
+                    .inspection_anchor(root.position.sequence().unwrap())
+                    .unwrap()
+            )
+            .unwrap()
+            .collections[0]
+            .total,
+        0
+    );
+}

@@ -117,6 +117,15 @@ impl ClientInner {
         offset: u64,
         limit: usize,
     ) -> Option<Result<super::super::checkpoint::CheckpointPage, RuntimeClientError>> {
+        if super::super::trace_observation::workflow_selection(domain).is_some() {
+            return Some(super::super::trace_observation::workflow_page(
+                self.store.as_ref(),
+                cut,
+                domain,
+                offset,
+                limit,
+            ));
+        }
         if super::super::trace_observation::context_selection(domain).is_some() {
             return Some(super::super::trace_observation::context_page(
                 self.store.as_ref(),

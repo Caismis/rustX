@@ -2,6 +2,7 @@ import { nativeTraceFixture } from '../native-trace-fixture';
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Trajectory } from '../../src/app/trajectory/Trajectory';
+import { workflowTraceFixture } from '../workflow-trace-fixture';
 import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace } from '../../src/client/trace';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, semanticLedgerRecords, structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v63';
@@ -87,7 +88,7 @@ const retainedRecords = [
 ];
 const snapshot = { records: agentInteractions ? agentRecords : backgroundJobs ? backgroundRecords : retainedInputs ? retainedRecords : stepLess ? stepLessRecords().slice(1) : ordered ? orderedRecords : chrome ? chromeRecords : params.has('ledger') ? semanticLedgerRecords() : mixedRecords ?? (long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records), next_cursor: agentInteractions ? null : 'older' };
 function Fixture() {
-  const [cache, setCache] = useState(() => replaceTrace(snapshot));
+  const [cache, setCache] = useState(() => params.has('workflows') ? workflowTraceFixture().cache : replaceTrace(snapshot));
   const [reads, setReads] = useState(0); const [pages, setPages] = useState(0);
   return <main style={{ height: '100dvh', display: 'flex', flexDirection: 'column' }}>
     <header style={{ padding: '8px 12px', display: 'flex', gap: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)', fontSize: 11 }}><strong>rustX / Workspace review</strong>
