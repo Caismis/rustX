@@ -59,6 +59,10 @@ impl ActivationScopes {
                 | WorkflowNodeDefinition::Tool {
                     on_error: WorkflowValueErrorStrategy::FailBranch,
                     ..
+                }
+                | WorkflowNodeDefinition::Code {
+                    on_error: WorkflowValueErrorStrategy::FailBranch,
+                    ..
                 } => 1,
                 _ => 0,
             })
@@ -148,6 +152,10 @@ impl ActivationScopes {
                     ..
                 }
                 | WorkflowNodeDefinition::Tool {
+                    on_error: WorkflowValueErrorStrategy::FailBranch,
+                    ..
+                }
+                | WorkflowNodeDefinition::Code {
                     on_error: WorkflowValueErrorStrategy::FailBranch,
                     ..
                 } => {

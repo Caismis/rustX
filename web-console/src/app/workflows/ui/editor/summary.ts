@@ -42,6 +42,7 @@ export function toolText(selector: Extract<NodeDefinition, { type: 'tool' }>['se
 /** Number of compact configuration rows a native node renders on its card. */
 export function previewRowCount(node: NodeDefinition): number {
   switch (node.type) {
+    case 'code': return 1 + Math.min(Object.keys(node.variables).length,2);
     case 'template': return Object.keys(node.variables).length;
     case 'list': case 'classifier': return 1;
     case 'aggregate': return node.groups.length;

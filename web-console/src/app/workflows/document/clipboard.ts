@@ -1,4 +1,4 @@
-import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v64';
+import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v65';
 import { readJson } from '../../../../shared/json-numbers';
 import { boundedDocument, CommandRejected, freshNodeId, validLocalKey, validNodeId } from './commands';
 import { blockAt, deepNodeCount, edgesOf, sameBlockPath, sameDocument, updateBlock, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from './model';
@@ -115,6 +115,11 @@ function node(input: unknown): void {
     case 'classifier':
       keys(record,['type','model','input','instruction','classes']); modelPolicy(record.model); value(record.input); if (record.instruction !== undefined) array(record.instruction).forEach(value);
       for (const item of array(record.classes)) { const entry=keys(item,['id','label','description']); text(entry.id); text(entry.label); array(entry.description).forEach(value); } return;
+    case 'code':
+      keys(record,['type','variables','code','outputs','retry','on_error']); text(record.code);
+      Object.values(object(record.variables)).forEach(value);
+      for(const kind of Object.values(object(record.outputs)))if(!VAR_TYPES.includes(kind as string))fail();
+      retry(record.retry); valueStrategy(record.on_error); return;
     case 'aggregate':
       keys(record,['type','groups']); for (const item of array(record.groups)) {
         const group=keys(item,['name','output_type','variables']); text(group.name); if (!VAR_TYPES.includes(group.output_type as string)) fail();
@@ -297,7 +302,7 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
   }
   // A copied descendant must not shadow any variable around its new body.
   // Check the complete subtree before accepting the paste transaction.
-  const produces = (node: NodeDefinition) => ['agent', 'model', 'tool', 'loop', 'iteration', 'review'].includes(node.type);
+  const produces = (node: NodeDefinition) => ['agent', 'model', 'tool', 'code', 'loop', 'iteration', 'review'].includes(node.type);
   const outer = new Set(['args', ...[...names].filter(([id]) => produces(fragment.nodes[id])).map(([, name]) => name)]);
   for (let depth = 0; depth <= path.length; depth++)
     for (const [id, node] of Object.entries(blockAt(document, path.slice(0, depth))?.nodes ?? {})) if (produces(node)) outer.add(id);

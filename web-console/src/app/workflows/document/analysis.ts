@@ -1,4 +1,4 @@
-import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowConsumerAddress, WorkflowConsumerField, WorkflowExpressionStep } from '../../../../../protocol/app-server/v64';
+import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowConsumerAddress, WorkflowConsumerField, WorkflowExpressionStep } from '../../../../../protocol/app-server/v65';
 import { sameAnalysisQuery } from '../../../../../protocol/app-server/workflow-analysis';
 import { blockAt, nodeAt, sameDocument, type WorkflowDocument } from './model';
 import type { FieldAddress } from './fields';
@@ -12,8 +12,8 @@ export function consumerAddress(document: WorkflowDocument, field: FieldAddress)
   const first = parts.shift();
   let consumer: WorkflowConsumerField;
   const key = () => { const part = parts.shift(); return typeof part === 'object' ? part.key : undefined; };
-  if (first === 'variables' && node.type === 'template') {
-    const name = key(); if (name === undefined) return undefined; consumer = { kind: 'template_variable', name };
+  if (first === 'variables' && (node.type === 'template' || node.type === 'code')) {
+    const name = key(); if (name === undefined) return undefined; consumer = { kind: node.type==='code' ? 'code_variable' : 'template_variable', name };
   } else if (first === 'input' && (node.type === 'list' || node.type === 'classifier')) consumer = { kind: 'transform_input' };
   else if (first === 'instruction' && node.type === 'classifier') return { address: { block: [...field.block], node: field.node }, field: { kind: 'classifier_instruction' }, path: [] };
   else if (first === 'classes' && node.type === 'classifier') {

@@ -1,4 +1,4 @@
-import type { ConfigRepairReceipt } from '../../../protocol/app-server/v64';
+import type { ConfigRepairReceipt } from '../../../protocol/app-server/v65';
 import type { AppServerClient } from '../client/app-server';
 import type { SourceRepairObservation } from '../client/contracts';
 import { SOURCE_REPAIR_WORKSPACES } from '../../../protocol/app-server/source-repair';

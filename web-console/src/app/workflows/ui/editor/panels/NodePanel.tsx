@@ -1,4 +1,5 @@
 import { ClassifierPanel } from './ClassifierPanel';
+import { CodePanel } from './CodePanel';
 import type { ComponentType } from 'react';
 import { nodeAt, blockAt, type NodeKind } from '../../../document/model';
 import { AgentPanel, ModelPanel } from './InferencePanels';
@@ -12,7 +13,7 @@ import { type PanelProps } from './shared';
 import { NextStep } from '../NextStep';
 import css from '../Editor.module.css';
 
-const PANELS: Record<NodeKind, ComponentType<PanelProps>> = { agent: AgentPanel, model: ModelPanel, tool: ToolPanel, branch: BranchPanel, loop: LoopPanel,
+const PANELS: Record<NodeKind, ComponentType<PanelProps>> = { code: CodePanel, agent: AgentPanel, model: ModelPanel, tool: ToolPanel, branch: BranchPanel, loop: LoopPanel,
   template:TemplatePanel,list:ListPanel,classifier:ClassifierPanel,aggregate:AggregatePanel,
   iteration: IterationPanel, loop_end: LoopEndPanel, assigner: AssignerPanel, return: ReturnPanel, review: ReviewPanel };
 export function NodePanel(props: PanelProps) {

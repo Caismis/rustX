@@ -1,5 +1,5 @@
 import { assign, enqueueActions, fromPromise, raise, setup, stateIn, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v64';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v65';
 import { isOutcomeUncertain, RpcFailure } from '../../../client/errors';
 import type { ConnectionState } from '../../../client/contracts';
 import { WorkspaceHostError } from '../../../workspaces/host';

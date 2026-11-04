@@ -429,12 +429,26 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 ]);
                 view.kind = "tool".into();
                 view.selector = Some(selector.clone());
-                view.bindings.insert("arguments".into(), binding(arguments));
+                match arguments {
+                    super::tool::WorkflowToolArguments::Value(value) => {
+                        view.bindings.insert("arguments".into(), binding(value));
+                    }
+                    super::tool::WorkflowToolArguments::Code { variables, .. } => {
+                        view.kind = "code".into();
+                        view.bindings.extend(
+                            variables
+                                .iter()
+                                .map(|(name, value)| (format!("variables.{name}"), binding(value))),
+                        );
+                    }
+                }
                 view.output_schema = Some(schema(&tool_result.schema()));
                 view.result_kind = Some(
                     match tool_result {
-                        super::WorkflowToolResult::Json { .. } => "json",
-                        super::WorkflowToolResult::Text {} => "text",
+                        super::tool::WorkflowToolProjection::Native(
+                            super::WorkflowToolResult::Text {},
+                        ) => "text",
+                        _ => "json",
                     }
                     .into(),
                 );

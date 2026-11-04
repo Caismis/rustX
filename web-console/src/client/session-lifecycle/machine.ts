@@ -1,5 +1,5 @@
 import { assign, raise, setup, type ActorRefFrom } from 'xstate';
-import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v64';
+import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v65';
 import { emptyFacts, sameClaim, type Admission, type Attached, type LifecycleFacts, type Observation, type SessionLifecyclePort } from './port';
 
 type Kind = 'open' | 'release' | 'switch' | 'delete' | 'recover' | 'inspect';

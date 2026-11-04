@@ -1,4 +1,4 @@
-import type { Response } from '../../../protocol/app-server/v64';
+import type { Response } from '../../../protocol/app-server/v65';
 
 /** Request outcome contracts of one App Server connection. They sit below the
  * client and the application flows that classify its failures, so neither

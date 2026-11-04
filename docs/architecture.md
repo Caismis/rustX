@@ -4895,7 +4895,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v64
+       App Server protocol v65
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4912,14 +4912,14 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
 The current internal envelope is Runtime Client v80, adding Workflow data-node
-observation kinds. It retains the removal of speculative cached-Connecting source state; App Server v64 records first-submission intent
+observation kinds. It retains the removal of speculative cached-Connecting source state; App Server v65 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v64, the only external product control protocol, and
+console speak App Server v65, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -7452,7 +7452,7 @@ See [Model contracts and examples](workflow-programs.md#direct-model-nodes-issue
 
 ## Scheduler product projection
 
-App Server v64 provides a bounded, read-only task catalog over the existing
+App Server v65 provides a bounded, read-only task catalog over the existing
 Session catalog and exact-node schedule readers. Keyset traversal, instruction
 search and unavailable-source reporting stay native; the browser does not walk
 Session trees or load runtimes to discover tasks. A coalesced native watch hint

@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { WorkflowNote } from '../../protocol/app-server/v64';
+import type { WorkflowNote } from '../../protocol/app-server/v65';
 import { NoteActions, NoteNode } from '../src/app/workflows/ui/editor/note/NoteNode';
 
 afterEach(cleanup);

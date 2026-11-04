@@ -42,6 +42,9 @@ pub enum WorkflowConsumerField {
     TemplateVariable {
         name: String,
     },
+    CodeVariable {
+        name: String,
+    },
     TransformInput,
     ClassifierInstruction,
     ClassifierClass {
@@ -198,6 +201,7 @@ pub fn declared_output(
 ) -> Result<Option<Value>, WorkflowCompileError> {
     let schema = match node {
         WorkflowNodeDefinition::Template { .. } => super::transform::text_schema(),
+        WorkflowNodeDefinition::Code { outputs, .. } => super::code::output_schema(outputs)?,
         WorkflowNodeDefinition::Classifier { .. } => super::transform::classifier_result_schema(),
         WorkflowNodeDefinition::Aggregate { groups } => {
             super::transform::validate_groups(groups)?;
@@ -383,7 +387,8 @@ fn consumer<'a>(
     use WorkflowNodeDefinition as N;
     let node = block.nodes.get(&address.address.node)?;
     let (expression, expected, result_scope) = match (node, &address.field) {
-        (N::Template { variables, .. }, F::TemplateVariable { name }) => {
+        (N::Template { variables, .. }, F::TemplateVariable { name })
+        | (N::Code { variables, .. }, F::CodeVariable { name }) => {
             (Expression::Value(variables.get(name)?), None, false)
         }
         (N::List { input, .. }, F::TransformInput) => (

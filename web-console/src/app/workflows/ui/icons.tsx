@@ -76,7 +76,7 @@ export function KindIcon({ kind, size, className }: { kind: NodeKind | 'start' |
   return <Icon size={size} className={className} />;
 }
 
-export const nodeIconKind = (node: NodeDefinition): NodeKind | 'start' | 'code' => node.type==='tool' && node.selector.origin==='builtin' && node.selector.name==='bash' ? 'code' : node.type;
+export const nodeIconKind = (node: NodeDefinition): NodeKind | 'start' => node.type;
 
 /** Builtin Tools by name, as Dify gives each tool its provider's icon; any
  * other Tool shows the Tool kind's glyph. */

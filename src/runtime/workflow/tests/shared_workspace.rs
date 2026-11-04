@@ -68,6 +68,129 @@ fn bash_context(
     )
 }
 
+fn code_definition(script: &str, extra: Value) -> WorkflowDefinition {
+    let mut node =
+        json!({"type":"code","variables":{},"code":script,"outputs":{"result":"string"}});
+    node.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    serde_json::from_value(json!({"description":"Bash Code","block":{"nodes":{"start":{"type":"start"},"script":node,"done":returns("script", &["result"])},"edges":[{"from":"start","to":"script"},{"from":"script","to":"done"}]}})).unwrap()
+}
+
+#[tokio::test]
+async fn code_inputs_are_quoted_data_and_typed_outputs_come_from_workspace_bash() {
+    let plane = workflow_test_plane(1);
+    let text = "quotes '\"; $(touch injected)\nsecond line";
+    let payload = json!({"result":{"message":text,"number":9_007_199_254_740_993_u64}});
+    let mut definition = code_definition(
+        "printf '%s' \"$message\" > received.txt\npwd > directory.txt\nprintf '%s' \"$payload\"",
+        json!({"variables":{"message":{"type":"reference","path":["args","message"]},"payload":{"type":"reference","path":["args","payload"]}},"outputs":{"result":"object"}}),
+    );
+    definition.block.input = schema(
+        json!({"message":{"type":"string"},"payload":{"type":"object"}}),
+        &["message", "payload"],
+    );
+    let runtime = workflow_runtime(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let output = runtime
+        .run_test_foreground(
+            Arc::new(compile_test(definition).unwrap()),
+            ToolCallId::new("code-quoted"),
+            bash_context(&plane, None),
+            json!({"message":text,"payload":payload}),
+            cancellation,
+        )
+        .await
+        .unwrap();
+    assert_eq!(output, payload);
+    let workspace = plane.dir.path().join("workspace");
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("received.txt")).unwrap(),
+        text
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("directory.txt"))
+            .unwrap()
+            .trim(),
+        workspace.to_str().unwrap()
+    );
+    assert!(!workspace.join("injected").exists());
+}
+
+#[tokio::test]
+async fn code_invalid_json_is_retried_through_distinct_native_invocations() {
+    let plane = workflow_test_plane(1);
+    let definition = code_definition(
+        "if [ -f attempted ]; then printf '{\"result\":\"ok\"}'; else touch attempted; printf invalid; fi",
+        json!({"retry":{"max_retries":1,"interval_ms":100}}),
+    );
+    let runtime = workflow_runtime(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let output = runtime
+        .run_test_foreground(
+            Arc::new(compile_test(definition).unwrap()),
+            ToolCallId::new("code-retry"),
+            bash_context(&plane, None),
+            json!({}),
+            cancellation,
+        )
+        .await
+        .unwrap();
+    assert_eq!(output, json!({"result":"ok"}));
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event.event,
+                RuntimeEvent::NativeToolInvocation {
+                    fact: NativeInvocationFact::Completed { .. },
+                    ..
+                }
+            ))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn code_wrong_output_types_support_defaults_and_explicit_fail_branches() {
+    for branch in [false, true] {
+        let plane = workflow_test_plane(1);
+        let handling = if branch {
+            json!({"type":"fail_branch"})
+        } else {
+            json!({"type":"default_value","value":{"result":"default"}})
+        };
+        let mut definition =
+            code_definition("printf '{\"result\":42}'", json!({"on_error":handling}));
+        if branch {
+            definition.block.nodes.insert("failed".into(),serde_json::from_value(json!({"type":"return","outputs":[{"variable":"result","value_selector":["script","error_type"]}]})).unwrap());
+            definition.block.edges.push(WorkflowEdgeDefinition {
+                from: "script".into(),
+                to: "failed".into(),
+                port: Some(WorkflowPort::Fail),
+            });
+        }
+        let runtime = workflow_runtime(&plane);
+        let (_, cancellation) = workflow_cancellation();
+        let output = runtime
+            .run_test_foreground(
+                Arc::new(compile_test(definition).unwrap()),
+                ToolCallId::new("code-handling"),
+                bash_context(&plane, None),
+                json!({}),
+                cancellation,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            output,
+            json!({"result":if branch {"failed"}else{"default"}})
+        );
+    }
+}
+
 /// C01/C05/C06/C07/C12: Implement -> Check failure -> Repair -> Check
 /// success over a plain (non-Git) workspace. Each Workflow Agent runs in the
 /// exact Session binding, native Bash observes its writes in place, the

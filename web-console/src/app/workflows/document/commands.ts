@@ -1,4 +1,5 @@
-import { deleteNodePresentation, renameNodePresentation, requireVacantNodePresentation } from './presentation';
+import { deleteNodePresentation, orderedKeys, renameNodePresentation, requireVacantNodePresentation } from './presentation';
+import { setOrder } from './geometry';
 import {
   blockAt, edgesOf, isContainer, nodeAt, sameBlockPath, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
   type WorkflowDocument,
@@ -49,6 +50,7 @@ export function emptyBody(start: string): Block {
  * by the native check; nothing is invented to make a graph pass. */
 export function nodeTemplate(kind: NodeKind, id: string = kind): NodeDefinition {
   switch (kind) {
+    case 'code': return {type:'code',variables:{},code: /* i18n-raw: executable Bash starter script */ `printf '{"result":"Hello, world!"}\\n'`,outputs:{result:'string'}};
     case 'template': return { type: 'template', variables: { arg1: { type: 'reference', path: [] } }, template: '{{ arg1 }}' };
     case 'list': return { type: 'list', input: { type: 'reference', path: [] } };
     case 'classifier': return { type: 'classifier', model: { mode: 'session' }, input: { type: 'reference', path: [] }, instruction: [], classes: [{ id: 'class_1', label: /* i18n-raw: authored classifier default label stored in the document */ 'CLASS 1', description: [] }, { id: 'class_2', label: /* i18n-raw: authored classifier default label stored in the document */ 'CLASS 2', description: [] }] };
@@ -322,4 +324,20 @@ export function renameAggregateOutput(document: WorkflowDocument, path: BlockPat
     const changed={...block,nodes:{...block.nodes,[id]:{...node,groups:node.groups.map(group=>group.name===from ? {...group,name:to}:group)}}};
     return rewriteBlockReferences(changed,reference=>reference[0]===id && reference[1]===from ? [id,to,...reference.slice(2)] : undefined);
   });
+}
+
+/** A Code output is a declared root field, so its structured readers rename too. */
+export function renameCodeOutput(document: WorkflowDocument, path: BlockPath, id: string, from: string, to: string): WorkflowDocument {
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(to)) throw new CommandRejected('invalid_identifier');
+  const target={kind:'node_output' as const,address:{block:[...path],node:id},path:[]};
+  const node=nodeAt(blockAt(document,path)!,id);
+  const order=orderedKeys(document,target,node?.type==='code'?Object.keys(node.outputs):[]);
+  const next=updateBlock(document,path,block => {
+    const node=nodeAt(block,id);
+    if(node?.type!=='code' || !Object.hasOwn(node.outputs,from))throw new CommandRejected('missing_field');
+    if(Object.hasOwn(node.outputs,to))throw new CommandRejected('duplicate_identifier');
+    const changed={...block,nodes:{...block.nodes,[id]:{...node,outputs:Object.fromEntries(Object.entries(node.outputs).map(([key,value])=>[key===from?to:key,value]))}}};
+    return rewriteBlockReferences(changed,reference=>reference[0]===id && reference[1]===from ? [id,to,...reference.slice(2)] : undefined);
+  });
+  return setOrder(next,target,order.map(key=>key===from?to:key));
 }

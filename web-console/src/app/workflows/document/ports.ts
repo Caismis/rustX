@@ -47,5 +47,5 @@ export function portsOf(node: NodeDefinition): readonly ControlPort[] {
   // As Dify's Agent output routes: each route replaces `next` as an exit.
   const exits = node.type === 'agent' && node.routes?.length ? node.routes.map(route => route.id) : outputPorts(node.type);
   // As Dify's fail branch: a Model, Tool or Agent handling errors that way also exits on `fail`.
-  return (node.type === 'model' || node.type === 'tool' || node.type === 'agent') && node.on_error?.type === 'fail_branch' ? [...exits, 'fail'] : exits;
+  return (node.type === 'model' || node.type === 'tool' || node.type === 'code' || node.type === 'agent') && node.on_error?.type === 'fail_branch' ? [...exits, 'fail'] : exits;
 }

@@ -1,4 +1,4 @@
-import type { ContentRef, RuntimeClientSnapshot } from '../../../protocol/app-server/v64';
+import type { ContentRef, RuntimeClientSnapshot } from '../../../protocol/app-server/v65';
 import { checkpoint, type Server } from '../fixture';
 
 /** Native settlement replaces the live text with bounded canonical headers. */

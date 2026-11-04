@@ -1,4 +1,4 @@
-import type { WorkflowDimensions, WorkflowNodePresentation, WorkflowNote, WorkflowOrderTarget, WorkflowPosition } from '../../../../../protocol/app-server/v64';
+import type { WorkflowDimensions, WorkflowNodePresentation, WorkflowNote, WorkflowOrderTarget, WorkflowPosition } from '../../../../../protocol/app-server/v65';
 import { CommandRejected, validLocalKey } from './commands';
 import { blockAt, nodeAt, sameBlockPath, sameDocument, type BlockPath, type WorkflowDocument } from './model';
 import { emptyPresentation } from './presentation';

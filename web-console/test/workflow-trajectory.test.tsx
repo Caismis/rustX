@@ -6,7 +6,7 @@ import { workflowCalls } from '../src/app/trajectory/workflow';
 import { useWorkflowNodes } from '../src/app/trajectory/useWorkflowNodes';
 import { translator } from '../src/locale/translation';
 import { workflowTraceFixture } from './workflow-trace-fixture';
-import type { CheckpointPage } from '../../protocol/app-server/v64';
+import type { CheckpointPage } from '../../protocol/app-server/v65';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 it('pairs repeated workflow names only by native call and Step and removes their duplicate lifecycle bars', () => {

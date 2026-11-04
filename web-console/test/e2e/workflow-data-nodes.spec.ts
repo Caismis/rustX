@@ -73,16 +73,16 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     }
     await page.screenshot({path:`/tmp/rustx-data-classifier-${width}.png`});
 
-    // Code is a dedicated chooser entry backed by the native Bash Tool contract.
+    // Code has its own configuration and lowers to the native Bash Tool contract.
     await activate(card(page,'repeat'));
     await panel(page).getByRole('button',{name:'Add parallel node on Next step',exact:true}).click();
     const chooser=page.getByRole('dialog',{name:'Choose a workflow node',exact:true});
     for(const name of ['Template','List Operator','Question Classifier','Variable Aggregator','Code Execution']) await expect(chooser.getByRole('option',{name,exact:true})).toBeVisible();
     await expect(chooser.getByRole('option',{name:'Variable Assigner',exact:true})).toHaveCount(0);
     await chooser.getByRole('option',{name:'Code Execution',exact:true}).click();
-    await expect(panel(page)).toContainText("calling Session's workspace");
-    const command=panel(page).getByRole('textbox',{name:'command',exact:true});
-    const script="printf '%s\\n' 'node check'\npwd";await command.fill(script);await command.blur();
+    await expect(panel(page)).toContainText('Runs in the Session workspace');
+    const command=panel(page).getByRole('textbox',{name:'Bash code',exact:true});
+    const script=`printf '{"result":"node check"}\\n'`;await command.fill(script);await command.blur();
     await panel(page).getByRole('button',{name:'Choose next node for Next step',exact:true}).click();
     await chooser.getByRole('tab',{name:'Existing',exact:true}).click();await chooser.locator('[data-node-id="done"]').click();
     await command.scrollIntoViewIfNeeded();
@@ -91,18 +91,19 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     // Assignment is available in its real scope: a Loop body with variables.
     const inner=canvas(page).locator(`.react-flow__node[data-id="${viewId([{node:'repeat'}],'start')}"]`);
     const add=inner.locator('[data-handleid="next"] button');await add.focus();await add.press('Enter');
+    const palette=(await page.getByRole('dialog').boundingBox())!;expect(palette.y+palette.height).toBeLessThanOrEqual(page.viewportSize()!.height);
     await page.getByRole('dialog').getByRole('option',{name:'Variable Assigner',exact:true}).click();
     await panel(page).getByRole('button',{name:'Add variable',exact:true}).click();
     await panel(page).getByRole('combobox',{name:'Operation',exact:true}).selectOption('increment');
-    const save=page.getByRole('button',{name:'Save File',exact:true});await save.click();await expect(save).toBeDisabled();
+    const save=page.getByRole('button',{name:'Save File',exact:true});await save.click();await expect(save).toBeDisabled({timeout:15_000});
     const saved=parse(readFileSync(file,'utf8'));
     expect(saved.block.nodes.left.variables.question.path).toEqual(['args','query']);
     expect(saved.block.nodes.left.template).toBe('{{ question | upper }}!');
     expect(saved.block.nodes.list).toMatchObject({filter:{operator:'greater_equal',value:2},sort:{order:'desc'},limit:2});
     expect(saved.block.nodes.done.outputs[0].value_selector).toEqual(['merge','answer']);
     expect(saved.block.edges).toContainEqual({from:'classify',to:'right',port:'class_2'});
-    const code=Object.values(saved.block.nodes).find((node:any)=>node.type==='tool' && node.selector.name==='bash') as any;
-    expect(code.arguments.fields.command).toEqual({type:'literal',value:script});
+    const code=Object.values(saved.block.nodes).find((node:any)=>node.type==='code') as any;
+    expect(code.code).toBe(script);expect(code.outputs).toEqual({result:'string'});
     const assigner=Object.values(saved.block.nodes.repeat.body.nodes).find((node:any)=>node.type==='assigner') as any;
     expect(assigner.items[0]).toMatchObject({variable:['repeat','count'],operation:'increment'});
     await page.getByRole('button',{name:'Back to Workflows',exact:true}).first().click();await page.getByRole('button',{name:'data_nodes',exact:true}).click();

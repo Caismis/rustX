@@ -1907,6 +1907,18 @@ export type WorkflowNodeDefinition =
       type: 'classifier';
     }
   | {
+      variables: {
+        [k: string]: WorkflowValue;
+      };
+      code: string;
+      outputs: {
+        [k: string]: WorkflowVarType;
+      };
+      retry?: WorkflowRetry | null;
+      on_error?: WorkflowValueErrorStrategy;
+      type: 'code';
+    }
+  | {
       groups: WorkflowAggregateGroup[];
       type: 'aggregate';
     }
@@ -2045,7 +2057,9 @@ export type WorkflowNodeDefinition =
        */
       retry?: WorkflowRetry | null;
       /**
-       * What a call that still failed leaves behind.
+       * As Dify's error handling on its Agent and tool nodes, for a call that
+       * failed or timed out once it is proven settled. Cancellation, an unknown
+       * outcome, unproven settlement and a refused start still stop the run.
        */
       on_error?:
         | {
@@ -2088,9 +2102,9 @@ export type WorkflowNodeDefinition =
        */
       routes?: WorkflowAgentRoute[];
       /**
-       * What a failed or timed-out child run leaves behind. Agents are not
-       * retried: a workflow child writes the shared Session workspace
-       * directly, and termination must be proven before it is handled.
+       * As Dify's error handling on its Agent and tool nodes, for a call that
+       * failed or timed out once it is proven settled. Cancellation, an unknown
+       * outcome, unproven settlement and a refused start still stop the run.
        */
       on_error?:
         | {
@@ -2194,6 +2208,25 @@ export type WorkflowVarType =
   | 'array[number]'
   | 'array[boolean]'
   | 'array[object]';
+/**
+ * As Dify's error handling on its Agent and tool nodes, for a call that
+ * failed or timed out once it is proven settled. Cancellation, an unknown
+ * outcome, unproven settlement and a refused start still stop the run.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowValueErrorStrategy".
+ */
+export type WorkflowValueErrorStrategy =
+  | {
+      type: 'stop';
+    }
+  | {
+      value: unknown;
+      type: 'default_value';
+    }
+  | {
+      type: 'fail_branch';
+    };
 /**
  * Who speaks a Model prompt message.
  *
@@ -2382,6 +2415,10 @@ export type WorkflowConsumerField =
   | {
       name: string;
       kind: 'template_variable';
+    }
+  | {
+      name: string;
+      kind: 'code_variable';
     }
   | {
       kind: 'transform_input';
@@ -7403,25 +7440,6 @@ export type WorkflowModelErrorStrategy =
       type: 'fail_branch';
     };
 /**
- * As Dify's error handling on its Agent and tool nodes, for a call that
- * failed or timed out once it is proven settled. Cancellation, an unknown
- * outcome, unproven settlement and a refused start still stop the run.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowValueErrorStrategy".
- */
-export type WorkflowValueErrorStrategy =
-  | {
-      type: 'stop';
-    }
-  | {
-      value: unknown;
-      type: 'default_value';
-    }
-  | {
-      type: 'fail_branch';
-    };
-/**
  * The authored output contract of a Workflow Agent node, as Dify's Agent:
  * the final reply is the `text` variable, or a declared schema adds the
  * reserved `workflow_output` terminal and its fields are the variables.
@@ -9621,6 +9639,18 @@ export interface WorkflowClassifierClass {
   description: WorkflowValue[];
 }
 /**
+ * As Dify's retry on failure: a failed or timed-out Model or Tool call is
+ * made again, up to `max_retries` more times, `interval_ms` after the
+ * previous one ended.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowRetry".
+ */
+export interface WorkflowRetry {
+  max_retries: number;
+  interval_ms: number;
+}
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowAggregateGroup".
  */
@@ -9641,18 +9671,6 @@ export interface WorkflowAggregateGroup {
 export interface WorkflowModelMessage {
   role: WorkflowModelRole;
   content?: WorkflowValue[];
-}
-/**
- * As Dify's retry on failure: a failed or timed-out Model or Tool call is
- * made again, up to `max_retries` more times, `interval_ms` after the
- * previous one ended.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowRetry".
- */
-export interface WorkflowRetry {
-  max_retries: number;
-  interval_ms: number;
 }
 /**
  * A Loop variable: Dify's `label`, `var_type` and constant or variable value.

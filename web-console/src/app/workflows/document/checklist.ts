@@ -1,4 +1,4 @@
-import type { WorkflowCheckReport, WorkflowDependencyFailure } from '../../../../../protocol/app-server/v64';
+import type { WorkflowCheckReport, WorkflowDependencyFailure } from '../../../../../protocol/app-server/v65';
 import { locate } from './diagnostics';
 import { nodePresentation } from './geometry';
 import { blockAt, blockKey, childSteps, edgesOf, isContainer, nodeAt, startOf, type Block, type BlockPath, type NodeDefinition, type Value, type WorkflowDocument } from './model';
@@ -30,6 +30,7 @@ const required = (field: ChecklistField, path: string): ChecklistMessage => ({ t
  * only names more problems at once than the compiler's first. */
 function nodeProblems(node: NodeDefinition): ChecklistMessage[] {
   switch (node.type) {
+    case 'code': return !node.code.trim() ? [required('value','code')] : !Object.keys(node.outputs).length ? [required('output','outputs')] : Object.entries(node.variables).filter(([,value])=>empty(value)).map(([name])=>required('input',`variables.${name}`));
     case 'template': return !node.template ? [required('value','template')] : Object.entries(node.variables).filter(([,value]) => empty(value)).map(([name]) => required('input',`variables.${name}`));
     case 'list': return empty(node.input) ? [required('input','input')] : [];
     case 'classifier': return empty(node.input) ? [required('input','input')] : (!node.classes.length || node.classes.some(item => !item.label.trim() || !item.description.length || item.description.every(part => part.type === 'literal' && typeof part.value === 'string' && !part.value.trim()))) ? [required('value','classes')] : [];

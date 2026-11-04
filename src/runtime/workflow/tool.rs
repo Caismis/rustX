@@ -41,6 +41,69 @@ pub struct WorkflowToolChoice {
     pub result: WorkflowToolResult,
 }
 
+#[derive(Debug, Clone)]
+pub enum WorkflowToolArguments {
+    Value(super::WorkflowValue),
+    Code {
+        variables: super::BTreeMap<String, super::WorkflowValue>,
+        code: String,
+    },
+}
+
+impl WorkflowToolArguments {
+    pub(super) fn evaluate(
+        &self,
+        input: &Value,
+        values: &imbl::OrdMap<String, Value>,
+    ) -> Result<Value, WorkflowRunError> {
+        let evaluate = |value: &super::WorkflowValue| super::evaluate_value(value, input, values);
+        match self {
+            Self::Value(value) => evaluate(value),
+            Self::Code { variables, code } => super::code::arguments(variables, code, evaluate),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum WorkflowToolProjection {
+    Native(WorkflowToolResult),
+    Code { schema: Value },
+}
+
+impl WorkflowToolProjection {
+    pub(super) fn schema(&self) -> Value {
+        match self {
+            Self::Native(result) => result.schema(),
+            Self::Code { schema } => schema.clone(),
+        }
+    }
+
+    pub(super) fn project(
+        &self,
+        result: &ToolExecutionResult,
+        node: &WorkflowNodeInstance,
+    ) -> Result<Value, WorkflowRunError> {
+        match self {
+            Self::Native(projection) => projection.project(result, node),
+            Self::Code { schema } => {
+                let native = WorkflowToolResult::declared(
+                    crate::tools::native::output_schema("bash").as_ref(),
+                )
+                .project(result, node)?;
+                let text = native["stdout"].as_str().ok_or_else(|| {
+                    WorkflowRunError::InvalidValue("Code produced no stdout".into())
+                })?;
+                let value: Value = serde_json::from_str(text).map_err(|_| {
+                    WorkflowRunError::InvalidValue("Code stdout must be one JSON object".into())
+                })?;
+                expressions::bounded_value_bytes(&value)?;
+                execution::validate_commit(schema, &value)?;
+                Ok(value)
+            }
+        }
+    }
+}
+
 /// The builtin Tools a Workflow Tool node can select at all, in the native
 /// order. Authoring presents these as choices; admission against the
 /// adopted generation remains the only authority.

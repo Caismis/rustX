@@ -28,7 +28,7 @@ workflow's result is what its Return nodes return (see below). Exactly one node 
 its outgoing edges select the initial work. The node vocabulary is Start, Agent,
 Model, Tool, Template, List Operator, Question Classifier, Variable Aggregator,
 Branch, Review, Iteration, Loop, Exit Loop (`loop_end`), Variable Assigner
-(`assigner`) and Return. Code Execution is a builtin Bash Tool preset. Iteration and Loop own a body, a block with no
+(`assigner`) and Return. Code Execution lowers to builtin Bash. Iteration and Loop own a body, a block with no
 input of its own. There is no explicit Parallel node, scalar `entry`
 field, callable subworkflow, conversation or independent job.
 
@@ -587,14 +587,40 @@ analysis exposes possible ancestor outputs specifically to these selectors.
 
 ### Code Execution and Variable Assigner
 
-The **Code Execution** chooser entry creates an ordinary
-`tool` node with `selector: {origin: builtin, name: bash}`. Its multiline command
-uses the existing Bash `command` argument, literal text or a Workflow template
-value with explicit references. Execution runs in the calling Session's
-workspace and reuses native Tool approval, timeout, cancellation, retry and
-error handling. Outputs remain the existing `exit_code`, `stdout`, `stderr`
-and `combined` result fields. There is no second script runtime or selectable
-working directory.
+The **Code Execution** chooser creates a `code` node with named variable
+selectors, a Bash script and typed output fields. As in Dify, output fields
+are authored declarations, and the runtime validates every returned field.
+The node lowers to one ordinary admitted builtin Bash invocation in the
+calling Session's workspace; native approval, physical settlement, deadline,
+cancellation and Scheduled effects retain their existing owners.
+
+```yaml
+process:
+  type: code
+  variables:
+    items: {type: reference, path: [args, items]}
+  code: |
+    printf '{"result":%s}\n' "$items"
+  outputs:
+    result: array[number]
+```
+
+Read an input with `$name`. Strings retain their text; numbers, booleans,
+objects and arrays are compact JSON. Bindings are shell-quoted literal data,
+so upstream text cannot interpolate commands. Input names are Bash identifiers
+and cannot replace execution environment variables such as `PATH`, `HOME`,
+`BASH_ENV` or `IFS`; NUL bytes are rejected before invocation.
+The script writes exactly one JSON object to stdout and logs to stderr.
+All declared outputs are required, with no undeclared extra fields. A failed
+process, malformed JSON or a wrong output type follows `retry` and `on_error`
+(`stop`, `default_value` or `fail_branch`). Each retry is a distinct native
+invocation and may repeat workspace side effects.
+
+The editor uses Dify's input/output rows and copy/expand controls. It offers
+only Bash, with no function-signature sync, sandbox service, selectable
+working directory or AI code generation. Ordinary Bash Tools remain ordinary
+Tools with their fixed `exit_code`, `stdout`, `stderr`, `combined` results;
+they are not inferred to be Code nodes.
 
 **Variable Assigner** remains the native `assigner` node described under Loop
 below. It is offered inside a Loop body and updates that Loop's declared

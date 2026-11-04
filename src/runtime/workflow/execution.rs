@@ -1156,7 +1156,7 @@ impl WorkflowRuntime {
                     retry,
                     on_error,
                 } => {
-                    let arguments = evaluate_value(arguments, input, &values)?;
+                    let arguments = arguments.evaluate(input, &values)?;
                     let mut retries = 0;
                     // Only a proven-settled failure or timeout is retried or
                     // handled; anything else is projected and stops as before.
@@ -1164,10 +1164,13 @@ impl WorkflowRuntime {
                         let (native, settled) = self
                             .invoke_tool(run, context, &node_instance, selector, arguments.clone(), retries, cancellation)
                             .await?;
+                        let projected = result.project(&native, &node_instance);
+                        let output_error = matches!(result, super::tool::WorkflowToolProjection::Code { .. })
+                            && native.status == crate::tools::types::ToolExecutionStatus::Success && projected.is_err();
                         let handled = settled && !cancellation.is_cancelled()
-                            && matches!(native.status, crate::tools::types::ToolExecutionStatus::Failed { .. } | crate::tools::types::ToolExecutionStatus::TimedOut);
+                            && (output_error || matches!(native.status, crate::tools::types::ToolExecutionStatus::Failed { .. } | crate::tools::types::ToolExecutionStatus::TimedOut));
                         if !handled {
-                            break Ok(native);
+                            break Ok(projected?);
                         }
                         if let Some(retry) = retry && retries < retry.max_retries {
                             retries += 1;
@@ -1178,10 +1181,11 @@ impl WorkflowRuntime {
                             }
                             continue;
                         }
-                        break if on_error.is_stop() { Ok(native) } else { Err(native.status) };
+                        if on_error.is_stop() { break Ok(projected?); }
+                        break Err(if output_error { crate::tools::types::ToolExecutionStatus::Failed { error: super::bound_workflow_diagnostic(projected.unwrap_err().to_string()) } } else { native.status });
                     };
                     let (value, schema) = match (outcome, on_error) {
-                        (Ok(native), _) => (result.project(&native, &node_instance)?, result.schema()),
+                        (Ok(value), _) => (value, result.schema()),
                         (Err(_), super::WorkflowValueErrorStrategy::DefaultValue { value }) => (value.clone(), result.schema()),
                         (Err(status), _) => {
                             let (kind, message) = match status {

@@ -187,6 +187,7 @@
   position: absolute;
   z-index: 30;
   width: 300px;
+  max-width: calc(100% - 16px);
   max-height: 460px;
   display: flex;
   flex-direction: column;
@@ -290,7 +291,7 @@
 .kind_loop, .kind_iteration, .kind_loop_end { --node-kind-color: #35a8c6; }
 .kind_assigner { --node-kind-color: #4c83df; }
 .kind_return { --node-kind-color: #e39625; }
-.kind_template, .kind_list, .kind_aggregate { --node-kind-color: #4c83df; }
+.kind_code, .kind_template, .kind_list, .kind_aggregate { --node-kind-color: #4c83df; }
 .kind_classifier { --node-kind-color: #43a4c8; }
 .dataRow { display: grid; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--dsw-alias-border-l3); }
 .dataRowHead { display: flex; align-items: center; gap: 8px; min-width: 0; }

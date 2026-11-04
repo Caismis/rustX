@@ -17,6 +17,7 @@ function toolArgument(tx: Translate, label: string, value: Value): Row {
 
 function rows(tx: Translate, node: PreviewNode): Row[] {
   switch (node.type) {
+    case 'code': return [{label:tx('workflows:code.language'),value: /* i18n-raw: supported scripting language */ 'Bash'},...Object.entries(node.variables).slice(0,2).map(([name,value])=>valueRow(name,value))];
     case 'template': return Object.entries(node.variables).map(([name,value]) => valueRow(name,value));
     case 'list': return [valueRow(tx('workflows:data.input'),node.input)];
     case 'classifier': return [valueRow(tx('workflows:data.input'),node.input)];

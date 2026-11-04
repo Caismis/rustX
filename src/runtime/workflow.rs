@@ -28,6 +28,7 @@ use super::subagent::SubagentName;
 
 mod admission;
 pub mod authoring;
+mod code;
 pub use authoring::{WorkflowModelPolicy, WorkflowToolSelector};
 mod defaults;
 pub(crate) use defaults::apply_schema_defaults;
@@ -447,6 +448,16 @@ pub enum WorkflowNodeDefinition {
         #[serde(default)]
         instruction: Vec<WorkflowValue>,
         classes: Vec<WorkflowClassifierClass>,
+    },
+    /// A workspace Bash script with named inputs and declared JSON outputs.
+    Code {
+        variables: BTreeMap<String, WorkflowValue>,
+        code: String,
+        outputs: BTreeMap<String, WorkflowVarType>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry: Option<WorkflowRetry>,
+        #[serde(default)]
+        on_error: WorkflowValueErrorStrategy,
     },
     /// Converge exactly one available source per named output group.
     Aggregate { groups: Vec<WorkflowAggregateGroup> },
@@ -1331,8 +1342,8 @@ pub enum WorkflowNodeProgram {
     },
     Tool {
         selector: crate::capabilities::selection::ExactToolSelector,
-        arguments: WorkflowValue,
-        result: WorkflowToolResult,
+        arguments: tool::WorkflowToolArguments,
+        result: tool::WorkflowToolProjection,
         retry: Option<WorkflowRetry>,
         on_error: WorkflowValueErrorStrategy,
     },
@@ -1900,6 +1911,22 @@ fn compile_block(
                 available_after.insert(node_id.clone(),available_before.with_prefix(&node_id,&transform::classifier_result_schema()));
                 WorkflowNodeProgram::Model(model)
             }
+            WorkflowNodeDefinition::Code { variables, code: script, outputs, retry, on_error } => {
+                code::validate(variables, script, &available_before, &node_id)?;
+                let schema = code::output_schema(outputs)?;
+                validate_workflow_schema(&schema, "Code outputs")?;
+                validate_retry(retry.as_ref(), "Code", &node_id)?;
+                if let WorkflowValueErrorStrategy::DefaultValue { value } = on_error
+                    && !jsonschema::Validator::new(&schema).is_ok_and(|validator| validator.is_valid(value)) {
+                    return Err(WorkflowCompileError::InvalidField("Code default value must satisfy its outputs".into()).at("on_error.value"));
+                }
+                available_after.insert(node_id.clone(), available_before.with_prefix(&node_id, &schema));
+                WorkflowNodeProgram::Tool {
+                    selector: crate::capabilities::selection::ExactToolSelector::Builtin { name: "bash".into() },
+                    arguments: tool::WorkflowToolArguments::Code { variables: variables.clone(), code: script.clone() },
+                    result: tool::WorkflowToolProjection::Code { schema }, retry: *retry, on_error: on_error.clone(),
+                }
+            }
             WorkflowNodeDefinition::Aggregate { groups } => {
                 transform::validate_groups(groups)?;
                 for (index,group) in groups.iter().enumerate() {
@@ -2149,8 +2176,8 @@ fn compile_block(
                 );
                 WorkflowNodeProgram::Tool {
                     selector,
-                    arguments: arguments.clone(),
-                    result: result.clone(),
+                    arguments: tool::WorkflowToolArguments::Value(arguments.clone()),
+                    result: tool::WorkflowToolProjection::Native(result.clone()),
                     retry: *retry,
                     on_error: on_error.clone(),
                 }
@@ -2394,6 +2421,10 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
                 | WorkflowNodeDefinition::Tool {
                     on_error: WorkflowValueErrorStrategy::FailBranch,
                     ..
+                }
+                | WorkflowNodeDefinition::Code {
+                    on_error: WorkflowValueErrorStrategy::FailBranch,
+                    ..
                 },
                 Some(WorkflowPort::Fail),
             ) => WorkflowPort::Fail,
@@ -2468,6 +2499,9 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
                 on_error: WorkflowValueErrorStrategy::FailBranch,
                 ..
             } | WorkflowNodeDefinition::Tool {
+                on_error: WorkflowValueErrorStrategy::FailBranch,
+                ..
+            } | WorkflowNodeDefinition::Code {
                 on_error: WorkflowValueErrorStrategy::FailBranch,
                 ..
             }

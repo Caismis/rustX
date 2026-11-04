@@ -46,7 +46,8 @@ pub(super) fn node(input: &WorkflowNodeDefinition) -> Vec<&[String]> {
     let mut reads = Vec::new();
     match input {
         WorkflowNodeDefinition::Start {} | WorkflowNodeDefinition::LoopEnd {} => {}
-        WorkflowNodeDefinition::Template { variables, .. } => {
+        WorkflowNodeDefinition::Template { variables, .. }
+        | WorkflowNodeDefinition::Code { variables, .. } => {
             for input in variables.values() {
                 value(input, &mut reads);
             }

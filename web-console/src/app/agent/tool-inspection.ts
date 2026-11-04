@@ -1,5 +1,5 @@
 import { createContext, useContext, useLayoutEffect, useRef } from 'react';
-import type { ForegroundToolExecution, TraceToolLocator } from '../../../../protocol/app-server/v64';
+import type { ForegroundToolExecution, TraceToolLocator } from '../../../../protocol/app-server/v65';
 
 /** The owning Conversation supplies the native navigation authority. */
 export const ToolInspectionContext = createContext<((locator: TraceToolLocator) => Promise<void>) | undefined>(undefined);

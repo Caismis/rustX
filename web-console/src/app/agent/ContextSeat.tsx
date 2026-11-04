@@ -1,4 +1,4 @@
-import type { RuntimeClientContextView } from '../../../../protocol/app-server/v64';
+import type { RuntimeClientContextView } from '../../../../protocol/app-server/v65';
 import type { AppServerClient } from '../../client/app-server';
 import type { CompactionRequestEvidence } from '../../client/contracts';
 import { useClientSelector, sameValue } from '../../client/selectors';

@@ -1,4 +1,4 @@
-import type { RuntimeClientProjectionHeadView, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v64';
+import type { RuntimeClientProjectionHeadView, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v65';
 import type { TranscriptCache } from '../client/transcript';
 import type { TurnNode } from './turn-presentation';
 
