@@ -74,7 +74,9 @@ export function useComposerContent(client: AppServerClient, view: SessionView | 
       ...(retainedTodos && view.snapshot.todos ? { todos: { ...view.snapshot.todos, tasks: retainedTodos } } : {}),
       ...(currentGoal?.value ? { goal: currentGoal.value } : {}),
     } : view?.snapshot,
-    todoLoaded: currentTodos?.value !== undefined && !currentTodos.error,
+    // Like Harness's whole-value projection, keep a complete displayed list
+    // ready during refresh; only an initial deferred read needs Loading.
+    todoLoaded: retainedTodos !== undefined || currentTodos?.value !== undefined && !currentTodos.error,
     error: currentTodos?.error ?? currentGoal?.error,
   };
 }

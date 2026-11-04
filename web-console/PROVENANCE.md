@@ -5148,3 +5148,24 @@ v67 artifacts are removed. Runtime Client v80 is unchanged.
 Actual desktop and touch browser checks use the repository's exact pinned
 Playwright container: no Browser plugin is available in this session. Screenshots
 are task evidence outside the repository, not replacement pixel baselines.
+
+## Todo refresh presentation
+
+Compared the sibling DeepSeek Harness revision
+`ce7073d51254c26cd63b22a60835b8f948deb447`:
+`packages/todo/tool-todo/src/index.ts` publishes whole Todo lists;
+`packages/api/session-controller/src/client/sessions/projection-store.ts` keeps
+each finished value until a newer value replaces it;
+`packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx` renders the
+current list and status counts without a refresh/loading transition. Its dock
+test is `packages/client/ui-conversation/tests/todo-panel.client.spec.tsx`.
+
+rustX's native bounded checkpoint reads remain authoritative. A complete Todo
+list retained within the same attachment observation is now display-ready
+while its replacement hydrates, so refreshing cannot add a Loading label or
+extra status paragraph. The replacement is published atomically. Initial
+deferred reads still show loading; another conversation/observation cannot
+borrow the prior list. Existing disclosure state, task identity, Goal hydration,
+native conversation-owned Todo lifetime, and error reporting remain intact.
+This changes the rustX hydration adapter, with no additional upstream component
+code, assets, dependencies, or native/schema changes.
