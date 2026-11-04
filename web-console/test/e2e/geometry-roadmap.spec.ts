@@ -61,14 +61,15 @@ for (const entry of ['delivery', 'workspace']) test(`roadmap structure, focus an
 test('all six axis endpoints match menu directions, stay separate and never pick the model', async ({ page }, info) => {
   await load(page); const tree = await parts(page); await tree.getByRole('button', { name: 'A', exact: true }).click();
   await page.getByRole('button', { name: 'Close parts', exact: true }).click();
+  await expect(page.locator('[data-geometry-axis-indicator] button')).toHaveCount(0);
   for (const [view, label] of [['right','Right'], ['left','Left'], ['top','Top'], ['bottom','Bottom'], ['front','Front'], ['back','Back']]) {
     await page.getByRole('button', { name: 'View angle', exact: true }).click();
     await expect(page.getByRole('menuitem', { name: label, exact: true }).locator('[data-view-icon]')).toHaveAttribute('data-view-icon', view);
     await page.getByRole('menuitem', { name: label, exact: true }).click(); const menuPose = await pose(page); await painted(page);
-    await page.locator(`[data-geometry-axis="${view}"]`).click(); const axisPose = await pose(page);
+    await page.locator(`[data-geometry-axis="${view}"] text`).click(); const axisPose = await pose(page);
     for (const key of ['position', 'target', 'up']) axisPose.camera[key].forEach((value: number, index: number) => expect(value).toBeCloseTo(menuPose.camera[key][index], 8));
     expect(axisPose.selected).toBe(menuPose.selected);
-    const boxes = await page.locator('[data-geometry-axis]').evaluateAll(buttons => buttons.map(button => { const b = button.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; }));
+    const boxes = await page.locator('[data-geometry-axis] text').evaluateAll(labels => labels.map(label => { const b = label.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; }));
     for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
       const a = boxes[i], b = boxes[j]; expect(Math.max(0, Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)) * Math.max(0, Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y))).toBeLessThan(1);
     }
@@ -78,6 +79,9 @@ test('all six axis endpoints match menu directions, stay separate and never pick
       const after = await pose(page); expect(after.camera.position).not.toEqual(axisPose.camera.position); expect(after.camera.up).toEqual(axisPose.camera.up);
     }
   }
+  await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: 'Isometric', exact: true }).click(); await painted(page);
+  await page.locator('[data-geometry-axis="right"] path').click();
+  const linePose = await pose(page); expect(linePose.camera.position[0]).toBeGreaterThan(0); expect(Math.abs(linePose.camera.position[2])).toBeLessThan(1e-6); expect(linePose.selected).toBeDefined();
   await page.setViewportSize({ width: 700, height: 500 }); await painted(page);
   await page.locator('[data-geometry-axis="right"]').focus(); await page.keyboard.press('Enter'); expect((await pose(page)).selected).toBeDefined();
   await page.getByRole('button', { name: 'Chinese', exact: true }).click(); await page.getByRole('button', { name: 'Dark theme', exact: true }).click();
@@ -85,10 +89,13 @@ test('all six axis endpoints match menu directions, stay separate and never pick
   await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('geometry-axis-narrow-zh-dark.png') });
 });
 
-test('mesh outlines are lazy, retire on hide, restore the option and add no idle loop', async ({ page }, info) => {
+test('mesh outlines start enabled, can be disabled, restore the option and add no idle loop', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  await load(page); const before = await resources(page), initialReads = await reads(page);
+  await load(page); const initialReads = await reads(page);
   const button = page.getByRole('button', { name: 'Model outlines', exact: true });
+  await expect(button).toHaveAttribute('aria-pressed', 'true');
+  await button.click(); await expect(button).toHaveAttribute('aria-pressed', 'false'); await painted(page);
+  const before = await resources(page);
   for (let i = 0; i < 2; i++) {
     await button.click(); await expect(button).toHaveAttribute('aria-pressed', 'true');
     await expect.poll(async () => (await resources(page)).workers).toBe(0); await painted(page);
@@ -111,7 +118,6 @@ test('mesh outlines are lazy, retire on hide, restore the option and add no idle
 test('outline gate preserves a near-limit shaded STL and keeps original Download', async ({ page }) => {
   await instrument(page); await page.route('**/test/fixtures/geometry/cube.stl', route => route.fulfill({ body: Buffer.from(denseBoxStl()), contentType: 'application/octet-stream' }));
   await page.goto(`${origin}/test/fixtures/geometry.html`); await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click(); await ready(page);
-  await page.getByRole('button', { name: 'Model outlines', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Outlines are unavailable');
   await expect(page.locator('[data-geometry-format] canvas')).toBeVisible(); await expect(page.getByRole('button', { name: 'Download artifact', exact: true })).toBeEnabled();
   expect(await reads(page)).toBe(1); expect((await resources(page)).workers).toBe(0);
@@ -129,7 +135,7 @@ test('curved outline capture contains silhouettes rather than a triangle wirefra
   }
   await instrument(page); await page.route('**/test/fixtures/geometry/cube.stl', route => route.fulfill({ body: Buffer.from(bytes), contentType: 'application/octet-stream' }));
   await page.goto(`${origin}/test/fixtures/geometry.html`); await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click(); await ready(page);
-  await page.getByRole('button', { name: 'Model outlines', exact: true }).click(); await expect(page.getByRole('button', { name: 'Model outlines', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Model outlines', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('geometry-smooth-silhouette.png') });
   writeFileSync(info.outputPath('outline-workload.json'), JSON.stringify({ triangles: positions.count / 3, resources: await resources(page), reads: await reads(page) }, null, 2));
 });
@@ -145,6 +151,10 @@ for (const workload of ['planar-outline-envelope', 'cad-96-parts']) test(`two-pa
   await page.getByRole('button', { name: 'Preview cube.glb in sidebar', exact: true }).click(); await ready(page);
   await page.getByRole('button', { name: 'Split preview', exact: true }).click();
   await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(2); await expect.poll(async () => (await resources(page)).workers).toBe(0); await painted(page);
+  for (const panel of await page.locator('[data-geometry-format]').all()) {
+    const button = panel.getByRole('button', { name: 'Model outlines', exact: true });
+    await expect(button).toHaveAttribute('aria-pressed', 'true'); await button.click(); await expect(button).toHaveAttribute('aria-pressed', 'false');
+  }
   await page.evaluate(() => {
     const before = window.Worker, outputs: { segments: number; bytes: number }[] = [];
     window.Worker = class extends before {
@@ -189,7 +199,7 @@ test.describe('scaled coordinate navigation', () => {
   test.use({ deviceScaleFactor: 2 });
   test('uses CSS hit areas after DPR/resize and preserves selection', async ({ page }) => {
     await load(page); await page.setViewportSize({ width: 700, height: 500 }); await painted(page);
-    await page.getByRole('button', { name: '+X: Right', exact: true }).click();
+    await page.getByRole('button', { name: '+X: Right', exact: true }).locator('text').click();
     const state = await pose(page); expect(state.camera.position[0]).toBeGreaterThan(0);
     expect(Math.abs(state.camera.position[1])).toBeLessThan(1e-6); expect(Math.abs(state.camera.position[2])).toBeLessThan(1e-6);
     const scale = await page.locator('[data-geometry-format] canvas').evaluate(canvas => (canvas as HTMLCanvasElement).width / canvas.clientWidth); expect(scale).toBeCloseTo(2, 2);

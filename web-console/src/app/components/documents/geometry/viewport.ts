@@ -24,7 +24,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   activeContexts++;
   const canvas = renderer.domElement; canvas.tabIndex = 0; canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', labels.canvas);
   let pendingDraw: WebGLSync | null = null;
-  let outlines: ReturnType<typeof createOutlines> | undefined, outlineRequest = 0, outlinesWanted = saved?.outlines === true;
+  let outlines: ReturnType<typeof createOutlines> | undefined, outlineRequest = 0, outlinesWanted = saved?.outlines !== false;
   container.append(canvas);
   const scene = new Scene(), centered = new Group(), camera = new PerspectiveCamera(45, 1, 0.001, 1000);
   const center = bounds.getCenter(new Vector3()), size = bounds.getSize(new Vector3()), radius = Math.max(size.length() / 2, 1e-6);

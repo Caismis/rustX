@@ -2,15 +2,14 @@
 .viewport { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-document-preview); }
 .viewport canvas { position: absolute; inset: 0; display: block; max-width: 100%; }
 .axes { position: absolute; inset-inline-start: 8px; bottom: 8px; pointer-events: none; }
-.axisButton { position: absolute; top: 0; left: 0; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 1px solid currentColor; border-radius: 50%; background: var(--dsw-alias-bg-base); font: 600 10px var(--dsw-font-family); cursor: pointer; pointer-events: auto; }
-.axisButton[data-axis="X"] { color: #b32a2a; }
-.axisButton[data-axis="Y"] { color: #23723e; }
-.axisButton[data-axis="Z"] { color: #285eae; }
-:global(body[data-ds-dark-theme]) .axisButton[data-axis="X"] { color: #f17b7b; }
-:global(body[data-ds-dark-theme]) .axisButton[data-axis="Y"] { color: #76bd85; }
-:global(body[data-ds-dark-theme]) .axisButton[data-axis="Z"] { color: #84aff8; }
-.axisButton[data-negative="true"] { border-style: dashed; }
-.axisButton:hover, .axisButton:focus-visible { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 2px; }
+.axisControl { cursor: pointer; }
+.axisControl[data-axis="X"] { color: #f17b7b; }
+.axisControl[data-axis="Y"] { color: #76bd85; }
+.axisControl[data-axis="Z"] { color: #84aff8; }
+.axisHit { fill: none; stroke: transparent; stroke-width: 14px; pointer-events: stroke; }
+.axisLabel { fill: currentColor; stroke: var(--dsw-alias-bg-document-preview); stroke-width: 3px; stroke-linejoin: round; paint-order: stroke fill; font: 600 12px var(--dsw-font-family); pointer-events: all; user-select: none; }
+.axisControl:hover .axisLabel, .axisControl:focus-visible .axisLabel { fill: white; text-decoration: underline; }
+.axisControl:focus-visible { outline: none; }
 .outlineStatus { position: absolute; bottom: 8px; inset-inline: 132px 8px; margin: 0; padding: 6px 8px; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-secondary); font-size: 11px; pointer-events: none; }
 .footer { display: flex; flex: none; align-items: center; gap: 12px; min-width: 0; min-height: 30px; padding-inline: 12px; border-top: .5px solid var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-base); }
 .rail { composes: rail from '../../../../presentation/primitives/CanvasTools.module.css'; top: 16px; inset-inline-start: 16px; }

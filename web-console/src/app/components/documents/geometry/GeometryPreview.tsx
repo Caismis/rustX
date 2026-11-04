@@ -62,7 +62,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
       }, () => { const publish = live(); retire(); if (publish) setState({ error: 'webgl' }); });
       active.current = mounted;
       setState(value => ({ ...value, parts: mounted!.parts, inspection: mounted!.inspect(), dimensions: [bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z] }));
-      if (saved?.outlines) requestOutlines(true);
+      if (saved?.outlines !== false) requestOutlines(true);
     })().catch(error => {
       const publish = live(); retire();
       if (publish) setState({ error: error instanceof GeometryError ? error.code : 'invalid' });

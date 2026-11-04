@@ -46,9 +46,10 @@ Fit recenters the model without changing the chosen viewing direction; the
 view-angle menu explicitly chooses a standard direction.
 Reset view restores the initial isometric framing without changing visibility.
 The six signed axis endpoints use the same standard-view path as the menu;
-+X/-X select Right/Left, +Y/-Y Top/Bottom and +Z/-Z Front/Back. Their labelled
-DOM buttons support keyboard activation and stay separate from canvas picking
-and orbit gestures. Orientation icons supplement the localized menu names.
++X/-X select Right/Left, +Y/-Y Top/Bottom and +Z/-Z Front/Back. Axis lines and
+signed labels are direct pointer targets, with keyboard activation on the same
+indicator. They stay separate from canvas picking and orbit gestures.
+Orientation icons supplement the localized menu names.
 Camera fitting centers a presentation-only parent. The admitted mesh surface,
 position-derived bounds and physical scale remain intact; preparation can remove
 redundant tessellation. Bounds are recomputed from admitted coordinates,
@@ -106,8 +107,9 @@ Hidden/occluded geometry is not an exact CAD solid classification or measurement
 These properties update on selection/structure changes, not camera gestures.
 All product text is localized in the project's concise English/Chinese style.
 
-Optional model outlines are off initially. Exact-position adjacency is prepared
-lazily in a disposable Worker. Boundary/non-manifold edges and 30-degree creases
+Model outlines are enabled initially, with an explicit on/off preference saved
+for the current copy. Exact-position adjacency is prepared in a disposable Worker
+after model import settles. Boundary/non-manifold edges and 30-degree creases
 are distinct from paired edges that can become view-dependent silhouettes.
 Coplanar tessellation edges are removed; smooth-surface candidates are gated by
 adjacent face orientation in the line shader, rather than drawn as wireframe.
@@ -194,7 +196,7 @@ The following are per visible body unless stated otherwise:
 | Complete Session source / applicable original Download | 32 MiB; managed Artifact policy remains 256 KiB |
 | GLB JSON / declared accessors / buffer views | 2 MiB / 4,096 / 4,096 |
 | Vertices / rendered triangles | 1,000,000 / 1,000,000; repeated mesh instances also consume triangle admission |
-| Scene nodes / parts / source hierarchy depth | 512 / 256 / 32 |
+| Admitted scene nodes / parts / source hierarchy depth | 512 / 256 / 32; optional line objects are charged separately |
 | Materials / draw groups, including CAD face ranges | 256 / 512 |
 | Decoded vertex/index/attribute buffers | 64 MiB |
 | Textures / dimension / aggregate source-image pixels | 8 / 2,048 per side / 8,388,608 pixels |

@@ -4,16 +4,23 @@ import { BoxGeometry, Group, Mesh, MeshStandardMaterial } from 'three';
 import { Profiler } from 'react';
 import GeometryPreview from '../src/app/components/documents/geometry/GeometryPreview';
 import { disposeScene, validateScene } from '../src/app/components/documents/geometry/scene-resources';
-const imports = vi.hoisted(() => ({ pending: [] as { resolve: (value: unknown) => void; reject: (reason: unknown) => void }[], mounts: [] as { fit: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; publish: (patch: unknown) => void; pending?: unknown; saved?: unknown; flush: ReturnType<typeof vi.fn> }[] }));
+const imports = vi.hoisted(() => ({ pending: [] as { resolve: (value: unknown) => void; reject: (reason: unknown) => void }[], mounts: [] as { fit: ReturnType<typeof vi.fn>; setOutlines: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; publish: (patch: unknown) => void; pending?: unknown; saved?: unknown; flush: ReturnType<typeof vi.fn> }[] }));
 vi.mock('../src/app/components/documents/geometry/glb', () => ({ importGlb: () => new Promise((resolve, reject) => { imports.pending.push({ resolve, reject }); }) }));
 vi.mock('../src/app/components/documents/geometry/viewport', () => ({ mountGeometry: (_element: unknown, _object: unknown, _bounds: unknown, saved: unknown, _labels: unknown, publish: (patch: unknown) => void) => {
-  const control = { fit: vi.fn(), reset: vi.fn(), focus: vi.fn(), isolate: vi.fn(), restore: vi.fn(), showAll: vi.fn(), inspect: () => ({ name: 'Body', triangles: 12, visibleTriangles: 12, min: [-5, -5, -5], max: [5, 5, 5], dimensions: [10, 10, 10] }), dispose: vi.fn(), publish, saved, pending: undefined as unknown, flush: vi.fn((save = publish) => { if (control.pending) { const patch = control.pending; control.pending = undefined; save(patch); } }), select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }] }; imports.mounts.push(control); return control;
+  const control = { fit: vi.fn(), reset: vi.fn(), focus: vi.fn(), isolate: vi.fn(), restore: vi.fn(), showAll: vi.fn(), setOutlines: vi.fn(async () => 'on'), relabel: vi.fn(), inspect: () => ({ name: 'Body', triangles: 12, visibleTriangles: 12, min: [-5, -5, -5], max: [5, 5, 5], dimensions: [10, 10, 10] }), dispose: vi.fn(), publish, saved, pending: undefined as unknown, flush: vi.fn((save = publish) => { if (control.pending) { const patch = control.pending; control.pending = undefined; save(patch); } }), select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }] }; imports.mounts.push(control); return control;
 } }));
 afterEach(() => { cleanup(); imports.pending = []; imports.mounts = []; });
 function graph() {
   const scene = new Group(), geometry = new BoxGeometry(10, 10, 10); scene.add(new Mesh(geometry, new MeshStandardMaterial()));
   const disposed = vi.spyOn(geometry, 'dispose'); return { value: { scene, scenes: [scene], bounds: validateScene([scene]), dispose: () => disposeScene([scene]) }, disposed };
 }
+it.each([undefined, true, false])('starts outlines by default and respects the saved preference: %s', async preference => {
+  const source = graph();
+  const ui = render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="copy" signal={new AbortController().signal} current={() => true} viewState={{ geometry: { copyId: 'copy', outlines: preference } }} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
+  await act(async () => imports.pending[0].resolve(source.value));
+  expect(imports.mounts[0].setOutlines).toHaveBeenCalledTimes(preference === false ? 0 : 1);
+  expect(ui.getByRole('button', { name: 'Model outlines', exact: true }).getAttribute('aria-pressed')).toBe(String(preference !== false));
+});
 it('copy retirement fences an import before React unmount and disposes its late graph', async () => {
   let owned = true; const changed = vi.fn(), source = graph();
   render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="first" signal={new AbortController().signal} current={() => owned} viewState={{}} onViewStateChange={changed} onGeometryRetire={vi.fn()}/>);
