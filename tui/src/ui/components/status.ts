@@ -283,11 +283,16 @@ export function footerSegments(
  * The Session configuration status, in Pi's transient-status manner: absent
  * once everything is applied, a quiet note while a saved change is prepared or
  * waits for current work, and a warning when native kept the previous
- * configuration. `/session settings` inspects the details.
+ * configuration. An uncertain commit published its configuration but could
+ * not record it, so nothing claims the previous one was kept; it outranks a
+ * failure. `/session settings` inspects the details.
  */
 export function configurationSegment(application?: ConfigurationApplication): Segment | undefined {
   const states = Object.values(application?.units ?? {}).map(unit => unit?.status);
-  if (states.some(state => state === "failed" || state === "uncertain")) {
+  if (states.includes("uncertain")) {
+    return { text: role.warning("config applied, not recorded · new work waits · /session settings"), priority: 0, compact: role.warning("config uncertain") };
+  }
+  if (states.includes("failed")) {
     return { text: role.warning("config failed · previous kept · /session settings"), priority: 0, compact: role.warning("config failed") };
   }
   if (states.includes("process_restart")) return { text: role.warning("config needs restart"), priority: 1 };
