@@ -69,125 +69,253 @@ fn bash_context(
 }
 
 fn code_definition(script: &str, extra: Value) -> WorkflowDefinition {
-    let mut node =
-        json!({"type":"code","variables":{},"code":script,"outputs":{"result":"string"}});
+    let mut node = json!({"type":"code","code_language":"python3","variables":{},"code":script,"outputs":{"result":"string"}});
     node.as_object_mut()
         .unwrap()
         .extend(extra.as_object().unwrap().clone());
-    serde_json::from_value(json!({"description":"Bash Code","block":{"nodes":{"start":{"type":"start"},"script":node,"done":returns("script", &["result"])},"edges":[{"from":"start","to":"script"},{"from":"script","to":"done"}]}})).unwrap()
+    serde_json::from_value(json!({"description":"Typed code through Bash","block":{"nodes":{"start":{"type":"start"},"script":node,"done":returns("script", &["result"])},"edges":[{"from":"start","to":"script"},{"from":"script","to":"done"}]}})).unwrap()
+}
+
+/// Real Node may be installed by NVM/setup-node outside Bash's baseline PATH.
+/// Admit that dependency through the existing runtime-owned Skill overlay.
+fn code_context(plane: &WorkflowTestPlane) -> crate::runtime::subagent::NativeExecutionContext {
+    let output = std::process::Command::new("node")
+        .args(["-p", "process.execPath"])
+        .output()
+        .expect("Code tests require Node.js");
+    assert!(output.status.success());
+    let root = plane.dir.path().join("node-environment");
+    let bin = root.join("node_modules/.bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::os::unix::fs::symlink(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        bin.join("node"),
+    )
+    .unwrap();
+    let environment = ToolEnvironment::new().with_overlay(
+        &crate::tools::environment::ToolEnvironmentOverlay::node(&root),
+    );
+    let lifecycle = crate::agent::AttemptLifecycle::default().with_pre_tool_policy(Arc::new(
+        crate::agent::lifecycle::ConfiguredApprovalPolicy::new(ApprovalMode::FullAccess),
+    ));
+    context_with_environment(
+        plane,
+        crate::tools::native::test_bash_registration(),
+        lifecycle,
+        environment,
+    )
 }
 
 #[tokio::test]
-async fn code_inputs_are_quoted_data_and_typed_outputs_come_from_workspace_bash() {
-    let plane = workflow_test_plane(1);
-    let text = "quotes '\"; $(touch injected)\nsecond line";
-    let payload = json!({"result":{"message":text,"number":9_007_199_254_740_993_u64}});
-    let mut definition = code_definition(
-        "printf '%s' \"$message\" > received.txt\npwd > directory.txt\nprintf '%s' \"$payload\"",
-        json!({"variables":{"message":{"type":"reference","path":["args","message"]},"payload":{"type":"reference","path":["args","payload"]}},"outputs":{"result":"object"}}),
-    );
-    definition.block.input = schema(
-        json!({"message":{"type":"string"},"payload":{"type":"object"}}),
-        &["message", "payload"],
-    );
-    let runtime = workflow_runtime(&plane);
-    let (_, cancellation) = workflow_cancellation();
-    let output = runtime
-        .run_test_foreground(
-            Arc::new(compile_test(definition).unwrap()),
-            ToolCallId::new("code-quoted"),
-            bash_context(&plane, None),
-            json!({"message":text,"payload":payload}),
-            cancellation,
-        )
-        .await
-        .unwrap();
-    assert_eq!(output, payload);
-    let workspace = plane.dir.path().join("workspace");
-    assert_eq!(
-        std::fs::read_to_string(workspace.join("received.txt")).unwrap(),
-        text
-    );
-    assert_eq!(
-        std::fs::read_to_string(workspace.join("directory.txt"))
-            .unwrap()
-            .trim(),
-        workspace.to_str().unwrap()
-    );
-    assert!(!workspace.join("injected").exists());
-}
-
-#[tokio::test]
-async fn code_invalid_json_is_retried_through_distinct_native_invocations() {
-    let plane = workflow_test_plane(1);
-    let definition = code_definition(
-        "if [ -f attempted ]; then printf '{\"result\":\"ok\"}'; else touch attempted; printf invalid; fi",
-        json!({"retry":{"max_retries":1,"interval_ms":100}}),
-    );
-    let runtime = workflow_runtime(&plane);
-    let (_, cancellation) = workflow_cancellation();
-    let output = runtime
-        .run_test_foreground(
-            Arc::new(compile_test(definition).unwrap()),
-            ToolCallId::new("code-retry"),
-            bash_context(&plane, None),
-            json!({}),
-            cancellation,
-        )
-        .await
-        .unwrap();
-    assert_eq!(output, json!({"result":"ok"}));
-    let events = plane.store.read_events(None, 256).unwrap().events;
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| matches!(
-                event.event,
-                RuntimeEvent::NativeToolInvocation {
-                    fact: NativeInvocationFact::Completed { .. },
-                    ..
-                }
-            ))
-            .count(),
-        2
-    );
-}
-
-#[tokio::test]
-async fn code_wrong_output_types_support_defaults_and_explicit_fail_branches() {
-    for branch in [false, true] {
+async fn code_languages_receive_typed_inputs_and_use_the_session_workspace() {
+    for language in ["python3", "javascript"] {
         let plane = workflow_test_plane(1);
-        let handling = if branch {
-            json!({"type":"fail_branch"})
+        let text = "quotes '\"; $(touch injected)\nRUSTX_CODE_PAYLOAD\nsecond line\0";
+        let number = if language == "python3" {
+            9_007_199_254_740_993_u64
         } else {
-            json!({"type":"default_value","value":{"result":"default"}})
+            9_007_199_254_740_991_u64
         };
-        let mut definition =
-            code_definition("printf '{\"result\":42}'", json!({"on_error":handling}));
-        if branch {
-            definition.block.nodes.insert("failed".into(),serde_json::from_value(json!({"type":"return","outputs":[{"variable":"result","value_selector":["script","error_type"]}]})).unwrap());
-            definition.block.edges.push(WorkflowEdgeDefinition {
-                from: "script".into(),
-                to: "failed".into(),
-                port: Some(WorkflowPort::Fail),
-            });
-        }
+        let payload = json!({"message":text,"number":number,"items":[1,true,"text",null]});
+        let workspace = plane.dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            workspace.join("helper.py"),
+            "def identity(value):\n    return value\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("helper.cjs"),
+            "module.exports = value => value;",
+        )
+        .unwrap();
+        let script = if language == "python3" {
+            r#"from pathlib import Path
+from helper import identity
+def main(message, payload):
+    print("user log")
+    Path("received.txt").write_text(message)
+    Path("directory.txt").write_text(str(Path.cwd()))
+    return {"result": identity(payload)}
+"#
+        } else {
+            r#"const fs = require('node:fs');
+const identity = require('./helper.cjs');
+async function main({message, payload}) {
+    console.log('user log');
+    process.stdout.write('direct log');
+    fs.writeFileSync('received.txt', message);
+    fs.writeFileSync('directory.txt', process.cwd());
+    return {result: identity(payload)};
+}
+"#
+        };
+        let mut definition = code_definition(
+            script,
+            json!({"code_language":language,"variables":{"message":{"type":"reference","path":["args","message"]},"payload":{"type":"reference","path":["args","payload"]}},"outputs":{"result":"object"}}),
+        );
+        definition.block.input = schema(
+            json!({"message":{"type":"string"},"payload":{"type":"object"}}),
+            &["message", "payload"],
+        );
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
         let output = runtime
             .run_test_foreground(
                 Arc::new(compile_test(definition).unwrap()),
-                ToolCallId::new("code-handling"),
-                bash_context(&plane, None),
+                ToolCallId::new("typed-code"),
+                code_context(&plane),
+                json!({"message":text,"payload":payload}),
+                cancellation,
+            )
+            .await
+            .unwrap();
+        assert_eq!(output, json!({"result":payload}));
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("received.txt")).unwrap(),
+            text
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("directory.txt"))
+                .unwrap()
+                .trim(),
+            workspace.to_str().unwrap()
+        );
+        assert!(!workspace.join("injected").exists());
+    }
+}
+
+#[tokio::test]
+async fn code_invalid_return_is_retried_through_distinct_native_invocations() {
+    for (language, script) in [
+        (
+            "python3",
+            r#"from pathlib import Path
+def main():
+    if Path('attempted').exists(): return {'result':'ok'}
+    Path('attempted').touch()
+    return {'result':42}
+"#,
+        ),
+        (
+            "javascript",
+            r#"const fs = require('node:fs');
+function main() {
+    if(fs.existsSync('attempted')) return {result:'ok'};
+    fs.writeFileSync('attempted', '');
+    return {result:42};
+}
+"#,
+        ),
+    ] {
+        let plane = workflow_test_plane(1);
+        let definition = code_definition(
+            script,
+            json!({"code_language":language,"retry":{"max_retries":1,"interval_ms":100}}),
+        );
+        let runtime = workflow_runtime(&plane);
+        let (_, cancellation) = workflow_cancellation();
+        let output = runtime
+            .run_test_foreground(
+                Arc::new(compile_test(definition).unwrap()),
+                ToolCallId::new("code-retry"),
+                code_context(&plane),
                 json!({}),
                 cancellation,
             )
             .await
             .unwrap();
+        assert_eq!(output, json!({"result":"ok"}));
+        let events = plane.store.read_events(None, 256).unwrap().events;
         assert_eq!(
-            output,
-            json!({"result":if branch {"failed"}else{"default"}})
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    RuntimeEvent::NativeToolInvocation {
+                        fact: NativeInvocationFact::Completed { .. },
+                        ..
+                    }
+                ))
+                .count(),
+            2
         );
+    }
+}
+
+#[tokio::test]
+async fn code_wrong_output_types_support_defaults_and_explicit_fail_branches() {
+    for (language, script) in [
+        ("python3", "def main():\n    return {'result':42}\n"),
+        ("javascript", "function main(){return {result:42}}"),
+    ] {
+        for branch in [false, true] {
+            let plane = workflow_test_plane(1);
+            let handling = if branch {
+                json!({"type":"fail_branch"})
+            } else {
+                json!({"type":"default_value","value":{"result":"default"}})
+            };
+            let mut definition = code_definition(
+                script,
+                json!({"code_language":language,"on_error":handling}),
+            );
+            if branch {
+                definition.block.nodes.insert("failed".into(),serde_json::from_value(json!({"type":"return","outputs":[{"variable":"result","value_selector":["script","error_type"]}]})).unwrap());
+                definition.block.edges.push(WorkflowEdgeDefinition {
+                    from: "script".into(),
+                    to: "failed".into(),
+                    port: Some(WorkflowPort::Fail),
+                });
+            }
+            let runtime = workflow_runtime(&plane);
+            let (_, cancellation) = workflow_cancellation();
+            let output = runtime
+                .run_test_foreground(
+                    Arc::new(compile_test(definition).unwrap()),
+                    ToolCallId::new("code-handling"),
+                    code_context(&plane),
+                    json!({}),
+                    cancellation,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                output,
+                json!({"result":if branch {"failed"}else{"default"}})
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn code_language_errors_stop_without_admitting_the_successor() {
+    for (language, script) in [
+        ("python3", "def main(:\n pass"),
+        ("python3", "def missing(): return {}"),
+        ("python3", "def main():\n    raise RuntimeError('failure')"),
+        ("javascript", "function main( {"),
+        ("javascript", "function missing(){return {}}"),
+        ("javascript", "function main(){throw new Error('failure')}"),
+    ] {
+        let plane = workflow_test_plane(1);
+        let runtime = workflow_runtime(&plane);
+        let (_, cancellation) = workflow_cancellation();
+        let definition = code_definition(script, json!({"code_language":language}));
+        assert!(
+            runtime
+                .run_test_foreground(
+                    Arc::new(compile_test(definition).unwrap()),
+                    ToolCallId::new("code-error"),
+                    code_context(&plane),
+                    json!({}),
+                    cancellation
+                )
+                .await
+                .is_err()
+        );
+        let events = plane.store.read_events(None, 256).unwrap().events;
+        assert!(!events.iter().any(|event|matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance,..} if instance.to_string().contains("done"))));
     }
 }
 

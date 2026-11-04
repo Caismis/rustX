@@ -2,19 +2,20 @@ import { test,expect } from '@playwright/test';
 import { mkdirSync,readFileSync,writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { codeDefaults } from '../../src/app/workflows/document/code';
 import { codeDocument } from '../workflow-code-document';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
 import { startDogfood } from './dogfood-server';
 import { connectRemote,openEmptySession,choose } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 
-for(const width of [1440,390])test.describe(`Code panel ${width}`,()=>{
+for(const width of [1440,390])for(const language of ['python3','javascript'] as const)test.describe(`Code panel ${language} ${width}`,()=>{
   test.use({viewport:{width,height:1000},hasTouch:width===390});
-  test('Bash inputs, editor, typed outputs and failure options persist',async({page})=>{
+  test('Dify language defaults, signature, typed outputs and persistence',async({page})=>{
     page.setDefaultTimeout(15000);const fixture=await startDogfood('web_console_dogfood'),errors:string[]=[];
     page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(['warning','error'].includes(message.type()))errors.push(message.text());});
     try {
-      const directory=join(fixture.workspaceA,'.agents/workflows');mkdirSync(directory,{recursive:true});const file=join(directory,'code.yaml');writeFileSync(file,JSON.stringify(codeDocument()));
+      const directory=join(fixture.workspaceA,'.agents/workflows');mkdirSync(directory,{recursive:true});const file=join(directory,'code.yaml');writeFileSync(file,JSON.stringify(codeDocument(language)));
       await page.context().grantPermissions(['clipboard-read','clipboard-write']);
       await page.addInitScript(dark=>localStorage.setItem('rustx-appearance-v1',dark?'dark':'light'),width===390);
       await routeWorkspaceHost(page,fixture);await page.goto('/');await connectRemote(page,fixture.endpoint,fixture.token);await openEmptySession(page,fixture,'Workspace A');
@@ -24,6 +25,14 @@ for(const width of [1440,390])test.describe(`Code panel ${width}`,()=>{
       await page.getByRole('button',{name:'Settings',exact:true}).click();await choose(page.getByRole('dialog',{name:'Settings',exact:true}),'Language','中文');await page.getByRole('button',{name:'关闭设置',exact:true}).click();
       const panel=page.getByRole('complementary',{name:'检查器',exact:true});
       await expect(panel.getByText('视觉',{exact:true})).toHaveCount(0);await expect(panel.getByRole('button',{name:/AI|生成代码|生成提示词/})).toHaveCount(0);
+      const languageSelector=panel.getByRole('combobox',{name:'语言',exact:true});await expect(languageSelector).toHaveValue(language);
+      const other=language==='python3'?'javascript':'python3';await languageSelector.selectOption(other);
+      await expect(panel.getByRole('textbox',{name:'变量名',exact:true})).toHaveCount(2);
+      await expect(panel.getByRole('textbox',{name:'代码',exact:true}).locator('.cm-line')).toHaveText(codeDefaults(other).code.split('\n'));
+      await panel.screenshot({path:`/tmp/rustx-code-default-${other}-${width}.png`});
+      await expect(panel.getByRole('combobox',{name:'result的类型',exact:true})).toHaveValue('string');
+      await page.getByRole('button',{name:'撤销',exact:true}).click();await expect(languageSelector).toHaveValue(language);
+      await expect(panel.getByRole('textbox',{name:'变量名',exact:true})).toHaveCount(1);
       await panel.getByRole('button',{name:'添加输入变量',exact:true}).click();
       const names=panel.getByRole('textbox',{name:'变量名',exact:true});await expect(names).toHaveCount(2);
       await names.nth(1).fill('items');await names.nth(1).press('Enter');
@@ -31,9 +40,12 @@ for(const width of [1440,390])test.describe(`Code panel ${width}`,()=>{
       const picker=page.getByRole('dialog',{name:'选择变量',exact:true});await picker.getByRole('button',{name:/^args \/ items /}).click();
       const inputBox=(await names.first().boundingBox())!,referenceBox=(await panel.getByRole('button',{name:'选择变量',exact:true}).first().boundingBox())!;
       expect(inputBox.x+inputBox.width).toBeLessThanOrEqual(referenceBox.x);expect(Math.abs(inputBox.height-referenceBox.height)).toBeLessThan(1);
-      const code=panel.getByRole('textbox',{name:'Bash 代码',exact:true}),script=`printf '{"renamed":"ok","count":2}\\n'`;
+      const code=panel.getByRole('textbox',{name:'代码',exact:true});
+      await panel.getByRole('button',{name:'同步函数签名',exact:true}).click();
+      await expect(code).toContainText(language==='python3'?'def main(arg1: str, items: list[float])':'function main({arg1, items})');
+      const script=language==='python3'?'def main(arg1, items):\n    return {"renamed":arg1,"count":len(items)}\n':'function main({arg1, items}) {\n    return {renamed:arg1,count:items.length};\n}';
       await code.fill(script);await code.blur();
-      const editor=panel.getByRole('region',{name:'Bash 代码',exact:true});
+      const editor=panel.getByRole('region',{name:'代码',exact:true});
       await expect(editor.locator('.cm-gutters')).toBeVisible();
       await editor.getByRole('button',{name:'复制',exact:true}).click();await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(script);
       await editor.getByRole('button',{name:'展开',exact:true}).click();await expect(editor).toHaveCSS('position','fixed');
@@ -52,11 +64,11 @@ for(const width of [1440,390])test.describe(`Code panel ${width}`,()=>{
       await panel.getByRole('button',{name:'异常处理策略',exact:true}).click();await page.getByRole('menuitem',{name:/^无/}).click();await expect(card.locator('[data-handleid="fail"]')).toHaveCount(0);
       await panel.getByRole('switch',{name:'失败时重试',exact:true}).click();
       const save=page.getByRole('button',{name:'保存文件',exact:true});await save.click();await expect(save).toBeDisabled();
-      const saved=parse(readFileSync(file,'utf8'));expect(saved.block.nodes.code).toMatchObject({type:'code',code:script,variables:{items:{type:'reference',path:['args','items']}},outputs:{renamed:'string',count:'number'}});
+      const saved=parse(readFileSync(file,'utf8'));expect(saved.block.nodes.code).toMatchObject({type:'code',code_language:language,code:script,variables:{items:{type:'reference',path:['args','items']}},outputs:{renamed:'string',count:'number'}});
       expect(saved.block.nodes.done.outputs[0].value_selector).toEqual(['code','renamed']);
-      await panel.locator('[data-workflow-inspector-body]').evaluate(element=>{element.scrollTop=0;});await page.screenshot({path:`/tmp/rustx-code-panel-${width}.png`});
+      await panel.locator('[data-workflow-inspector-body]').evaluate(element=>{element.scrollTop=0;});await page.screenshot({path:`/tmp/rustx-code-${language}-${width}.png`});
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-      await page.getByRole('button',{name:'返回工作流',exact:true}).first().click();await page.getByRole('button',{name:'code',exact:true}).click();await card.focus();await card.press('Enter');await expect(code).toHaveText(script);
+      await page.getByRole('button',{name:'返回工作流',exact:true}).first().click();await page.getByRole('button',{name:'code',exact:true}).click();await card.focus();await card.press('Enter');await expect(code.locator('.cm-line')).toHaveText(script.split('\n'));
       await expect(page.locator('vite-error-overlay')).toHaveCount(0);expect(errors).toEqual([]);
     }finally{await fixture.stop(false);}
   });

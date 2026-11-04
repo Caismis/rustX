@@ -1,6 +1,6 @@
 import { useContext, useEffect, useRef, useState } from 'react';
 import { useSelector } from '@xstate/react';
-import type { WorkflowAnalysisQuery, WorkflowAnalysisReport } from '../../../../../../../protocol/app-server/v65';
+import type { WorkflowAnalysisQuery, WorkflowAnalysisReport } from '../../../../../../../protocol/app-server/v66';
 import { WorkflowAnalysisSession, type AnalysisInput } from '../../../document/analysis';
 import { targetKey } from '../../../port';
 import { DraftOwner } from './drafts';

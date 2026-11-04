@@ -30,6 +30,7 @@ mod admission;
 pub mod authoring;
 mod code;
 pub use authoring::{WorkflowModelPolicy, WorkflowToolSelector};
+pub use code::WorkflowCodeLanguage;
 mod defaults;
 pub(crate) use defaults::apply_schema_defaults;
 mod execution;
@@ -449,8 +450,9 @@ pub enum WorkflowNodeDefinition {
         instruction: Vec<WorkflowValue>,
         classes: Vec<WorkflowClassifierClass>,
     },
-    /// A workspace Bash script with named inputs and declared JSON outputs.
+    /// A Python/JavaScript main function executed through workspace Bash.
     Code {
+        code_language: WorkflowCodeLanguage,
         variables: BTreeMap<String, WorkflowValue>,
         code: String,
         outputs: BTreeMap<String, WorkflowVarType>,
@@ -1911,7 +1913,7 @@ fn compile_block(
                 available_after.insert(node_id.clone(),available_before.with_prefix(&node_id,&transform::classifier_result_schema()));
                 WorkflowNodeProgram::Model(model)
             }
-            WorkflowNodeDefinition::Code { variables, code: script, outputs, retry, on_error } => {
+            WorkflowNodeDefinition::Code { code_language, variables, code: script, outputs, retry, on_error } => {
                 code::validate(variables, script, &available_before, &node_id)?;
                 let schema = code::output_schema(outputs)?;
                 validate_workflow_schema(&schema, "Code outputs")?;
@@ -1923,7 +1925,7 @@ fn compile_block(
                 available_after.insert(node_id.clone(), available_before.with_prefix(&node_id, &schema));
                 WorkflowNodeProgram::Tool {
                     selector: crate::capabilities::selection::ExactToolSelector::Builtin { name: "bash".into() },
-                    arguments: tool::WorkflowToolArguments::Code { variables: variables.clone(), code: script.clone() },
+                    arguments: tool::WorkflowToolArguments::Code { language: *code_language, variables: variables.clone(), code: script.clone() },
                     result: tool::WorkflowToolProjection::Code { schema }, retry: *retry, on_error: on_error.clone(),
                 }
             }

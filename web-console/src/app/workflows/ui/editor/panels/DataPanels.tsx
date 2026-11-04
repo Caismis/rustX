@@ -1,4 +1,4 @@
-import type { WorkflowVarType } from '../../../../../../../protocol/app-server/v65';
+import type { WorkflowVarType } from '../../../../../../../protocol/app-server/v66';
 import { useTranslation } from '../../../../../locale/react';
 import { IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';

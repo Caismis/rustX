@@ -80,9 +80,13 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     for(const name of ['Template','List Operator','Question Classifier','Variable Aggregator','Code Execution']) await expect(chooser.getByRole('option',{name,exact:true})).toBeVisible();
     await expect(chooser.getByRole('option',{name:'Variable Assigner',exact:true})).toHaveCount(0);
     await chooser.getByRole('option',{name:'Code Execution',exact:true}).click();
-    await expect(panel(page)).toContainText('Runs in the Session workspace');
-    const command=panel(page).getByRole('textbox',{name:'Bash code',exact:true});
-    const script=`printf '{"result":"node check"}\\n'`;await command.fill(script);await command.blur();
+    await expect(panel(page)).toContainText('Code runs in the Session workspace');
+    const command=panel(page).getByRole('textbox',{name:'Code',exact:true});
+    await expect(panel(page).getByRole('combobox',{name:'Language',exact:true})).toHaveValue('python3');
+    await expect(command).toContainText('def main(arg1: str, arg2: str)');
+    await expect(panel(page).getByRole('textbox',{name:'Variable name',exact:true})).toHaveCount(2);
+    for(const index of [0,1]){await panel(page).getByRole('button',{name:'Choose a variable',exact:true}).nth(index).click();await page.getByRole('dialog',{name:'Choose a variable',exact:true}).getByRole('button',{name:/^args \/ query /}).click();}
+    const script='def main(arg1, arg2):\n    return {"result":"node check"}\n';await command.fill(script);await command.blur();
     await panel(page).getByRole('button',{name:'Choose next node for Next step',exact:true}).click();
     await chooser.getByRole('tab',{name:'Existing',exact:true}).click();await chooser.locator('[data-node-id="done"]').click();
     await command.scrollIntoViewIfNeeded();
@@ -103,7 +107,7 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     expect(saved.block.nodes.done.outputs[0].value_selector).toEqual(['merge','answer']);
     expect(saved.block.edges).toContainEqual({from:'classify',to:'right',port:'class_2'});
     const code=Object.values(saved.block.nodes).find((node:any)=>node.type==='code') as any;
-    expect(code.code).toBe(script);expect(code.outputs).toEqual({result:'string'});
+    expect(code.code_language).toBe('python3');expect(code.code).toBe(script);expect(code.outputs).toEqual({result:'string'});
     const assigner=Object.values(saved.block.nodes.repeat.body.nodes).find((node:any)=>node.type==='assigner') as any;
     expect(assigner.items[0]).toMatchObject({variable:['repeat','count'],operation:'increment'});
     await page.getByRole('button',{name:'Back to Workflows',exact:true}).first().click();await page.getByRole('button',{name:'data_nodes',exact:true}).click();

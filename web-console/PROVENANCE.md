@@ -2,23 +2,33 @@
 
 Read-only study uses sibling Dify `ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0`:
 `workflow/nodes/code/panel.tsx`, `use-config.ts`, `types.ts`, `default.ts`, and
-the shared `variable/var-list.tsx`, `output-var-list.tsx`, `editor/code-editor/`.
-These are behavioral references, without copied source or assets.
+shared `variable/var-list.tsx`, `output-var-list.tsx`, `editor/code-editor/`.
+Graphon `4fa22141774dff80e90e4dfa98ea3e6fbf0421bb`'s `nodes/code/code_node.py`
+and `dsl/code_runtime.py` supply the default examples and main-call contract.
+The panel and runtime adapters are original composition.
 
 | Dify behavior | Native treatment |
 | --- | --- |
-| Named input rows with variable selectors and add/remove | Native Code input map, reference pickers and original lexical analysis; renames retain the selected path |
-| Language header, numbered/resizable editor, copy and panel expansion | Bash only, lazy CodeMirror with its maintained shell mode; editor instance and pending draft survive expansion |
-| Editable output names/types and referenced-output removal confirmation | Declared native output types; renames rewrite structured consumers; confirmed deletion clears selectors; Undo restores both |
-| Retry and exception handling below outputs | Existing native Bash invocation/approval/cancellation plus Code JSON validation, defaults and fail branch |
-| Python/JavaScript main-signature synchronization and AI generation | Intentionally omitted: the approved runtime is workspace Bash with named bindings, and auxiliary AI authoring is outside scope |
+| Python3/JavaScript selection and initial configuration | Python3 by default, unbound arg1/arg2, the language's main example, and result:String; switching language resets that configuration in one Undo/Redo transaction |
+| Named input selectors, with sync-function-signature operation | Original native scope/type analysis; explicit sync replaces only the parsed main parameter list using CodeMirror's Python/JavaScript syntax trees and native selected-reference schemas |
+| Numbered/resizable editor, copy and panel expansion | Lazy CodeMirror language support; the editor instance and pending draft survive expansion and language changes |
+| Typed output rows and referenced-output removal confirmation | Native output declarations and authored order; renames rewrite consumers, confirmed deletion clears selectors, and Undo restores both |
+| main receives typed inputs and returns outputs | Python main(**inputs) / JavaScript main(inputs); the runner serializes the returned object, and normal program logs go to native stderr |
+| Retry and exception handling below outputs | The same native Bash invocation/approval/cancellation/settlement plus Code return validation, defaults and fail branch |
+| AI code generation | Omitted under the user's Dify alignment scope |
 
-App Server v65 carries Code definitions and analysis; Runtime Client stays v80.
-Code lowers to the same admitted Tool program and remains a native Bash Tool
-invocation in execution observations. Ordinary Tool selection no longer labels
-arbitrary Bash Tools as Code. Inputs are quoted data; stdout is one validated
-JSON object matching the declared outputs. Browser plugin is not available;
-the repository's pinned Playwright image checks desktop and touch interaction.
+App Server v66 requires code_language; the Bash-only Code format is removed,
+without compatibility inference or migration. Runtime Client remains v80:
+Code compiles to a native Tool program, executing python3 or node through the
+existing Bash registration and its frozen workspace/environment. It neither
+starts a separate process owner nor inherits an uncontrolled parent PATH.
+Native tests explicitly admit an NVM/setup-node installation through the
+existing runtime-owned Node environment overlay. Python/Node must be available
+in the actual Bash tool environment. Typed JSON stdin keeps code/inputs out of
+shell interpolation; user stdout logging is separated from the main result.
+Browser plugin is not available; the repository's pinned Playwright image
+checks defaults, language changes, signature synchronization and persistence
+on desktop and touch viewports.
 
 ## Classifier panel alignment (2026-11-04)
 
@@ -44,7 +54,7 @@ auxiliary AI authoring features, including disabled placeholder controls. Such
 features require an explicit product request.
 
 This is original composition with existing components, without Dify source,
-styles, assets, stores or Graphon runtime. The App Server contract is v65;
+styles, assets, stores or Graphon runtime. The App Server contract is v66;
 Runtime Client remains v80. Classifier descriptions and instructions use typed
 parts, and classes carry authored labels. The old string configuration and
 nested classifier output path are removed, without fallback or migration.
@@ -4903,8 +4913,8 @@ coordinates and viewports.
 
 The native `ModelCapabilities` object now serializes `jsonSchemaOutput`, which
 is incompatible with the closed v53 schema. Web and TUI therefore negotiate
-App Server v65 and reject v53 peers before loading Model or configuration data.
-Only the v65 generated schema and TypeScript pair remains. Existing strict
+App Server v66 and reject v53 peers before loading Model or configuration data.
+Only the v66 generated schema and TypeScript pair remains. Existing strict
 validation stays in place. Derived source changes are protocol import paths;
 the source inventory records their current hashes and dependency paths without
 changing the pinned Harness baseline or licenses.
@@ -4912,7 +4922,7 @@ changing the pinned Harness baseline or licenses.
 
 ## Issue #499: live readiness and submission receipt
 
-The current mandatory contracts are App Server v65 and Runtime Client v80.
+The current mandatory contracts are App Server v66 and Runtime Client v80.
 Only the current generated artifacts and strict decoders are retained. Scheduled
 Workflow recovery and execution origins share this generation with live MCP
 readiness. The shared native
@@ -4934,13 +4944,13 @@ Workspace changes keep the existing composer text, ordered Files and model inten
 No sidebar/composer restyle, asset, dependency, localization vocabulary or visible
 prewarm presentation is introduced.
 
-App Server v65 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
+App Server v66 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
 inventory diagnostics and `session/create.submission`. First Send now carries its
 intent with creation, so the native timestamp precedes configuration/capacity/load
 waiting. Durable creation acknowledgement, upload receipts and canonical input
 acceptance remain distinct. The earlier Issue #499 paragraph describes its
 historical boundary; Issue #504 replaces the Web create-then-intent sequence.
-All consumers use the regenerated mandatory v65 vocabulary; earlier generated protocol artifacts are removed.
+All consumers use the regenerated mandatory v66 vocabulary; earlier generated protocol artifacts are removed.
 
 The new `test/e2e/mcp-prewarm.spec.ts` uses the real native stdio peer, supervisor
 and provider emulator, with explicit protocol/process counters. It exercises
@@ -4978,7 +4988,7 @@ The port retains rustX's exact native Session/node task binding, revisioned
 mutation receipts, pause/resume, Workflow arguments/results and physical
 settlement diagnostics. Harness Host/Peer services, Cordis stores and schedule
 execution APIs are excluded. Native `schedule/catalog` and `schedule/changed`
-provide bounded cold reads and invalidation under mandatory App Server v65;
+provide bounded cold reads and invalidation under mandatory App Server v66;
 The current internal versions are Runtime Client v80, SQLite 82 and child IPC 37. Ordinary message
 admission is presented separately from execution success, and the UI explicitly
 states that only the latest trigger is retained.
@@ -5033,7 +5043,7 @@ The exact frontend and Graphon execution source revisions and inspected paths
 are recorded in [the editor reference](../docs/workflow-visual-editor.md). No
 Dify or Graphon source, assets or Python runtime are copied into rustX.
 
-App Server v65 and Runtime Client v80 are mandatory. The sole generated schema
+App Server v66 and Runtime Client v80 are mandatory. The sole generated schema
 and TypeScript pair describe the new definitions and consumer addresses; old
 protocol artifacts are removed. Derived presentation files only change their
 protocol import paths, with current hashes and dependency paths recorded in the

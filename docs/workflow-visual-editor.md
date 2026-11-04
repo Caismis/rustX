@@ -152,7 +152,7 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | List Operator | Array input, optional typed filter, stable sort and limit, with literal field paths |
 | Question Classifier | Session/registered model, text/numeric input variable, variable-aware topic cards with separate labels and stable exits, sortable classes and folded instructions; `class_name`, `class_label`, `usage` outputs |
 | Variable Aggregator | Named typed groups with alternative source pickers; renaming a group updates downstream references |
-| Code Execution | Named input selectors, a Bash editor with line numbers/copy/expand, typed output rows, retry and error handling; one native workspace Bash invocation |
+| Code Execution | Named input selectors, Python3/JavaScript defaults, main-parameter synchronization, a language-aware editor with line numbers/copy/expand, typed output rows, retry and error handling; one native workspace Bash invocation |
 | Branch | Compact IF/ELIF/ELSE card, ordered cases, searchable variable conditions, AND/OR and multiple successors per exit |
 | Loop | Loop variables (name, type, variable or constant value), termination conditions as IF/ELSE builds them, and a 1–100 maximum loop count slider |
 | Iteration | Array input and output variable pickers, parallel mode with a 1–10 maximum parallelism slider, error response method and flatten output |
@@ -208,8 +208,8 @@ schemas, nodes, references and edges unchanged.
 | Inspector append, canvas +, real pointer reconnect, Save YAML and desktop/mobile picker | `web-console/test/e2e/workflow-visual.spec.ts` |
 | Renamed node titles across every native kind, real input/output drags, fail exits, surviving CASE exits and private Block connections | `web-console/test/e2e/workflow-node-connections.spec.ts` |
 | Human Input action ID changes, drag after Undo/Redo, Save and reopening | `web-console/test/e2e/workflow-review-connections.spec.ts` |
-| Data-node panels, renamed classifier drag/Undo/Redo, aggregate output references, workspace Bash Code, Loop assignment and Save/reopen at desktop/mobile widths | `web-console/test/e2e/workflow-data-nodes.spec.ts` |
-| Code input bindings, numbered editor/copy/expand, output types/renames/order/removal, retry/fail controls and Save/reopen at desktop/mobile widths | `web-console/test/e2e/workflow-code.spec.ts` |
+| Data-node panels, renamed classifier drag/Undo/Redo, aggregate output references, Bash-backed Python/JavaScript Code, Loop assignment and Save/reopen at desktop/mobile widths | `web-console/test/e2e/workflow-data-nodes.spec.ts` |
+| Code language/default reset, typed parameter sync, input bindings, numbered editor/copy/expand, output types/renames/order/removal, retry/fail controls and Save/reopen at desktop/mobile widths | `web-console/test/e2e/workflow-code.spec.ts` |
 | Bounded Jinja, stable typed lists, conditional aggregation and actual classifier model dispatch | `src/runtime/workflow/tests/data_nodes.rs`, `tests/model.rs` |
 | Schema/value forms, drafts, references, presentation, clipboard and history | `web-console/test/workflow-*.test.*` |
 | Active-path joins, conditional scope, skipped Returns and retired syntax rejection | `src/runtime/workflow/tests/graph.rs` |

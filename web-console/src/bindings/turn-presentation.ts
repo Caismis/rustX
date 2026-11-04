@@ -1,5 +1,5 @@
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
-import type { TurnProcessView, CompletedResponseView, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v65';
+import type { TurnProcessView, CompletedResponseView, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v66';
 
 export type TurnNode =
   | { kind: 'process'; key: string; process: TurnProcessView }

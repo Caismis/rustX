@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import { useRef, useState } from 'react';
 import { useTranslation } from '../../../../locale/react';
 import { IconChecklistOutline14, IconCloseOutline16 } from '../../../../presentation/primitives/icons';
-import type { WorkflowDependencyFailure } from '../../../../../../protocol/app-server/v65';
+import type { WorkflowDependencyFailure } from '../../../../../../protocol/app-server/v66';
 import type { ChecklistItem, ChecklistMessage } from '../../document/checklist';
 import { IconArrowLeft, IconWorkflow, KindIcon } from '../icons';
 import css from './Editor.module.css';

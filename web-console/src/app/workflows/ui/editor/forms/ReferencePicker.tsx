@@ -2,7 +2,7 @@ import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react
 import { createPortal } from 'react-dom';
 import { useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useSelector } from '@xstate/react';
-import type { WorkflowAnalysisQuery, WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v65';
+import type { WorkflowAnalysisQuery, WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v66';
 import { useTranslation } from '../../../../../locale/react';
 import { consumerAddress } from '../../../document/analysis';
 import { encodeField, setField, type FieldAddress } from '../../../document/fields';

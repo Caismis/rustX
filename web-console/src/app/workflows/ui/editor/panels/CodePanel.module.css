@@ -4,6 +4,7 @@
 .panel > section:first-child { padding-top: 0; }
 .panel > div { padding-block: 16px; border-bottom: 1px solid var(--dsw-alias-border-l3); }
 .variables { display: grid; gap: 6px; }
+.operations { display: inline-flex; align-items: center; gap: 4px; }
 .row { display: grid; grid-template-columns: minmax(64px, .7fr) minmax(0, 1.3fr) 24px; gap: 4px; align-items: start; min-width: 0; }
 .row > * { min-width: 0; }
 .row input, .row select { height: 32px; min-height: 32px; border: 0; border-radius: 8px; padding: 6px 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
@@ -17,6 +18,9 @@
 .editor { padding: 6px 8px 8px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
 .editor > header { display: flex; align-items: center; justify-content: space-between; min-height: 24px; padding-left: 2px; color: var(--dsw-alias-label-secondary); font-size: 12px; font-weight: 600; }
 .editor > header > div { display: flex; gap: 2px; }
+.editor > header > select { max-width: 160px; height: 24px; padding: 0 2px; border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; text-transform: uppercase; cursor: pointer; }
+.editor > header > select:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); }
+.editor > header > select option { background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); }
 .codeArea { height: 200px; min-height: 100px; max-height: 60vh; resize: vertical; overflow: auto; }
 .codeArea > :global(.cm-theme) { height: 100%; }
 .editor :global(.cm-editor), .editor :global(.cm-gutters) { background: transparent; color: var(--dsw-alias-label-secondary); border: 0; }

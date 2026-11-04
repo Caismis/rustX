@@ -1,5 +1,6 @@
 import { deleteNodePresentation, orderedKeys, renameNodePresentation, requireVacantNodePresentation } from './presentation';
 import { setOrder } from './geometry';
+import { codeDefaults } from './code';
 import {
   blockAt, edgesOf, isContainer, nodeAt, sameBlockPath, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
   type WorkflowDocument,
@@ -50,7 +51,7 @@ export function emptyBody(start: string): Block {
  * by the native check; nothing is invented to make a graph pass. */
 export function nodeTemplate(kind: NodeKind, id: string = kind): NodeDefinition {
   switch (kind) {
-    case 'code': return {type:'code',variables:{},code: /* i18n-raw: executable Bash starter script */ `printf '{"result":"Hello, world!"}\\n'`,outputs:{result:'string'}};
+    case 'code': return codeDefaults();
     case 'template': return { type: 'template', variables: { arg1: { type: 'reference', path: [] } }, template: '{{ arg1 }}' };
     case 'list': return { type: 'list', input: { type: 'reference', path: [] } };
     case 'classifier': return { type: 'classifier', model: { mode: 'session' }, input: { type: 'reference', path: [] }, instruction: [], classes: [{ id: 'class_1', label: /* i18n-raw: authored classifier default label stored in the document */ 'CLASS 1', description: [] }, { id: 'class_2', label: /* i18n-raw: authored classifier default label stored in the document */ 'CLASS 2', description: [] }] };

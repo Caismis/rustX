@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import clsx from 'clsx';
-import type { WorkflowVarType } from '../../../../../../../protocol/app-server/v65';
+import type { WorkflowVarType } from '../../../../../../../protocol/app-server/v66';
 import { useTranslation } from '../../../../../locale/react';
 import { IconCheckOutline16, IconCopyOutline16, IconFullscreenOutline16, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { Modal } from '../../../../../presentation/primitives/Modal';
@@ -11,23 +11,25 @@ import { encodeField, fieldValue, setField } from '../../../document/fields';
 import { blockAt, nodeAt, updateBlock } from '../../../document/model';
 import { setOrder } from '../../../document/geometry';
 import { orderedKeys } from '../../../document/presentation';
+import { codeDefaults, type CodeLanguage } from '../../../document/code';
 import { rewriteBlockReferences } from '../../../document/references';
 import { IconPlus } from '../../icons';
 import { ReferencePicker } from '../forms/ReferencePicker';
 import { ConflictActions, JsonField, useFieldError } from '../forms/fields';
 import { useFieldDraft } from '../forms/drafts';
 import { useInspectorExpansion } from '../forms/useInspectorExpansion';
+import { CodeSignatureButton } from '../forms/CodeSignatureButton';
 import { ErrorStrategy, RetrySettings, RouteId } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 import styles from './CodePanel.module.css';
 
-const BashCodeView=lazy(()=>import('../forms/BashCodeView'));
+const WorkflowCodeView=lazy(()=>import('../forms/WorkflowCodeView'));
 const TYPES:readonly WorkflowVarType[]=['string','number','boolean','object','array[string]','array[number]','array[boolean]','array[object]'];
 
 /** Dify's Code panel, backed by one admitted Bash call in the Session workspace. */
 export function CodePanel(props:PanelProps) {
-  const tx=useTranslation(),{node,at,update}=useNode(props,'code'),[removing,setRemoving]=useState<string>();
+  const tx=useTranslation(),{node,at,update}=useNode(props,'code'),[removing,setRemoving]=useState<string>(),[syncFailed,setSyncFailed]=useState(false);
   const orderTarget={kind:'node_output' as const,address:{block:[...props.block],node:props.id},path:[]};
   const outputs=orderedKeys(props.document,orderTarget,Object.keys(node.outputs));
   const removeOutput=(name:string)=>props.edit(document=>{
@@ -44,7 +46,8 @@ export function CodePanel(props:PanelProps) {
   };
   return <div className={styles.panel}>
     <section className={css.group} aria-label={tx('workflows:data.inputs')}>
-      <h3 className={css.groupHeading}>{tx('workflows:data.inputs')}<button type="button" className={css.iconButton} aria-label={tx('workflows:data.add-input')} onClick={()=>{let index=1;while(Object.hasOwn(node.variables,`arg${index}`))index++;const name=`arg${index}`;update(current=>({...current,variables:{...current.variables,[name]:{type:'reference',path:[]}}}),at('variables'));}}><IconPlus size={14}/></button></h3>
+      <h3 className={css.groupHeading}>{tx('workflows:data.inputs')}<span className={styles.operations}><CodeSignatureButton {...props} onError={setSyncFailed}/><button type="button" className={css.iconButton} aria-label={tx('workflows:data.add-input')} onClick={()=>{let index=1;while(Object.hasOwn(node.variables,`arg${index}`))index++;const name=`arg${index}`;update(current=>({...current,variables:{...current.variables,[name]:{type:'reference',path:[]}}}),at('variables'));}}><IconPlus size={14}/></button></span></h3>
+      {syncFailed&&<p role="alert" className={css.hintError}>{tx('workflows:code.sync-error')}</p>}
       <div className={styles.variables}>{Object.entries(node.variables).map(([name,value])=><div className={styles.row} key={name}>
         <div><RouteId label={tx('workflows:data.input-name')} value={name} address={{...at('variables',{key:name}),role:'key'}} rename={(document,from,to)=>{
           if(!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(to))throw new CommandRejected('invalid_identifier');
@@ -75,13 +78,23 @@ function CodeEditor(props:PanelProps) {
   const tx=useTranslation(),{node,at}=useNode(props,'code'),address=at('code'),describe=useFieldError();
   const field=useFieldDraft({address,canonical:node.code,command:(document,text)=>({status:'applied',document:setField(document,address,text)})});
   const copy=useCopyFeedback(field.text),expand=useInspectorExpansion();
+  const changeLanguage=(language:CodeLanguage)=>{
+    if(language===node.code_language)return;
+    field.apply();
+    props.edit(document=>{
+      const owner=blockAt(document,props.block),current=owner&&nodeAt(owner,props.id);if(current?.type!=='code')throw new CommandRejected('missing_node');
+      const defaults=codeDefaults(language),removed=new Set(Object.keys(current.outputs).filter(name=>!Object.hasOwn(defaults.outputs,name)));
+      const next=replaceNodeExits(document,props.block,props.id,{...current,...defaults,...(current.on_error?.type==='default_value'?{on_error:{type:'default_value' as const,value:{result:''}}}:{})});
+      return setOrder(updateBlock(next,props.block,block=>rewriteBlockReferences(block,path=>path[0]===props.id&&removed.has(path[1])?[]:undefined)),{kind:'node_output',address:{block:[...props.block],node:props.id},path:[]},['result']);
+    });
+  };
   return <div ref={expand.anchor} style={expand.expanded?{height:expand.collapsedHeight}:undefined}>
     <section className={clsx(styles.editor,expand.expanded&&styles.expanded)} style={expand.expanded?expand.bounds:undefined} aria-label={tx('workflows:code.editor')} data-code-expanded={expand.expanded||undefined} onKeyDown={event=>{if(expand.expanded&&event.key==='Escape'&&!event.defaultPrevented){event.preventDefault();event.stopPropagation();expand.setExpanded(false);}}}>
-      <header><span aria-label={tx('workflows:code.language')}>{/* i18n-raw: only supported script language */ 'BASH'}</span><div>
+      <header><select aria-label={tx('workflows:code.language')} value={node.code_language} onChange={event=>changeLanguage(event.target.value as CodeLanguage)}><option value="python3">{/* i18n-raw: language name */ 'Python3'}</option><option value="javascript">{/* i18n-raw: language name */ 'JavaScript'}</option></select><div>
         <button type="button" className={css.promptTool} aria-label={tx(copy.copied?'workflows:prompt.copied':'workflows:prompt.copy')} title={tx('workflows:prompt.copy')} onClick={copy.onCopy} disabled={!field.text}>{copy.copied?<IconCheckOutline16/>:<IconCopyOutline16/>}</button>
         <button type="button" className={css.promptTool} aria-label={tx(expand.expanded?'workflows:prompt.collapse':'workflows:prompt.expand')} aria-pressed={expand.expanded} title={tx('workflows:prompt.expand')} onClick={expand.toggle}><IconFullscreenOutline16/></button>
       </div></header>
-      <div className={styles.codeArea}><Suspense fallback={<p role="status">{tx('settings:json-editor.loading')}</p>}><BashCodeView label={tx('workflows:code.editor')} value={field.text} field={encodeField(address)} onChange={field.change} onBlur={field.apply}/></Suspense></div>
+      <div className={styles.codeArea} data-code-language={node.code_language}><Suspense fallback={<p role="status">{tx('settings:json-editor.loading')}</p>}><WorkflowCodeView language={node.code_language} label={tx('workflows:code.editor')} value={field.text} field={encodeField(address)} onChange={field.change} onBlur={field.apply}/></Suspense></div>
       {field.error&&<small role="alert" className={css.hintError}>{describe(field.error)}</small>}<ConflictActions field={field}/>
     </section>
     <p className={styles.help}>{tx('workflows:code.input-help')}</p>
@@ -92,7 +105,7 @@ function CodeFailure(props:PanelProps) {
   const tx=useTranslation(),{node,at,update}=useNode(props,'code'),strategy=node.on_error??{type:'stop' as const};
   return <>
     <RetrySettings retry={node.retry} setRetry={retry=>update(({retry:_,...current})=>retry?{...current,retry}:current,at('retry'))}/>
-    <ErrorStrategy strategy={strategy.type} note={tx('workflows:failure.tool-retry')} choose={type=>props.edit(document=>{
+    <ErrorStrategy strategy={strategy.type} choose={type=>props.edit(document=>{
       const owner=blockAt(document,props.block),current=owner&&nodeAt(owner,props.id);if(current?.type!=='code')throw new CommandRejected('missing_node');
       const {on_error:_,...rest}=current;
       const value=Object.fromEntries(Object.entries(current.outputs).map(([name,kind])=>[name,kind==='string'?'':kind==='number'?0:kind==='boolean'?false:kind==='object'?{}:[]]));

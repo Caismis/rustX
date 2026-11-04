@@ -143,6 +143,15 @@ fn context_with_registration(
     registration: ToolRegistration,
     lifecycle: crate::agent::AttemptLifecycle,
 ) -> crate::runtime::subagent::NativeExecutionContext {
+    context_with_environment(plane, registration, lifecycle, ToolEnvironment::new())
+}
+
+fn context_with_environment(
+    plane: &WorkflowTestPlane,
+    registration: ToolRegistration,
+    lifecycle: crate::agent::AttemptLifecycle,
+    environment: ToolEnvironment,
+) -> crate::runtime::subagent::NativeExecutionContext {
     let model_catalog = ModelCatalog::from_toml_slice(WORKFLOW_TEST_MODELS.as_bytes()).unwrap();
     let models = ModelBindingRegistry::new(
         model_catalog
@@ -162,7 +171,7 @@ fn context_with_registration(
         Arc::new(SkillSnapshot::new(Vec::new())),
         None,
         None,
-        ToolEnvironment::new(),
+        environment,
         Arc::new(McpRuntimeLeaseAuthority::empty()),
         Arc::new(BTreeMap::new()),
     ));

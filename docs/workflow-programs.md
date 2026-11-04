@@ -587,40 +587,56 @@ analysis exposes possible ancestor outputs specifically to these selectors.
 
 ### Code Execution and Variable Assigner
 
-The **Code Execution** chooser creates a `code` node with named variable
-selectors, a Bash script and typed output fields. As in Dify, output fields
-are authored declarations, and the runtime validates every returned field.
-The node lowers to one ordinary admitted builtin Bash invocation in the
-calling Session's workspace; native approval, physical settlement, deadline,
-cancellation and Scheduled effects retain their existing owners.
+The **Code Execution** chooser creates a `code` node with Python3 and
+JavaScript language choices, named variable selectors and typed outputs. The
+initial configuration follows Dify: Python3, two unbound inputs `arg1`/`arg2`, a
+`main` function returning their concatenation, and one String output `result`.
+Switching language restores the corresponding default code, inputs and output
+in one undoable edit. Referenced outputs removed by that reset are cleared.
 
 ```yaml
 process:
   type: code
+  code_language: python3
   variables:
-    items: {type: reference, path: [args, items]}
+    arg1: {type: reference, path: [args, first]}
+    arg2: {type: reference, path: [args, second]}
   code: |
-    printf '{"result":%s}\n' "$items"
+    def main(arg1: str, arg2: str):
+        return {"result": arg1 + arg2}
   outputs:
-    result: array[number]
+    result: string
 ```
 
-Read an input with `$name`. Strings retain their text; numbers, booleans,
-objects and arrays are compact JSON. Bindings are shell-quoted literal data,
-so upstream text cannot interpolate commands. Input names are Bash identifiers
-and cannot replace execution environment variables such as `PATH`, `HOME`,
-`BASH_ENV` or `IFS`; NUL bytes are rejected before invocation.
-The script writes exactly one JSON object to stdout and logs to stderr.
-All declared outputs are required, with no undeclared extra fields. A failed
-process, malformed JSON or a wrong output type follows `retry` and `on_error`
-(`stop`, `default_value` or `fail_branch`). Each retry is a distinct native
-invocation and may repeat workspace side effects.
+For JavaScript use `code_language: javascript` with
+`function main({arg1, arg2}) { return {result: arg1 + arg2}; }`.
+Python receives keyword arguments; JavaScript receives the inputs object and
+may return a Promise. Inputs retain their JSON types, including embedded NUL
+characters in strings. Python integers retain their native precision;
+JavaScript uses its ordinary Number semantics. Return an object from `main`;
+the runner serializes it automatically. Normal `print`, `console.log` and
+stdout writes are recorded as native stderr logs and do not pollute the result.
+All declared outputs are required and undeclared extra fields are rejected.
 
-The editor uses Dify's input/output rows and copy/expand controls. It offers
-only Bash, with no function-signature sync, sandbox service, selectable
-working directory or AI code generation. Ordinary Bash Tools remain ordinary
-Tools with their fixed `exit_code`, `stdout`, `stderr`, `combined` results;
-they are not inferred to be Code nodes.
+The node lowers to one ordinary admitted builtin Bash invocation in the
+calling Session's workspace. `python3` or `node` must be available in that
+Bash tool's approved environment, including any configured Skill environment
+overlay. It does not install interpreters, load arbitrary shell startup files
+or inherit the launching process's PATH. Workspace Python imports and Node
+require calls use the calling workspace. Source and typed inputs arrive as
+quoted JSON stdin data, never shell interpolation or command-line arguments.
+Native approval, physical settlement, deadline, cancellation and Scheduled
+effects retain their existing owners. A failed process or invalid return
+follows `retry` and `on_error` (`stop`, `default_value` or `fail_branch`). Every
+retry is a distinct native invocation and may repeat workspace side effects.
+
+The editor offers Dify's parameter synchronization, copy/expand and typed
+output controls. Synchronization uses real language syntax trees, retaining
+the function body and comments, with Python annotations derived from native
+variable analysis. Stale analysis cannot replace a newer document or draft.
+There is no AI code generation, sandbox service or selectable working
+directory. Ordinary Bash Tools retain their existing fixed result contract.
+The old Bash-language Code definition is removed; code_language is required.
 
 **Variable Assigner** remains the native `assigner` node described under Loop
 below. It is offered inside a Loop body and updates that Loop's declared

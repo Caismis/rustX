@@ -1,4 +1,4 @@
-import type { MessageBlock, RuntimeClientSnapshot, TurnProcessView } from '../../../protocol/app-server/v65';
+import type { MessageBlock, RuntimeClientSnapshot, TurnProcessView } from '../../../protocol/app-server/v66';
 import type { Server } from '../fixture';
 import { conversationPreferences } from '../../src/app/conversation-preferences';
 

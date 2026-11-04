@@ -1907,6 +1907,7 @@ export type WorkflowNodeDefinition =
       type: 'classifier';
     }
   | {
+      code_language: WorkflowCodeLanguage;
       variables: {
         [k: string]: WorkflowValue;
       };
@@ -2193,6 +2194,11 @@ export type WorkflowModelPolicy =
       max_output_tokens?: number | null;
       mode: 'explicit';
     };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowCodeLanguage".
+ */
+export type WorkflowCodeLanguage = 'python3' | 'javascript';
 /**
  * The value types of a Loop variable, as Dify offers them.
  *

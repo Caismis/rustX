@@ -1,4 +1,4 @@
-import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v65';
+import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v66';
 import { readJson } from '../../../../shared/json-numbers';
 import { boundedDocument, CommandRejected, freshNodeId, validLocalKey, validNodeId } from './commands';
 import { blockAt, deepNodeCount, edgesOf, sameBlockPath, sameDocument, updateBlock, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from './model';
@@ -116,7 +116,8 @@ function node(input: unknown): void {
       keys(record,['type','model','input','instruction','classes']); modelPolicy(record.model); value(record.input); if (record.instruction !== undefined) array(record.instruction).forEach(value);
       for (const item of array(record.classes)) { const entry=keys(item,['id','label','description']); text(entry.id); text(entry.label); array(entry.description).forEach(value); } return;
     case 'code':
-      keys(record,['type','variables','code','outputs','retry','on_error']); text(record.code);
+      keys(record,['type','code_language','variables','code','outputs','retry','on_error']); text(record.code);
+      if(record.code_language!=='python3'&&record.code_language!=='javascript')fail();
       Object.values(object(record.variables)).forEach(value);
       for(const kind of Object.values(object(record.outputs)))if(!VAR_TYPES.includes(kind as string))fail();
       retry(record.retry); valueStrategy(record.on_error); return;

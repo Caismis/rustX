@@ -1,8 +1,20 @@
-//! Code nodes lower to the ordinary admitted workspace Bash invocation.
+//! Typed Python/JavaScript main functions over the admitted workspace Bash tool.
 use super::{
     BTreeMap, SchemaMap, Value, WorkflowCompileError, WorkflowRunError, WorkflowValue,
     WorkflowVarType,
 };
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, super::Serialize, super::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkflowCodeLanguage {
+    Python3,
+    JavaScript,
+}
+
+const PYTHON_RUNNER: &str = include_str!("code/python_runner.py");
+const JAVASCRIPT_RUNNER: &str = include_str!("code/javascript_runner.cjs");
 
 pub(super) fn valid_name(name: &str) -> bool {
     !name.is_empty()
@@ -38,27 +50,14 @@ pub(super) fn validate(
 ) -> Result<(), WorkflowCompileError> {
     if code.trim().is_empty() || code.contains('\0') {
         return Err(WorkflowCompileError::InvalidField(
-            "Code must contain a Bash script without NUL bytes".into(),
+            "Code must contain source without NUL bytes".into(),
         )
         .at("code"));
     }
     for (name, value) in variables {
-        if !valid_name(name)
-            || matches!(
-                name.as_str(),
-                "HOME"
-                    | "home"
-                    | "CODEX_HOME"
-                    | "PATH"
-                    | "IFS"
-                    | "BASH_ENV"
-                    | "ENV"
-                    | "SHELLOPTS"
-                    | "BASHOPTS"
-            )
-        {
+        if !valid_name(name) {
             return Err(WorkflowCompileError::InvalidField(
-                "Code input must be a non-reserved Bash variable name".into(),
+                "Code input must be an identifier".into(),
             )
             .at(format!("variables.{name}")));
         }
@@ -75,30 +74,28 @@ pub(super) fn validate(
 }
 
 pub(super) fn arguments(
+    language: WorkflowCodeLanguage,
     variables: &BTreeMap<String, WorkflowValue>,
     code: &str,
     mut evaluate: impl FnMut(&WorkflowValue) -> Result<Value, WorkflowRunError>,
 ) -> Result<Value, WorkflowRunError> {
-    let mut command = String::new();
-    // Literal assignments, never shell interpolation of upstream data. JSON
-    // preserves the types of non-string inputs; strings retain their bytes.
-    for (name, value) in variables {
-        let value = evaluate(value)?;
-        let text = match value {
-            Value::String(text) => text,
-            value => value.to_string(),
-        };
-        if text.contains('\0') {
-            return Err(WorkflowRunError::InvalidValue(
-                "Bash inputs cannot contain NUL bytes".into(),
-            ));
-        }
-        command.push_str(name);
-        command.push_str("='");
-        command.push_str(&text.replace('\'', "'\\''"));
-        command.push_str("'\n");
-    }
-    command.push_str(code);
+    let inputs = variables
+        .iter()
+        .map(|(name, value)| evaluate(value).map(|value| (name.clone(), value)))
+        .collect::<Result<serde_json::Map<_, _>, _>>()?;
+    // A compact JSON line in a quoted heredoc keeps source and inputs as data
+    // until their language interpreter receives them; no argv-size limitation
+    // or shell interpolation is introduced. The line always starts with `{`,
+    // so it cannot terminate this fixed, standalone heredoc delimiter.
+    let payload = serde_json::json!({"code":code,"inputs":inputs}).to_string();
+    let (interpreter, runner) = match language {
+        WorkflowCodeLanguage::Python3 => ("python3 -X utf8 -c", PYTHON_RUNNER),
+        WorkflowCodeLanguage::JavaScript => ("node --input-type=commonjs -e", JAVASCRIPT_RUNNER),
+    };
+    let command = format!(
+        "{interpreter} '{}' <<'RUSTX_CODE_PAYLOAD'\n{payload}\nRUSTX_CODE_PAYLOAD\n",
+        runner.replace('\'', "'\\''")
+    );
     if command.len() > super::MAX_VALUE_BYTES {
         return Err(WorkflowRunError::InvalidValue(
             "Code command exceeds Workflow value bound".into(),

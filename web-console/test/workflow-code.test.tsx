@@ -8,8 +8,10 @@ import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { viewId } from '../src/app/workflows/ui/editor/selection';
 import { codeDocument } from './workflow-code-document';
 import { statusSource } from './workflow-fixtures';
+import { WorkflowAnalysisSession } from '../src/app/workflows/document/analysis';
+import type { WorkflowAnalysisReport } from '../../protocol/app-server/v66';
 
-vi.mock('../src/app/workflows/ui/editor/forms/BashCodeView',()=>({default:({label,value,onChange,onBlur}:{label:string;value:string;onChange:(value:string)=>void;onBlur:()=>void})=><textarea aria-label={label} value={value} onChange={event=>onChange(event.target.value)} onBlur={onBlur}/>}));
+vi.mock('../src/app/workflows/ui/editor/forms/WorkflowCodeView',()=>({default:({label,value,onChange,onBlur}:{label:string;value:string;onChange:(value:string)=>void;onBlur:()=>void})=><textarea aria-label={label} value={value} onChange={event=>onChange(event.target.value)} onBlur={onBlur}/>}));
 beforeEach(()=>{vi.stubGlobal('ResizeObserver',class{observe(){}unobserve(){}disconnect(){}});vi.stubGlobal('DOMMatrixReadOnly',class{m22=1;});});
 afterEach(()=>{cleanup();vi.unstubAllGlobals();localStorage.clear();});
 
@@ -25,7 +27,7 @@ async function open() {
   return {editor,documentValue,node,panel:within(screen.getByRole('complementary',{name:'Inspector'}))};
 }
 
-it('owns Bash inputs, editor drafts and typed output renames through Undo and Redo',async()=>{
+it('owns typed inputs, editor drafts and typed output renames through Undo and Redo',async()=>{
   const {panel,node,documentValue}=await open();
   expect(panel.queryByText('Vision')).toBeNull();
   fireEvent.click(panel.getByRole('button',{name:'Add input variable'}));
@@ -38,9 +40,9 @@ it('owns Bash inputs, editor drafts and typed output renames through Undo and Re
   expect(documentValue().block.nodes.done).toMatchObject({outputs:[{value_selector:['code','renamed']},{value_selector:['code','count']}]});
   fireEvent.click(screen.getByRole('button',{name:'Undo'}));expect(node().outputs.result).toBe('string');
   fireEvent.click(screen.getByRole('button',{name:'Redo'}));expect(node().outputs.renamed).toBe('string');
-  const code=await screen.findByRole('textbox',{name:'Bash code'});
-  fireEvent.change(code,{target:{value:'printf "{}"'}});expect(node().code).not.toBe('printf "{}"');
-  fireEvent.blur(code);expect(node().code).toBe('printf "{}"');
+  const code=await screen.findByRole('textbox',{name:'Code'});
+  fireEvent.change(code,{target:{value:'def main(): return {}'}});expect(node().code).not.toBe('def main(): return {}');
+  fireEvent.blur(code);expect(node().code).toBe('def main(): return {}');
 });
 
 it('confirms removal of referenced output and restores both declaration and readers with Undo',async()=>{
@@ -66,4 +68,27 @@ it('uses declared output types for defaults and exposes an actual failure port',
   await act(async()=>fireEvent.click(await screen.findByRole('menuitem',{name:/^Fail branch/})));
   expect(node().on_error).toEqual({type:'fail_branch'});
   expect(document.querySelector('.react-flow__handle[data-handleid="fail"]')).toBeTruthy();
+});
+
+it('switches between language defaults as one undoable document edit',async()=>{
+  const {panel,node,documentValue}=await open(),original=structuredClone(node());
+  fireEvent.change(panel.getByRole('combobox',{name:'Language'}),{target:{value:'javascript'}});
+  expect(node()).toMatchObject({code_language:'javascript',variables:{arg1:{type:'reference',path:[]},arg2:{type:'reference',path:[]}},outputs:{result:'string'}});
+  expect(node().code).toContain('function main({arg1, arg2})');
+  expect(documentValue().block.nodes.done).toMatchObject({outputs:[{value_selector:['code','result']},{value_selector:[]}]});
+  fireEvent.click(screen.getByRole('button',{name:'Undo'}));expect(node()).toEqual(original);
+  expect(documentValue().block.nodes.done).toMatchObject({outputs:[{value_selector:['code','result']},{value_selector:['code','count']}]});
+  fireEvent.click(screen.getByRole('button',{name:'Redo'}));expect(node().code_language).toBe('javascript');
+});
+
+it('does not replace code typed while native parameter analysis is pending',async()=>{
+  let release!:(report:WorkflowAnalysisReport)=>void;
+  const request=vi.spyOn(WorkflowAnalysisSession.prototype,'request').mockImplementation(()=>new Promise(resolve=>{release=resolve;}));
+  const {panel,node}=await open(),before=node().code;
+  fireEvent.click(panel.getByRole('button',{name:'Sync function signature'}));expect(request).toHaveBeenCalledTimes(1);
+  const code=await screen.findByRole('textbox',{name:'Code'}),latest='def main(arg1):\n    return {"result":"new draft"}\n';
+  fireEvent.change(code,{target:{value:latest}});
+  await act(async()=>release({target:{kind:'user'},id:'flow',candidate_revision:`sha256:${'a'.repeat(64)}`,generation:'1',presentation:[],analysis:{outputs:[],references:[],selected:{path:['args','query'],schema:{type:'string'},availability:'available',compatibility:'compatible'},incomplete:false,truncated:false}}));
+  expect(node().code).toBe(before);expect((code as HTMLTextAreaElement).value).toBe(latest);
+  expect(panel.queryByRole('alert')).toBeNull();
 });

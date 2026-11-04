@@ -1,5 +1,5 @@
 import { useContext, useState } from 'react';
-import type { InteractionSettlement, QuestionnaireAnswerEntry, QuestionSpecification, RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v65';
+import type { InteractionSettlement, QuestionnaireAnswerEntry, QuestionSpecification, RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v66';
 import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconQuestionOutline14 } from '../../presentation/primitives/icons';

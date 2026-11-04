@@ -12039,9 +12039,12 @@
           ]
         },
         {
-          "description": "A workspace Bash script with named inputs and declared JSON outputs.",
+          "description": "A Python/JavaScript main function executed through workspace Bash.",
           "type": "object",
           "properties": {
+            "code_language": {
+              "$ref": "#/$defs/WorkflowCodeLanguage"
+            },
             "variables": {
               "type": "object",
               "additionalProperties": {
@@ -12081,6 +12084,7 @@
           "additionalProperties": false,
           "required": [
             "type",
+            "code_language",
             "variables",
             "code",
             "outputs"
@@ -12684,6 +12688,13 @@
         "id",
         "label",
         "description"
+      ]
+    },
+    "WorkflowCodeLanguage": {
+      "type": "string",
+      "enum": [
+        "python3",
+        "javascript"
       ]
     },
     "WorkflowVarType": {

@@ -4,7 +4,7 @@ import { useTranslation } from '../../locale/react';
 import { CellContent, KindTag, cellKind, cellLabel, isErrorRecord, listText } from './TrajectoryCell';
 import type { InspectableDisplayItem, TrajectoryLedgerRow } from './layout';
 import css from './Trajectory.module.css';
-import type { TraceRecord } from '../../../../protocol/app-server/v65';
+import type { TraceRecord } from '../../../../protocol/app-server/v66';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
 
 export interface TrajectoryRowActions {

@@ -45,6 +45,7 @@ pub struct WorkflowToolChoice {
 pub enum WorkflowToolArguments {
     Value(super::WorkflowValue),
     Code {
+        language: super::WorkflowCodeLanguage,
         variables: super::BTreeMap<String, super::WorkflowValue>,
         code: String,
     },
@@ -59,7 +60,11 @@ impl WorkflowToolArguments {
         let evaluate = |value: &super::WorkflowValue| super::evaluate_value(value, input, values);
         match self {
             Self::Value(value) => evaluate(value),
-            Self::Code { variables, code } => super::code::arguments(variables, code, evaluate),
+            Self::Code {
+                language,
+                variables,
+                code,
+            } => super::code::arguments(*language, variables, code, evaluate),
         }
     }
 }

@@ -10,7 +10,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 import { useId, useImperativeHandle, useRef, useState, type Ref } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import clsx from 'clsx';
-import type { QuestionSpecification, QuestionnaireSubmission } from '../../../../protocol/app-server/v65';
+import type { QuestionSpecification, QuestionnaireSubmission } from '../../../../protocol/app-server/v66';
 import { finiteNumberFromWire } from '../../../../protocol/app-server/number';
 import { emptyDraft, submission, QuestionnaireValidationError, type QuestionDraft } from '../../bindings/questionnaire';
 import { message } from '../../locale/translation';
