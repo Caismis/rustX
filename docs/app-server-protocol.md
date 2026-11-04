@@ -1928,8 +1928,10 @@ is a `ContentRef` to a JSON document of every Tool and Skill the commit added,
 changed or removed: `{ tools: [{ name, change, before, after }], skills: [...] }`
 with `before` for a change or removal and `after` for an addition or change. A
 Tool state is `{ definition, model_input_schema, server_binding_digest,
-workflow, agents }` (`agents`: the Named Agent definition digests a Workflow froze
-or `subagent` admits); a Skill state is `{ entry, version_id }`. The server
+workflow, agents }` (`agents`: for each Named Agent a Workflow froze or
+`subagent` admits, `{ definition, execution }`: its definition digest and the
+execution digest of its resolved composition, `null` when it cannot be frozen);
+a Skill state is `{ entry, version_id }`. The server
 binding appears only as a digest of its transport and policy, never its
 credentials. Both are
 retained with the fact and read through `conversation/contentRead` (or the
@@ -1948,11 +1950,12 @@ Invariants:
   order and counted in the Trace total. A failed append is an absorbing
   `record_configuration_change` durability failure and leaves the unit
   `uncertain`: published, not recorded, with new work fenced. The attached
-  runtime allocation's own durability gate decides this, read by every
-  application view: while it reports the failure no unit reads `applied`,
-  whatever later edit or late settlement arrives. Units keep their real
-  outcome, so a published unit is retained across reload either way; a healthy
-  replacement allocation recovers the view.
+  runtime allocation owns that fact apart from the first failure its
+  durability gate keeps, and every application view reads it: while it holds
+  no unit reads `applied`, whatever later edit, late settlement or earlier
+  durable failure. Units keep their real outcome, so a published unit is
+  retained across reload either way; a healthy replacement allocation recovers
+  the view and notifies its observers.
 - The fact never enters model context. Web Chat shows only Tool additions and
   removals from it; instruction, context, Skill and same-name Tool changes stay
   in Trace and inspection.

@@ -880,6 +880,10 @@ struct CoordinatorState {
 /// The shared state of one conversation runtime.
 pub(crate) struct RuntimeInner {
     configuration_owner: Arc<()>,
+    /// The first configuration commit this allocation published but could
+    /// not record. The durability gate keeps only its first failure, so this
+    /// fact is kept apart from it.
+    unrecorded_configuration: Arc<std::sync::OnceLock<String>>,
     initialization_cancellation:
         std::sync::OnceLock<crate::runtime::cancellation::CancellationSignal>,
     runtime_catalog_preparer:

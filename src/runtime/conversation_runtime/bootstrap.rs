@@ -901,6 +901,7 @@ impl ConversationRuntime {
         let catalog_revision = config.capability.catalog_revision();
         let inner = Arc::new(RuntimeInner {
             configuration_owner: Arc::new(()),
+            unrecorded_configuration: Arc::default(),
             initialization_cancellation: std::sync::OnceLock::new(),
             runtime_catalog_preparer: std::sync::OnceLock::new(),
             runtime_catalog_publication: tokio::sync::watch::channel(0).0,

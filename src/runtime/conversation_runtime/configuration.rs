@@ -466,6 +466,7 @@ impl RuntimeInner {
         match self.record_configuration_change(change, &content) {
             Ok(()) => StagedOutcome::Committed,
             Err(diagnostic) => {
+                let _ = self.unrecorded_configuration.set(diagnostic.clone());
                 self.record_durability_failure(
                     state,
                     DurableOperation::RecordConfigurationChange,
@@ -822,9 +823,9 @@ impl ConversationRuntime {
     }
 
     /// This allocation's native authority over unrecorded configuration
-    /// commits: the same absorbing durability gate admission reads.
+    /// commits.
     pub(crate) fn configuration_health(&self) -> ConfigurationHealth {
-        ConfigurationHealth(self.inner.durability_gate.clone())
+        ConfigurationHealth(self.inner.unrecorded_configuration.clone())
     }
 
     /// Whether a candidate is staged and waiting for the safe boundary.
@@ -998,15 +999,12 @@ mod tests;
 /// commit whose change fact it could not record. The failure is absorbing, so
 /// only a replacement allocation recovers from it.
 #[derive(Clone)]
-pub(crate) struct ConfigurationHealth(Arc<super::DurabilityGate>);
+pub(crate) struct ConfigurationHealth(Arc<std::sync::OnceLock<String>>);
 
 impl ConfigurationHealth {
-    /// The diagnostic of that unrecorded commit, if any.
+    /// The diagnostic of the first unrecorded commit, if any.
     pub(crate) fn unrecorded(&self) -> Option<String> {
-        self.0
-            .failure()
-            .filter(|failure| failure.operation == DurableOperation::RecordConfigurationChange)
-            .map(|failure| failure.diagnostic)
+        self.0.get().cloned()
     }
 
     pub(crate) fn same_allocation(&self, other: &Self) -> bool {

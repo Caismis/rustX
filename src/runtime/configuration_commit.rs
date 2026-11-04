@@ -388,9 +388,19 @@ struct ToolEntry {
     server_binding_digest: Option<String>,
     /// The enabled Workflow program it runs.
     workflow: Option<crate::runtime::workflow::WorkflowToolIdentity>,
-    /// The Named Agent definitions it runs: those a Workflow froze at
-    /// admission, or those the `subagent` intrinsic admits.
-    agents: BTreeMap<String, crate::runtime::subagent::NamedAgentDefinitionDigest>,
+    /// The Named Agents it runs: those a Workflow froze at admission, or
+    /// those the `subagent` intrinsic admits.
+    agents: BTreeMap<String, AgentEntry>,
+}
+
+/// One Named Agent as a Tool runs it: its definition, and the execution
+/// identity of the composition it resolved to, which also covers the
+/// versions of the Skills and Tools it selected. `None` when the generation
+/// cannot freeze it, so delegating it fails.
+#[derive(Debug, PartialEq, serde::Serialize)]
+struct AgentEntry {
+    definition: crate::runtime::subagent::NamedAgentDefinitionDigest,
+    execution: Option<crate::runtime::subagent::resolver::SubagentExecutionProfileDigest>,
 }
 
 /// One Skill as a commit compares it: its catalog entry and content version.
@@ -402,7 +412,7 @@ struct SkillEntry {
 
 /// A Tool is its whole definition and its implementation identity: the
 /// executable binding of the server it runs on, or the enabled Workflow
-/// program it runs, and the Named Agents either runs. A same-name
+/// program it runs, and the resolved Named Agents either runs. A same-name
 /// implementation change is `changed` even when the model-visible declaration
 /// is byte-identical; an Agent nothing runs changes no Tool.
 fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntry> {
@@ -419,12 +429,22 @@ fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntr
             crate::runtime::workflow::WorkflowAdmission::Disabled(_) => None,
         })
         .collect::<BTreeMap<_, _>>();
-    let delegated = snapshot
+    let mut delegated = snapshot
         .delegatable_agents()
         .iter()
         .filter_map(|name| {
             let definition = snapshot.subagents().get(name)?;
-            Some((name.to_string(), definition.digest().clone()))
+            let execution = crate::runtime::subagent::resolver::FrozenAgentComposition::delegated(
+                snapshot, name,
+            )
+            .map(|frozen| frozen.execution_digest(snapshot));
+            Some((
+                name.to_string(),
+                AgentEntry {
+                    definition: definition.digest().clone(),
+                    execution,
+                },
+            ))
         })
         .collect::<BTreeMap<_, _>>();
     registry
@@ -449,14 +469,17 @@ fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntr
                         let frozen = agent.resolved.as_ref()?;
                         Some((
                             agent.profile.to_string(),
-                            frozen.definition_digest().clone(),
+                            AgentEntry {
+                                definition: frozen.definition_digest().clone(),
+                                execution: Some(frozen.execution_digest(snapshot)),
+                            },
                         ))
                     })
                     .collect(),
                 None if definition.name == crate::tools::native::SUBAGENT_TOOL_NAME
                     && definition.origin == crate::tools::types::ToolOrigin::Builtin =>
                 {
-                    delegated.clone()
+                    std::mem::take(&mut delegated)
                 }
                 None => BTreeMap::new(),
             };

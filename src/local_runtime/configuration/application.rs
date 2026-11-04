@@ -195,7 +195,7 @@ impl ConfigurationApplications {
         runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     ) -> bool {
         let mut state = self.lock();
-        state.attach(scope, runtime);
+        let attached = state.attach(scope, runtime);
         // A candidate staged in a replaced runtime can never commit into its
         // successor; the current input is prepared again for this allocation.
         // Attaching the allocation that already holds it changes nothing.
@@ -211,6 +211,10 @@ impl ConfigurationApplications {
         // finds nothing to prepare again.
         let deferred = state.deferred.remove(scope);
         if !obsolete && !deferred {
+            // A new allocation changes the views even with nothing to prepare.
+            if attached {
+                self.notify(&state);
+            }
             return false;
         }
         state
@@ -812,19 +816,20 @@ impl ApplicationState {
     /// Attach the allocation whose authority decides this scope's
     /// uncertainty. A replacement that recorded nothing uncertain recovers
     /// the scope: units its predecessor left uncertain are applied there,
-    /// since it runs the generation they published.
+    /// since it runs the generation they published. Returns whether the
+    /// allocation is new, which changes the views.
     pub(crate) fn attach(
         &mut self,
         scope: &str,
         runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
-    ) {
+    ) -> bool {
         let health = runtime.configuration_health();
         if self
             .health
             .get(scope)
             .is_some_and(|attached| attached.same_allocation(&health))
         {
-            return;
+            return false;
         }
         let healthy = health.unrecorded().is_none();
         self.health.insert(scope.to_owned(), health);
@@ -842,6 +847,7 @@ impl ApplicationState {
                 }
             }
         }
+        true
     }
 
     /// A late settlement reported that this scope's allocation could not

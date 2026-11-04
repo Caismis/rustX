@@ -58,9 +58,11 @@ Server protocol/connection layer.
   read domain and Trace (`TraceKind::Configuration`, counted in the Trace
   total by the same `TraceFactKind::is_anchor` the queries use). A Tool
   compares by definition and implementation (server binding, the enabled
-  Workflow program digest, and the Named Agent definition digests a Workflow
-  froze or `subagent` admits), a Skill by content version; an Agent nothing
-  runs changes nothing. The independently
+  Workflow program digest, and each Named Agent a Workflow froze or
+  `subagent` admits: its definition digest and the execution digest of its
+  resolved composition, which covers the versions of the Skills and Tools it
+  selects), a Skill by content version; an Agent nothing runs changes
+  nothing. The independently
   published execution-policy unit (approval mode, model timeout, Tool
   deadline, MCP startup) records its own `execution_policy` fact (equal
   binding revisions). The same transaction retains the exact effective
@@ -74,11 +76,13 @@ Server protocol/connection layer.
   bounded by count (16) and encoded bytes (1 KiB each). No effective change, no
   fact. A failed append is an absorbing `record_configuration_change`
   durability failure and reports the commit `uncertain`; Web and TUI say it is
-  published but not recorded. The attached allocation's durability gate is the
-  authority: every application view reads it, so no unit reads `applied` while
-  it reports the failure, however late the settlement or whatever no-op edit
-  follows. Units keep their real outcome, so a published unit is still
-  retained for reload; a healthy replacement allocation recovers the view.
+  published but not recorded. The attached allocation owns that fact apart
+  from its durability gate, which keeps only its first failure: every
+  application view reads it, so no unit reads `applied` while it holds,
+  however late the settlement, whatever no-op edit follows, and whichever
+  durable failure came first. Units keep their real outcome, so a published
+  unit is still retained for reload; a healthy replacement allocation
+  recovers the view and notifies its observers.
 - **External edits.** A bounded `notify` watcher routes changed paths to their
   owning source target and feeds `observe_source_change`, the same capture,
   fence and validation path as a native write. Coverage: User document
@@ -119,8 +123,10 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | Unused commits each keep readable instructions and affected-item catalog; wrong refs refused | `configuration::tests::configuration_change_fact_is_a_complete_transcript_row`; real server `test/e2e/trajectory-integration.spec.ts` (read before first use, Inspector) |
 | Successive Skill versions with no request stay readable after the file moved on and the runtime is gone; Tool catalog carries a binding digest, no credentials | `automatic_commit::body_only_skill_edit_records_one_changed_fact`, `mcp_readiness::implementation_only_tool_change_records_one_changed_fact` |
 | An unrecorded commit stays `uncertain` across a comment-only edit, also when its settlement arrives after that edit; admission fenced | `automatic_commit::an_unrecorded_live_commit_is_uncertain_and_fences_admission`, `automatic_commit::a_late_unrecorded_settlement_is_never_reported_applied` |
-| A policy published after an unrecorded commit survives unload/load; the healthy replacement recovers the view | `automatic_commit::a_published_policy_after_an_unrecorded_commit_survives_reload` |
+| A policy published after an unrecorded commit survives unload/load; the healthy replacement recovers the view and notifies its observers | `automatic_commit::a_published_policy_after_an_unrecorded_commit_survives_reload` |
+| A commit left unrecorded after an earlier, unrelated durable failure stays `uncertain` across a comment-only edit | `automatic_commit::an_unrecorded_commit_behind_an_earlier_durability_failure_stays_uncertain` |
 | An Agent edit changes exactly the Tools that run it (`review` Workflow, `subagent`); an unadmitted Agent changes nothing; the next call runs the edit | `automatic_commit::named_agent_edits_change_exactly_the_tools_that_run_them` |
+| A new version of a Skill only a delegated child selects changes `subagent` once, with Root prompt and declarations unchanged; a Skill nothing runs changes nothing | `automatic_commit::a_child_only_skill_version_changes_the_tool_that_runs_it` |
 | A removal of 17 bootstrap Skills (no request, no earlier fact) keeps every removed definition, readable after the runtime and files are gone | `automatic_commit::a_removal_retains_every_removed_definition` |
 | Oversized/escaped names stay within the header; Trace total counts configuration (alone and mixed) | `configuration_commit::tests::name_lists_are_bounded_by_encoded_bytes`, `trace::tests::header_tests::configuration_records_are_counted_and_unbounded_names_stay_readable` |
 | Real background owner defers; its settlement alone commits | `automatic_commit::t11_background_ownership_defers_commit_until_it_settles` |

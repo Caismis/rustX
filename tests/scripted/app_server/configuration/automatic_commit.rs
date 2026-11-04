@@ -1453,6 +1453,109 @@ async fn named_agent_edits_change_exactly_the_tools_that_run_them() {
     .await;
 }
 
+/// A Named Agent's identity is its resolved execution, not only its
+/// definition: a Skill only a delegated child selects changes the `subagent`
+/// Tool when its content changes, while a Skill nothing runs changes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let workspace = fixture.workspaces[0].clone();
+        let agents = workspace.join(".agents/agents");
+        let skills = workspace.join(".agents/skills");
+        std::fs::create_dir_all(&agents).unwrap();
+        let skill = |name: &str, body: &str| {
+            std::fs::create_dir_all(skills.join(name)).unwrap();
+            std::fs::write(
+                skills.join(name).join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: Guide {name}\n---\n{body}\n"),
+            )
+            .unwrap();
+        };
+        skill("guide", "body A");
+        skill("idle", "body A");
+        std::fs::write(
+            agents.join("reviewer.toml"),
+            "description='Review'\ninstructions='Review the task'\nskills=['guide']\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[agent]\nagents=['reviewer']\nskills=[]\n",
+        )
+        .unwrap();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let resources = runtime.runtime_resources();
+        assert!(resources.capability().model_skill_entries().is_empty());
+        let declarations = resources.capability().tool_registry().model_definitions();
+        let prompt = system_prompt(&runtime);
+        let reconcile = || async {
+            fixture
+                .manager
+                .reconcile_configuration(
+                    &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                        directory: workspace.clone(),
+                    },
+                )
+                .await
+                .unwrap();
+            applied(&fixture, 0).await;
+        };
+        let facts = configuration_changes(&runtime).len();
+        skill("idle", "body B");
+        reconcile().await;
+        assert_eq!(
+            configuration_changes(&runtime).len(),
+            facts,
+            "nothing runs idle"
+        );
+        let version = |runtime: &crate::runtime::ConversationRuntime| {
+            runtime
+                .runtime_resources()
+                .capability()
+                .skills()
+                .packages()
+                .iter()
+                .find(|package| package.name() == "guide")
+                .map(|package| package.version_id().clone())
+                .unwrap()
+        };
+        let before = version(&runtime);
+        skill("guide", "body B");
+        reconcile().await;
+        assert_ne!(version(&runtime), before, "the child runs the new version");
+        let resources = runtime.runtime_resources();
+        assert!(resources.capability().model_skill_entries().is_empty());
+        assert_eq!(
+            resources.capability().tool_registry().model_definitions(),
+            declarations
+        );
+        assert_eq!(system_prompt(&runtime), prompt);
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 1, "{changes:?}");
+        assert_eq!(changes[facts].tools.changed.names, ["subagent"]);
+        assert!(changes[facts].skills.changed.names.is_empty());
+        let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
+            .pop()
+            .unwrap();
+        let tool = &catalog["tools"][0];
+        assert_eq!(tool["name"], "subagent");
+        let (old, new) = (
+            &tool["before"]["agents"]["reviewer"],
+            &tool["after"]["agents"]["reviewer"],
+        );
+        assert_eq!(
+            old["definition"], new["definition"],
+            "the definition is unchanged"
+        );
+        assert_ne!(old["execution"], new["execution"], "{tool}");
+        fixture.close().await;
+    })
+    .await;
+}
+
 /// A removal keeps what it removed: 17 Skills present since bootstrap, with
 /// no request and no earlier fact, all removed at once, stay readable in full
 /// from that one fact after the runtime is gone and the files changed.
@@ -1687,6 +1790,8 @@ async fn a_published_policy_after_an_unrecorded_commit_survives_reload() {
         }
         drop(runtime);
         let _ = fixture.manager.unload(&loaded.conversation).await;
+        let mut changed = fixture.manager.configuration_changes();
+        changed.mark_unchanged();
         fixture.manager.load(&id, None).await.unwrap();
         let reloaded = fixture.manager.configuration_runtime(&id).unwrap();
         let effective = EffectiveConfiguration::adopted(&reloaded).unwrap();
@@ -1699,6 +1804,9 @@ async fn a_published_policy_after_an_unrecorded_commit_survives_reload() {
                 .all(|unit| !matches!(unit, UnitApplication::Uncertain { .. })),
             "a healthy replacement recovers the view: {view:?}"
         );
+        // Observers waiting on the old view learn of the recovery.
+        assert!(changed.has_changed().unwrap());
+        assert!(*changed.borrow_and_update() >= view.version, "{view:?}");
         fixture.manager.drain_all_runtimes().await;
     })
     .await;
@@ -1771,6 +1879,76 @@ async fn a_late_unrecorded_settlement_is_never_reported_applied() {
         changed.changed().await.unwrap();
         assert!(uncertain(&fixture.manager.configuration_application(&id).unwrap()));
         assert!(configuration_changes(&runtime).is_empty());
+        let _ = fixture.manager.drain_all_runtimes().await;
+    })
+    .await;
+}
+
+/// The allocation's configuration health is its own fact, not the first
+/// failure its durability gate kept: a commit the runtime could not record
+/// after an earlier, unrelated durable failure stays uncertain through a
+/// later comment-only edit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unrecorded_commit_behind_an_earlier_durability_failure_stays_uncertain() {
+    bounded(async {
+        use crate::local_runtime::configuration::settings::EffectiveConfiguration;
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        runtime.force_durability_failure_for_test(
+            crate::runtime::types::DurableOperation::EventJournal,
+            "journal unavailable",
+        );
+        runtime.fail_next_configuration_record();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::ModelTimeout {
+                authored: Some(crate::local_runtime::authoring::TimeoutLayer {
+                    response_start_timeout_ms: Some(41_000),
+                    stream_idle_timeout_ms: Some(42_000),
+                }),
+            },
+        )
+        .await;
+        let unrecorded = |view: &crate::local_runtime::configuration::application::ConfigurationApplication| {
+            matches!(
+                &view.units[&ApplyUnit::ExecutionPolicy],
+                UnitApplication::Uncertain { diagnostic } if diagnostic.contains("fault injected")
+            )
+        };
+        let view = applied(&fixture, 0).await;
+        assert!(unrecorded(&view), "{view:?}");
+        assert_eq!(
+            EffectiveConfiguration::adopted(&runtime)
+                .unwrap()
+                .model_timeout
+                .response_start_timeout_ms,
+            41_000,
+            "the timeout is published"
+        );
+        let document = fixture.workspaces[0].join("rustx.toml");
+        let mut text = std::fs::read_to_string(&document).unwrap();
+        text.push_str("\n# comment only\n");
+        std::fs::write(&document, text).unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: fixture.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
+        let after = applied(&fixture, 0).await;
+        assert_ne!(after.desired, view.desired, "the edit is a new application");
+        assert!(unrecorded(&after), "{after:?}");
+        assert!(
+            after.units.values().all(|unit| *unit != UnitApplication::Applied),
+            "{after:?}"
+        );
+        assert!(configuration_changes(&runtime).is_empty(), "nothing recorded");
         let _ = fixture.manager.drain_all_runtimes().await;
     })
     .await;
