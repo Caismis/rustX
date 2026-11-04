@@ -1904,24 +1904,32 @@ ConfigurationApplication.units.*   preparing → ready → applied | failed | un
                                    (ready = prepared, waiting for the safe boundary)
 RuntimeEvent::ConfigurationApplied one Journal fact per effective change
 RuntimeClientEvent                 configuration_applied { item, transcript_cursor }
-RuntimeClientTranscriptItem        configuration_applied { event_id, timestamp, change, instructions }
+RuntimeClientTranscriptItem        configuration_applied { event_id, timestamp, change, instructions, catalog }
 TraceRecord.kind = configuration   with TraceRecord.configuration = change,
-                                   TraceRecord.configuration_instructions = instructions
+                                   TraceRecord.configuration_instructions = instructions,
+                                   TraceRecord.configuration_catalog = catalog
 ContentSource                      configuration_instructions { journal_sequence }
+                                   configuration_catalog { journal_sequence }
 ```
 
 `ConfigurationChange` carries the reason (`source`, `model_selection`,
 `reallocation`), previous and new binding revisions (equal for the
 independently published execution-policy unit, which never rebinds), the
 changed domains (`instructions`, `context_policy`, `tools`, `skills`, `model`,
-`approval_mode`), bounded Tool and Skill names — at most 16 and 1 KiB of
+`execution_policy` — approval mode, model timeout, Tool deadline and MCP
+startup policies), bounded Tool and Skill names — at most 16 and 1 KiB of
 encoded names per added/removed/changed list, each with its exact total — and
-`instructions_bytes`. A same-name Tool whose definition or server binding
-changed, and a same-name Skill whose content version changed, is `changed`.
-`instructions` is a `ContentRef` to the exact effective instructions the commit
-installed, retained with the fact and read through `conversation/contentRead`
-(or the history equivalent) within the reader's cut; a Trace configuration
-record opens it through its detail cut.
+`instructions_bytes` and `catalog_bytes`. A same-name Tool whose definition or
+implementation (server binding, or enabled Workflow program) changed, and a
+same-name Skill whose content version changed, is `changed`. `instructions` is a
+`ContentRef` to the exact effective instructions the commit installed; `catalog`
+is a `ContentRef` to a JSON document of every Tool and Skill the commit added or
+changed: `{ tools: [{ definition, model_input_schema, server_binding_digest,
+workflow }], skills: [{ entry, version_id }] }`. The server binding appears only
+as a digest of its transport and policy, never its credentials. Both are
+retained with the fact and read through `conversation/contentRead` (or the
+history equivalent) within the reader's cut; a Trace configuration record opens
+them through its detail cut.
 
 Invariants:
 
@@ -1934,7 +1942,9 @@ Invariants:
   `configuration_applied` fact, released to the transcript and Trace in Journal
   order and counted in the Trace total. A failed append is an absorbing
   `record_configuration_change` durability failure and leaves the unit
-  `uncertain`: published, not recorded, with new work fenced.
+  `uncertain`: published, not recorded, with new work fenced. No later
+  application of that Session reports `applied` — a comment-only edit or a
+  rescan included — until a resident runtime without that failure attaches.
 - The fact never enters model context. Web Chat shows only Tool additions and
   removals from it; instruction, context, Skill and same-name Tool changes stay
   in Trace and inspection.

@@ -784,7 +784,7 @@ not roll back independently applied units or mutate resources leased by old work
 
 Each Session retains its committed binding across runtime unload/load and
 reconnect within an App Server process. A prepared candidate — instructions,
-context policy, capability closure, Skills, model invocations and approval mode
+context policy, capability closure, Skills, model invocations and execution policy
 together — is staged in the resident runtime and committed automatically at the
 Session's next safe boundary, under the same coordinator lock as Attempt
 admission. The boundary is narrower than idleness: a current or scheduled
