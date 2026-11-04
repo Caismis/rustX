@@ -10,6 +10,33 @@ use super::{
 use serde_json::json;
 use std::borrow::Cow;
 
+impl WorkflowNodeProgram {
+    /// The final value this node commits, after any internal response mapping.
+    /// A Classifier's routing Model response is not its public node value.
+    fn value_schema(&self) -> Option<Value> {
+        match self {
+            Self::Model(model) => Some(if model.classes.is_empty() {
+                model.output.schema()
+            } else {
+                super::transform::classifier_result_schema()
+            }),
+            Self::Agent(agent) => Some(agent.value_schema()),
+            Self::Tool { result, .. } => Some(result.schema()),
+            Self::Review { actions, .. } => Some(super::review::result_schema(actions)),
+            Self::Template { .. } => Some(super::transform::text_schema()),
+            Self::List { output_schema, .. }
+            | Self::Aggregate { output_schema, .. }
+            | Self::Loop { output_schema, .. }
+            | Self::Iteration { output_schema, .. } => Some(output_schema.clone()),
+            Self::Start
+            | Self::Branch { .. }
+            | Self::Return { .. }
+            | Self::LoopEnd
+            | Self::Assigner { .. } => None,
+        }
+    }
+}
+
 impl WorkflowProgram {
     /// Trusted Model intent with exact authored paths, available to structural
     /// checkers without introducing model execution or credential authority.
@@ -54,33 +81,12 @@ impl WorkflowProgram {
         fn walk(block: &WorkflowBlockProgram, path: &str, found: &mut BTreeMap<String, Value>) {
             for (id, node) in &block.nodes {
                 let path = format!("{path}.nodes.{id}");
-                let output = match node {
-                    WorkflowNodeProgram::Model(model) => Some(model.output.schema()),
-                    WorkflowNodeProgram::Agent(agent) => Some(agent.value_schema()),
-                    WorkflowNodeProgram::Tool { result, .. } => Some(result.schema()),
-                    WorkflowNodeProgram::Review { actions, .. } => {
-                        Some(super::review::result_schema(actions))
-                    }
-                    WorkflowNodeProgram::Loop {
-                        body,
-                        output_schema,
-                        ..
-                    }
-                    | WorkflowNodeProgram::Iteration {
-                        body,
-                        output_schema,
-                        ..
-                    } => {
-                        walk(body, &format!("{path}.body"), found);
-                        Some(output_schema.clone())
-                    }
-                    WorkflowNodeProgram::Start
-                    | WorkflowNodeProgram::Branch { .. }
-                    | WorkflowNodeProgram::Return { .. }
-                    | WorkflowNodeProgram::LoopEnd
-                    | WorkflowNodeProgram::Assigner { .. } => None,
-                };
-                if let Some(output) = output {
+                if let WorkflowNodeProgram::Loop { body, .. }
+                | WorkflowNodeProgram::Iteration { body, .. } = node
+                {
+                    walk(body, &format!("{path}.body"), found);
+                }
+                if let Some(output) = node.value_schema() {
                     found.insert(path, output);
                 }
             }
@@ -220,7 +226,7 @@ fn schema(value: &Value) -> Value {
                                     .map(|(name, property)| (name.clone(), schema(property)))
                                     .collect(),
                             )
-                        } else if key == "items" {
+                        } else if matches!(key.as_str(), "items" | "anyOf") {
                             schema(value)
                         } else {
                             value.clone()
@@ -264,6 +270,18 @@ fn predicate(value: &WorkflowPredicate) -> Value {
         WorkflowPredicate::NotEqual { left, right } => {
             json!({"type":"not_equal", "left":binding(left), "right":binding(right)})
         }
+        WorkflowPredicate::Greater { left, right } => {
+            json!({"type":"greater", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::GreaterEqual { left, right } => {
+            json!({"type":"greater_equal", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::Less { left, right } => {
+            json!({"type":"less", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::LessEqual { left, right } => {
+            json!({"type":"less_equal", "left":binding(left), "right":binding(right)})
+        }
         WorkflowPredicate::Contains { left, right } => {
             json!({"type":"contains", "left":binding(left), "right":binding(right)})
         }
@@ -304,17 +322,57 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             profile: None,
             model: None,
             selector: None,
-            output_schema: None,
+            output_schema: node.value_schema().as_ref().map(schema),
             result_kind: None,
             loop_count: None,
         };
         match node {
+            WorkflowNodeProgram::Template { variables, .. } => {
+                view.kind = "template".into();
+                view.bindings.extend(
+                    variables
+                        .iter()
+                        .map(|(name, value)| (format!("variables.{name}"), binding(value))),
+                );
+            }
+            WorkflowNodeProgram::List {
+                input,
+                filter,
+                extract,
+                ..
+            } => {
+                view.kind = "list".into();
+                view.bindings.insert("input".into(), binding(input));
+                if let Some(filter) = filter {
+                    view.bindings
+                        .insert("filter.value".into(), binding(&filter.value));
+                }
+                if let Some(extract) = extract {
+                    view.bindings.insert("extract".into(), binding(extract));
+                }
+            }
+            WorkflowNodeProgram::Aggregate { groups, .. } => {
+                view.kind = "aggregate".into();
+                for (index, group) in groups.iter().enumerate() {
+                    for (position, path) in group.variables.iter().enumerate() {
+                        view.bindings.insert(
+                            format!("groups.{index}.variables.{position}"),
+                            binding(&WorkflowValue::Reference { path: path.clone() }),
+                        );
+                    }
+                }
+            }
             WorkflowNodeProgram::Model(model) => {
                 result.runtime_requirements.extend([
                     "invoking_attempt_frozen_model_resolution",
                     "auxiliary_model_execution_and_settlement",
                 ]);
-                view.kind = "model".into();
+                view.kind = if model.classes.is_empty() {
+                    "model"
+                } else {
+                    "classifier"
+                }
+                .into();
                 view.model = Some(match &model.model {
                     crate::model::session::AuxiliaryModelPolicy::Session => {
                         ModelPolicyInspection::Session
@@ -330,7 +388,6 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                         max_output_tokens: *max_output_tokens,
                     },
                 });
-                view.output_schema = Some(schema(&model.output.schema()));
                 view.result_kind = Some(match model.output {
                     super::WorkflowModelOutput::Text {} => "text".into(),
                     super::WorkflowModelOutput::JsonSchema { .. } => "json_schema".into(),
@@ -363,7 +420,6 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 view.kind = "agent".into();
                 view.profile = Some(agent.profile.clone());
                 result.profiles.insert(agent.profile.clone());
-                view.output_schema = Some(schema(&agent.value_schema()));
                 view.bindings.extend(
                     agent
                         .task
@@ -386,12 +442,25 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 ]);
                 view.kind = "tool".into();
                 view.selector = Some(selector.clone());
-                view.bindings.insert("arguments".into(), binding(arguments));
-                view.output_schema = Some(schema(&tool_result.schema()));
+                match arguments {
+                    super::tool::WorkflowToolArguments::Value(value) => {
+                        view.bindings.insert("arguments".into(), binding(value));
+                    }
+                    super::tool::WorkflowToolArguments::Code { variables, .. } => {
+                        view.kind = "code".into();
+                        view.bindings.extend(
+                            variables
+                                .iter()
+                                .map(|(name, value)| (format!("variables.{name}"), binding(value))),
+                        );
+                    }
+                }
                 view.result_kind = Some(
                     match tool_result {
-                        super::WorkflowToolResult::Json { .. } => "json",
-                        super::WorkflowToolResult::Text {} => "text",
+                        super::tool::WorkflowToolProjection::Native(
+                            super::WorkflowToolResult::Text {},
+                        ) => "text",
+                        _ => "json",
                     }
                     .into(),
                 );
@@ -417,12 +486,11 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 break_condition,
                 loop_count,
                 body,
-                output_schema,
+                ..
             } => {
                 result.runtime_requirements.insert("actual_loop_iterations");
                 view.kind = "loop".into();
                 view.loop_count = Some(*loop_count);
-                view.output_schema = Some(schema(output_schema));
                 for variable in loop_variables {
                     view.bindings.insert(
                         format!("loop_variables.{}", variable.label),
@@ -439,12 +507,10 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 iterator,
                 output,
                 body,
-                output_schema,
                 ..
             } => {
                 result.runtime_requirements.insert("actual_loop_iterations");
                 view.kind = "iteration".into();
-                view.output_schema = Some(schema(output_schema));
                 view.bindings.extend([
                     ("iterator".into(), binding(iterator)),
                     ("output".into(), binding(output)),
@@ -463,14 +529,11 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                     }
                 }
             }
-            WorkflowNodeProgram::Review {
-                content, actions, ..
-            } => {
+            WorkflowNodeProgram::Review { content, .. } => {
                 result
                     .runtime_requirements
                     .insert("human_input_and_interaction_availability");
                 view.kind = "review".into();
-                view.output_schema = Some(schema(&super::review::result_schema(actions)));
                 view.bindings.extend(
                     content
                         .iter()
@@ -491,4 +554,95 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             nodes,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explain_redacts_nullable_list_records_and_return_projections() {
+        let scalar = json!({
+            "type":"string",
+            "enum":["PRIVATE_ENUM_MARKER", "PRIVATE_DEFAULT_MARKER"],
+            "default":"PRIVATE_DEFAULT_MARKER",
+            "description":"PRIVATE_DESCRIPTION_MARKER",
+        });
+        let object = json!({
+            "type":"object", "properties":{"id":scalar}, "required":["id"],
+            "additionalProperties":false,
+            "description":"PRIVATE_OBJECT_DESCRIPTION_MARKER",
+            "default":{"id":"PRIVATE_DEFAULT_MARKER"},
+        });
+        for item in [scalar, object] {
+            let definition = serde_json::from_value(json!({
+                "description":"Explain a nullable List result",
+                "block":{
+                    "input":{
+                        "type":"object", "properties":{"items":{"type":"array","items":item}},
+                        "required":["items"], "additionalProperties":false,
+                    },
+                    "nodes":{
+                        "start":{"type":"start"},
+                        "list":{"type":"list","input":{"type":"reference","path":["args","items"]}},
+                        "done":{"type":"return","outputs":[{"variable":"selected","value_selector":["list","first_record"]}]},
+                    },
+                    "edges":[{"from":"start","to":"list"},{"from":"list","to":"done"}],
+                },
+            })).unwrap();
+            let program = WorkflowProgram::compile(
+                super::super::WorkflowId::parse("private_list").unwrap(),
+                definition,
+            )
+            .unwrap();
+            let report = program.inspect();
+            let serialized = serde_json::to_string(&report).unwrap();
+            for marker in [
+                "PRIVATE_ENUM_MARKER",
+                "PRIVATE_DEFAULT_MARKER",
+                "PRIVATE_DESCRIPTION_MARKER",
+                "PRIVATE_OBJECT_DESCRIPTION_MARKER",
+            ] {
+                assert!(!serialized.contains(marker), "Explain leaked {marker}");
+            }
+            // The actual inferred union and both nullable projections remain
+            // visible, including nested object property structure.
+            let expected_item = schema(&item);
+            let nullable = json!({"anyOf":[expected_item, {"type":"null"}]});
+            let node = report.blocks["block"].nodes["list"]
+                .output_schema
+                .as_ref()
+                .unwrap();
+            assert_eq!(node["properties"]["result"]["items"], expected_item);
+            for field in ["first_record", "last_record"] {
+                assert_eq!(node["properties"][field], nullable);
+            }
+            assert_eq!(report.output_schema["properties"]["selected"], nullable);
+            assert_eq!(report.blocks["block"].output_schema, report.output_schema);
+            let unredacted = program.node_outputs();
+            assert_eq!(
+                unredacted["block.nodes.list"]["properties"]["first_record"]["anyOf"][0],
+                item
+            );
+            let annotation = if item["type"] == "object" {
+                &expected_item["properties"]["id"]
+            } else {
+                &expected_item
+            };
+            for field in ["enum", "default", "description"] {
+                assert_eq!(annotation[field], json!({"redacted":true}));
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_inspection_keeps_the_operator_and_redacts_literal_operands() {
+        for kind in ["greater", "greater_equal", "less", "less_equal"] {
+            let condition:WorkflowPredicate=serde_json::from_value(json!({"type":kind,"left":{"type":"reference","path":["args","amount"]},"right":{"type":"literal","value":938_471}})).unwrap();
+            let view = predicate(&condition);
+            assert_eq!(view["type"], kind);
+            assert_eq!(view["left"]["path"], json!(["args", "amount"]));
+            assert!(!view.to_string().contains("938471"));
+        }
+    }
 }

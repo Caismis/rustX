@@ -16,7 +16,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 test('real executable failure preserves native stdout, stderr, exact argv and exit code', t => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-launch-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
     writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
   }
   const binary = join(directory, 'native binary with spaces');
@@ -30,7 +30,7 @@ test('real executable failure preserves native stdout, stderr, exact argv and ex
 test('real owned children: partial startup failure waits for native shutdown and removes scratch', { timeout: 20_000 }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-launch-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
     writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
   }
   const marker = join(directory, 'native-settled');
@@ -58,7 +58,7 @@ process.on('SIGTERM',()=>server.close(()=>writeFileSync(${JSON.stringify(marker)
 test('real SIGTERM during native readiness settles once without launching Web', { timeout: 20_000 }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-launch-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
     writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
   }
   const script = join(directory, 'signal-test.mjs');
@@ -90,7 +90,7 @@ process.exitCode=await launcher.done; process.disconnect();`);
 test('owned process group settles descendants even when the leader exits without reaping them', { timeout: 20_000 }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-launch-tree-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
     writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
   }
   const pidFile = join(directory, 'descendant-pid');
@@ -120,7 +120,7 @@ function lines(stream: NodeJS.ReadableStream) {
 async function nativeFixture(t: import('node:test').TestContext, mode: 'app-server' | 'web', transport?: string) {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-owner-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
     writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
   }
   const userState = join(directory, 'user-state'); writeFileSync(userState, 'keep');
@@ -217,7 +217,7 @@ for (const phase of ['startup', 'ready'] as const) test(`real main SIGHUP during
 test('exact native help delegation has no invented transport and exits successfully', t => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-help-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
     writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
   }
   const binary = join(directory, 'native.mjs');
@@ -236,7 +236,7 @@ else process.exitCode=2;
 test('EOF consumed before ownership still settles and removes stdin listeners across repeated use', { timeout: 20_000 }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-ended-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
     writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
   }
   const script = join(directory, 'ended.mjs');

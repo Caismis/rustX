@@ -1,4 +1,4 @@
-import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowConsumerAddress, WorkflowConsumerField, WorkflowExpressionStep } from '../../../../../protocol/app-server/v62';
+import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowConsumerAddress, WorkflowConsumerField, WorkflowExpressionStep } from '../../../../../protocol/app-server/v69';
 import { sameAnalysisQuery } from '../../../../../protocol/app-server/workflow-analysis';
 import { blockAt, nodeAt, sameDocument, type WorkflowDocument } from './model';
 import type { FieldAddress } from './fields';
@@ -12,7 +12,20 @@ export function consumerAddress(document: WorkflowDocument, field: FieldAddress)
   const first = parts.shift();
   let consumer: WorkflowConsumerField;
   const key = () => { const part = parts.shift(); return typeof part === 'object' ? part.key : undefined; };
-  if (first === 'messages' && node.type === 'model') {
+  if (first === 'variables' && (node.type === 'template' || node.type === 'code')) {
+    const name = key(); if (name === undefined) return undefined; consumer = { kind: node.type==='code' ? 'code_variable' : 'template_variable', name };
+  } else if (first === 'input' && (node.type === 'list' || node.type === 'classifier')) consumer = { kind: 'transform_input' };
+  else if (node.type==='list' && first==='filter' && parts.shift()==='value') return {address:{block:[...field.block],node:field.node},field:{kind:'list_filter_value'},path:[]};
+  else if (node.type==='list' && first==='extract') return {address:{block:[...field.block],node:field.node},field:{kind:'list_extract'},path:[]};
+  else if (first === 'instruction' && node.type === 'classifier') return { address: { block: [...field.block], node: field.node }, field: { kind: 'classifier_instruction' }, path: [] };
+  else if (first === 'classes' && node.type === 'classifier') {
+    const index = parts.shift(); if (typeof index !== 'number' || !node.classes[index] || parts.shift() !== 'description') return undefined;
+    return { address: { block: [...field.block], node: field.node }, field: { kind: 'classifier_class', index }, path: [] };
+  }
+  else if (first === 'groups' && node.type === 'aggregate') {
+    const group = parts.shift(); if (typeof group !== 'number' || parts.shift() !== 'variables') return undefined;
+    const index = parts.shift(); if (typeof index !== 'number') return undefined; consumer = { kind: 'aggregate_variable', group, index };
+  } else if (first === 'messages' && node.type === 'model') {
     // Every variable of a message shares its scope, inserted or not.
     const index = parts.shift(); if (typeof index !== 'number' || !node.messages[index]) return undefined;
     return { address: { block: [...field.block], node: field.node }, field: { kind: 'message', index }, path: [] };

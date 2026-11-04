@@ -88,9 +88,9 @@ test('native child live cuts, independent title, active and file-only resume upl
     if (await step.isVisible() && await step.getAttribute('aria-expanded') === 'false') await step.click();
     const disclosure = tool.getByRole('button', { expanded: false });
     if (await disclosure.count()) await disclosure.click();
-    await child.getByRole('button', { name: 'Load attachment', exact: true }).click();
-    await expect(child.locator('img')).toBeVisible();
-    await expect.poll(() => child.locator('img').evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
+    await tool.getByRole('button', { name: /^Load attachment / }).click();
+    await expect(tool.locator('img')).toBeVisible();
+    await expect.poll(() => tool.locator('img').evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
     expect(wire.requests.some(request => request.method === 'agent/artifactRead' && request.params.agent_id === id)).toBe(true);
     // The native locator, not the currently loaded Trace page, owns Inspect.
     await tool.getByRole('button', { name: 'Inspect', exact: true }).click();

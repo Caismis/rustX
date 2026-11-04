@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode, type RefObject } from 'react';
 import clsx from 'clsx';
-import type { WorkflowToolChoice, WorkflowToolSource } from '../../../../../../protocol/app-server/v62';
+import type { WorkflowToolChoice, WorkflowToolSource } from '../../../../../../protocol/app-server/v69';
 import { useTranslation } from '../../../../locale/react';
 import type { Translate } from '../../../../locale/translation';
 import { IconChevronRightOutline14, IconSearchOutline16 } from '../../../../presentation/primitives/icons';
@@ -24,8 +24,8 @@ type Row = { kind: 'heading'; key: string; label: string } | { kind: 'note'; key
 /** As Dify's block classifications: the default group has no heading. */
 const GROUPS: readonly { group?: 'logic' | 'transform'; kinds: readonly Exclude<NodeKind, 'tool'>[] }[] = [
   { kinds: ['agent', 'model', 'return'] },
-  { group: 'logic', kinds: ['branch', 'iteration', 'loop', 'loop_end', 'review'] },
-  { group: 'transform', kinds: ['assigner'] },
+  { group: 'logic', kinds: ['classifier', 'branch', 'iteration', 'loop', 'loop_end', 'review'] },
+  { group: 'transform', kinds: ['code', 'template', 'list', 'aggregate', 'assigner'] },
 ];
 
 /** A Tool's description up to its first sentence, as a node description. */

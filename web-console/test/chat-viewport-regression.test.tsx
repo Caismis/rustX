@@ -5,11 +5,15 @@ import { ChatViewport } from '../src/presentation/layout/ChatViewport';
 
 let frames: Map<number, FrameRequestCallback>;
 let nextFrame: number;
+let resize: () => void;
 beforeEach(() => {
   frames = new Map(); nextFrame = 0;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++nextFrame, callback); return nextFrame; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
-  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(callback: () => void) { resize = callback; }
+    observe() {} disconnect() {}
+  });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function paint() {
@@ -34,6 +38,23 @@ function fixture() {
   paint(); expect(port.scrollTop).toBe(1000);
   return { port, view, update: (height: number) => view.rerender(tree(height)) };
 }
+it('corrects observed layout before paint even after the current animation frame has run', () => {
+  const f = fixture();
+  f.update(1200);
+  act(() => resize());
+  // ResizeObserver runs before paint, after this frame's animation callbacks.
+  // Scheduling another frame here visibly paints the inherited offset first.
+  expect(f.port.scrollTop).toBe(1100);
+  expect(frames.size).toBe(0);
+});
+it('keeps a reader gesture authoritative when resize flushes a queued correction', () => {
+  const f = fixture();
+  f.update(1200);
+  act(() => { f.port.scrollTop = 900; f.port.dispatchEvent(new Event('scroll')); resize(); });
+  expect(f.port.scrollTop).toBe(900);
+  act(() => f.port.dispatchEvent(new Event('scrollend')));
+  expect(f.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
+});
 it('keeps following when committed DOM shrinks and grows before one layout frame', () => {
   const f = fixture();
   f.update(600); expect(f.port.scrollTop).toBe(500);

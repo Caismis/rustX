@@ -19,7 +19,7 @@
   transition: color 100ms ease;
 }
 
-.row:hover {
+.row:focus-visible {
   color: var(--dsw-alias-label-secondary);
 }
 
@@ -165,15 +165,23 @@
   transition: opacity 100ms ease;
 }
 
-.root:hover .inspectButton,
+.root:focus-within .inspectButton,
 .inspectButton:focus-visible {
   opacity: 1;
 }
 
 /* Solid hover fill (a translucent token would let content bleed through). */
-.inspectButton:hover {
-  background: var(--dsw-alias-interactive-bg-hover-solid);
-  color: var(--dsw-alias-label-primary);
+@media (hover: hover) {
+  .row:hover { color: var(--dsw-alias-label-secondary); }
+  .root:hover .inspectButton { opacity: 1; }
+  .inspectButton:hover {
+    background: var(--dsw-alias-interactive-bg-hover-solid);
+    color: var(--dsw-alias-label-primary);
+  }
+}
+
+@media (hover: none) {
+  .inspectButton { opacity: 1; }
 }
 
 /* Expanded-body scroll wrapper for the run_code CodeBlock; the IN/OUT card

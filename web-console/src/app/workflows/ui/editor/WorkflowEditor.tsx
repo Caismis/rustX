@@ -21,7 +21,7 @@ import { blockAt, nodeAt, sameBlockPath, startOf, type BlockPath, type WorkflowD
 import { isDirty, type EditorNotice, type FieldDraft, type WorkflowEditorActor } from '../../machines/editor';
 import { editorHolds, type WorkflowSurfaceActor } from '../../machines/surface';
 import { scopeKey } from '../../port';
-import { IconArrowLeft, IconFile, IconFolder, IconRedo, IconUndo } from '../icons';
+import { IconArrowLeft, IconFile, IconRedo, IconUndo } from '../icons';
 import { WorkflowIcon } from '../WorkflowIcon';
 import { FailureText, shortRevision } from '../notices';
 import { Canvas, keyboardOwned, type Problems, type Selection } from './Canvas';
@@ -157,7 +157,6 @@ export default function WorkflowEditor({ surface, editor, scopeLabel }: {
     setFieldFocus(current => ({ address, epoch: (current?.epoch ?? 0) + 1 }));
   }, [editor, navigate]);
 
-  const blockLabel = block.length ? block.map(step => `${step.node} / body`).join(' › ') : tx('workflows:canvas.root');
   const fileState = !base?.source.present ? tx('workflows:editor.file-state-missing') : dirty ? tx('workflows:editor.file-state-unsaved') : tx('workflows:editor.file-state-saved');
 
   // Editor shortcuts apply while the editor is shown, wherever focus rests
@@ -199,16 +198,8 @@ export default function WorkflowEditor({ surface, editor, scopeLabel }: {
   else content = <ToolCatalogProvider port={context.port}><div className={css.body}>
     <ReactFlowProvider>
       <div className={css.stage}>
-        <nav className={css.crumbs} aria-label={tx('workflows:canvas.block-path')}>
-          <IconFolder size={14} />
-          <button type="button" className={css.crumb} aria-current={block.length === 0 ? 'location' : undefined} onClick={() => navigate([])}>{tx('workflows:canvas.root')}</button>
-          {block.map((step, index) => <span key={index} className={css.crumbStep}><span aria-hidden>/</span>
-            <button type="button" className={css.crumb} aria-current={index === block.length - 1 ? 'location' : undefined} onClick={() => navigate(block.slice(0, index + 1))}>{step.node} / {/* i18n-raw: native Loop body field name */ 'body'}</button>
-          </span>)}
-          {block.length === 0 && <><span aria-hidden>/</span><span className={css.crumbFile}>{target.id}</span></>}
-        </nav>
         <Canvas document={document} path={block} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection} currentState={currentState} organizeEpoch={layoutEpoch}
-          problems={problems} edit={edit} editable={editable && !saving} blockLabel={blockLabel} drafts={context.drafts} onDuplicate={duplicate} tools={base.source.vocabulary.builtin_tools} />
+          problems={problems} edit={edit} editable={editable && !saving} drafts={context.drafts} onDuplicate={duplicate} tools={base.source.vocabulary.builtin_tools} />
       </div>
     </ReactFlowProvider>
     {/* As Dify: a selected connection only highlights and a note is written in

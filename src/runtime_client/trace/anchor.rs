@@ -160,6 +160,32 @@ impl TraceProjection<'_> {
         facts.terminal(ending, anchor.sequence);
         Ok(facts)
     }
+    fn workflow_nodes(
+        &self,
+        facts: &mut AnchorFacts,
+        sequence: u64,
+    ) -> Result<(), ConversationStoreError> {
+        let nodes = self
+            .store
+            .observation_workflow_nodes(self.cut()?, sequence, 0, 0)?;
+        facts.preview = Some(TracePreview::of(&nodes.workflow_id));
+        if let Some(parent) = nodes.parent_sequence {
+            facts.location = self
+                .anchor_facts(&self.inspection_anchor(parent)?)?
+                .location;
+        }
+        facts
+            .collections
+            .push(crate::observation::cut::CollectionFrontier {
+                domain: format!("trace.records.{sequence}.workflow.nodes"),
+                revision: nodes.revision,
+                total: nodes.total,
+                loaded: 0,
+                next_offset: (nodes.total > 0).then_some(0),
+            });
+        facts.has_detail = true;
+        Ok(())
+    }
     fn anchor_start(
         &self,
         facts: &mut AnchorFacts,
@@ -245,6 +271,7 @@ impl TraceProjection<'_> {
                 facts
                     .originating_tool_call_id
                     .clone_from(originating_tool_call_id);
+                self.workflow_nodes(facts, anchor.sequence)?;
                 vec![
                     K::WorkflowCompleted,
                     K::WorkflowFailed,

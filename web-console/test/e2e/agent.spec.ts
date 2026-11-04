@@ -27,6 +27,17 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
      await page.getByRole('menuitem', { name: 'Thinking effort', exact: true }).click();
      await expect(page.getByRole('menuitemradio', { name: 'deliberate', exact: true })).toBeVisible();
    }
+   if (mode === 'approval') {
+     const approval = page.getByRole('region', { name: 'Approval', exact: true });
+     const details = approval.getByRole('group', { name: 'Approval details', exact: true });
+     await expect(details.getByText('bash', { exact: true })).toBeVisible();
+     await expect(details.getByText('Developer approval required', { exact: true })).toBeVisible();
+     await expect(details.locator('pre')).toHaveText('printf rustX');
+     await expect(approval.getByRole('button', { name: 'Deny', exact: true })).toBeVisible();
+     await expect(approval.getByRole('button', { name: 'Allow once', exact: true })).toBeVisible();
+     await expect(approval.getByRole('button')).toHaveCount(2);
+     await expect(page.getByRole('button', { name: 'Cancel interaction', exact: true })).toHaveCount(0);
+   }
    await expectStableScreenshot(page, `agent-${mode}-light.png`);
  if (mode === 'selectors') {
  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');

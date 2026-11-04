@@ -4469,6 +4469,7 @@ mod mcp_race_tests {
                 arguments: serde_json::json!({}),
             },
             crate::tools::executor::ToolExecutionContext {
+                stdout_capture: None,
                 workspace_changes: None,
                 model_invocation: None,
                 goal: None,

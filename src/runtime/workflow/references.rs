@@ -26,6 +26,10 @@ fn predicate<'a>(input: &'a WorkflowPredicate, reads: &mut Vec<&'a [String]>) {
         | WorkflowPredicate::NotEmpty { value: input } => value(input, reads),
         WorkflowPredicate::Equal { left, right }
         | WorkflowPredicate::NotEqual { left, right }
+        | WorkflowPredicate::Greater { left, right }
+        | WorkflowPredicate::GreaterEqual { left, right }
+        | WorkflowPredicate::Less { left, right }
+        | WorkflowPredicate::LessEqual { left, right }
         | WorkflowPredicate::Contains { left, right }
         | WorkflowPredicate::NotContains { left, right }
         | WorkflowPredicate::StartsWith { left, right }
@@ -42,10 +46,64 @@ fn predicate<'a>(input: &'a WorkflowPredicate, reads: &mut Vec<&'a [String]>) {
     }
 }
 
+fn list_reads<'a>(
+    input: &'a WorkflowValue,
+    filter: Option<&'a super::WorkflowListFilter>,
+    extract: Option<&'a WorkflowValue>,
+    reads: &mut Vec<&'a [String]>,
+) {
+    value(input, reads);
+    if let Some(filter) = filter
+        && !matches!(
+            filter.operator,
+            super::WorkflowListOperator::Empty | super::WorkflowListOperator::NotEmpty
+        )
+    {
+        value(&filter.value, reads);
+    }
+    if let Some(extract) = extract {
+        value(extract, reads);
+    }
+}
+
 pub(super) fn node(input: &WorkflowNodeDefinition) -> Vec<&[String]> {
     let mut reads = Vec::new();
     match input {
         WorkflowNodeDefinition::Start {} | WorkflowNodeDefinition::LoopEnd {} => {}
+        WorkflowNodeDefinition::Template { variables, .. }
+        | WorkflowNodeDefinition::Code { variables, .. } => {
+            for input in variables.values() {
+                value(input, &mut reads);
+            }
+        }
+        WorkflowNodeDefinition::List {
+            input,
+            filter,
+            extract,
+            ..
+        } => list_reads(input, filter.as_ref(), extract.as_ref(), &mut reads),
+        WorkflowNodeDefinition::Classifier {
+            input,
+            instruction,
+            classes,
+            ..
+        } => {
+            value(input, &mut reads);
+            for part in instruction
+                .iter()
+                .chain(classes.iter().flat_map(|class| &class.description))
+            {
+                value(part, &mut reads);
+            }
+        }
+        WorkflowNodeDefinition::Aggregate { groups, grouped } => {
+            let active = super::transform::active_groups(groups, *grouped);
+            for group in active {
+                for path in &group.variables {
+                    reads.push(path.as_slice());
+                }
+            }
+        }
         WorkflowNodeDefinition::Model { messages, .. } => {
             for message in messages {
                 for part in &message.content {

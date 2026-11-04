@@ -77,7 +77,7 @@ export function ValueEditor({ label, address, value, edit }: { label: string; ad
 /** Explicit path components at the path array `address`; a component may
  * itself contain any text. A component being added is unapplied text of
  * the field `address` with the `append` role. */
-function PathEditor({ address, path, edit }: { address: FieldAddress; path: readonly string[]; edit: Edit }) {
+export function PathEditor({ address, path, edit }: { address: FieldAddress; path: readonly string[]; edit: Edit }) {
   const tx = useTranslation();
   const adding = useFieldDraft({
     address: { ...address, role: 'append' }, canonical: '',
@@ -119,14 +119,15 @@ export function AddKey({ existing, address, add, label, action }: { existing: re
 }
 
 type PredicateKind = Predicate['type'];
-const PREDICATE_KINDS: readonly PredicateKind[] = ['boolean', 'equal', 'not_equal', 'contains', 'not_contains', 'starts_with', 'ends_with', 'empty', 'not_empty', 'not', 'and', 'or'];
+const PREDICATE_KINDS: readonly PredicateKind[] = ['boolean', 'greater', 'greater_equal', 'less', 'less_equal', 'equal', 'not_equal', 'contains', 'not_contains', 'starts_with', 'ends_with', 'empty', 'not_empty', 'not', 'and', 'or'];
 
 function predicateTemplate(kind: PredicateKind, from: Predicate): Predicate {
   const operand: Value = from.type === 'boolean' || from.type === 'empty' || from.type === 'not_empty' ? from.value
-    : from.type === 'equal' || from.type === 'not_equal' || from.type === 'contains' || from.type === 'not_contains' || from.type === 'starts_with' || from.type === 'ends_with' ? from.left
+    : 'left' in from ? from.left
       : { type: 'reference', path: ['args'] };
   switch (kind) {
     case 'boolean': return { type: 'boolean', value: operand };
+    case 'greater': case 'greater_equal': case 'less': case 'less_equal': return {type:kind,left:operand,right:{type:'literal',value:0}};
     case 'equal':
     case 'not_equal': return { type: kind, left: operand, right: { type: 'literal', value: null } };
     case 'contains':
@@ -159,7 +160,7 @@ export function PredicateEditor({ label, address, predicate, edit }: { label: st
       {PREDICATE_KINDS.map(kind => <option key={kind} value={kind}>{tx(`workflows:predicate.${kind}`)}</option>)}
     </select>
     {predicate.type === 'boolean' && <ValueEditor label={tx('workflows:predicate.boolean')} address={within(address, ['value'])} value={predicate.value} edit={edit} />}
-    {(predicate.type === 'equal' || predicate.type === 'not_equal' || predicate.type === 'contains' || predicate.type === 'not_contains' || predicate.type === 'starts_with' || predicate.type === 'ends_with') && <>
+    {('left' in predicate) && <>
       <ValueEditor label={tx('workflows:predicate.left')} address={within(address, ['left'])} value={predicate.left} edit={edit} />
       <ValueEditor label={tx('workflows:predicate.right')} address={within(address, ['right'])} value={predicate.right} edit={edit} />
     </>}

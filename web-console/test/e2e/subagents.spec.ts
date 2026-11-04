@@ -59,7 +59,9 @@ test('header child navigation preserves the parent draft and renders agent retur
   const inbound = page.locator('[data-inbound-source="agent"]');
   await inbound.getByRole('button').click();
   await expect(inbound.getByText('Evidence', { exact: true })).toBeVisible();
-  await inbound.getByRole('button', { name: 'View agent', exact: true }).click();
+  await expect(inbound.getByRole('button', { name: 'View agent', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Subagents', exact: true }).click();
+  await page.getByRole('treeitem', { name: /Verify findings/ }).click();
   await expect(page.getByRole('heading', { name: 'Child research report' })).toBeVisible();
   expect(errors).toEqual([]);
 });

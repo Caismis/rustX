@@ -5,7 +5,9 @@ use crate::durable::ConversationStore;
 use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut};
 use base64::Engine as _;
 mod inspection;
+mod workflow;
 pub(crate) use inspection::{canonical_selection, messages_page, messages_selection};
+pub(crate) use workflow::{workflow_page, workflow_selection};
 
 pub(crate) fn context_selection(domain: &str) -> Option<u64> {
     domain
@@ -560,6 +562,9 @@ pub(crate) fn history_page(
     }
     if messages_selection(domain).is_some() {
         return messages_page(store, cut, domain, offset, limit);
+    }
+    if workflow_selection(domain).is_some() {
+        return workflow_page(store, cut, domain, offset, limit, None);
     }
     if context_selection(domain).is_some() {
         return context_page(store, cut, domain, offset, limit);

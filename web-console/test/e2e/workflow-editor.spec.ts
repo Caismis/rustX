@@ -132,7 +132,7 @@ test('unfinished input schemas hide self, forward and alternate branch outputs',
   } finally { await fixture.stop(false); }
 });
 
-test('equality picker rejects numeric operands and admits a matching string binding after editing the literal', async ({ page }) => {
+test('equality picker matches numeric and string bindings to the edited literal type', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
@@ -150,7 +150,7 @@ test('equality picker rejects numeric operands and admits a matching string bind
     const inspector = page.getByRole('complementary', { name: 'Inspector' }), pick = inspector.getByRole('button', { name: 'Choose a variable', exact: true });
     await inspector.getByRole('button', { name: 'Advanced conditions', exact: true }).click();
     await pick.click();
-    await expect(inspector.getByRole('button', { name: /^args \/ count ·/ })).toBeDisabled();
+    await expect(inspector.getByRole('button', { name: /^args \/ count ·/ })).toBeEnabled();
     await expect(inspector.getByRole('button', { name: /^args \/ text ·/ })).toBeDisabled();
     await pick.click();
     await inspector.getByLabel('Literal JSON', { exact: true }).fill('"known"'); await inspector.getByLabel('Literal JSON', { exact: true }).blur();
@@ -322,6 +322,11 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.getByRole('complementary', { name: 'Inspector' })).toBeVisible();
     await expect(page.getByRole('complementary', { name: 'Inspector' })).toHaveCSS('position', 'absolute');
+    // Native Boolean predicates retain their original value semantics through
+    // the full editor rather than being projected as binary equality to true.
+    const predicates = page.getByRole('complementary', { name: 'Inspector' }).getByRole('combobox', { name: 'Predicate', exact: true });
+    await expect(predicates).toHaveCount(2);
+    for (const predicate of await predicates.all()) await expect(predicate).toHaveValue('boolean');
     await expectStableScreenshot(page, 'workflow-editor-narrow.png');
   } finally { await fixture.stop(false); }
 });
@@ -514,7 +519,7 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
     await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(1);
     await page.getByRole('button', { name: 'Add node', exact: true }).click();
-    await expect(page.getByRole('option')).toHaveCount(7);
+    await expect(page.getByRole('option')).toHaveCount(12);
     await page.getByLabel('Search nodes').fill('model');
     await page.keyboard.press('Enter');
     await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(2);

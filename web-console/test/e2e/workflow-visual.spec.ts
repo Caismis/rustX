@@ -367,26 +367,29 @@ test('authors structured required output, nested contracts and repeated downstre
 import { scaleWorkflow } from '../fixtures/workflow-scale';
 test('measures the native 256-node nested fixture and one metadata-only organize transaction', async ({ page }, info) => {
   const fixture = await startDogfood('web_console_dogfood');
+  const budgetMs = 10_000;
   try {
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
     const file = join(directory, 'bounded_scene.yaml'), original = scaleWorkflow(); writeFileSync(file, JSON.stringify(original));
     await openLibrary(page, fixture);
     const start = await page.evaluate(() => performance.now());
     await page.getByRole('button', { name: 'bounded_scene', exact: true }).click();
-    await expect(canvas(page).locator('.react-flow__node')).toHaveCount(257);
+    // Await the same budget that the measured render must satisfy, instead of
+    // failing at Playwright's shorter default before the allowed interval ends.
+    await expect(canvas(page).locator('.react-flow__node')).toHaveCount(257, { timeout: budgetMs });
     const renderMs = await page.evaluate(start => performance.now() - start, start);
-    expect(renderMs).toBeLessThan(10_000);
+    expect(renderMs).toBeLessThan(budgetMs);
     await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     // As Dify, nothing is selected on open, so no panel covers the canvas.
     await expect(panel(page)).toHaveCount(0);
     const organize = canvas(page).getByRole('button', { name: 'Organize nodes', exact: true });
     const before = await page.evaluate(() => performance.now()); await organize.click();
-    await expect(organize).toBeEnabled(); await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
-    const layoutMs = await page.evaluate(before => performance.now() - before, before); expect(layoutMs).toBeLessThan(10_000);
+    await expect(organize).toBeEnabled({ timeout: budgetMs }); await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible({ timeout: budgetMs });
+    const layoutMs = await page.evaluate(before => performance.now() - before, before); expect(layoutMs).toBeLessThan(budgetMs);
     await canvas(page).focus(); await page.keyboard.press('Control+z'); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     await page.keyboard.press('Control+Shift+z'); await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     const saved = parse(readFileSync(file, 'utf8')); expect(saved.block).toEqual(original.block); expect(saved.editor.notes).toEqual(original.editor?.notes);
-    const measurement = { fixture: 'test/fixtures/workflow-scale.ts', executableNodes: 256, blocks: 2, viewport: '1440x1000', renderMs, layoutMs, thresholdsMs: { render: 10000, layout: 10000 } };
+    const measurement = { fixture: 'test/fixtures/workflow-scale.ts', executableNodes: 256, blocks: 2, viewport: '1440x1000', renderMs, layoutMs, thresholdsMs: { render: budgetMs, layout: budgetMs } };
     const measurements = info.outputPath('bounded-scene-measurements.json'); writeFileSync(measurements, JSON.stringify(measurement, null, 2) + '\n');
     await info.attach('bounded-scene-measurements', { path: measurements, contentType: 'application/json' });
     expect((await fixture.control('requests')).requests).toHaveLength(0);

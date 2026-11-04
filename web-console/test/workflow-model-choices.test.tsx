@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../protocol/app-server/v62';
+import type { WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../protocol/app-server/v69';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { useModelChoices } from '../src/app/workflows/ui/editor/forms/ModelSelection';
 

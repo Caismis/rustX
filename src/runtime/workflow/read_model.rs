@@ -87,6 +87,10 @@ pub enum WorkflowWait {
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowNodeKind {
+    Template,
+    List,
+    Aggregate,
+    Classifier,
     Block,
     Agent,
     Model,
@@ -147,6 +151,12 @@ impl WorkflowInstanceView {
 
     pub(super) fn started(node: &WorkflowNodeInstance, program: &WorkflowNodeProgram) -> Self {
         let kind = match program {
+            WorkflowNodeProgram::Template { .. } => WorkflowNodeKind::Template,
+            WorkflowNodeProgram::List { .. } => WorkflowNodeKind::List,
+            WorkflowNodeProgram::Aggregate { .. } => WorkflowNodeKind::Aggregate,
+            WorkflowNodeProgram::Model(model) if !model.classes.is_empty() => {
+                WorkflowNodeKind::Classifier
+            }
             WorkflowNodeProgram::Agent(_) => WorkflowNodeKind::Agent,
             WorkflowNodeProgram::Model(_) => WorkflowNodeKind::Model,
             WorkflowNodeProgram::Tool { .. } => WorkflowNodeKind::Tool,
@@ -368,6 +378,24 @@ impl WorkflowReadModel {
             state.runs.push(run);
             true
         });
+    }
+
+    /// Exercise native mutation, revision retention and the installed host
+    /// callback together in cross-owner publication contract tests.
+    #[cfg(test)]
+    pub(crate) fn publish_run_for_test(&self, run: WorkflowRunView, sequence: u64) {
+        if self
+            .snapshot()
+            .runs
+            .iter()
+            .any(|current| current.id == run.id)
+        {
+            let id = run.id.clone();
+            self.update(&id, |current| *current = run);
+        } else {
+            self.register(run);
+        }
+        self.publish_committed(sequence);
     }
 
     pub(super) fn update(&self, id: &WorkflowRunId, mutate: impl FnOnce(&mut WorkflowRunView)) {

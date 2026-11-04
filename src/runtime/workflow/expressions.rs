@@ -133,11 +133,14 @@ pub(super) fn intrinsic_value_type(value: &WorkflowValue) -> Option<&'static str
 }
 
 pub(super) fn equality_type_supported(kind: &str) -> bool {
-    matches!(kind, "boolean" | "string" | "null")
+    matches!(kind, "boolean" | "string" | "null" | "number" | "integer")
 }
 
 pub(super) fn equality_types_compatible(left: Option<&str>, right: Option<&str>) -> bool {
-    left.is_some_and(|kind| equality_type_supported(kind) && Some(kind) == right)
+    matches!(
+        (left, right),
+        (Some("number" | "integer"), Some("number" | "integer"))
+    ) || left.is_some_and(|kind| equality_type_supported(kind) && Some(kind) == right)
 }
 
 pub(super) fn validate_predicate(
@@ -159,29 +162,70 @@ pub(super) fn validate_predicate(
             let left = value_schema(left, available, node, depth + 1)?;
             let right = value_schema(right, available, node, depth + 1)?;
             if !equality_types_compatible(schema_type(&left), schema_type(&right)) {
-                return Err(invalid(
-                    "equality requires matching boolean/string/null types; numeric predicates are unsupported",
-                ));
+                return Err(invalid("equality requires matching scalar types"));
+            }
+        }
+        WorkflowPredicate::Greater { left, right }
+        | WorkflowPredicate::GreaterEqual { left, right }
+        | WorkflowPredicate::Less { left, right }
+        | WorkflowPredicate::LessEqual { left, right } => {
+            let left = value_schema(left, available, node, depth + 1)?;
+            let right = value_schema(right, available, node, depth + 1)?;
+            if !matches!(schema_type(&left), Some("number" | "integer"))
+                || !matches!(schema_type(&right), Some("number" | "integer"))
+            {
+                return Err(invalid("numeric comparison requires two numeric operands"));
             }
         }
         WorkflowPredicate::Contains { left, right }
-        | WorkflowPredicate::NotContains { left, right }
-        | WorkflowPredicate::StartsWith { left, right }
+        | WorkflowPredicate::NotContains { left, right } => {
+            let left_schema = value_schema(left, available, node, depth + 1)?;
+            let right_schema = value_schema(right, available, node, depth + 1)?;
+            let valid = match schema_type(&left_schema) {
+                Some("array") => {
+                    if let Some(item) = left_schema.get("items") {
+                        super::schemas_compatible(&right_schema, item)
+                            || matches!(
+                                (schema_type(item), schema_type(&right_schema)),
+                                (Some("number" | "integer"), Some("number" | "integer"))
+                            )
+                    } else if let Some(items) = left_schema.get("const").and_then(Value::as_array) {
+                        items.iter().all(|item| {
+                            equality_types_compatible(
+                                Some(json_type(item)),
+                                schema_type(&right_schema),
+                            )
+                        }) && schema_type(&right_schema).is_some_and(equality_type_supported)
+                    } else {
+                        false
+                    }
+                }
+                Some("string") => {
+                    schema_type(&right_schema) == Some("string")
+                        && !matches!(right,WorkflowValue::Literal{value:Value::String(text)} if text.is_empty())
+                }
+                _ => false,
+            };
+            if !valid {
+                return Err(invalid(
+                    "containment requires strings or an array with a matching item",
+                ));
+            }
+        }
+        WorkflowPredicate::StartsWith { left, right }
         | WorkflowPredicate::EndsWith { left, right } => {
-            if matches!(right, WorkflowValue::Literal { value: Value::String(text) } if text.is_empty())
+            if matches!(right,WorkflowValue::Literal{value:Value::String(text)} if text.is_empty())
             {
                 return Err(invalid("string comparison requires a nonempty value"));
             }
-            let left = value_schema(left, available, node, depth + 1)?;
-            let right = value_schema(right, available, node, depth + 1)?;
-            if schema_type(&left) != Some("string") || schema_type(&right) != Some("string") {
+            if schema_type(&value_schema(left, available, node, depth + 1)?) != Some("string")
+                || schema_type(&value_schema(right, available, node, depth + 1)?) != Some("string")
+            {
                 return Err(invalid("string comparison requires two string operands"));
             }
         }
         WorkflowPredicate::Empty { value } | WorkflowPredicate::NotEmpty { value } => {
-            if schema_type(&value_schema(value, available, node, depth + 1)?) != Some("string") {
-                return Err(invalid("empty comparison requires a string operand"));
-            }
+            value_schema(value, available, node, depth + 1)?;
         }
         WorkflowPredicate::Not { predicate } => {
             validate_predicate(predicate, available, node, depth + 1)?;
@@ -307,6 +351,18 @@ pub(super) fn bounded_value_bytes(value: &Value) -> Result<usize, WorkflowRunErr
     Ok(bytes)
 }
 
+/// Dify's explicit empty operator, separate from the strict boolean predicate.
+fn is_empty(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Bool(value) => !*value,
+        Value::Number(value) => value.as_f64() == Some(0.0),
+        Value::String(value) => value.is_empty(),
+        Value::Array(value) => value.is_empty(),
+        Value::Object(value) => value.is_empty(),
+    }
+}
+
 pub(super) fn evaluate_predicate(
     predicate: &WorkflowPredicate,
     input: &Value,
@@ -319,11 +375,57 @@ pub(super) fn evaluate_predicate(
         WorkflowPredicate::Equal { left, right } | WorkflowPredicate::NotEqual { left, right } => {
             let left = evaluate_value(left, input, values)?;
             let right = evaluate_value(right, input, values)?;
-            (left == right) == matches!(predicate, WorkflowPredicate::Equal { .. })
+            (if left.is_number() && right.is_number() {
+                super::transform::compare(&left, &right) == Some(std::cmp::Ordering::Equal)
+            } else {
+                left == right
+            }) == matches!(predicate, WorkflowPredicate::Equal { .. })
+        }
+        WorkflowPredicate::Greater { left, right }
+        | WorkflowPredicate::GreaterEqual { left, right }
+        | WorkflowPredicate::Less { left, right }
+        | WorkflowPredicate::LessEqual { left, right } => {
+            let left = evaluate_value(left, input, values)?;
+            let right = evaluate_value(right, input, values)?;
+            if !left.is_number() || !right.is_number() {
+                return Err(WorkflowRunError::InvalidValue(
+                    "non-numeric comparison operand".into(),
+                ));
+            }
+            let order = super::transform::compare(&left, &right).ok_or_else(|| {
+                WorkflowRunError::InvalidValue("numeric operands are not comparable".into())
+            })?;
+            match predicate {
+                WorkflowPredicate::Greater { .. } => order.is_gt(),
+                WorkflowPredicate::GreaterEqual { .. } => !order.is_lt(),
+                WorkflowPredicate::Less { .. } => order.is_lt(),
+                _ => !order.is_gt(),
+            }
         }
         WorkflowPredicate::Contains { left, right }
-        | WorkflowPredicate::NotContains { left, right }
-        | WorkflowPredicate::StartsWith { left, right }
+        | WorkflowPredicate::NotContains { left, right } => {
+            let left = evaluate_value(left, input, values)?;
+            let right = evaluate_value(right, input, values)?;
+            let contains = match left {
+                Value::Array(items) => items.iter().any(|item| {
+                    if item.is_number() && right.is_number() {
+                        super::transform::compare(item, &right) == Some(std::cmp::Ordering::Equal)
+                    } else {
+                        item == &right
+                    }
+                }),
+                Value::String(text) => text.contains(right.as_str().ok_or_else(|| {
+                    WorkflowRunError::InvalidValue("non-string containment operand".into())
+                })?),
+                _ => {
+                    return Err(WorkflowRunError::InvalidValue(
+                        "containment requires a string or array".into(),
+                    ));
+                }
+            };
+            contains == matches!(predicate, WorkflowPredicate::Contains { .. })
+        }
+        WorkflowPredicate::StartsWith { left, right }
         | WorkflowPredicate::EndsWith { left, right } => {
             let left = evaluate_value(left, input, values)?;
             let right = evaluate_value(right, input, values)?;
@@ -333,20 +435,15 @@ pub(super) fn evaluate_predicate(
             let right = right
                 .as_str()
                 .ok_or_else(|| WorkflowRunError::InvalidValue("nonstring right operand".into()))?;
-            match predicate {
-                WorkflowPredicate::Contains { .. } => left.contains(right),
-                WorkflowPredicate::NotContains { .. } => !left.contains(right),
-                WorkflowPredicate::StartsWith { .. } => left.starts_with(right),
-                WorkflowPredicate::EndsWith { .. } => left.ends_with(right),
-                _ => unreachable!(),
+            if matches!(predicate, WorkflowPredicate::StartsWith { .. }) {
+                left.starts_with(right)
+            } else {
+                left.ends_with(right)
             }
         }
         WorkflowPredicate::Empty { value } | WorkflowPredicate::NotEmpty { value } => {
             let value = evaluate_value(value, input, values)?;
-            let empty = value
-                .as_str()
-                .ok_or_else(|| WorkflowRunError::InvalidValue("nonstring empty operand".into()))?
-                .is_empty();
+            let empty = is_empty(&value);
             empty == matches!(predicate, WorkflowPredicate::Empty { .. })
         }
         WorkflowPredicate::Not { predicate } => !evaluate_predicate(predicate, input, values)?,
@@ -372,6 +469,86 @@ pub(super) fn evaluate_predicate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Operators use Dify's type-specific vocabulary without string coercion or
+    /// rounding integers through f64. Compile and execution must agree.
+    #[test]
+    fn typed_conditions_compare_numbers_arrays_and_explicit_empty_values() {
+        use serde_json::json;
+        let values = imbl::OrdMap::new();
+        for (operator, left, right, expected) in [
+            (
+                "greater",
+                json!(9_007_199_254_740_993u64),
+                json!(9_007_199_254_740_992u64),
+                true,
+            ),
+            ("less", json!(-3), json!(-2.5), true),
+            ("greater_equal", json!(2), json!(2.0), true),
+            ("less_equal", json!(2.0), json!(2), true),
+            ("equal", json!(2), json!(2.0), true),
+            ("not_equal", json!(2), json!(2.0), false),
+            ("greater", json!(2), json!(2), false),
+            ("contains", json!([1, 2, 3]), json!(2.0), true),
+            ("not_contains", json!([true, false]), json!(false), false),
+            ("contains", json!(["a", "b"]), json!("b"), true),
+            ("contains", json!([]), json!(1), false),
+        ] {
+            let predicate:WorkflowPredicate=serde_json::from_value(json!({"type":operator,"left":{"type":"literal","value":left},"right":{"type":"literal","value":right}})).unwrap();
+            validate_predicate(&predicate, &SchemaMap::default(), "condition", 0).unwrap();
+            assert_eq!(
+                evaluate_predicate(&predicate, &Value::Null, &values).unwrap(),
+                expected,
+                "{operator} {left} {right}"
+            );
+        }
+        for value in [
+            json!(null),
+            json!(false),
+            json!(0),
+            json!(0.0),
+            json!(""),
+            json!([]),
+            json!({}),
+        ] {
+            for (operator, expected) in [("empty", true), ("not_empty", false)] {
+                let predicate = serde_json::from_value(
+                    json!({"type":operator,"value":{"type":"literal","value":value}}),
+                )
+                .unwrap();
+                validate_predicate(&predicate, &SchemaMap::default(), "condition", 0).unwrap();
+                assert_eq!(
+                    evaluate_predicate(&predicate, &Value::Null, &values).unwrap(),
+                    expected,
+                    "{operator} {value}"
+                );
+            }
+        }
+        for value in [
+            json!(true),
+            json!(1),
+            json!(" "),
+            json!([null]),
+            json!({"key":null}),
+        ] {
+            let predicate = WorkflowPredicate::NotEmpty {
+                value: WorkflowValue::Literal { value },
+            };
+            assert!(evaluate_predicate(&predicate, &Value::Null, &values).unwrap());
+        }
+        for (operator, left, right) in [
+            ("greater", json!("2"), json!(1)),
+            ("equal", json!(2), json!("2")),
+            ("contains", json!([1]), json!("1")),
+            ("equal", json!({}), json!({})),
+        ] {
+            let predicate=serde_json::from_value(json!({"type":operator,"left":{"type":"literal","value":left},"right":{"type":"literal","value":right}})).unwrap();
+            assert!(
+                validate_predicate(&predicate, &SchemaMap::default(), "condition", 0).is_err(),
+                "{operator} {left} {right}"
+            );
+        }
+    }
+
     /// Values carry no filesystem version: construction composes committed
     /// data from any producers, and an uncommitted reference still fails.
     #[test]

@@ -2,6 +2,11 @@
 /* User bubble: right-aligned column (bubble + IconActions). Figma
    User_Bubble/message_container 659:38813 — r22 fill, actions gap 6 below. */
 
+.assistant { display: flex; flex-direction: column; min-width: 0; }
+.assistant > :where(:not([hidden])) ~ :where(:not([hidden])) { margin-top: 4px; }
+.assistant > [data-markdown-variant="normal"]:not(:first-child),
+.assistant > [data-markdown-variant="normal"] + :not([hidden]) { margin-top: 12px; }
+
 .userRow {
   display: flex;
   flex-direction: column;

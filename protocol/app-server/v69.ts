@@ -1886,6 +1886,46 @@ export type WorkflowNodeDefinition =
       type: 'start';
     }
   | {
+      variables: {
+        [k: string]: WorkflowValue;
+      };
+      template: string;
+      type: 'template';
+    }
+  | {
+      input: WorkflowValue;
+      filter?: WorkflowListFilter | null;
+      sort?: WorkflowListSort | null;
+      limit?: number | null;
+      extract?: WorkflowValue | null;
+      type: 'list';
+    }
+  | {
+      model?: WorkflowModelPolicy;
+      input: WorkflowValue;
+      instruction?: WorkflowValue[];
+      classes: WorkflowClassifierClass[];
+      type: 'classifier';
+    }
+  | {
+      code_language: WorkflowCodeLanguage;
+      variables: {
+        [k: string]: WorkflowValue;
+      };
+      code: string;
+      outputs: {
+        [k: string]: WorkflowVarType;
+      };
+      retry?: WorkflowRetry | null;
+      on_error?: WorkflowValueErrorStrategy;
+      type: 'code';
+    }
+  | {
+      grouped: boolean;
+      groups: WorkflowAggregateGroup[];
+      type: 'aggregate';
+    }
+  | {
       model?: WorkflowModelPolicy;
       /**
        * The prompt: a system message, then user and assistant turns.
@@ -2020,7 +2060,9 @@ export type WorkflowNodeDefinition =
        */
       retry?: WorkflowRetry | null;
       /**
-       * What a call that still failed leaves behind.
+       * As Dify's error handling on its Agent and tool nodes, for a call that
+       * failed or timed out once it is proven settled. Cancellation, an unknown
+       * outcome, unproven settlement and a refused start still stop the run.
        */
       on_error?:
         | {
@@ -2063,9 +2105,9 @@ export type WorkflowNodeDefinition =
        */
       routes?: WorkflowAgentRoute[];
       /**
-       * What a failed or timed-out child run leaves behind. Agents are not
-       * retried: a workflow child writes the shared Session workspace
-       * directly, and termination must be proven before it is handled.
+       * As Dify's error handling on its Agent and tool nodes, for a call that
+       * failed or timed out once it is proven settled. Cancellation, an unknown
+       * outcome, unproven settlement and a refused start still stop the run.
        */
       on_error?:
         | {
@@ -2088,30 +2130,6 @@ export type WorkflowNodeDefinition =
       outputs: WorkflowReturnOutput[];
       type: 'return';
     };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelPolicy".
- */
-export type WorkflowModelPolicy =
-  | {
-      mode: 'session';
-    }
-  | {
-      model: string;
-      profile?: string | null;
-      request_params?: {
-        [k: string]: unknown;
-      };
-      max_output_tokens?: number | null;
-      mode: 'explicit';
-    };
-/**
- * Who speaks a Model prompt message.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelRole".
- */
-export type WorkflowModelRole = 'system' | 'user' | 'assistant';
 /**
  * Closed, explicitly tagged value syntax; no evaluation of expression strings.
  *
@@ -2142,19 +2160,51 @@ export type WorkflowValue =
       type: 'template';
     };
 /**
- * The single authored output contract of a Workflow Model node.
- *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelOutput".
+ * via the `definition` "WorkflowListOperator".
  */
-export type WorkflowModelOutput =
+export type WorkflowListOperator =
+  | 'equal'
+  | 'not_equal'
+  | 'contains'
+  | 'not_contains'
+  | 'starts_with'
+  | 'ends_with'
+  | 'greater'
+  | 'greater_equal'
+  | 'less'
+  | 'less_equal'
+  | 'empty'
+  | 'not_empty'
+  | 'in'
+  | 'not_in';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowSortOrder".
+ */
+export type WorkflowSortOrder = 'asc' | 'desc';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelPolicy".
+ */
+export type WorkflowModelPolicy =
   | {
-      type: 'text';
+      mode: 'session';
     }
   | {
-      schema: unknown;
-      type: 'json_schema';
+      model: string;
+      profile?: string | null;
+      request_params?: {
+        [k: string]: unknown;
+      };
+      max_output_tokens?: number | null;
+      mode: 'explicit';
     };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowCodeLanguage".
+ */
+export type WorkflowCodeLanguage = 'python3' | 'javascript';
 /**
  * The value types of a Loop variable, as Dify offers them.
  *
@@ -2170,6 +2220,46 @@ export type WorkflowVarType =
   | 'array[number]'
   | 'array[boolean]'
   | 'array[object]';
+/**
+ * As Dify's error handling on its Agent and tool nodes, for a call that
+ * failed or timed out once it is proven settled. Cancellation, an unknown
+ * outcome, unproven settlement and a refused start still stop the run.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowValueErrorStrategy".
+ */
+export type WorkflowValueErrorStrategy =
+  | {
+      type: 'stop';
+    }
+  | {
+      value: unknown;
+      type: 'default_value';
+    }
+  | {
+      type: 'fail_branch';
+    };
+/**
+ * Who speaks a Model prompt message.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelRole".
+ */
+export type WorkflowModelRole = 'system' | 'user' | 'assistant';
+/**
+ * The single authored output contract of a Workflow Model node.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelOutput".
+ */
+export type WorkflowModelOutput =
+  | {
+      type: 'text';
+    }
+  | {
+      schema: unknown;
+      type: 'json_schema';
+    };
 /**
  * Typed predicates. Equality requires matching scalar types; no coercion.
  *
@@ -2190,6 +2280,26 @@ export type WorkflowPredicate =
       left: WorkflowValue;
       right: WorkflowValue;
       type: 'not_equal';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'greater';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'greater_equal';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'less';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'less_equal';
     }
   | {
       left: WorkflowValue;
@@ -2334,6 +2444,35 @@ export type WorkflowSchemaStep =
  * via the `definition` "WorkflowConsumerField".
  */
 export type WorkflowConsumerField =
+  | {
+      name: string;
+      kind: 'template_variable';
+    }
+  | {
+      name: string;
+      kind: 'code_variable';
+    }
+  | {
+      kind: 'transform_input';
+    }
+  | {
+      kind: 'list_filter_value';
+    }
+  | {
+      kind: 'list_extract';
+    }
+  | {
+      kind: 'classifier_instruction';
+    }
+  | {
+      index: number;
+      kind: 'classifier_class';
+    }
+  | {
+      group: number;
+      index: number;
+      kind: 'aggregate_variable';
+    }
   | {
       index: number;
       kind: 'message';
@@ -4649,6 +4788,10 @@ export type WorkflowExecutionOutcome =
  * via the `definition` "WorkflowNodeKind".
  */
 export type WorkflowNodeKind =
+  | 'template'
+  | 'list'
+  | 'aggregate'
+  | 'classifier'
   | 'block'
   | 'agent'
   | 'model'
@@ -7080,6 +7223,33 @@ export type WorkflowRunOrigin =
       type: 'scheduled';
     };
 /**
+ * Durable visit lifecycle; transient labels additionally require a live owner.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNodeTraceState".
+ */
+export type WorkflowNodeTraceState =
+  | {
+      type: 'incomplete';
+    }
+  | {
+      type: 'pending';
+    }
+  | {
+      type: 'running';
+    }
+  | {
+      reason: WorkflowWait;
+      type: 'waiting';
+    }
+  | {
+      type: 'draining';
+    }
+  | {
+      outcome: WorkflowExecutionOutcome;
+      type: 'settled';
+    };
+/**
  * The bounded native interaction vocabulary of the 0.1 protocol.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -7329,25 +7499,6 @@ export type WorkflowModelErrorStrategy =
   | {
       text: string;
       structured_output?: unknown;
-      type: 'default_value';
-    }
-  | {
-      type: 'fail_branch';
-    };
-/**
- * As Dify's error handling on its Agent and tool nodes, for a call that
- * failed or timed out once it is proven settled. Cancellation, an unknown
- * outcome, unproven settlement and a refused start still stop the run.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowValueErrorStrategy".
- */
-export type WorkflowValueErrorStrategy =
-  | {
-      type: 'stop';
-    }
-  | {
-      value: unknown;
       type: 'default_value';
     }
   | {
@@ -9522,17 +9673,35 @@ export interface WorkflowBlock {
   edges?: WorkflowEdgeDefinition[];
 }
 /**
- * One prompt message of a Model node. The first message is the system
- * prompt and every later one a user or assistant turn. Its content is fixed
- * text (string literals) and explicit references, rendered in order: a
- * string value as itself, any other value as its JSON text.
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowListFilter".
+ */
+export interface WorkflowListFilter {
+  /**
+   * Empty selects a primitive item; otherwise literal object field names.
+   */
+  path: string[];
+  operator: WorkflowListOperator;
+  value: WorkflowValue;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowListSort".
+ */
+export interface WorkflowListSort {
+  path: string[];
+  order: WorkflowSortOrder;
+}
+/**
+ * A classifier's stable exit, display label and variable-aware topic.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelMessage".
+ * via the `definition` "WorkflowClassifierClass".
  */
-export interface WorkflowModelMessage {
-  role: WorkflowModelRole;
-  content?: WorkflowValue[];
+export interface WorkflowClassifierClass {
+  id: string;
+  label: string;
+  description: WorkflowValue[];
 }
 /**
  * As Dify's retry on failure: a failed or timed-out Model or Tool call is
@@ -9547,6 +9716,28 @@ export interface WorkflowRetry {
   interval_ms: number;
 }
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAggregateGroup".
+ */
+export interface WorkflowAggregateGroup {
+  name: string;
+  output_type?: WorkflowVarType | null;
+  variables: string[][];
+}
+/**
+ * One prompt message of a Model node. The first message is the system
+ * prompt and every later one a user or assistant turn. Its content is fixed
+ * text (string literals) and explicit references, rendered in order: a
+ * string value as itself, any other value as its JSON text.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelMessage".
+ */
+export interface WorkflowModelMessage {
+  role: WorkflowModelRole;
+  content?: WorkflowValue[];
+}
+/**
  * A Loop variable: Dify's `label`, `var_type` and constant or variable value.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9556,7 +9747,7 @@ export interface WorkflowLoopVariable {
   label: string;
   var_type: WorkflowVarType;
   /**
-   * A literal, or a reference read once before the first round.
+   * Closed, explicitly tagged value syntax; no evaluation of expression strings.
    */
   value:
     | {
@@ -19198,6 +19389,25 @@ export interface TraceSystemPromptPresentation1 {
    * A present but empty preview records an empty historical prompt.
    */
   preview?: TracePreview | null;
+}
+/**
+ * Actual admitted nodes at one immutable Journal cut, not the program's nodes.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowTraceNode".
+ */
+export interface WorkflowTraceNode {
+  id: string;
+  instance: WorkflowNodeInstance;
+  kind?: WorkflowNodeKind | null;
+  state: WorkflowNodeTraceState;
+  timing: TraceTiming;
+  input?: TraceFieldSource | null;
+  output?: TraceFieldSource | null;
+  input_preview?: string | null;
+  output_preview?: string | null;
+  input_omitted: boolean;
+  output_omitted: boolean;
 }
 /**
  * Finite metadata for one original model name at its native request owner.

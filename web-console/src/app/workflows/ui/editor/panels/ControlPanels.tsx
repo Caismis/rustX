@@ -1,5 +1,5 @@
 import { Menu } from '@base-ui/react/menu';
-import type { WorkflowAssignment, WorkflowLoopVariable, WorkflowVarType, WorkflowWriteMode } from '../../../../../../../protocol/app-server/v62';
+import type { WorkflowAssignment, WorkflowLoopVariable, WorkflowVarType, WorkflowWriteMode } from '../../../../../../../protocol/app-server/v69';
 import { useTranslation } from '../../../../../locale/react';
 import { IconChevronDownOutline14, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';
@@ -60,15 +60,15 @@ export function LoopPanel(props: PanelProps) {
         const set = (change: Partial<WorkflowLoopVariable>) => setVariables(variables.map((item, i) => i === index ? { ...item, ...change } : item));
         return <div key={index} className={css.loopVariable}>
           <div className={css.loopVariableHead}>
-            <RouteId label={tx('workflows:loop.variable-name')} value={variable.label} address={within(base, ['label'])} rename={(document, from, to) => renameLoopVariable(document, props.block, props.id, from, to)} />
+            <div><RouteId label={tx('workflows:loop.variable-name')} value={variable.label} address={within(base, ['label'])} rename={(document, from, to) => renameLoopVariable(document, props.block, props.id, from, to)} /></div>
             <select className={css.input} aria-label={tx('workflows:loop.variable-type')} value={variable.var_type} onChange={event => { const var_type = event.target.value as WorkflowVarType; set({ var_type, value: variableMode ? unset() : constant(var_type) }); }}>
               {VAR_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
             </select>
+            <button type="button" className={css.iconButton} aria-label={tx('workflows:loop.remove-variable', { p0: variable.label })} onClick={() => setVariables(variables.filter((_, i) => i !== index), { array: at('loop_variables'), removed: index })}><IconTrashOutline16 /></button>
+          </div>
             <select className={css.input} aria-label={tx('workflows:loop.input-mode')} value={variableMode ? 'variable' : 'constant'} onChange={event => set({ value: event.target.value === 'variable' ? unset() : constant(variable.var_type) })}>
               <option value="variable">{tx('workflows:loop.mode-variable')}</option><option value="constant">{tx('workflows:loop.mode-constant')}</option>
             </select>
-            <button type="button" className={css.iconButton} aria-label={tx('workflows:loop.remove-variable', { p0: variable.label })} onClick={() => setVariables(variables.filter((_, i) => i !== index), { array: at('loop_variables'), removed: index })}><IconTrashOutline16 /></button>
-          </div>
           {variableMode && variable.value.type === 'reference'
             ? <ReferencePicker address={within(base, ['value'])} path={variable.value.path} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />
             : <ConstantField label={tx('workflows:loop.value')} type={variable.var_type} value={variable.value} address={within(base, ['value'])} edit={props.edit} />}
@@ -156,7 +156,7 @@ export function AssignerPanel(props: PanelProps) {
   const setItems = (items: WorkflowAssignment[], array?: ArrayEdit) => update(current => ({ ...current, items }), at('items'), array);
   const typeOf = (item: WorkflowAssignment) => item.variable[0] === step?.node ? variables.find(variable => variable.label === item.variable[1])?.var_type : undefined;
   if (owner?.type !== 'loop') return <Section title={tx('workflows:assigner.variables')}><p className={css.note}>{tx('workflows:assigner.outside-loop')}</p></Section>;
-  return <Section title={tx('workflows:assigner.variables')} aside={<button type="button" className={css.iconButton} aria-label={tx('workflows:assigner.add')} disabled={!variables.length}
+  return <Section title={tx('workflows:assigner.variables')} aside={<button type="button" className={css.iconButton} aria-label={tx('workflows:assigner.add')} disabled={!variables.length||node.items.length>=32}
     onClick={() => { const first = variables[0]; setItems([...node.items, { variable: [step!.node, first.label], operation: 'overwrite', value: unset() }], { array: at('items'), inserted: node.items.length }); }}><IconPlus size={14} /></button>}>
     {!variables.length && <p className={css.note}>{tx('workflows:assigner.no-loop-variables')}</p>}
     {node.items.length ? node.items.map((item, index) => {
@@ -164,7 +164,7 @@ export function AssignerPanel(props: PanelProps) {
       const set = (variable: string[], operation: WorkflowWriteMode, value: Value | undefined) =>
         setItems(node.items.map((current, i) => i === index ? { variable, operation, ...(value ? { value } : {}) } : current));
       return <div key={index} className={css.loopVariable}>
-        <div className={css.loopVariableHead}>
+        <div className={css.assignmentHead}>
           <select className={css.input} aria-label={tx('workflows:assigner.variable')} value={item.variable[1] ?? ''} onChange={event => {
             const variable = variables.find(entry => entry.label === event.target.value)!;
             set([step!.node, variable.label], 'overwrite', unset());

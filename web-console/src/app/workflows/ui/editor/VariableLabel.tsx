@@ -2,7 +2,7 @@ import clsx from 'clsx';
 import type { Translate } from '../../../../locale/translation';
 import type { NodeKind, Predicate, Value } from '../../document/model';
 import { KindIcon } from '../icons';
-import { valueText } from './summary';
+import { comparisonSymbols, valueText } from './summary';
 import css from './Editor.module.css';
 
 /** What a reference's first segment names where it is read: a node of the
@@ -37,8 +37,8 @@ export function PredicateView({ tx, sources, predicate }: { tx: Translate; sourc
   switch (predicate.type) {
     case 'boolean': return <ValueView tx={tx} sources={sources} value={predicate.value} />;
     case 'empty': case 'not_empty': return <><ValueView tx={tx} sources={sources} value={predicate.value} /><span className={css.variableLabelOperator}>{tx(`workflows:branch.${predicate.type}`)}</span></>;
-    case 'equal': case 'not_equal': case 'contains': case 'not_contains': case 'starts_with': case 'ends_with':
-      return <><ValueView tx={tx} sources={sources} value={predicate.left} /><span className={css.variableLabelOperator}>{tx(`workflows:branch.${predicate.type}`)}</span><ValueView tx={tx} sources={sources} value={predicate.right} /></>;
+    case 'greater': case 'greater_equal': case 'less': case 'less_equal': case 'equal': case 'not_equal': case 'contains': case 'not_contains': case 'starts_with': case 'ends_with':
+      return <><ValueView tx={tx} sources={sources} value={predicate.left} /><span className={css.variableLabelOperator}>{['greater','greater_equal','less','less_equal'].includes(predicate.type)?comparisonSymbols[predicate.type]:tx(`workflows:branch.${predicate.type}`)}</span><ValueView tx={tx} sources={sources} value={predicate.right} /></>;
     default: return null;
   }
 }

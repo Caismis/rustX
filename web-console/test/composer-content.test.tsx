@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { CheckpointPage, RuntimeClientGoalSnapshot } from '../../protocol/app-server/v62';
+import type { CheckpointPage, RuntimeClientGoalSnapshot } from '../../protocol/app-server/v69';
 import { useComposerContent } from '../src/app/agent/useComposerContent';
 import { TodoDock } from '../src/app/composer/TodoDock';
 import { GoalDock } from '../src/app/composer/GoalDock';
@@ -12,12 +12,35 @@ afterEach(() => { cleanup(); server?.client.disconnect(); });
 const tasks = [1, 2, 3].map(id => ({ id: String(id), subject: `Original task ${id}`, status: 'pending' as const }));
 function Dock({ view }: { view: SessionView }) {
  const content = useComposerContent(server.client, view);
- return <TodoDock state={todoDock(content.snapshot, content.todoLoaded ? undefined : view.checkpoint?.collections.find(row => row.domain === 'todos.tasks'))}/>;
+ return <>{content.error && <p role="alert">{content.error}</p>}<TodoDock state={todoDock(content.snapshot, content.todoLoaded ? undefined : view.checkpoint?.collections.find(row => row.domain === 'todos.tasks'))}/></>;
 }
 function Goal({ view }: { view: SessionView }) {
  const content = useComposerContent(server.client, view);
  return <GoalDock state={goalDock(content.snapshot)} observation={view.snapshot} disabled={false} mutate={async () => ({ status: 'obsolete' })}/>;
 }
+it('keeps a complete Goal and its matching CAS reference while a newer Goal revision hydrates', async () => {
+ server = new Server();
+ const goal: RuntimeClientGoalSnapshot = { reference: { id: 'goal-1', revision: '3' }, objective: 'Complete Goal objective', objective_deferred: false, phase: 'active', blocked_reason_deferred: false, autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' }, last_round_message_id_deferred: false, fields: [] };
+ server.snapshots.set('A', { ...snapshot(), goal: { current: goal } }); await server.attached('A');
+ const view = server.client.getSnapshot().views.A;
+ const ui = renderHook(({ view }) => useComposerContent(server.client, view), { initialProps: { view } });
+ server.held.add('conversation/checkpointValueRead');
+ const nextGoal = { ...goal, reference: { ...goal.reference, revision: '4' }, objective: 'preview', objective_deferred: true };
+ await act(async () => server.update('A', { ...view.snapshot!, goal: { current: nextGoal } }));
+ const nextView = server.client.getSnapshot().views.A;
+ ui.rerender({ view: nextView });
+ const request = await server.waitFor('conversation/checkpointValueRead', 1);
+ expect(ui.result.current.snapshot?.goal?.current).toEqual(goal);
+ const objective = 'New authoritative Goal objective', cut = nextView.checkpoint!.read_cut;
+ await act(async () => server.socket.success(request, { type: 'checkpoint_value_chunk', chunk: { cut, domain: 'goal', item_offset: 0, path: ['current', 'objective'], offset: 0, readable_end: objective.length, next_offset: null, representation: 'utf8_text', bytes_base64: btoa(objective) } }));
+ expect(ui.result.current.snapshot?.goal?.current).toMatchObject({ reference: nextGoal.reference, objective, objective_deferred: false });
+ const replaced = { ...nextGoal, reference: { id: 'another-goal', revision: '1' } };
+ ui.rerender({ view: { ...nextView, snapshot: { ...nextView.snapshot!, goal: { current: replaced } } } });
+ expect(ui.result.current.snapshot?.goal?.current).toEqual(replaced);
+ const complete = { ...nextGoal, phase: 'complete' as const };
+ ui.rerender({ view: { ...nextView, snapshot: { ...nextView.snapshot!, goal: { current: complete } } } });
+ expect(ui.result.current.snapshot?.goal?.current?.phase).toBe('complete');
+});
 it('keeps an unsaved hydrated Goal objective draft while a Todo-only update waits for its own read', async () => {
  server = new Server();
  const goal: RuntimeClientGoalSnapshot = { reference: { id: 'goal-1', revision: '3' }, objective: 'preview', objective_deferred: true, phase: 'active', blocked_reason_deferred: false, autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' }, last_round_message_id_deferred: false, fields: [] };
@@ -27,7 +50,7 @@ it('keeps an unsaved hydrated Goal objective draft while a Todo-only update wait
  server.handlers.set('conversation/checkpointValueRead', () => ({ type: 'checkpoint_value_chunk', chunk: { cut, domain: 'goal', item_offset: 0, path: ['current', 'objective'], offset: 0, readable_end: objective.length, next_offset: null, representation: 'utf8_text', bytes_base64: btoa(objective) } }));
  const ui = render(<Goal view={view}/>); await screen.findByText(objective);
  fireEvent.click(screen.getByRole('button', { name: 'Edit goal objective' }));
- const input = screen.getByRole('textbox', { name: 'Goal objective' });
+ const input = await screen.findByRole('textbox', { name: 'Goal objective' });
  fireEvent.change(input, { target: { value: 'My unsaved Goal objective' } });
  server.held.add('conversation/checkpointPage'); server.held.add('conversation/checkpointValueRead');
  const checkpoint = { ...view.checkpoint!, collections: [{ domain: 'todos.tasks', total: '3', loaded: '0', revision: '2', next_offset: '0' }] };
@@ -37,15 +60,17 @@ it('keeps an unsaved hydrated Goal objective draft while a Todo-only update wait
  expect((input as HTMLInputElement).value).toBe('My unsaved Goal objective');
  expect(server.requests.filter(row => row.request.method === 'conversation/checkpointValueRead')).toHaveLength(1);
 });
-async function hydratedDock() {
+async function hydratedDock(expanded = true) {
  server = new Server(); server.snapshots.set('A', { ...snapshot(), todos: { tasks: [], next_id: '4' } }); await server.attached('A');
  const view = server.client.getSnapshot().views.A, cut = view.checkpoint!.read_cut;
  view.checkpoint!.collections.push({ domain: 'todos.tasks', total: '3', loaded: '0', revision: '1', next_offset: '0' });
  server.handlers.set('conversation/checkpointPage', () => ({ type: 'checkpoint_page', page: { read_cut: cut, cursor: cut.revision, domain: 'todos.tasks', total: '3', next_offset: null, collections: [], items: tasks.map((value, index) => ({ offset: String(index), identity: value.id, value, content: [], deferred: false })) } }));
  const ui = render(<Dock view={view}/>);
- await waitFor(() => expect(screen.queryByText('Loading')).toBeNull());
- fireEvent.click(screen.getByRole('button', { name: /To-dos/ }));
- await screen.findByText('Original task 3');
+ await waitFor(() => expect(screen.getByRole('button', { name: /To-dos/ }).textContent).toBe('To-dos3 pending'));
+ if (expanded) {
+  fireEvent.click(screen.getByRole('button', { name: /To-dos/ }));
+  await screen.findByText('Original task 3');
+ }
  return { ui, view, rows: [...ui.container.querySelectorAll('[data-task-id]')] };
 }
 it('keeps expanded hydrated Todo rows intact while an independent Goal refresh waits for its content', async () => {
@@ -59,17 +84,52 @@ it('keeps expanded hydrated Todo rows intact while an independent Goal refresh w
  await server.waitFor('conversation/checkpointValueRead', 1);
  expect(server.requests.filter(row => row.request.method === 'conversation/checkpointPage')).toHaveLength(1);
 });
-it('keeps hydrated Todos visible as refreshing and replaces the list atomically on a Todo revision change', async () => {
- const { ui, view, rows } = await hydratedDock(); server.held.add('conversation/checkpointPage');
+it.each([false, true])('refreshes hydrated Todos without a loading flash and replaces the list atomically (expanded: %s)', async expanded => {
+ const { ui, view, rows } = await hydratedDock(expanded); server.held.add('conversation/checkpointPage');
+ const header = screen.getByRole('button', { name: /To-dos/ }), label = header.textContent;
  const checkpoint = { ...view.checkpoint!, collections: [{ domain: 'todos.tasks', total: '4', loaded: '0', revision: '2', next_offset: '0' }] };
  ui.rerender(<Dock view={{ ...view, checkpoint }}/>);
  const request = await server.waitFor('conversation/checkpointPage', 2);
  expect([...ui.container.querySelectorAll('[data-task-id]')]).toEqual(rows);
- expect(screen.getByRole('status').textContent).toContain('Loading');
- const next = [...tasks, { id: '4', subject: 'New task after refresh', status: 'pending' as const }];
+ expect(header.textContent).toBe(label);
+ expect(ui.container.textContent).not.toContain('Loading');
+ expect(screen.queryByRole('status')).toBeNull();
+ const next = [{ ...tasks[0], status: 'completed' as const }, ...tasks.slice(1), { id: '4', subject: 'New task after refresh', status: 'pending' as const }];
  await act(async () => server.socket.success(request, { type: 'checkpoint_page', page: { read_cut: checkpoint.read_cut, cursor: checkpoint.read_cut.revision, domain: 'todos.tasks', total: '4', next_offset: null, collections: [], items: next.map((value, index) => ({ offset: String(index), identity: value.id, value, content: [], deferred: false })) } }));
- await screen.findByText('New task after refresh');
- expect([...ui.container.querySelectorAll('[data-task-id]')].slice(0, 3)).toEqual(rows);
+ expect(header).toBe(screen.getByRole('button', { name: /To-dos/ }));
+ expect(header.getAttribute('aria-expanded')).toBe(String(expanded));
+ expect(header.textContent).toContain('1 completed');
+ expect(header.textContent).toContain('3 pending');
+ if (expanded) {
+  await screen.findByText('New task after refresh');
+  expect([...ui.container.querySelectorAll('[data-task-id]')].slice(0, 3)).toEqual(rows);
+ }
+ expect(screen.queryByRole('status')).toBeNull();
+});
+it('shows initial loading instead of borrowing a complete Todo list from another conversation', async () => {
+ const { ui } = await hydratedDock();
+ server.snapshots.set('B', { ...snapshot('B'), todos: { tasks: [], next_id: '4' } });
+ await server.client.attach('B');
+ const view = server.client.getSnapshot().views.B;
+ const checkpoint = { ...view.checkpoint!, collections: [{ domain: 'todos.tasks', total: '3', loaded: '0', revision: '1', next_offset: '0' }] };
+ server.held.add('conversation/checkpointPage');
+ ui.rerender(<Dock view={{ ...view, checkpoint }}/>);
+ await server.waitFor('conversation/checkpointPage', 2);
+ expect(screen.queryByText('Original task 1')).toBeNull();
+ expect(screen.getByRole('button', { name: /To-dos/ }).textContent).toContain('Loading');
+ expect(screen.getByRole('status').textContent).toContain('Loading');
+});
+it('reports a failed Todo refresh while keeping the complete list and summary in place', async () => {
+ const { ui, view, rows } = await hydratedDock();
+ const header = screen.getByRole('button', { name: /To-dos/ }), label = header.textContent;
+ server.held.add('conversation/checkpointPage');
+ const checkpoint = { ...view.checkpoint!, collections: [{ domain: 'todos.tasks', total: '4', loaded: '0', revision: '2', next_offset: '0' }] };
+ ui.rerender(<Dock view={{ ...view, checkpoint }}/>);
+ const request = await server.waitFor('conversation/checkpointPage', 2);
+ await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'Todo read unavailable' } }));
+ expect(screen.getByRole('alert').textContent).toContain('Todo read unavailable');
+ expect(header.textContent).toBe(label);
+ expect([...ui.container.querySelectorAll('[data-task-id]')]).toEqual(rows);
  expect(screen.queryByRole('status')).toBeNull();
 });
 it('retains a complete inline Todo list when an unrelated capture budget defers the same Todo revision', async () => {

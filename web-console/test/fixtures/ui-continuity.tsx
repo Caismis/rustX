@@ -21,7 +21,7 @@ import { useComposerContent } from '../../src/app/agent/useComposerContent';
 import { TodoDock } from '../../src/app/composer/TodoDock';
 import { todoDock } from '../../src/bindings/composer-context';
 import { conversationPreferences } from '../../src/app/conversation-preferences';
-import type { ContentChunk, ContentRef, MessageBlock, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v62';
+import type { ContentChunk, ContentRef, MessageBlock, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v69';
 import { Server, snapshot, checkpoint, projectionHead } from '../fixture';
 import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import '../../src/presentation/theme/base.css';
@@ -37,6 +37,7 @@ const deferredText = 'Released deferred text. '.repeat(2000).slice(0, 35000);
 if (scene === 'first') await import('../../src/app/console.css');
 conversationPreferences().update({ transcriptMode: mode === 'compact' ? 'compact' : 'standard' }, false);
 const server = new Server(), tasks = [1, 2, 3].map(id => ({ id: String(id), subject: `Original task ${id}`, status: 'pending' as const }));
+const updatedTodos = [{ ...tasks[0], status: 'completed' as const }, ...tasks.slice(1), { id: '4', subject: 'New task after refresh', status: 'pending' as const }];
 if (scene === 'first') server.workspaceHost.classifyLocations = async cwds => cwds.map(cwd => ({ authorized: true, workspaceId: cwd.endsWith('/B') ? 'workspace-b' : 'workspace-a' }));
 const readingSnapshot = (id = 'A') => {
   const value = snapshot(id);
@@ -159,12 +160,24 @@ function Continuity() {
         const goal: RuntimeClientGoalSnapshot = { reference: { id: 'goal-1', revision: '4' }, objective: 'Independent Goal update', objective_deferred: false, phase: 'blocked', blocked_reason: 'preview', blocked_reason_deferred: true, autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' }, last_round_message_id_deferred: false, fields: [] };
         setView({ ...view, snapshot: { ...view.snapshot!, goal: { current: goal } } });
       },
+      changeTodos: () => {
+        server.held.add('conversation/checkpointPage');
+        setView({ ...view, checkpoint: { ...view.checkpoint!, collections: [{ domain: 'todos.tasks', total: '4', loaded: '1', revision: '2', next_offset: '1' }] }, snapshot: { ...view.snapshot!, todos: { tasks: updatedTodos.slice(0, 1), next_id: '5' } } });
+      },
+      finishTodos: () => {
+        const request = server.requests.filter(row => row.request.method === 'conversation/checkpointPage' && row.request.params.domain === 'todos.tasks').at(-1)?.request;
+        if (!request) throw Error('No pending Todo read');
+        server.socket.success(request, { type: 'checkpoint_page', page: { read_cut: cut, cursor: cut.revision, domain: 'todos.tasks', total: '4', next_offset: null, collections: [], items: updatedTodos.map((value, index) => ({ offset: String(index), identity: value.id, value, content: [], deferred: false })) } });
+      },
       reads: () => server.requests.filter(row => row.request.method === 'conversation/checkpointPage').length,
     } });
   }, []);
   if (scene === 'code-complete') return <main style={{ width: 740, margin: '24px auto' }}><AgentTranscript snapshot={codeCompleted ? { ...codeLive, transcript: { entries: [codeEntry] } } : codeLive}/></main>;
   if (scene === 'reading' || deferredReading) return <main style={{ width: 740, height: 420, overflow: 'auto', margin: '24px auto' }} data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></main>;
   if (scene === 'first') return <App client={server.client} workspaceHost={server.workspaceHost}/>;
+  if (scene === 'todo') return <main style={{ width: 'min(740px, 100%)', margin: '24px auto' }}>
+    <TodoDock state={todoDock(content.snapshot, content.todoLoaded ? undefined : current.checkpoint?.collections.find(row => row.domain === 'todos.tasks'))}/>
+  </main>;
   if (descriptorScene) return <main style={{ width: 740, margin: '24px auto' }}><JournalSourceProvider presentationOwner={toolPresentation} source={{ client: server.client, target: server.client.target('A'), cut: () => server.client.getSnapshot().views.A.checkpoint?.read_cut, owned: () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A.attachmentObservation) }}><AgentTranscript snapshot={toolsStage === 6 ? toolsContinuingDeferred : toolsStage === 5 ? toolsContinuing : toolsStage === 4 ? toolsDeferredReply : toolsStage === 3 ? toolsDurable : toolsStage === 2 ? toolsHydrated : toolsStage === 1 ? toolsCanonical : toolsLive} compactions={toolsCompactions}/></JournalSourceProvider></main>;
   if (scene === 'tools' || scene === 'tools-compaction') return <main style={{ width: 740, margin: '24px auto' }}><AgentTranscript snapshot={toolsStage === 2 ? toolsDurable : toolsStage === 1 ? toolsCanonical : toolsLive} compactions={toolsCompactions}/></main>;
   if (scene === 'workflow') return <main style={{ width: 740, margin: '24px auto' }}><WorkflowRunPanel run={{ ...completedWorkflow, instances: workflowHydrated ? completedWorkflow.instances : completedWorkflow.instances.slice(0, 2) }}/></main>;

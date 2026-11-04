@@ -1,5 +1,15 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "kind.workflow_node": "NODE",
+  "short.workflow-node": "NODE",
+  "workflow.expand": "Expand workflow nodes",
+  "workflow.collapse": "Collapse workflow nodes",
+  "workflow.input-not-recorded": "Input not recorded",
+  "workflow.output-not-recorded": "Output not recorded",
+  "workflow.body-omitted": "Content too large to record",
+  "workflow.node-kind": "Node type",
+  "workflow.node-state": "Status",
+  "workflow.node-path": "Execution path",
   "source.byte-count": "{bytes} bytes",
   "source.cut-unavailable": "Details are unavailable. Reopen this event.",
   "trajectory.trace-ledger": "Trace ledger",
@@ -209,6 +219,16 @@ export const en = {
 } as const;
 export type TrajectoryKey = keyof typeof en;
 export const zh = {
+  "kind.workflow_node": "节点",
+  "short.workflow-node": "节点",
+  "workflow.expand": "展开工作流节点",
+  "workflow.collapse": "收起工作流节点",
+  "workflow.input-not-recorded": "未记录输入",
+  "workflow.output-not-recorded": "未记录输出",
+  "workflow.body-omitted": "内容过大，未保存详情",
+  "workflow.node-kind": "节点类型",
+  "workflow.node-state": "状态",
+  "workflow.node-path": "执行路径",
   "source.byte-count": "{bytes} 字节",
   "source.cut-unavailable": "暂时无法读取详情，请重新打开此事件。",
   "trajectory.trace-ledger": "追踪明细",

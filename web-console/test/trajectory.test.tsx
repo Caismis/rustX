@@ -13,7 +13,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, repl
 import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v62';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v69';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -333,7 +333,7 @@ it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s and leaves n
   // Harness names the folded calls by count and Tool name, never by lifecycle.
   expect(summary.summary).toBe(locale === 'en' ? '5 tool calls · same name' : '5 个工具调用 · same name');
   expect(executions.map(record => record.state)).toEqual(states);
-  for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(domain.kind !== 'subagent');
+  for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(domain.kind === 'background');
   expect(visible.find((item): item is InspectableDisplayItem => item.type === 'RecordRow' && item.record.id === 'trace:20')?.label).toBe(tx('trajectory:copy.compacting'));
   for (const state of ['incomplete', 'failed', 'completed'] as const) {
     const item = flattenTrajectory(tx, projectTrajectory(tx, [traceRecord(21, { kind: 'compaction', request: null, state })])).find(item => item.type === 'RecordRow')!;
@@ -1642,6 +1642,16 @@ it('compaction summary exposes loading and read errors before detail arrives', (
   expect(screen.getByRole('alert').textContent).toBe('Summary read failed');
 });
 
+it.each(['incomplete', 'running', 'completed', 'failed', 'cancelled'] as const)('compaction Inspector preserves the native %s state', state => {
+  const record = traceRecord(0, { kind: 'compaction', request: null, state, location: {}, preview: null, has_detail: false });
+  show(cacheOf([record]));
+  fireEvent.click(row('RecordRow'));
+  const panel = within(screen.getByRole('tabpanel'));
+  expect(panel.getByText(traceStateLabel(translator('en'), state), { exact: true })).toBeTruthy();
+  expect(panel.queryByText('Completed', { exact: true })).toBeNull();
+  expect(row('RecordRow').getAttribute('data-state')).toBe(state);
+});
+
 
 it('checkpoint summaries and unscoped reused history display Between turns without acquiring execution ownership', () => {
   const records = [
@@ -1668,7 +1678,7 @@ it.each(['background', 'workflow', 'tool'] as const)('unscoped %s activity is no
     traceRecord(0, { kind: 'user', request: null, location: {}, preview: { text: 'Reused original context', truncated: false } }),
     traceRecord(1, { kind: 'compaction', request: null, location: {} }),
     traceRecord(2, { kind: 'assistant', request: null, location: { attempt_id: 'parent-turn', step_id: '1' } }),
-    traceRecord(3, { kind, request: null, location: {}, agent_id: 'native-agent', activation_id: 'native-activation', originating_tool_call_id: 'source-call' }),
+    traceRecord(3, { kind, request: null, location: {}, agent_id: 'native-agent', activation_id: 'native-activation', originating_tool_call_id: kind === 'workflow' ? null : 'source-call' }),
   ];
   const original = JSON.stringify(records), tx = translator('en'), projection = projectTrajectory(tx, records);
   const items = flattenTrajectory(tx, projection);

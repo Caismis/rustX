@@ -1,9 +1,11 @@
 import { useToolInspection } from './tool-inspection';
 import { useTranslation } from '../../locale/react';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v62';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v69';
 import { useToolInput } from './tool-source';
 import { toolCard } from '../../bindings/tools';
-import { askUserRow } from '../../bindings/ask-user';
+import { askUserRecord, askUserRow } from '../../bindings/ask-user';
+import { questionPanelKey, useQuestionPanels } from './QuestionPanels';
+import { AgentConversationContext } from './subagent-context';
 import { QuestionRow } from '../../presentation/agent/QuestionRow';
 import { PresentRow } from '../../presentation/agent/PresentRow';
 import { presentRow } from '../../bindings/present';
@@ -18,6 +20,7 @@ import { canonicalLocatorKey } from '../../../../protocol/app-server/content-ide
 /** One conversation presentation owns disclosure across process-group reparenting. */
 export const ToolDisclosureContext = createContext<{ scope: string; open: (key: string) => boolean; toggle: (key: string) => void } | undefined>(undefined);
 export function Tool({ tool: original, messageId }: { tool: ForegroundToolExecution; messageId?: string }) {
+  const panels = useQuestionPanels(), agent = useContext(AgentConversationContext);
   const disclosure = useContext(ToolDisclosureContext), locator = original.occurrence.locator;
   const message = messageId ?? original.message_id ?? (locator.type === 'by_message_id' ? locator.message_id : undefined);
   const key = JSON.stringify([disclosure?.scope, message === undefined ? ['locator', canonicalLocatorKey(locator)] : ['message', message], original.block_index]);
@@ -26,7 +29,13 @@ export function Tool({ tool: original, messageId }: { tool: ForegroundToolExecut
   const tx = useTranslation(), inspect = useToolInspection(tool);
   if (domainActivity(tool)) return <DomainActivity tool={tool}/>;
   const question = tool.tool_id === 'tool-ask-user' ? askUserRow(tool) : undefined;
-  if (question) return <QuestionRow inspect={inspect} row={question}/>;
+  if (question) {
+    const panelKey = questionPanelKey(agent?.child_conversation_id ?? panels?.conversation, 'call', tool.call_id ?? '');
+    const record = question.verdict === 'answered' ? askUserRecord(tool) : undefined;
+    const panelAction = record && panels ? { label: tx('tools:ask.review'), open: () => panels.show(key, record) }
+      : question.verdict === 'waiting' && panels?.canReveal(panelKey) ? { label: tx('tools:ask.reopen'), open: () => { panels.reveal(panelKey); } } : undefined;
+    return <QuestionRow inspect={inspect} row={question} panelAction={panelAction} disclosure={disclosure ? { open, toggle: () => { if (!open) input.expand(); disclosure.toggle(key); } } : undefined}/>;
+  }
   // Lifecycle only: delivery cards render from the committed Tool message.
   if (tool.tool_id === 'tool-present') return <PresentRow inspect={inspect} row={presentRow(tool)}/>;
   const goal = goalActivityLabel(tx, tool);

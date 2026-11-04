@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { CompactionCheckpoint } from '../src/app/agent/CompactionCheckpoint';
 import { CompactionMessage } from '../src/presentation/agent/Message';
 import { projectionHead, Server, checkpoint, snapshot } from './fixture';
-import type { ProjectionDetail } from '../../protocol/app-server/v62';
+import type { ProjectionDetail } from '../../protocol/app-server/v69';
 afterEach(cleanup);
 
 it.each([false,true])('shows only the DSH marker until expanded, without model-projection metadata (inherited=%s)', inherited => {
@@ -47,6 +47,21 @@ it('a bounded summary loads on expansion, retains complete Markdown and reopens 
     fireEvent.click(ui.getByRole('button')); fireEvent.click(ui.getByRole('button'));
     expect(ui.getByRole('heading', { name: 'Full summary' })).toBeTruthy();
     expect(read).toHaveBeenCalledOnce();
+  } finally { server.client.disconnect(); }
+});
+it('keeps the visible summary preview without inserting a temporary loading paragraph', async () => {
+  const server = new Server(); await server.attached('A');
+  try {
+    const head = { ...projectionHead('Visible summary preview'), summary_preview: { text: 'Visible summary preview', truncated: true } };
+    let finish!: (detail: ProjectionDetail) => void;
+    vi.spyOn(server.client, 'projectionDetail').mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const ui = render(<CompactionCheckpoint head={head} client={server.client} sessionId="A"/>);
+    fireEvent.click(ui.getByRole('button'));
+    expect(ui.getByText('Visible summary preview')).toBeTruthy();
+    expect(ui.queryByRole('status')).toBeNull();
+    expect(ui.container.textContent).not.toContain('Loading');
+    await act(async () => finish({ read_cut: checkpoint(snapshot()).read_cut, checkpoint: { ...head, summary_preview: { text: 'Complete summary', truncated: false } }, items: [], next_item: null }));
+    expect(ui.getByText('Complete summary')).toBeTruthy();
   } finally { server.client.disconnect(); }
 });
 it('late summary content cannot replace another checkpoint', async () => {

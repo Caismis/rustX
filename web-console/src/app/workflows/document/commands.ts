@@ -1,10 +1,12 @@
-import { deleteNodePresentation, renameNodePresentation, requireVacantNodePresentation } from './presentation';
+import { deleteNodePresentation, orderedKeys, renameNodePresentation, requireVacantNodePresentation } from './presentation';
+import { setOrder } from './geometry';
+import { codeDefaults } from './code';
 import {
   blockAt, edgesOf, isContainer, nodeAt, sameBlockPath, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
   type WorkflowDocument,
 } from './model';
 import { authoredEdge, edgePort, outputPorts, portsOf, RESERVED_PORTS, TIMEOUT_PORT, type ControlPort } from './ports';
-import { renameProducer, rewriteBlockReferences, rewriteRoundReferences } from './references';
+import { renameProducer, rewriteBlockReferences, rewriteRoundReferences, rewriteScopeReferences } from './references';
 
 /** Why an editing command was refused. The document is unchanged. These are
  * canvas ergonomics only; the native compiler remains the graph authority. */
@@ -49,6 +51,11 @@ export function emptyBody(start: string): Block {
  * by the native check; nothing is invented to make a graph pass. */
 export function nodeTemplate(kind: NodeKind, id: string = kind): NodeDefinition {
   switch (kind) {
+    case 'code': return codeDefaults();
+    case 'template': return { type: 'template', variables: { arg1: { type: 'reference', path: [] } }, template: '{{ arg1 }}' };
+    case 'list': return { type: 'list', input: { type: 'reference', path: [] } };
+    case 'classifier': return { type: 'classifier', model: { mode: 'session' }, input: { type: 'reference', path: [] }, instruction: [], classes: [{ id: 'class_1', label: /* i18n-raw: authored classifier default label stored in the document */ 'CLASS 1', description: [] }, { id: 'class_2', label: /* i18n-raw: authored classifier default label stored in the document */ 'CLASS 2', description: [] }] };
+    case 'aggregate': return { type: 'aggregate', grouped:false, groups: [{ name: 'Group1', variables: [] }] };
     // As Dify's Agent: the final reply is its `text` until outputs are declared.
     case 'agent': return { type: 'agent', profile: '', task: [], output: { type: 'text' } };
     // As Dify's LLM node: an empty system prompt, then an empty user turn.
@@ -68,8 +75,12 @@ export function nodeTemplate(kind: NodeKind, id: string = kind): NodeDefinition 
 
 /** The first free `<kind>`, `<kind>_2`, … id in a block. */
 export function freshIdentifier(block: Block, base: string): string {
-  if (!nodeAt(block, base)) return base;
-  for (let index = 2; ; index++) if (!nodeAt(block, `${base}_${index}`)) return `${base}_${index}`;
+  return freshKey(Object.keys(block.nodes),base);
+}
+
+export function freshKey(names: readonly string[], base: string): string {
+  if (!names.includes(base)) return base;
+  for (let index=2;;index++) if (!names.includes(`${base}_${index}`)) return `${base}_${index}`;
 }
 
 /** The node IDs a new or renamed node at `path` must not take: as Dify's
@@ -290,16 +301,44 @@ export function replaceNodeExits(document: WorkflowDocument, path: BlockPath, id
 export function renameExit(document: WorkflowDocument, path: BlockPath, id: string, from: string, to: string): WorkflowDocument {
   return updateBlock(document, path, block => {
     const node = nodeAt(block, id);
-    const exits = node?.type === 'agent' ? node.routes : node?.type === 'review' ? node.actions : undefined;
+    const exits = node?.type === 'agent' ? node.routes : node?.type === 'review' ? node.actions : node?.type === 'classifier' ? node.classes : undefined;
     if (!node || !exits?.some(exit => exit.id === from)) throw new CommandRejected('missing_field');
     if (from === to) return block;
     const invalid = validLocalKey(to);
     if (invalid) throw new CommandRejected(invalid);
     if (RESERVED_PORTS.includes(to) || node.type === 'review' && to === TIMEOUT_PORT) throw new CommandRejected('reserved_port');
     if (exits.some(exit => exit.id === to)) throw new CommandRejected('duplicate_identifier');
-    const renamed = node.type === 'agent' ? { ...node, routes: node.routes!.map(route => route.id === from ? { ...route, id: to } : route) }
+    const renamed = node.type === 'classifier' ? { ...node, classes: node.classes.map(item => item.id === from ? { ...item, id: to } : item) } : node.type === 'agent' ? { ...node, routes: node.routes!.map(route => route.id === from ? { ...route, id: to } : route) }
       : { ...node, actions: (node as Extract<NodeDefinition, { type: 'review' }>).actions.map(action => action.id === from ? { ...action, id: to } : action) };
     return { ...block, nodes: { ...block.nodes, [id]: renamed },
       edges: edgesOf(block).map(edge => edge.from === id && edgePort(edge) === from ? authoredEdge(id, to, edge.to) : edge) };
   });
+}
+
+/** Rename an aggregator's output together with every structured consumer. */
+export function renameAggregateOutput(document: WorkflowDocument, path: BlockPath, id: string, from: string, to: string): WorkflowDocument {
+  const invalid=validLocalKey(to); if (invalid) throw new CommandRejected(invalid);
+  const next=updateBlock(document,path,block => {
+    const node=nodeAt(block,id);
+    if (node?.type !== 'aggregate' || !node.groups.some(group=>group.name===from)) throw new CommandRejected('missing_field');
+    if (node.groups.some(group=>group.name===to)) throw new CommandRejected('duplicate_identifier');
+    return {...block,nodes:{...block.nodes,[id]:{...node,groups:node.groups.map(group=>group.name===from ? {...group,name:to}:group)}}};
+  });
+  return rewriteScopeReferences(next,path,reference=>reference[0]===id && reference[1]===from ? [id,to,...reference.slice(2)] : undefined);
+}
+
+/** A Code output is a declared root field, so its structured readers rename too. */
+export function renameCodeOutput(document: WorkflowDocument, path: BlockPath, id: string, from: string, to: string): WorkflowDocument {
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(to)) throw new CommandRejected('invalid_identifier');
+  const target={kind:'node_output' as const,address:{block:[...path],node:id},path:[]};
+  const node=nodeAt(blockAt(document,path)!,id);
+  const order=orderedKeys(document,target,node?.type==='code'?Object.keys(node.outputs):[]);
+  const next=updateBlock(document,path,block => {
+    const node=nodeAt(block,id);
+    if(node?.type!=='code' || !Object.hasOwn(node.outputs,from))throw new CommandRejected('missing_field');
+    if(Object.hasOwn(node.outputs,to))throw new CommandRejected('duplicate_identifier');
+    return {...block,nodes:{...block.nodes,[id]:{...node,outputs:Object.fromEntries(Object.entries(node.outputs).map(([key,value])=>[key===from?to:key,value]))}}};
+  });
+  const rewritten=rewriteScopeReferences(next,path,reference=>reference[0]===id && reference[1]===from ? [id,to,...reference.slice(2)] : undefined);
+  return setOrder(rewritten,target,order.map(key=>key===from?to:key));
 }

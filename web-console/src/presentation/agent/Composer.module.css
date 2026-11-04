@@ -82,6 +82,11 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
+/* Touch editors retain the native 16px floor, including smaller font settings. */
+@media (pointer: coarse) {
+  .card { font-size: max(16px, var(--dsh-content-font-size, 14px)); }
+}
+
 /* An inset dashed stroke keeps the workspace picker inside the card corners. */
 .cardWorkspaceTrigger {
   --dsw-elevation-stroke-color: transparent;
@@ -317,8 +322,8 @@
   will-change: transform;
 }
 
-.add:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover-solid);
+@media (hover: hover) {
+  .add:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-solid); }
 }
 
 .add:disabled {
@@ -354,14 +359,19 @@
   will-change: transform;
 }
 
-.primary:hover:not(:disabled) {
-  background: var(--dsw-alias-button-info-hover);
+@media (hover: hover) {
+  .primary:hover:not(:disabled) { background: var(--dsw-alias-button-info-hover); }
 }
 
 .primary:disabled {
   opacity: 0.4;
   cursor: default;
 }
+
+.primary[data-sending]:disabled { opacity: 1; cursor: progress; }
+.sendingSpinner { animation: input-sending 800ms linear infinite; }
+@keyframes input-sending { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sendingSpinner { animation-duration: 2400ms; } }
 
 .retry {
   margin-left: 8px;

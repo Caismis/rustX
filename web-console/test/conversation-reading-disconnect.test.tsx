@@ -1,8 +1,8 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
-import { Server, snapshot, checkpoint, projectionHead } from './fixture';
-import type { ContentRef } from '../../protocol/app-server/v62';
+import { Server, snapshot, checkpoint, projectionHead, readingWindow } from './fixture';
+import type { ContentRef } from '../../protocol/app-server/v69';
 let frames: Map<number, FrameRequestCallback>, serial = 0;
 beforeEach(() => {
   frames = new Map(); vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++serial, callback); return serial; });
@@ -125,6 +125,40 @@ it('continues paging a cold preview while the first attachment is held', async (
     expect(server.client.getSnapshot().views.A.attachment).toBe('attaching');
     await act(async () => server.reply(await server.waitFor('session/attach', 1)));
     await act(async () => attaching);
+  } finally { server.client.dispose(); }
+});
+it.each([false, true])('hands history to the bounded live checkpoint without removing released rows (reconnected: %s)', async reconnected => {
+  const server = new Server();
+  const entries = Array.from({ length: 20 }, (_, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message: { id: `saved-${index}`, role: 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `Saved message ${index}` }] } } }));
+  const value = { ...snapshot(), transcript: { entries, next_cursor: null } };
+  server.snapshots.set('A', value);
+  await server.connect();
+  if (reconnected) await server.client.attach('A');
+  const latest = { ...entries[19], item: { type: 'message' as const, message: { ...entries[19].item.message, content: [{ type: 'text' as const, text: 'Latest native message' }] } } };
+  server.handlers.set('session/checkpoint', () => ({ type: 'checkpoint', checkpoint: checkpoint({ ...value, transcript: { entries: [...entries.slice(-8, -1), latest], next_cursor: '13' } }) }));
+  // A returning reader can have more rows than the new passive preview.
+  if (reconnected) server.handlers.set('session/history', () => ({ type: 'session_history', conversation_id: value.conversation_id, window: readingWindow({ entries: entries.slice(-12), next_cursor: '9' }) }));
+  for (const method of ['session/attach', 'session/checkpoint', 'session/transcript'] as const) server.held.add(method);
+  try {
+    const ui = render(<div data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>);
+    if (reconnected) await act(async () => { server.socket.close(); server.loaded.delete('A'); await server.connect(); });
+    let attaching: Promise<void> | undefined;
+    await act(async () => { attaching = server.client.attach('A'); void attaching.catch(() => {}); });
+    await waitFor(() => expect(server.client.getSnapshot().views.A.preview).toBeTruthy());
+    const first = await ui.findByText('Saved message 0');
+    const last = ui.getByText('Saved message 19');
+    const viewport = ui.container.querySelector('.chat-reading-surface');
+    await act(async () => server.reply(await server.waitFor('session/attach', reconnected ? 2 : 1)));
+    const held = await server.waitFor('session/checkpoint', reconnected ? 2 : 1);
+    expect(ui.getByText('Saved message 0')).toBe(first);
+    await act(async () => { server.reply(held); await attaching; });
+    expect(server.client.getSnapshot().views.A.snapshot?.transcript.entries).toHaveLength(8);
+    expect(ui.getByText('Saved message 0')).toBe(first);
+    expect(ui.getByText('Latest native message')).toBe(last);
+    expect(ui.container.querySelector('.chat-reading-surface')).toBe(viewport);
+    expect(server.client.getSnapshot().views.A.history?.page.entries).toHaveLength(20);
+    expect(server.requests.filter(row => row.request.method === 'session/transcript')).toHaveLength(0);
+    expect(ui.queryByRole('button', { name: 'Load earlier' })).toBeNull();
   } finally { server.client.dispose(); }
 });
 it.each(['user', 'assistant'] as const)('keeps released deferred %s text through a held checkpoint without retaining old read admission', async role => {

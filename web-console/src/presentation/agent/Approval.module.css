@@ -62,6 +62,21 @@
   word-break: break-all;
 }
 
+/* Approval owns command typography and scrolling, rather than the global pre. */
+.command > pre {
+  margin: 0;
+  font: inherit;
+  max-height: none;
+  overflow: visible;
+}
+
+.description {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
 .actionRow {
   display: flex;
   justify-content: flex-end;

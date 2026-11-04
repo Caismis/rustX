@@ -4,7 +4,7 @@ import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { Server, snapshot } from './fixture';
 import { turnAnchor } from '../src/client/transcript';
-import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v62';
+import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v69';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ChatViewport } from '../src/presentation/layout/ChatViewport';
@@ -69,7 +69,7 @@ it('preserves the stable reading anchor for prepend and growth, follows only at 
   ui.unmount(); expect(disconnect).toHaveBeenCalledOnce();
 });
 
-it('one frame owns 10 observer deliveries and 5 React updates; newer user intent wins', () => {
+it('pre-paint observation coalesces pending React work and newer user intent wins', () => {
   let frame: FrameRequestCallback | undefined;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
   const cancel = vi.fn(() => { frame = undefined; });
@@ -87,14 +87,16 @@ it('one frame owns 10 observer deliveries and 5 React updates; newer user intent
   for (let n = 0; n < 10; n++) resize();
   for (let n = 0; n < 5; n++) ui.rerender(<ChatViewport><div data-chat-anchor-key="a">{n}</div></ChatViewport>);
   flush(); expect(writes).toBe(1); expect(top).toBe(400);
-  height += 100; resize(); top = 100; readerScroll(el); flush();
-  expect(top).toBe(100); expect(writes).toBe(1);
+  height += 100; resize(); expect(top).toBe(500);
+  const beforeGesture = writes;
+  top = 100; readerScroll(el); flush();
+  expect(top).toBe(100); expect(writes).toBe(beforeGesture);
   for (let n = 0; n < 100; n++) { height += 10; ui.rerender(<ChatViewport><div data-chat-anchor-key="a">{n}</div></ChatViewport>); resize(); flush(); }
-  expect(writes).toBe(1); expect(top).toBe(100);
+  expect(writes).toBe(beforeGesture); expect(top).toBe(100);
   top = height - 200; readerScroll(el); height += 20; resize(); flush();
-  expect(top).toBe(height - 200); expect(writes).toBe(2);
-  resize(); flush(); expect(writes).toBe(2);
-  resize(); ui.unmount(); expect(cancel).toHaveBeenCalledOnce();
+  expect(top).toBe(height - 200); expect(writes).toBe(beforeGesture + 1);
+  resize(); flush(); expect(writes).toBe(beforeGesture + 1);
+  resize(); ui.unmount(); expect(frame).toBeUndefined();
 });
 
 it('short-history prepend retains reading ownership through disappearing anchors and shrink', () => {
@@ -145,7 +147,7 @@ function coordinatedViewport(latestTurn?: string) {
   flush();
   return { ui, el, owner: () => owner!, active, positions, flush, top: () => top,
     scroll(value: number) { top = value; readerScroll(el); },
-    grow(value: number) { height += value; resize(); },
+    grow(value: number) { act(() => { height += value; resize(); }); },
     replace(ids: string[]) { ui.rerender(element(ids)); } };
 }
 

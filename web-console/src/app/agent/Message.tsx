@@ -3,20 +3,19 @@ import { InboundMessage, isUserBubble } from './InboundMessage';
 import { AgentConversationContext } from './subagent-context';
 import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
-import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v62';
+import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v69';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { Artifact } from '../components/Artifact';
 import { UserMessage, AssistantMessage, MessageFile } from '../../presentation/agent/Message';
 import { Reasoning } from '../../presentation/agent/Reasoning';
 import { Tool } from './Tool';
 import { CanonicalTool } from './CanonicalTool';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v62';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v69';
 import { Fragment, useContext, type ReactNode } from 'react';
 import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 
 export function Content({ blocks, messageId, publicationStream, markdown = false, streaming = false, tools = [], reasoningHidden = false, include, messageAttachments = false }: { messageId?: string; publicationStream?: string; reasoningHidden?: boolean; tools?: ForegroundToolExecution[]; markdown?: boolean; streaming?: boolean; blocks: (UserContentBlock | AssistantContentBlock | InFlightBlock)[]; include?: readonly number[]; messageAttachments?: boolean }) {
-  const tx = useTranslation();
   const [preferences] = useConversationPreferences();
   return blocks.map((block, index) => {
     // A step piece renders listed blocks at their canonical indices, which Tool lookup keys on.
@@ -31,7 +30,9 @@ export function Content({ blocks, messageId, publicationStream, markdown = false
       const indexInMessage='block_index' in block?block.block_index:index;
       const id = 'block_index' in block ? block.call_id : block.id;
       const tool = tools.find(tool => tool.block_index === indexInMessage && (id==null||tool.call_id==null||tool.call_id===id) && (block.tool_id==null||tool.tool_id==null||tool.tool_id===block.tool_id));
-      return tool ? <Tool key={indexInMessage} tool={tool} messageId={messageId}/> : messageId && !streaming ? <CanonicalTool key={indexInMessage} messageId={messageId} blockIndex={indexInMessage} name={block.name}/> : <small key={indexInMessage}>{tx('agent:message.assembling')}{' '}{block.name}…</small>;
+      // Harness leaves streamed proposals to the process indicator until a
+      // Tool row exists, without a temporary assembly-text row in the reply.
+      return tool ? <Tool key={indexInMessage} tool={tool} messageId={messageId}/> : messageId && !streaming ? <CanonicalTool key={indexInMessage} messageId={messageId} blockIndex={indexInMessage} name={block.name}/> : null;
     }
     return null;
   });

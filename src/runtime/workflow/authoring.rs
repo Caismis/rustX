@@ -39,6 +39,23 @@ pub struct WorkflowNodeAddress {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkflowConsumerField {
+    TemplateVariable {
+        name: String,
+    },
+    CodeVariable {
+        name: String,
+    },
+    TransformInput,
+    ListFilterValue,
+    ListExtract,
+    ClassifierInstruction,
+    ClassifierClass {
+        index: u32,
+    },
+    AggregateVariable {
+        group: u32,
+        index: u32,
+    },
     /// A variable in one Model prompt message. Every part of a message shares
     /// its scope, so this also answers for a variable not inserted yet.
     Message {
@@ -185,6 +202,14 @@ pub fn declared_output(
     node: &WorkflowNodeDefinition,
 ) -> Result<Option<Value>, WorkflowCompileError> {
     let schema = match node {
+        WorkflowNodeDefinition::Template { .. } => super::transform::text_schema(),
+        WorkflowNodeDefinition::Code { outputs, .. } => super::code::output_schema(outputs)?,
+        WorkflowNodeDefinition::Classifier { .. } => super::transform::classifier_result_schema(),
+        WorkflowNodeDefinition::Aggregate { groups, grouped } => {
+            super::transform::validate_groups(groups, *grouped)?;
+            super::transform::aggregate_schema(groups, *grouped)?
+        }
+        WorkflowNodeDefinition::List { .. } => return Ok(None),
         WorkflowNodeDefinition::Model { output, .. } => {
             super::validate_model_output(output, "candidate")?;
             output.schema()
@@ -334,6 +359,7 @@ struct ChoiceInference<'a> {
 enum NecessaryCondition {
     None,
     ToolArgumentsObject,
+    NumberOrString,
     EqualityOperand,
     ForbiddenField,
 }
@@ -343,6 +369,7 @@ enum DestinationContract<'a> {
     Unknown,
     Complete(&'a Value),
     ToolArgumentsObject,
+    NumberOrString,
     Equality(Option<&'a Value>),
     ForbiddenField,
 }
@@ -354,6 +381,22 @@ struct ConsumerContract<'a> {
     selected: Option<&'a WorkflowValue>,
 }
 
+fn necessary_condition(
+    node: &WorkflowNodeDefinition,
+    field: &WorkflowConsumerField,
+) -> NecessaryCondition {
+    match (node, field) {
+        (WorkflowNodeDefinition::Tool { .. }, WorkflowConsumerField::Arguments) => {
+            NecessaryCondition::ToolArgumentsObject
+        }
+        (WorkflowNodeDefinition::Classifier { .. }, WorkflowConsumerField::TransformInput)
+        | (WorkflowNodeDefinition::List { .. }, WorkflowConsumerField::ListExtract) => {
+            NecessaryCondition::NumberOrString
+        }
+        _ => NecessaryCondition::None,
+    }
+}
+
 fn consumer<'a>(
     block: &'a WorkflowBlock,
     address: &WorkflowConsumerAddress,
@@ -362,11 +405,50 @@ fn consumer<'a>(
     use WorkflowNodeDefinition as N;
     let node = block.nodes.get(&address.address.node)?;
     let (expression, expected, result_scope) = match (node, &address.field) {
+        // The template editor queries the input scope before inserting a
+        // binding. It uses the same consumer contract as an existing input.
+        (N::Template { variables, .. }, F::TemplateVariable { name }) => (
+            Expression::Value(variables.get(name).unwrap_or(&UNSET_REFERENCE)),
+            None,
+            false,
+        ),
+        (N::Code { variables, .. }, F::CodeVariable { name }) => {
+            (Expression::Value(variables.get(name)?), None, false)
+        }
+        (N::List { input, .. }, F::TransformInput)
+        | (
+            N::Iteration {
+                iterator: input, ..
+            },
+            F::IterationIterator,
+        ) => (
+            Expression::Value(input),
+            Some(Cow::Owned(serde_json::json!({"type":"array"}))),
+            false,
+        ),
+        (N::Classifier { input, .. }, F::TransformInput) => (Expression::Value(input), None, false),
+        (N::Classifier { classes, .. }, F::ClassifierClass { index }) => {
+            classes.get(*index as usize)?;
+            (Expression::Value(&UNSET_REFERENCE), None, false)
+        }
+        (N::Aggregate { groups, .. }, F::AggregateVariable { group, index }) => {
+            let group = groups.get(*group as usize)?;
+            if *index as usize > group.variables.len() {
+                return None;
+            }
+            (
+                Expression::Value(&UNSET_REFERENCE),
+                group.output_type.map(|kind| Cow::Owned(kind.schema())),
+                false,
+            )
+        }
         (N::Model { messages, .. }, F::Message { index }) => {
             messages.get(*index as usize)?;
             (Expression::Value(&UNSET_REFERENCE), None, false)
         }
-        (N::Agent { .. }, F::Task)
+        (N::List { .. }, F::ListExtract | F::ListFilterValue)
+        | (N::Classifier { .. }, F::ClassifierInstruction)
+        | (N::Agent { .. }, F::Task)
         | (N::Review { .. }, F::ReviewContent)
         | (N::Return { .. }, F::ReturnOutput) => (Expression::Value(&UNSET_REFERENCE), None, false),
         (N::Tool { arguments, .. }, F::Arguments) => (Expression::Value(arguments), None, false),
@@ -393,11 +475,6 @@ fn consumer<'a>(
             None,
             true,
         ),
-        (N::Iteration { iterator, .. }, F::IterationIterator) => (
-            Expression::Value(iterator),
-            Some(Cow::Owned(serde_json::json!({"type": "array"}))),
-            false,
-        ),
         (N::Iteration { output, .. }, F::IterationOutput) => {
             (Expression::Value(output), None, true)
         }
@@ -414,11 +491,7 @@ fn consumer<'a>(
     Some(Consumer {
         expression,
         expected: expected.filter(|schema| validate_workflow_schema(schema, "expected").is_ok()),
-        necessary: if matches!((node, &address.field), (N::Tool { .. }, F::Arguments)) {
-            NecessaryCondition::ToolArgumentsObject
-        } else {
-            NecessaryCondition::None
-        },
+        necessary: necessary_condition(node, &address.field),
         result_scope,
         arrays: Vec::new(),
     })
@@ -467,69 +540,137 @@ fn position<'a>(
                 current.expected = None;
                 Expression::Value(parts.get(*index as usize)?)
             }
-            (Expression::Predicate(WorkflowPredicate::Boolean { value }), S::Value) => {
-                current.expected = Some(Cow::Owned(serde_json::json!({"type":"boolean"})));
-                Expression::Value(value)
+            (Expression::Predicate(predicate), step) => {
+                position_predicate(predicate, step, &mut current, inference)?
             }
-            (
-                Expression::Predicate(
-                    WorkflowPredicate::Equal { left, right }
-                    | WorkflowPredicate::NotEqual { left, right },
-                ),
-                S::Left | S::Right,
-            ) => {
-                let (selected, other) = if matches!(step, S::Left) {
-                    (left, right)
-                } else {
-                    (right, left)
-                };
-                let kind = super::expressions::intrinsic_value_type(other)
-                    .map(str::to_owned)
-                    .or_else(|| match other {
-                        WorkflowValue::Reference { path } => inference
-                            .resolve(path)
-                            .ok()
-                            .and_then(|schema| super::schema_type(schema).map(str::to_owned)),
-                        _ => None,
-                    });
-                current.expected = kind.map(|kind| Cow::Owned(serde_json::json!({"type":kind})));
-                current.necessary = NecessaryCondition::EqualityOperand;
-                Expression::Value(selected)
-            }
-            (
-                Expression::Predicate(
-                    WorkflowPredicate::Contains { left, right }
-                    | WorkflowPredicate::NotContains { left, right }
-                    | WorkflowPredicate::StartsWith { left, right }
-                    | WorkflowPredicate::EndsWith { left, right },
-                ),
-                S::Left | S::Right,
-            ) => {
-                current.expected = Some(Cow::Owned(serde_json::json!({"type":"string"})));
-                Expression::Value(if matches!(step, S::Left) { left } else { right })
-            }
-            (
-                Expression::Predicate(
-                    WorkflowPredicate::Empty { value } | WorkflowPredicate::NotEmpty { value },
-                ),
-                S::Value,
-            ) => {
-                current.expected = Some(Cow::Owned(serde_json::json!({"type":"string"})));
-                Expression::Value(value)
-            }
-            (Expression::Predicate(WorkflowPredicate::Not { predicate }), S::Predicate) => {
-                Expression::Predicate(predicate)
-            }
-            (
-                Expression::Predicate(
-                    WorkflowPredicate::And { predicates } | WorkflowPredicate::Or { predicates },
-                ),
-                S::PredicateAt { index },
-            ) => Expression::Predicate(predicates.get(*index as usize)?),
             _ => return None,
         };
     }
     matches!(current.expression, Expression::Value(_)).then_some(current)
+}
+
+/// Predicate operand expectations are independent of structural value traversal.
+fn position_predicate<'a>(
+    predicate: &'a WorkflowPredicate,
+    step: &WorkflowExpressionStep,
+    current: &mut Consumer<'a>,
+    inference: &mut SchemaInference<'a>,
+) -> Option<Expression<'a>> {
+    use WorkflowExpressionStep as S;
+    Some(match (Expression::Predicate(predicate), step) {
+        (Expression::Predicate(WorkflowPredicate::Boolean { value }), S::Value) => {
+            current.expected = Some(Cow::Owned(serde_json::json!({"type":"boolean"})));
+            Expression::Value(value)
+        }
+        (
+            Expression::Predicate(
+                WorkflowPredicate::Equal { left, right }
+                | WorkflowPredicate::NotEqual { left, right },
+            ),
+            S::Left | S::Right,
+        ) => {
+            let (selected, other) = if matches!(step, S::Left) {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            let kind = super::expressions::intrinsic_value_type(other)
+                .map(str::to_owned)
+                .or_else(|| match other {
+                    WorkflowValue::Reference { path } => inference
+                        .resolve(path)
+                        .ok()
+                        .and_then(|schema| super::schema_type(schema).map(str::to_owned)),
+                    _ => None,
+                });
+            current.expected = kind.map(|kind| {
+                Cow::Owned(serde_json::json!({"type":if kind=="integer" {"number"}else{&kind}}))
+            });
+            current.necessary = NecessaryCondition::EqualityOperand;
+            Expression::Value(selected)
+        }
+        (
+            Expression::Predicate(
+                WorkflowPredicate::Greater { left, right }
+                | WorkflowPredicate::GreaterEqual { left, right }
+                | WorkflowPredicate::Less { left, right }
+                | WorkflowPredicate::LessEqual { left, right },
+            ),
+            S::Left | S::Right,
+        ) => {
+            current.expected = Some(Cow::Owned(serde_json::json!({"type":"number"})));
+            current.necessary = NecessaryCondition::None;
+            Expression::Value(if matches!(step, S::Left) { left } else { right })
+        }
+        (
+            Expression::Predicate(
+                WorkflowPredicate::Contains { left, right }
+                | WorkflowPredicate::NotContains { left, right },
+            ),
+            S::Left | S::Right,
+        ) => {
+            current.expected = if matches!(step, S::Left) {
+                None
+            } else {
+                containment_item_schema(left, inference)
+            };
+            Expression::Value(if matches!(step, S::Left) { left } else { right })
+        }
+        (
+            Expression::Predicate(
+                WorkflowPredicate::StartsWith { left, right }
+                | WorkflowPredicate::EndsWith { left, right },
+            ),
+            S::Left | S::Right,
+        ) => {
+            current.expected = Some(Cow::Owned(serde_json::json!({"type":"string"})));
+            Expression::Value(if matches!(step, S::Left) { left } else { right })
+        }
+        (
+            Expression::Predicate(
+                WorkflowPredicate::Empty { value } | WorkflowPredicate::NotEmpty { value },
+            ),
+            S::Value,
+        ) => {
+            current.expected = None;
+            Expression::Value(value)
+        }
+        (Expression::Predicate(WorkflowPredicate::Not { predicate }), S::Predicate) => {
+            Expression::Predicate(predicate)
+        }
+        (
+            Expression::Predicate(
+                WorkflowPredicate::And { predicates } | WorkflowPredicate::Or { predicates },
+            ),
+            S::PredicateAt { index },
+        ) => Expression::Predicate(predicates.get(*index as usize)?),
+        _ => return None,
+    })
+}
+
+fn containment_item_schema<'a>(
+    left: &WorkflowValue,
+    inference: &mut SchemaInference<'a>,
+) -> Option<Cow<'a, Value>> {
+    match left {
+        WorkflowValue::Reference { path } => inference
+            .resolve(path)
+            .ok()
+            .map(|schema| {
+                if super::schema_type(schema) == Some("array") {
+                    let item = schema.get("items").cloned().unwrap_or(Value::Null);
+                    if super::schema_type(&item) == Some("integer") {
+                        serde_json::json!({"type":"number"})
+                    } else {
+                        item
+                    }
+                } else {
+                    serde_json::json!({"type":"string"})
+                }
+            })
+            .map(Cow::Owned),
+        _ => None,
+    }
 }
 
 /// Shared native lexical proof, independent of unfinished bindings/instructions.
@@ -548,7 +689,11 @@ fn entry_scopes(
     let mut after = BTreeMap::new();
     let mut before = BTreeMap::new();
     for id in flow.topological {
-        let scope = flow.scopes.scope(&id, &after, base);
+        let scope = if matches!(block.nodes[&id], WorkflowNodeDefinition::Aggregate { .. }) {
+            flow.scopes.potential_scope(&id, &after, base)
+        } else {
+            flow.scopes.scope(&id, &after, base)
+        };
         // Unknown args and producer contracts retain their independent
         // presence facts through the compiler's native intersection.
         let next = declarations
@@ -585,6 +730,19 @@ fn destination_compatibility(
     use WorkflowReferenceCompatibility as C;
     match (schema, contract) {
         (_, DestinationContract::ForbiddenField) => C::Incompatible,
+        (Some(actual), DestinationContract::NumberOrString) => {
+            let string = serde_json::json!({"type":"string"});
+            let number = serde_json::json!({"type":"number"});
+            match inference.compatible(actual, &string) {
+                Ok(true) => C::Compatible,
+                Ok(false) => match inference.compatible(actual, &number) {
+                    Ok(true) => C::Compatible,
+                    Ok(false) => C::Incompatible,
+                    Err(_) => C::Unknown,
+                },
+                Err(_) => C::Unknown,
+            }
+        }
         (actual, DestinationContract::Equality(other)) => {
             let actual = actual.and_then(super::schema_type);
             let other = other.and_then(super::schema_type);
@@ -891,6 +1049,24 @@ fn declare(block: &WorkflowBlock, declarations: &mut SchemaMap) -> BTreeMap<Stri
     );
     for id in order {
         let node = &block.nodes[&id];
+        if let WorkflowNodeDefinition::List {
+            input,
+            filter,
+            sort,
+            limit,
+            ..
+        } = node
+        {
+            let schema = super::value_schema(input, declarations, &id, 0)
+                .ok()
+                .and_then(|array| {
+                    super::transform::list_schema(&array, filter.as_ref(), sort.as_ref(), *limit)
+                        .ok()
+                })
+                .unwrap_or(Value::Null);
+            declarations.0.insert(id.clone(), schema.clone());
+            declared.insert(id.clone(), schema);
+        }
         if let WorkflowNodeDefinition::Iteration {
             output,
             error_handle_mode,
@@ -1094,10 +1270,35 @@ fn analyze_query(
         && matches!(
             query.consumer.field,
             WorkflowConsumerField::ConditionVariable { .. }
+                | WorkflowConsumerField::BreakConditionVariable
         )
     {
         consumer.expected = None;
-        consumer.necessary = NecessaryCondition::EqualityOperand;
+        consumer.necessary = NecessaryCondition::None;
+    }
+    if let Some(consumer) = &mut consumer
+        && matches!(query.consumer.field, WorkflowConsumerField::ListFilterValue)
+        && let Some(WorkflowNodeDefinition::List {
+            input: WorkflowValue::Reference { path },
+            filter: Some(filter),
+            ..
+        }) = block.nodes.get(&address.node)
+        && let Ok(array) = inference.schemas.resolve(path)
+        && let Some(mut item) = array.get("items")
+    {
+        for key in &filter.path {
+            item = item
+                .get("properties")
+                .and_then(|fields| fields.get(key))
+                .unwrap_or(&Value::Null);
+        }
+        if matches!(super::schema_type(item), Some("number" | "integer")) {
+            consumer.expected = None;
+            consumer.necessary = NecessaryCondition::NumberOrString;
+        } else {
+            consumer.expected =
+                super::schema_type(item).map(|kind| Cow::Owned(serde_json::json!({"type":kind})));
+        }
     }
     let invalid_consumer = consumer.is_none();
     let expected = consumer
@@ -1106,10 +1307,12 @@ fn analyze_query(
     let destination = match consumer.as_ref().map(|consumer| consumer.necessary) {
         Some(NecessaryCondition::ForbiddenField) => DestinationContract::ForbiddenField,
         Some(NecessaryCondition::ToolArgumentsObject) => DestinationContract::ToolArgumentsObject,
+        Some(NecessaryCondition::NumberOrString) => DestinationContract::NumberOrString,
         Some(NecessaryCondition::EqualityOperand) => DestinationContract::Equality(expected),
-        _ => expected
-            .filter(|schema| validate_workflow_schema(schema, "expected").is_ok())
-            .map_or(DestinationContract::Unknown, DestinationContract::Complete),
+        // Position expectations are constructed natively or read from admitted
+        // producer contracts. Derived List item unions are valid expectations
+        // even though authored schemas use a narrower vocabulary.
+        _ => expected.map_or(DestinationContract::Unknown, DestinationContract::Complete),
     };
     let contract = ConsumerContract {
         destination,
