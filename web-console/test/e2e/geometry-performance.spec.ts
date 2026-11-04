@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { writeFileSync } from 'node:fs';
 import { instrument, resources } from './geometry-observation';
+import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview';
 
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 test.use({ connectOptions: { wsEndpoint: process.env.RUSTX_BROWSER_WS_ENDPOINT ?? '', exposeNetwork: '<loopback>' } });
@@ -59,7 +60,8 @@ for (const workload of [
   });
   const canvas = page.locator('[data-geometry-format] canvas'), box = (await canvas.boundingBox())!;
   const contentReads = () => page.evaluate(name => (window as any).geometryContract.reads.filter((read: any) => read.name === name && !read.probe).length, workload.name);
-  expect(await contentReads()).toBe(1);
+  const expectedReads = workload.id.startsWith('stl') ? Math.ceil(12_250_084 / FILE_PREVIEW_LIMITS.pageBytes) : 1;
+  expect(await contentReads()).toBe(expectedReads);
   const activity = async (button: 'left' | 'right') => {
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down({ button }); await page.mouse.move(box.x + box.width / 2 + 48, box.y + box.height / 2 + 16, { steps: 8 }); await page.mouse.up({ button });
@@ -77,7 +79,7 @@ for (const workload of [
   }
   expect(point).toBeDefined();
   const picking = await sample(page, async () => { await page.mouse.click(point!.x, point!.y); });
-  expect(await contentReads()).toBe(1);
+  expect(await contentReads()).toBe(expectedReads);
   const beforeSplit = performance.now(); await page.getByRole('button', { name: 'Preview cube.glb in sidebar', exact: true }).click();
   await expect(page.locator('[data-geometry-format]')).toContainText('10 × 10 × 10');
   await page.getByRole('button', { name: 'Split preview', exact: true }).click();

@@ -1,14 +1,18 @@
 # CAD sidebar validation
 
-The original interaction implementation is `fbf0a875c27f2b39529793fb032919eb56940797`.
-The [review follow-up](review-follow-up.md) records subsequent correctness fixes,
-chat-style sidebar questions, readable hover diffs, loading stages and measured
-performance work. Its final source hashes and results supersede the historical
-validation table below for those changes; the 50/200-ms acceptance gap remains.
-The [takeover validation](takeover-validation.md) records the later WASM-request
-test repair, projection switching, Parts search and current-source checks.
-The [budget follow-up](budget-follow-up.md) fixes off-origin camera reconstruction,
-reduces certified planar preparation and records the still-failing budget gate.
+Geometry previews admit up to 200 MiB through authorized, single-version byte
+ranges. Initial and moving pictures use bounded temporary display samples; a
+settled view restores every admitted triangle, original shading and full pixel
+quality, then stops drawing. The current acceptance requirement is a usable
+model picture within 200 ms and every interaction below 50 ms on the fixed
+browser/test machine. **The complete latency contract remains unmet.**
+
+The [large-model quality report](large-model-quality.md) is the current validation
+record, including the approximately 200-MiB closed STL, exact full-geometry draw
+counts, input maxima, resource retirement and failed budget assertions.
+Earlier [review](review-follow-up.md), [takeover](takeover-validation.md) and
+[budget](budget-follow-up.md) reports retain their named source revisions and
+historical observations.
 [Geometry contracts](../geometry-previews.md) define the formats, source authority,
 fixed-copy lifetime, lossless preparation and resource limits.
 [Interaction controls and current validation](interaction-roadmap.md) describe
@@ -25,15 +29,16 @@ GLB, binary/ASCII STL, STEP/STP, IGES/IGS and Open CASCADE BREP open through the
 shared delivery/Workbench document body. The original PBR shading and MSAA are
 preserved. Exact indexing and certified planar preparation retain represented
 surfaces, bounds, scale, normals/color semantics, hierarchy and original bytes.
-No lossy simplifier or warm parsed-model/Worker/WASM-instance cache is shipped.
+Temporary lossy display samples do not replace admitted geometry or source bytes.
+No warm parsed-model/Worker/WASM-instance cache is shipped.
 
-The 50-ms interaction P95 / 200-ms first-display target remains **unmet across
-all measured workloads and entry points**. Native GPU completion is reported
+The 50-ms interaction maximum / 200-ms first-display contract remains unmet.
+Native GPU completion is reported
 separately from the next-rendering-opportunity proxy and the legacy display
 clock; none is silently substituted for independently observed presentation.
 The explicit budget-gate run fails, while correctness and lifecycle checks pass.
 
-| Check | Result |
+| Historical check at fbf0a875c | Result |
 | --- | --- |
 | Complete Web/Host suite | 4044 passed, 4 platform skips |
 | Type checking and full production application build | Passed |

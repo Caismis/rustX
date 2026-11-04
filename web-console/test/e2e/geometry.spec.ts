@@ -85,6 +85,7 @@ test('production startup defers geometry and the STL envelope remains responsive
   await expect(outlines).toHaveAttribute('aria-pressed', 'true');
   await expect(outlines).toHaveAttribute('aria-busy', 'false');
   await expect.poll(async () => (await resources(page)).workers).toBe(0);
+  await expect(page.locator('[data-geometry-format] canvas')).toHaveAttribute('data-geometry-quality', 'complete');
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   measurement.idleDrawCalls = await page.evaluate(async () => {
     const counter = (window as any).geometryDrawCalls, start = counter.calls;

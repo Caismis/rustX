@@ -11,7 +11,7 @@ verification are recorded in [the interaction report](interaction-roadmap.md).
 
 | Request | Current state | Source |
 | --- | --- | --- |
-| Reach 50-ms interaction P95 / 200-ms first complete display across measured workloads/entries | Still unachieved. The prior report retains its actual GPU/proxy/whole-action definitions and the failing budget gate. New outline diagnostics do not substitute for those targets. | [Performance evidence](performance-optimization.md) |
+| Approximately 200 MiB geometry: first usable picture within 200 ms, every interaction below 50 ms, complete geometry when settled | Still unachieved. Bounded lossy moving pictures and complete settled draws are implemented. The current gate checks maximum input latency and includes the large closed STL; loading text, P95 and historical smaller workloads do not certify the requirement. | [Large-model quality evidence](large-model-quality.md) |
 
 ## Roadmap and evidence follow-ups
 

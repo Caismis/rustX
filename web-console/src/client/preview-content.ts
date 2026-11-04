@@ -9,7 +9,7 @@ export interface PreviewReader {
   current(): boolean;
   immutable: boolean;
   page(offset: number, signal: AbortSignal): Promise<PreviewTextPage>;
-  bytes(signal: AbortSignal): Promise<PreviewBytes>;
+  bytes(signal: AbortSignal, mode: 'bytes' | 'geometry'): Promise<PreviewBytes>;
   document(extension: 'docx' | 'pptx', signal: AbortSignal): Promise<PreviewBytes>;
   observe?(signal: AbortSignal, changed: () => void): Promise<PreviewObservation>;
   probe(signal: AbortSignal): Promise<string>;
@@ -161,7 +161,7 @@ export class PreviewContentOwner {
           return;
         }
         if (mode !== 'pages') {
-          const result = await (mode === 'bytes' || mode === 'geometry' ? this.reader.bytes(controller.signal) : this.reader.document(mode, controller.signal));
+          const result = await (mode === 'bytes' || mode === 'geometry' ? this.reader.bytes(controller.signal, mode) : this.reader.document(mode, controller.signal));
           if (this.current(epoch)) this.publish({ data: result.data, version: result.version, loading: false });
         } else {
           const page = await this.reader.page(intent.offset, controller.signal);

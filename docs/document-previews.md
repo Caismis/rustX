@@ -41,6 +41,7 @@ retires every incompatible active occurrence lease, including its original URL.
 | --- | --- |
 | Original Artifact bytes | 256 KiB, existing owner policy |
 | Complete Session-file preview / Download | 32 MiB |
+| Geometry source assembly | 200 MiB through existing bounded byte windows; complete-copy version checks, separate decoded/render budgets |
 | Session-file text page / byte window | 2 MiB; text pages have at most 5,000 lines |
 | Office source bytes | 50 MiB, read directly by the Host |
 | Private Host reads / ordinary Artifact transfers | 2 private permits per Host authority / 2 public transfers per ArtifactResources owner; independent physical domains |

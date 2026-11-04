@@ -3,7 +3,7 @@ import type { Page } from '@playwright/test';
 export async function instrument(page: Page) {
   await page.addInitScript(() => {
     const counts = { workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 };
-    const drawing = { calls: 0, modelCalls: 0, scheduled: false };
+    const drawing = { calls: 0, modelCalls: 0, scheduled: false, frameTriangles: 0, lastModelTriangles: 0 };
     const imports: { vertices: number; triangles: number }[][] = [];
     const importTimings: { elapsedMs: number; profile: unknown }[] = [];
     for (const method of ['drawArrays', 'drawElements'] as const) {
@@ -12,7 +12,8 @@ export async function instrument(page: Page) {
         drawing.calls++; const result = Reflect.apply(original, this, args);
         if (args[0] === this.TRIANGLES) {
           drawing.modelCalls++;
-          if (!drawing.scheduled) { drawing.scheduled = true; queueMicrotask(() => { drawing.scheduled = false; document.dispatchEvent(new CustomEvent('geometry-test-model-submitted', { detail: this.canvas })); }); }
+          drawing.frameTriangles += Number(args[method === 'drawArrays' ? 2 : 1]) / 3;
+          if (!drawing.scheduled) { drawing.scheduled = true; queueMicrotask(() => { drawing.scheduled = false; drawing.lastModelTriangles = drawing.frameTriangles; drawing.frameTriangles = 0; document.dispatchEvent(new CustomEvent('geometry-test-model-submitted', { detail: this.canvas })); }); }
         }
         return result;
       } });

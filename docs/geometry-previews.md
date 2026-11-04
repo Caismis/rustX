@@ -32,7 +32,9 @@ and unchanged position-derived bounds certify that disk. Unused indexed
 coordinates still contribute to the bounds. Holes, seams, disconnected regions,
 degenerate faces and unproved surfaces keep their admitted triangles.
 
-Preparation has a cooperative 200-ms budget and starts no optional work in the
+Preparation is restricted to meshes of at most one million vertices and one
+million triangles, has a
+cooperative 200-ms budget and starts no optional work in the
 final second of the original import deadline. Long scans and copies check that
 budget; individual allocations, garbage collection and sorting cannot be
 preempted by JavaScript. The parent still terminates the Worker at its original
@@ -91,9 +93,11 @@ Revocation, Refresh and occurrence replacement cannot save obsolete view state.
 Initial hidden-part restoration publishes once, and camera-only publications do
 not rebuild the part rows or their derived metadata. Repeating an unchanged
 selection or visibility action does not publish or schedule a draw.
-Picking prunes hidden subtrees before nonrecursive mesh raycasts and resolves
-hits through an occurrence map. Unchanged CSS size and effective DPR cause no
-drawing-buffer update; a changed size/DPR uses one public renderer operation.
+Picking prunes hidden subtrees before nonrecursive raycasts against bounded
+display samples and resolves approximate hits through the original occurrence
+map. Inspection and framing always use admitted original geometry. Size, DPR
+and quality changes are coalesced into one public drawing-buffer update at the
+next draw; an unchanged effective buffer causes no allocation.
 Both entry points mount inside the existing document sidebar, retaining its tabs,
 path header, source actions, split/fullscreen behavior and content ownership.
 The geometry body fills the remaining height without a fixed minimum or a second
@@ -160,6 +164,35 @@ the visible scene. Generated
 materials use the original Standard shading, metalness 0.05 and roughness 0.65;
 renderer MSAA remains enabled.
 
+The first submitted picture and subsequent camera/selection/visibility actions
+use a disposable low-cost picture: evenly sampled source triangles, one neutral
+unlit material, no mesh outline shaders, and DPR at most 0.25. Selection boxes
+and axis navigation remain visible. Sampling visits at most 20,000 triangles
+plus one rounding triangle per occurrence (at most 256), and reuses a sample
+for repeated geometry. Only positions are copied, at most 729,216 bytes per
+body; original attributes, indices, materials, transforms, hierarchy and bounds
+are retained. Geometry/material references are restored synchronously after
+submission or picking, including on exceptions, before inspection or metadata
+publication can run. No source or admitted mesh is simplified by this pass.
+
+After 120 ms without a changed view and after the gesture ends, one frame restores
+every admitted triangle, authored material/normal/color/texture, mesh outline
+and the original full-resolution pixel policy. New actions cancel/coalesce that
+refinement. A gesture with no pose/selection change schedules no extra work.
+An idle view has no quality loop. All samples and their shared material are
+disposed with the visible body. `data-geometry-quality` distinguishes pending
+interactive pictures from a submitted complete picture for diagnostics; it is
+not a GPU-completion or presentation timestamp.
+
+The acceptance workload is approximately 200 MiB of source geometry on the
+project's fixed browser/test machine. First demand to a usable model picture
+must be at most 200 ms; every observed interaction must be below 50 ms. Initial
+and moving pictures may be lossy, while a settled picture must use all admitted
+geometry. The [large-model report](issue-516/large-model-quality.md) records the
+actual failing gate and remaining source/import costs. Loading text and an
+empty canvas do not satisfy first display; P95 does not replace the maximum
+latency requirement. The current raw-file pipeline does not meet this contract.
+
 The renderer owns at most one submitted GPU frame/fence. While it is busy, new
 camera changes replace the pending pose instead of submitting obsolete frames.
 WebGL 2 fences are checked without blocking; initialization/wait failure produces
@@ -179,7 +212,13 @@ decoder download, CAD editing, exact measurement or format export is provided.
 
 Geometry uses an explicit `geometry` mode in `PreviewContentOwner`. It does not
 change a mutable reader into an immutable source or introduce a second source
-cache. A complete authorized read establishes the displayed copy. Source-version
+cache. A complete authorized read establishes the displayed copy. Geometry Session
+files and Workbench sources use the existing at-most-2-MiB byte ranges to assemble
+at most 200 MiB in one exact-size buffer. Every range reauthorizes its source and
+checks offset, size, version, EOF and response length. A changed version/size
+rejects the assembly; cancellation waits for the current physical read to settle
+and starts no next range. No partial assembly is published or retained as a copy.
+Ordinary complete reads and original Download retain their 32-MiB bound. Source-version
 hints still validate authority but cannot replace that copy. Refresh starts a
 new content generation and reauthorizes the current source; loading/errors follow
 the existing preview flow. Other viewers keep their automatic-refresh behavior.
@@ -233,12 +272,12 @@ The following are per visible body unless stated otherwise:
 
 | Resource | Bound |
 | --- | --- |
-| Complete Session source / applicable original Download | 32 MiB; managed Artifact policy remains 256 KiB |
+| Geometry Session/Workbench source / applicable original Download | 200 MiB through bounded ranges / 32 MiB complete read; managed Artifact policy remains 256 KiB |
 | GLB JSON / declared accessors / buffer views | 2 MiB / 4,096 / 4,096 |
-| Vertices / rendered triangles | 1,000,000 / 1,000,000; repeated mesh instances also consume triangle admission |
+| Vertices / rendered triangles | 13,000,000 / 5,000,000; repeated mesh instances also consume triangle admission |
 | Admitted scene nodes / parts / source hierarchy depth | 512 / 256 / 32; optional line objects are charged separately |
 | Materials / draw groups, including CAD face ranges | 256 / 512 |
-| Decoded vertex/index/attribute buffers | 64 MiB |
+| Decoded vertex/index/attribute buffers | 512 MiB |
 | Textures / dimension / aggregate source-image pixels | 8 / 2,048 per side / 8,388,608 pixels |
 | Coordinate / matrix magnitude | Finite, absolute value at most 1e12; resulting world bounds are checked too |
 | Canvas backing pixels / CSS dimension / pixel ratio | 4,194,304 / 4,096 per side / at most 2, reduced to fit the pixel budget |
@@ -247,6 +286,7 @@ The following are per visible body unless stated otherwise:
 | CAD WASM linear-memory maximum | 2 GiB, verified in both the shipped binary declaration and glue |
 | Aggregate renderer contexts / import Workers | 2 / 2, additionally restricted by existing visible-body ownership |
 | Submitted GPU frames / owned fences | 1 per visible body, 2 aggregate |
+| Moving-picture triangles / additional position buffers | At most 20,256 / 729,216 bytes per body; one shared unlit material |
 | Optional outline unique input triangles / copied attributes and indices | 100,000 / 16 MiB per body |
 | Optional outline segments, including repeated occurrences / extra draws | 65,536 / 256 per body; 131,072 / 512 for two bodies |
 | Optional outline output vertex buffers | 5 MiB per body, 10 MiB aggregate (80 bytes per segment); at most two shared line materials per body |
@@ -271,6 +311,8 @@ buffers/materials. Default shaded-model limits remain unchanged.
 
 Optional indexing uses at most about 16 MiB of hash/remap/index workspace for
 one million source vertices, plus output arrays whose decoded size must decrease.
+Larger meshes skip optional indexing/planar preparation and retain original
+arrays; increased source admission does not enlarge this temporary workspace.
 Planar certification can use up to 64 MiB of edge tables, about 4 MiB of vertex
 links and bounded 8,192-vertex boundary/hull lists. Meshes are processed
 sequentially; earlier temporary arrays may remain until collection or Worker
@@ -288,10 +330,13 @@ LoadingManager also owns generated image URLs through settlement: successful
 loads use the loader's revocation path, decode failures revoke through the
 manager's error callback, and retired work cannot start another image load.
 
-For two panes, admitted attribute buffers are at most 128 MiB and admitted image
+For two panes, admitted attribute buffers are at most 1 GiB and admitted image
 pixels at most 16,777,216. RGBA image storage is approximately 32 MiB per body
 before mipmaps/driver overhead. Each parent/Worker input copy is independently
-bounded by the 32-MiB source limit. These are allocation/retention admission
+bounded by the 200-MiB geometry source limit. Two retained sources and two Worker
+input copies can total 800 MiB, additional to decoded buffers and WASM. Source
+size alone does not guarantee a model fits the separate decoded, node, material
+or runtime bounds. These are allocation/retention admission
 bounds, not a hard cap on browser RSS or graphics-driver memory.
 Retiring GLB imports have a separate two-slot physical obligation. In the worst
 case, two visible completed scenes coexist with two retiring decode batches:

@@ -57,6 +57,26 @@ it('coalesces poses while the GPU owns a frame and releases its fence on retirem
   expect(f.renderer.render).toHaveBeenCalledTimes(4); expect(frames.size).toBe(0);
   f.view.dispose(); expect(f.renderer.gl.deleteSync).toHaveBeenCalledTimes(2);
 });
+it('draws a bounded moving preview, restores the exact scene after settling and then stops drawing', () => {
+  const object = new Group(), original = new BoxGeometry(1, 1, 1, 100, 100, 100), mesh = new Mesh(original, new MeshStandardMaterial()); object.add(mesh);
+  const f = mount(object), before = f.view.inspect(), samples: { triangles: number; material: unknown }[] = [];
+  f.renderer.render.mockImplementation((scene: Group & { overrideMaterial?: unknown }) => {
+    if (scene.children.includes(object.parent!)) samples.push({ triangles: (mesh.geometry.index?.count ?? mesh.geometry.getAttribute('position').count) / 3, material: mesh.material });
+  });
+  draw(); expect(samples[0].triangles).toBeLessThan(30_000); expect(samples[0].material).not.toBe(mesh.material);
+  expect(mesh.geometry).toBe(original); expect(f.view.inspect()).toEqual(before);
+  vi.advanceTimersByTime(150); draw(); expect(samples.at(-1)!.triangles).toBe(120_000); expect(samples.at(-1)!.material).toBe(mesh.material);
+  f.control().dispatchEvent({ type: 'start' }); move(f.control(), 4); draw(); expect(samples.at(-1)!.triangles).toBeLessThan(30_000);
+  vi.advanceTimersByTime(300); draw(); expect(samples.at(-1)!.triangles).toBeLessThan(30_000);
+  f.control().dispatchEvent({ type: 'end' }); vi.advanceTimersByTime(150); draw(); expect(samples.at(-1)!.triangles).toBe(120_000);
+  const draws = samples.length; vi.advanceTimersByTime(1000); draw(); expect(samples).toHaveLength(draws);
+  expect(mesh.geometry).toBe(original); expect(f.view.inspect()).toEqual(before);
+});
+it('schedules no refinement for a gesture that leaves the complete pose unchanged', () => {
+  const f = mount(); draw(); vi.advanceTimersByTime(L.refineDelayMs); draw(); const calls = f.renderer.render.mock.calls.length;
+  f.control().dispatchEvent({ type: 'start' }); f.control().dispatchEvent({ type: 'end' }); vi.advanceTimersByTime(1000); draw();
+  expect(f.renderer.render).toHaveBeenCalledTimes(calls); expect(vi.getTimerCount()).toBe(0); expect(frames.size).toBe(0);
+});
 it.each(['creation', 'wait'])('retires graphics and reports a GPU-fence %s failure', failure => {
   const f = mount();
   if (failure === 'creation') f.renderer.gl.fenceSync.mockReturnValue(null);
@@ -112,14 +132,19 @@ it('prunes hidden subtrees before raycasting and selects the nearest visible mes
   expect(hiddenRaycast).not.toHaveBeenCalled(); expect(nearRaycast).toHaveBeenCalledOnce(); expect(f.changed.mock.lastCall![0].selected).toBe('0.2');
   f.view.select('0.0'); expect(f.changed.mock.lastCall![0].selected).toBe('0.0');
 });
-it('writes the drawing buffer once per changed size or DPR and releases all idle scheduling and listeners', () => {
-  const f = mount(); expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledExactlyOnceWith(640, 480, 1);
-  resize(); resize(); expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledTimes(1);
+it('coalesces size, DPR and quality into drawing-buffer updates and releases all idle scheduling and listeners', () => {
+  const f = mount(); expect(f.renderer.setDrawingBufferSize).not.toHaveBeenCalled();
+  resize(); resize(); draw(); expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledExactlyOnceWith(640, 480, .25);
+  vi.advanceTimersByTime(L.refineDelayMs); draw(); expect(f.renderer.setDrawingBufferSize).toHaveBeenLastCalledWith(640, 480, 1);
+  resize(); resize(); expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledTimes(2);
   vi.stubGlobal('devicePixelRatio', 1.5); queries[0].listener!(); resize();
-  expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledTimes(2); expect(f.renderer.setDrawingBufferSize).toHaveBeenLastCalledWith(640, 480, 1.5);
+  draw(); vi.advanceTimersByTime(L.refineDelayMs); draw();
+  expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledTimes(4); expect(f.renderer.setDrawingBufferSize).toHaveBeenLastCalledWith(640, 480, 1.5);
   expect(f.renderer.domElement.style.width).toBe('640px'); expect(queries[0].removeEventListener).toHaveBeenCalledOnce();
-  Object.defineProperty(f.element, 'clientWidth', { value: 800 }); resize(); resize(); expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledTimes(3);
-  draw(); const draws = f.renderer.render.mock.calls.length; vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws);
+  Object.defineProperty(f.element, 'clientWidth', { value: 800 }); resize(); resize();
+  expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledTimes(4); draw(); expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledTimes(5);
+  draw(); vi.advanceTimersByTime(L.refineDelayMs); draw();
+  const draws = f.renderer.render.mock.calls.length; vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws);
   f.view.dispose(); expect(disconnect).toHaveBeenCalledOnce(); expect(queries.at(-1)!.removeEventListener).toHaveBeenCalledOnce(); expect(f.control().dispose).toHaveBeenCalledOnce(); expect(f.renderer.dispose).toHaveBeenCalledOnce();
 });
 it('recreates orbit controls for top and bottom and keeps final-flush listeners on the replacement', () => {

@@ -22,11 +22,12 @@ const files = new Map<string, { data: Uint8Array<ArrayBuffer>; version: number }
 const hints = new Set<() => void>(), reads: { name: string; version: number; probe: boolean }[] = [];
 let available = true, hostId = 'geometry-host';
 function file(name: string): SessionFileReference { return { scope: { conversation_id: 'original', device: '1', inode: String(names.indexOf(name) + 1) }, path: name, name, mime_type: 'application/octet-stream' }; }
-async function source(name: string, probe: boolean) {
+async function source(name: string, range?: { offset: number; length: number }) {
   if (!available) throw new WorkspaceHostError('revoked', 'authorization_revoked');
   if (!files.has(name)) { const response = await fetch(`/test/fixtures/geometry/${name}`); if (!response.ok) throw new Error('Fixture missing'); files.set(name, { data: new Uint8Array(await response.arrayBuffer()), version: 1 }); }
-  const value = files.get(name)!; reads.push({ name, version: value.version, probe });
-  return { data: probe ? value.data.slice(0, 1) : value.data.slice(), version: String(value.version), bytes: value.data.length, offset: 0, eof: !probe || value.data.length <= 1 };
+  const value = files.get(name)!; reads.push({ name, version: value.version, probe: range?.length === 1 });
+  const offset = range?.offset ?? 0, data = value.data.slice(offset, range ? offset + range.length : undefined);
+  return { data, version: String(value.version), bytes: value.data.length, offset, eof: offset + data.length >= value.data.length };
 }
 function observe(changed: () => void) {
   hints.add(changed); let resolve!: () => void; const done = new Promise<void>(finish => { resolve = finish; });
@@ -39,7 +40,7 @@ const host: ProductHostWorkspaces = { ...server.workspaceHost,
     if (read.locator.type !== 'by_message_id') throw new Error('Wrong fixture source');
     const name = read.locator.message_id.replace('geometry:', '');
     if (read.read?.kind !== 'bytes') throw new Error('Geometry must use byte reads');
-    return { file: file(name), ...await source(name, !!read.read.range) };
+    return { file: file(name), ...await source(name, read.read.range) };
   },
   observeDelivery: async (_scope, _read, _file, changed) => observe(changed),
 };
@@ -49,7 +50,7 @@ const activity = { publications: 0, commits: 0 };
 owner.subscribe(() => { activity.publications++; });
 const workspaceViews = new Map(names.map(name => [name, fileTabView(undefined, () => available)]));
 const call: WorkbenchCall = Object.assign(async (request: Parameters<WorkbenchCall>[0]) => {
-  if (request.kind === 'preview') return { cwd: '/workspace', preview: await source(request.path, request.read.kind === 'bytes' && !!request.read.range) };
+  if (request.kind === 'preview') return { cwd: '/workspace', preview: await source(request.path, request.read.kind === 'bytes' ? request.read.range : undefined) };
   return {};
 }, { observe: async (_path: string, changed: () => void) => observe(changed) });
 
@@ -93,6 +94,24 @@ Object.assign(window, { geometryContract: {
       view.setFloat32(at + 8, 1, true); points.forEach((value, index) => view.setFloat32(at + 12 + index * 4, value, true)); at += 50;
     }
     files.set('cube.stl', { data, version: 1 });
+  },
+  denseBox(side: number) {
+    if (!Number.isSafeInteger(side) || side < 1 || side > 591) throw new Error('Invalid benchmark size');
+    const triangles = 12 * side * side, data = new Uint8Array(84 + triangles * 50), view = new DataView(data.buffer);
+    view.setUint32(80, triangles, true); let at = 84;
+    for (let face = 0; face < 6; face++) {
+      const axis = Math.floor(face / 2), u = (axis + 1) % 3, v = (axis + 2) % 3, sign = face % 2 ? 1 : -1;
+      for (let y = 0; y < side; y++) for (let x = 0; x < side; x++) for (let triangle = 0; triangle < 2; triangle++, at += 50) {
+        view.setFloat32(at + axis * 4, sign, true);
+        for (let point = 0; point < 3; point++) {
+          const corner = sign > 0 || point === 0 ? point : 3 - point, base = at + 12 + point * 12;
+          view.setFloat32(base + axis * 4, sign / 2, true);
+          view.setFloat32(base + u * 4, (x + Number(triangle ? corner < 2 : corner === 1)) / side - .5, true);
+          view.setFloat32(base + v * 4, (y + Number(triangle ? corner > 0 : corner === 2)) / side - .5, true);
+        }
+      }
+    }
+    files.set('cube.stl', { data, version: 1 }); return { bytes: data.length, triangles, vertices: triangles * 3 };
   },
   mutate() {
     const value = files.get('cube.stl')!; const next = value.data.slice(), data = new DataView(next.buffer);

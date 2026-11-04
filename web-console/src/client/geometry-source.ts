@@ -1,0 +1,26 @@
+import { FILE_PREVIEW_LIMITS as L, isFileData, type FileBytes, type FileReadOptions } from '../../shared/file-preview';
+import { WorkspaceHostError } from '../workspaces/host';
+
+/** Reuse authorized range reads. A complete, single-version copy is published
+ * only after every bounded physical read has settled. No whole-file HTTP body,
+ * array-of-chunks retention or final concatenation is needed. */
+export async function readGeometrySource(read: (options: FileReadOptions, signal: AbortSignal) => Promise<FileBytes>, signal: AbortSignal) {
+  let data: Uint8Array<ArrayBuffer> | undefined, version = '', total = 0, offset = 0;
+  do {
+    signal.throwIfAborted();
+    const length = data ? Math.min(L.pageBytes, total - offset) : L.pageBytes;
+    const page = await read({ kind: 'bytes', range: { offset, length } }, signal);
+    signal.throwIfAborted();
+    if (!isFileData(page.data) || !Number.isSafeInteger(page.bytes) || page.bytes < 0 || page.bytes > L.geometryBytes
+      || page.lines !== undefined || page.offset !== offset || typeof page.version !== 'string' || !page.version
+      || page.data.length !== Math.min(length, Math.max(0, page.bytes - offset))
+      || page.eof !== (offset + page.data.length === page.bytes)) throw new Error(page.bytes > L.geometryBytes ? 'too_large' : 'malformed');
+    if (!data) {
+      total = page.bytes; version = page.version;
+      if (page.eof) return { data: page.data, version };
+      data = new Uint8Array(total);
+    } else if (version !== page.version || total !== page.bytes) throw new WorkspaceHostError('Geometry source changed during read', 'source_changed');
+    data.set(page.data, offset); offset += page.data.length;
+  } while (offset < total);
+  return { data: data!, version };
+}

@@ -1,5 +1,6 @@
 import type { GeometryMesh, GeometryModel } from './model';
 import { planarMesh } from './planar';
+import { GEOMETRY_LIMITS as L } from './limits';
 
 const MIN_VERTICES = 50_000;
 
@@ -7,7 +8,8 @@ const MIN_VERTICES = 50_000;
  * certified planar retriangulation preserve surfaces, attributes and parts. */
 export function optimizeModel(model: GeometryModel, deadline = performance.now() + 200): GeometryModel {
   const meshes = model.meshes.map(mesh => {
-    if (mesh.positions.length / 3 < MIN_VERTICES || performance.now() > deadline) return mesh;
+    if (mesh.positions.length / 3 < MIN_VERTICES || mesh.positions.length / 3 > L.preparationVertices
+      || (mesh.indices?.length ?? mesh.positions.length / 3) / 3 > L.preparationTriangles || performance.now() > deadline) return mesh;
     return planarMesh(indexMesh(mesh, deadline), deadline);
   });
   return meshes.every((mesh, index) => mesh === model.meshes[index]) ? model : { ...model, meshes };

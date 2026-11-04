@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Box3, BoxGeometry, Group, Mesh, MeshBasicMaterial, Vector2, Vector3 } from 'three';
 import { mountGeometry } from '../src/app/components/documents/geometry/viewport';
 import { en } from '../src/locale/dictionaries/geometry';
+import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/limits';
 
 // Keep the installed OrbitControls implementation, including its absolute EPS.
 // Only the GPU boundary is replaced; inputs go through real DOM listeners.
@@ -58,7 +59,8 @@ it('renders a 120px sub-EPS pan during the gesture and persists its final pose w
   pointer(document, 'pointerup', 420);
   expect(f.changed).toHaveBeenCalledOnce(); const pose = f.changed.mock.lastCall![0].camera;
   expect(Math.abs(pose.position[0] - before.x)).toBeGreaterThan(1e-7); expect(Math.abs(pose.position[0] - before.x)).toBeLessThan(1e-5);
-  vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+  vi.advanceTimersByTime(L.refineDelayMs); draw();
+  const draws = f.renderer.render.mock.calls.length; vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws);
 });
 it('retires an input pose before its queued observation through the supplied retirement callback only', async () => {
   const f = mount(), retired = vi.fn();
@@ -86,7 +88,8 @@ it('persists real orthographic wheel zoom with an unchanged position and no idle
   f.canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 300, clientY: 200, bubbles: true, cancelable: true }));
   expect(f.changed).toHaveBeenCalledOnce(); expect(camera.position.distanceTo(position)).toBeLessThan(1e-12);
   expect(f.changed.mock.lastCall![0].camera.projection).toBe('orthographic'); expect(f.changed.mock.lastCall![0].camera.verticalSpan).toBeLessThan(before);
-  draw(); vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+  draw(); vi.advanceTimersByTime(L.refineDelayMs); draw();
+  const draws = f.renderer.render.mock.calls.length; vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws);
   f.view.setProjection('perspective'); expect(runtime.renderers).toHaveLength(1); expect(Number.isFinite(f.changed.mock.lastCall![0].camera.position[0])).toBe(true);
 });
 
@@ -114,5 +117,7 @@ it.each(['front', 'top'] as const)('preserves an off-origin tiny focused part th
     if (projection === 'orthographic') expect(after.verticalSpan / (2 * distance * Math.tan(Math.PI / 8))).toBeCloseTo(1, 6);
   }
   expect(changed).toHaveBeenCalledTimes(2); expect(runtime.renderers).toHaveLength(1);
-  vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+  vi.advanceTimersByTime(L.refineDelayMs); draw();
+  const renderer = runtime.renderers[0], draws = renderer.render.mock.calls.length;
+  vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(renderer.render).toHaveBeenCalledTimes(draws);
 });

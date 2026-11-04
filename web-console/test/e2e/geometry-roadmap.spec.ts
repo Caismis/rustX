@@ -4,6 +4,7 @@ import { BoxGeometry, SphereGeometry, Triangle, Vector3 } from 'three';
 import { PNG } from 'pngjs';
 import { instrument, resources } from './geometry-observation';
 import { denseBoxStl } from '../geometry-fixtures';
+import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview';
 
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 test.use({ connectOptions: { wsEndpoint: process.env.RUSTX_BROWSER_WS_ENDPOINT ?? '', exposeNetwork: '<loopback>' } });
@@ -11,6 +12,9 @@ const ready = (page: Page) => expect(page.locator('[data-geometry-format] canvas
 const pose = (page: Page) => page.evaluate(() => (window as any).geometryContract.snapshot().find((tab: any) => tab.name === 'cube.glb').state);
 const reads = (page: Page) => page.evaluate(() => (window as any).geometryContract.reads.filter((read: any) => !read.probe).length);
 const painted = (page: Page) => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+// Pixel/resource/idle assertions require the final picture. Latency clocks keep
+// their original first-model and input endpoints and do not use this helper.
+const refined = async (page: Page) => { await expect.poll(() => page.locator('[data-geometry-format] canvas').evaluateAll(canvases => canvases.length > 0 && canvases.every(canvas => canvas.getAttribute('data-geometry-quality') === 'complete'))).toBe(true); await painted(page); };
 
 function assemblyGlb(nodes: object[] = [{ name: 'Assembly', translation: [100,200,300], scale: [2,3,4], children: [1,2] }, { name: 'A', mesh: 0 }, { name: 'B', mesh: 0, translation: [20,0,0] }]) {
   const original = new Uint8Array(readFileSync(new URL('../fixtures/geometry/cube.glb', import.meta.url))), header = new DataView(original.buffer), length = header.getUint32(12, true);
@@ -94,7 +98,7 @@ test('projection switches preserve framing and resources, persist orthographic w
   await load(page); const tree = await parts(page);
   await tree.getByRole('checkbox', { name: 'Visible: B', exact: true }).uncheck(); await tree.getByRole('button', { name: 'A', exact: true }).click();
   await page.getByRole('button', { name: 'Focus selected', exact: true }).click(); await page.getByRole('button', { name: 'Close parts', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Model outlines', exact: true })).toHaveAttribute('aria-pressed', 'true'); await painted(page);
+  await expect(page.getByRole('button', { name: 'Model outlines', exact: true })).toHaveAttribute('aria-pressed', 'true'); await refined(page);
   const initial = await pose(page), initialReads = await reads(page), before = await resources(page);
   await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: 'Orthographic', exact: true }).click(); await painted(page);
   const orthographic = await pose(page); expect(orthographic.camera.projection).toBe('orthographic');
@@ -135,9 +139,9 @@ test('projection roundtrip preserves a tiny focused part far from the orbit orig
     expect(after.camera.projection).toBe(projection.toLowerCase()); expect(after.camera.target).toEqual(initial.camera.target); expect(after.camera.up).toEqual(initial.camera.up);
     expect(Math.hypot(...after.camera.position.map((value: number, i: number) => value - initial.camera.position[i]))).toBeLessThan(distance * 1e-6);
     if (projection === 'Orthographic') expect(after.camera.verticalSpan / (2 * distance * Math.tan(Math.PI / 8))).toBeCloseTo(1, 6);
-    expect(await resources(page)).toEqual(before);
+    await refined(page); expect(await resources(page)).toEqual(before);
   }
-  const calls = await page.evaluate(() => (window as any).geometryDrawCalls.calls); await page.waitForTimeout(250);
+  await refined(page); const calls = await page.evaluate(() => (window as any).geometryDrawCalls.calls); await page.waitForTimeout(250);
   expect(await page.evaluate(() => (window as any).geometryDrawCalls.calls)).toBe(calls);
 });
 
@@ -146,11 +150,11 @@ test('mesh outlines start enabled, can be disabled, restore the option and add n
   await load(page); const initialReads = await reads(page);
   const button = page.getByRole('button', { name: 'Model outlines', exact: true });
   await expect(button).toHaveAttribute('aria-pressed', 'true');
-  await button.click(); await expect(button).toHaveAttribute('aria-pressed', 'false'); await painted(page);
+  await button.click(); await expect(button).toHaveAttribute('aria-pressed', 'false'); await refined(page);
   const before = await resources(page);
   for (let i = 0; i < 2; i++) {
     await button.click(); await expect(button).toHaveAttribute('aria-pressed', 'true');
-    await expect.poll(async () => (await resources(page)).workers).toBe(0); await painted(page);
+    await expect.poll(async () => (await resources(page)).workers).toBe(0); await refined(page);
     expect((await resources(page)).buffers).toBeGreaterThan(before.buffers);
     const calls = await page.evaluate(() => (window as any).geometryDrawCalls.calls); await page.waitForTimeout(250);
     expect(await page.evaluate(() => (window as any).geometryDrawCalls.calls)).toBe(calls);
@@ -179,7 +183,7 @@ for (const projection of ['Perspective', 'Orthographic']) for (const scale of [1
   await page.getByRole('button', { name: 'View angle', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Front', exact: true }).click();
   const tree = await parts(page), canvas = page.locator('[data-geometry-format] canvas');
-  const settle = async () => { await canvas.focus(); await page.mouse.move(0, 0); await expect(page.getByRole('tooltip')).toHaveCount(0); await painted(page); };
+  const settle = async () => { await canvas.focus(); await page.mouse.move(0, 0); await expect(page.getByRole('tooltip')).toHaveCount(0); await refined(page); };
   await page.getByRole('button', { name: 'Close parts', exact: true }).click(); await settle();
   await expect.poll(async () => (await resources(page)).workers).toBe(0); await painted(page);
   const both = PNG.sync.read(await canvas.screenshot());
@@ -216,7 +220,7 @@ for (const projection of ['Perspective', 'Orthographic']) for (const scale of [1
   await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: 'Front', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Model outlines', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const canvas = page.locator('[data-geometry-format] canvas'), tree = page.getByRole('list', { name: 'Parts', exact: true });
-  const settle = async () => { await canvas.focus(); await page.mouse.move(0, 0); await expect(page.getByRole('tooltip')).toHaveCount(0); await painted(page); };
+  const settle = async () => { await canvas.focus(); await page.mouse.move(0, 0); await expect(page.getByRole('tooltip')).toHaveCount(0); await refined(page); };
   await expect.poll(async () => (await resources(page)).workers).toBe(0); await settle();
   const both = PNG.sync.read(await canvas.screenshot());
   await page.getByRole('button', { name: 'Parts', exact: true }).click();
@@ -228,11 +232,12 @@ for (const projection of ['Perspective', 'Orthographic']) for (const scale of [1
 });
 
 test('outline gate preserves a near-limit shaded STL and keeps original Download', async ({ page }) => {
-  await instrument(page); await page.route('**/test/fixtures/geometry/cube.stl', route => route.fulfill({ body: Buffer.from(denseBoxStl()), contentType: 'application/octet-stream' }));
+  const source = denseBoxStl();
+  await instrument(page); await page.route('**/test/fixtures/geometry/cube.stl', route => route.fulfill({ body: Buffer.from(source), contentType: 'application/octet-stream' }));
   await page.goto(`${origin}/test/fixtures/geometry.html`); await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click(); await ready(page);
   await expect(page.getByRole('status')).toContainText('Outlines are unavailable');
   await expect(page.locator('[data-geometry-format] canvas')).toBeVisible(); await expect(page.getByRole('button', { name: 'Download artifact', exact: true })).toBeEnabled();
-  expect(await reads(page)).toBe(1); expect((await resources(page)).workers).toBe(0);
+  expect(await reads(page)).toBe(Math.ceil(source.length / FILE_PREVIEW_LIMITS.pageBytes)); expect((await resources(page)).workers).toBe(0);
   await page.getByRole('button', { name: 'Close preview cube.stl', exact: true }).click();
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
 });
@@ -299,7 +304,9 @@ for (const workload of ['planar-outline-envelope', 'cad-96-parts']) test(`two-pa
   const outputs = await page.evaluate(() => (window as any).roadmapOutlineOutputs as { segments: number; bytes: number }[]);
   expect(outputs).toHaveLength(2); for (const output of outputs) { expect(output.segments).toBeLessThanOrEqual(65536); expect(output.bytes).toBeLessThanOrEqual(65536 * 80); }
   expect(withOutlines.contexts).toBe(2); expect(withOutlines.workers).toBe(0);
-  expect(browser.antialias).toBe(true); expect(await reads(page)).toBe(2);
+  const expectedReads = workload === 'planar-outline-envelope' ? Math.ceil((84 + 96_800 * 50) / FILE_PREVIEW_LIMITS.pageBytes) + 1 : 2;
+  expect(browser.antialias).toBe(true); expect(await reads(page)).toBe(expectedReads);
+  await refined(page);
   const draws = await page.evaluate(() => (window as any).geometryDrawCalls.calls); await page.waitForTimeout(1000); expect(await page.evaluate(() => (window as any).geometryDrawCalls.calls)).toBe(draws);
   await page.getByRole('button', { name: `Close preview ${name}`, exact: true }).click(); await page.getByRole('button', { name: 'Close preview cube.glb', exact: true }).click();
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
@@ -314,7 +321,7 @@ test.describe('scaled coordinate navigation', () => {
     await page.getByRole('button', { name: '+X: Right', exact: true }).locator('text').click();
     const state = await pose(page); expect(state.camera.position[0]).toBeGreaterThan(0);
     expect(Math.abs(state.camera.position[1])).toBeLessThan(1e-6); expect(Math.abs(state.camera.position[2])).toBeLessThan(1e-6);
-    const scale = await page.locator('[data-geometry-format] canvas').evaluate(canvas => (canvas as HTMLCanvasElement).width / canvas.clientWidth); expect(scale).toBeCloseTo(2, 2);
+    await refined(page); const scale = await page.locator('[data-geometry-format] canvas').evaluate(canvas => (canvas as HTMLCanvasElement).width / canvas.clientWidth); expect(scale).toBeCloseTo(2, 2);
     await page.getByRole('button', { name: '−Z: Back', exact: true }).focus(); await page.keyboard.press('Enter'); expect((await pose(page)).camera.position[2]).toBeLessThan(0);
     expect(await reads(page)).toBe(1);
     await page.getByRole('button', { name: 'Close preview cube.glb', exact: true }).click();

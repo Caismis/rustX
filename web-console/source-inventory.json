@@ -4755,6 +4755,7 @@
       "retained_dependencies": [
         "../../../shared/file-observation.ts",
         "../../../shared/file-preview",
+        "../../client/geometry-source",
         "../../client/preview-content",
         "../../locale/react",
         "../../presentation/markdown/CodeBlock",
@@ -4796,7 +4797,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "2b9a8cbc9cda6358119c28e5ec4d476e9777097c08a66f3bd0aa4f7324a3cbbe"
+      "local_sha256": "bcf0a69ac42f1e550a87314db0698df85961206f4854195dfac43b02e04fb402"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",

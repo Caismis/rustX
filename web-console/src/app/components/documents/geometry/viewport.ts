@@ -4,6 +4,7 @@ import type { PreviewViewState } from '../../../../presentation/right-panel/prev
 import { GEOMETRY_LIMITS as L, GeometryError } from './limits';
 import { createStructure } from './structure';
 import { createAxisNavigation, type AxisLabels } from './axes';
+import { createDisplayQuality } from './display-quality';
 import type { createOutlines, OutlineStatus } from './outlines';
 export type { Part } from './structure';
 
@@ -52,7 +53,9 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const navigation = createAxisNavigation(container, labels, view => fit(view));
   const highlight = new BoxHelper(object, new Color(0xffbd45)); highlight.visible = false; scene.add(highlight);
   const structure = createStructure(object, center, saved);
+  const quality = createDisplayQuality(object);
   let frame = 0, disposed = false, initial = true, restoring = true;
+  let moving = true, refinement: ReturnType<typeof setTimeout> | undefined, drawingRatio = 0, drawingWidth = 0, drawingHeight = 0;
   let cameraDirty = false, interacting = false, lastPublished = -Infinity, publication: ReturnType<typeof setTimeout> | undefined;
   const projection = (): Projection => camera instanceof OrthographicCamera ? 'orthographic' : 'perspective';
   const verticalSpan = () => camera instanceof OrthographicCamera ? (camera.top - camera.bottom) / camera.zoom : 2 * camera.position.distanceTo(controls.target) * Math.tan(camera.fov * Math.PI / 360) / camera.zoom;
@@ -72,8 +75,14 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
       gl.deleteSync(pendingDraw); pendingDraw = null;
       if (status === gl.WAIT_FAILED) { dispose(); lost(); return; }
     }
-    const { x: width, y: height } = renderer.getSize(new Vector2());
-    renderer.setViewport(0, 0, width, height); renderer.autoClear = true; renderer.render(scene, camera);
+    const width = viewportWidth, height = viewportHeight;
+    const ratio = moving ? Math.min(viewportRatio, .25, Math.sqrt(L.movingPixels / (width * height))) : viewportRatio;
+    if (drawingRatio !== ratio || drawingWidth !== width || drawingHeight !== height) {
+      renderer.setDrawingBufferSize(width, height, ratio); drawingRatio = ratio; drawingWidth = width; drawingHeight = height;
+    }
+    renderer.setViewport(0, 0, width, height); renderer.autoClear = true;
+    quality.draw(scene, moving, () => renderer.render(scene, camera));
+    canvas.dataset.geometryQuality = moving ? 'interactive' : 'complete';
     renderer.autoClear = false; renderer.clearDepth();
     axisCamera.position.copy(camera.position).sub(controls.target).normalize().multiplyScalar(3.5); axisCamera.up.copy(camera.up); axisCamera.lookAt(0, 0, 0);
     const side = Math.min(112, width, height); renderer.setViewport(8, 8, side, side); renderer.render(axisScene, axisCamera);
@@ -83,6 +92,12 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     gl.flush();
   };
   const render = () => { if (!disposed && !frame) frame = requestAnimationFrame(draw); };
+  const refine = () => {
+    clearTimeout(refinement); refinement = undefined;
+    if (disposed || interacting || !moving) return;
+    refinement = setTimeout(() => { refinement = undefined; if (!disposed) { moving = false; render(); } }, L.refineDelayMs);
+  };
+  const renderMoving = () => { moving = true; canvas.dataset.geometryQuality = 'interactive'; refine(); render(); };
   const updateHighlight = () => {
     const item = structure.selectedObject;
     highlight.visible = !!item;
@@ -91,7 +106,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   };
   const select = (id?: string) => {
     if (!structure.select(id)) return;
-    updateHighlight(); render(); emit();
+    updateHighlight(); renderMoving(); emit();
   };
   const updateClipping = () => {
     const far = Math.max(radius * 1000, camera.position.length() + radius * 2, camera.position.distanceTo(controls.target) + radius * 2);
@@ -110,7 +125,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     else { camera = new PerspectiveCamera(45, viewportWidth / viewportHeight || 1); position.copy(direction).normalize().multiplyScalar(span / (2 * Math.tan(Math.PI / 8))).add(target); }
     camera.position.copy(position); camera.up.copy(up); camera.near = near; camera.far = far; camera.updateProjectionMatrix();
     controls.maxDistance = Math.max(controls.maxDistance, camera.position.distanceTo(target));
-    interacting = false; synchronizeOrbit(target); updateClipping(); render(); emit();
+    interacting = false; synchronizeOrbit(target); updateClipping(); renderMoving(); emit();
   };
   const frameBounds = (box: Box3, view?: StandardView) => {
     if (box.isEmpty()) return;
@@ -123,16 +138,16 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     if (view) camera.up.set(0, view === 'top' || view === 'bottom' ? 0 : 1, view === 'top' ? -1 : view === 'bottom' ? 1 : 0);
     if (camera instanceof OrthographicCamera) setOrthographicSpan(frameRadius * 2 / Math.min(1, aspect) * 1.1);
     controls.minDistance = frameRadius / 100; controls.maxDistance = Math.max(radius * 100, distance);
-    camera.near = Math.max(Math.min(radius, frameRadius) / 10_000, 1e-12); camera.updateProjectionMatrix(); synchronizeOrbit(target); updateClipping(); render(); emit();
+    camera.near = Math.max(Math.min(radius, frameRadius) / 10_000, 1e-12); camera.updateProjectionMatrix(); synchronizeOrbit(target); updateClipping(); renderMoving(); emit();
   };
   const fit = (view?: StandardView) => frameBounds(structure.bounds(object, true), view);
   const reset = () => frameBounds(bounds.clone().translate(center.clone().negate()), 'isometric');
   const focus = () => { if (structure.selectedObject) frameBounds(structure.bounds(structure.selectedObject, true)); };
   const visibility = (id: string, visible: boolean) => {
     if (!structure.visibility(id, visible)) return;
-    outlines?.sync(); updateHighlight(); render(); emit();
+    outlines?.sync(); updateHighlight(); renderMoving(); emit();
   };
-  const structureAction = (action: () => boolean) => { if (action()) { outlines?.sync(); updateHighlight(); render(); emit(); } };
+  const structureAction = (action: () => boolean) => { if (action()) { outlines?.sync(); updateHighlight(); renderMoving(); emit(); } };
   const setOutlines = async (enabled: boolean): Promise<OutlineStatus> => {
     const request = ++outlineRequest;
     if (disposed) return 'off'; outlinesWanted = enabled; emit();
@@ -158,8 +173,8 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     const pixelRatio = Math.min(globalThis.devicePixelRatio || 1, 2, Math.sqrt(L.canvasPixels / (width * height)));
     if (width === viewportWidth && height === viewportHeight && pixelRatio === viewportRatio) return;
     viewportWidth = width; viewportHeight = height; viewportRatio = pixelRatio;
-    // Set size and DPR together: setPixelRatio() itself resizes the buffer.
-    renderer.setDrawingBufferSize(width, height, pixelRatio);
+    // The next draw applies the latest size, DPR and display quality together.
+    // Do not allocate a full-resolution buffer that the first coarse draw discards.
     canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
     if (camera instanceof PerspectiveCamera) camera.aspect = width / height;
     else { const span = camera.top - camera.bottom; camera.left = -span * width / height / 2; camera.right = span * width / height / 2; }
@@ -178,7 +193,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
         }
       }
     }
-    render();
+    renderMoving();
   };
   let viewportWidth = 0, viewportHeight = 0, viewportRatio = 0;
   const observedPosition = camera.position.clone(), observedTarget = controls.target.clone(), observedRotation = camera.quaternion.clone();
@@ -187,7 +202,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const poseChanged = () => !observedPosition.equals(camera.position) || !observedTarget.equals(controls.target) || !observedRotation.equals(camera.quaternion) || observedZoom !== camera.zoom || observedProjection !== projection();
   const changed = () => {
     rememberPose();
-    updateClipping(); render(); if (restoring || disposed) return;
+    updateClipping(); renderMoving(); if (restoring || disposed) return;
     cameraDirty = true;
     if (interacting) return;
     const remaining = 100 - (performance.now() - lastPublished);
@@ -201,8 +216,8 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   // Its public input events still update smaller models. Read the final pose
   // after their handlers, without scheduling any work while the view is idle.
   const inputFinished = () => { queueMicrotask(observePose); };
-  const started = () => { interacting = true; observePose(); clearTimeout(publication); publication = undefined; };
-  const ended = () => { observePose(); interacting = false; flush(); };
+  const started = () => { interacting = true; clearTimeout(refinement); refinement = undefined; observePose(); clearTimeout(publication); publication = undefined; };
+  const ended = () => { observePose(); interacting = false; refine(); flush(); };
   const inputMoved = () => { if (interacting) inputFinished(); };
   canvas.ownerDocument.addEventListener('pointermove', inputMoved, true);
   canvas.addEventListener('keydown', inputFinished, true);
@@ -245,14 +260,14 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     const rect = canvas.getBoundingClientRect(); raycaster.setFromCamera(new Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
     const candidates: Mesh[] = [];
     object.traverseVisible(item => { if (item instanceof Mesh) candidates.push(item); });
-    const hit = raycaster.intersectObjects(candidates, false)[0];
+    const hit = quality.pick(raycaster, candidates);
     select(hit ? structure.occurrenceIds.get(hit.object) : undefined);
   };
   const contextLost = (event: Event) => { event.preventDefault(); dispose(); lost(); };
   canvas.addEventListener('pointerdown', pointerDown); canvas.addEventListener('pointerup', pointerUp); canvas.addEventListener('webglcontextlost', contextLost);
   function dispose() {
     if (disposed) return; flush(); if (disposed) return;
-    disposed = true; outlineRequest++; outlines?.dispose(); activeContexts--; clearTimeout(publication); cancelAnimationFrame(frame); observer.disconnect(); themeObserver.disconnect(); resolution.removeEventListener('change', resolutionChanged);
+    disposed = true; outlineRequest++; outlines?.dispose(); quality.dispose(); activeContexts--; clearTimeout(refinement); clearTimeout(publication); cancelAnimationFrame(frame); observer.disconnect(); themeObserver.disconnect(); resolution.removeEventListener('change', resolutionChanged);
     canvas.removeEventListener('pointerdown', pointerDown); canvas.removeEventListener('pointerup', pointerUp); canvas.removeEventListener('webglcontextlost', contextLost);
     canvas.ownerDocument.removeEventListener('pointermove', inputMoved, true); canvas.removeEventListener('keydown', inputFinished, true);
     controls.removeEventListener('change', changed); controls.removeEventListener('start', started); controls.removeEventListener('end', ended); controls.dispose();

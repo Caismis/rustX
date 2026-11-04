@@ -6,6 +6,7 @@ import { modelScene, disposeScene } from '../src/app/components/documents/geomet
 import { BoxGeometry, PlaneGeometry, SphereGeometry } from 'three';
 import { denseBoxStl } from './geometry-fixtures';
 import { importStl } from '../src/app/components/documents/geometry/stl';
+import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/limits';
 import type { GeometryMesh } from '../src/app/components/documents/geometry/model';
 
 function triangleBits(mesh: GeometryMesh, key: 'positions' | 'normals' | 'colors') {
@@ -113,6 +114,18 @@ it('keeps the admitted near-limit six-face STL within the original import deadli
 it('skips optional work when its deadline is already consumed and never smooths missing normals', () => {
   const model = grid(); expect(optimizeModel(model, -Infinity)).toBe(model);
   model.meshes[0].normals = undefined; expect(optimizeModel(model)).toBe(model);
+});
+it('keeps the old optional workspace bound for indexed meshes admitted under the larger triangle limit', () => {
+  const plane = new PlaneGeometry(1, 1, 230, 230), positions = Float32Array.from(plane.getAttribute('position').array), normals = Float32Array.from(plane.getAttribute('normal').array);
+  const mesh: GeometryMesh = { name: '', positions, normals, indices: new Uint32Array((L.preparationTriangles + 1) * 3), groups: [] };
+  const model = { meshes: [mesh], root: { name: '', meshes: [0], children: [] } }; validateModel(model);
+  const Native = Uint32Array;
+  vi.stubGlobal('Uint32Array', new Proxy(Native, { construct(target, args) {
+    if (typeof args[0] === 'number' && args[0] > 2 ** 20) throw new Error('Optional workspace expanded');
+    return Reflect.construct(target, args);
+  } }));
+  try { expect(optimizeModel(model, Infinity)).toBe(model); }
+  finally { vi.unstubAllGlobals(); plane.dispose(); }
 });
 it('keeps bounds from unused indexed positions and stops a copy when its cooperative budget expires', () => {
   vi.spyOn(performance, 'now').mockReturnValue(0);
