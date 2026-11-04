@@ -14,6 +14,7 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
     const fixture = await startDogfood('web_compaction');
     let passed = false;
     const errors: string[] = [];
+    const requestCapacityErrors: { method: string | undefined; error: unknown }[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
     const draft = 'Draft survives native maintenance ' + 'Keep these additional historical facts. '.repeat(512);
@@ -21,12 +22,21 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
     let releaseCompact: (() => void) | undefined;
     await page.routeWebSocket(/ws:\/\//, socket => {
       const server = socket.connectToServer();
+      const methods = new Map<string | number, string>();
       socket.onMessage(message => {
-        if (holdCompact && JSON.parse(String(message)).method === 'context/compact') {
+        const request = JSON.parse(String(message));
+        methods.set(request.id, request.method);
+        if (holdCompact && request.method === 'context/compact') {
           holdCompact = false; releaseCompact = () => server.send(message);
         } else server.send(message);
       });
-      server.onMessage(message => socket.send(message));
+      server.onMessage(message => {
+        const response = JSON.parse(String(message));
+        if (response.error?.data?.kind === 'request_capacity') {
+          requestCapacityErrors.push({ method: methods.get(response.id), error: response.error });
+        }
+        socket.send(message);
+      });
     });
     const copy = <T extends string | RegExp>(en: T, zh: T) => locale === 'zh' ? zh : en;
     try {
@@ -138,6 +148,7 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
         // rather than the dev launcher's authenticated local bootstrap.
         await connectRemote(page, fixture.endpoint, fixture.token);
         await expect(message).toBeEditable();
+        expect(requestCapacityErrors).toEqual([]);
         await expect(marker).toHaveCount(1);
         await expect(dock.getByRole('button', { name: /(% of context used$|^上下文已用 )/ })).toBeVisible();
         await marker.click();
@@ -206,10 +217,12 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
         await page.reload();
         await connectRemote(page, fixture.endpoint, fixture.token);
         await expect(page.getByText('Conversation continued after stopping.', { exact: true })).toBeVisible();
+        expect(requestCapacityErrors).toEqual([]);
         await expect(marker).toHaveCount(2);
         expect(await page.locator('[data-compaction-checkpoint]').last().evaluate(el => !!(el.compareDocumentPosition([...document.querySelectorAll('p')].find(p => p.textContent === 'Question answered after compaction.')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
       }
       expect(errors).toEqual([]);
+      expect(requestCapacityErrors).toEqual([]);
       passed = true;
     } catch (error) {
       let report: unknown;

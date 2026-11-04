@@ -1642,6 +1642,16 @@ it('compaction summary exposes loading and read errors before detail arrives', (
   expect(screen.getByRole('alert').textContent).toBe('Summary read failed');
 });
 
+it.each(['incomplete', 'running', 'completed', 'failed', 'cancelled'] as const)('compaction Inspector preserves the native %s state', state => {
+  const record = traceRecord(0, { kind: 'compaction', request: null, state, location: {}, preview: null, has_detail: false });
+  show(cacheOf([record]));
+  fireEvent.click(row('RecordRow'));
+  const panel = within(screen.getByRole('tabpanel'));
+  expect(panel.getByText(traceStateLabel(translator('en'), state), { exact: true })).toBeTruthy();
+  expect(panel.queryByText('Completed', { exact: true })).toBeNull();
+  expect(row('RecordRow').getAttribute('data-state')).toBe(state);
+});
+
 
 it('checkpoint summaries and unscoped reused history display Between turns without acquiring execution ownership', () => {
   const records = [

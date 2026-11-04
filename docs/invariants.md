@@ -562,12 +562,14 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 83 binds request fingerprints to the native JSON Schema capability
+SQLite schema 84 binds request fingerprints to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
-change fingerprints for text requests. Schema 83 also admits bounded native
+change fingerprints for text requests. Schema 84 also admits bounded native
 `WorkflowNodeWaiting` Journal facts and reserved Auxiliary Call identities, plus
 `WorkflowNodeInputRecorded` / `WorkflowNodeOutputRecorded` and their data-node kinds.
-Stores from schema 82 or earlier fail with
+Exact run/type/sequence and full-instance/type/sequence indexes bound Workflow
+trace lookups to the selected run and visit, including absent I/O and terminals.
+Stores from schema 83 or earlier fail with
 `SchemaVersionMismatch` at open, before historical reconstruction; no legacy
 fingerprint comparison, migration or compatibility reader is available.
 The Event envelope remains version 1; its framing did not change.

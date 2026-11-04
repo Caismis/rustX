@@ -5,6 +5,18 @@ use crate::durable::observation::{
 };
 use crate::observation::trace::{TraceFieldKind, TraceFieldSource, TraceTiming};
 
+#[cfg(test)]
+mod query_work;
+
+// These queries seek the exact run or visit before applying the immutable
+// Journal cut. In particular, missing I/O and terminal facts do not scan
+// later visits or unrelated runs to prove absence.
+const RUN_TOTAL_SQL: &str = "SELECT count(*) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_started' AND sequence>?1 AND sequence<=?2";
+const RUN_REVISION_SQL: &str = "SELECT max(sequence) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type') IN ('workflow_node_started','workflow_node_waiting','workflow_node_settled') AND sequence>?1 AND sequence<=?2";
+const RUN_NODES_SQL: &str = "SELECT sequence,event_timestamp,CASE WHEN octet_length(json_extract(event_json,'$.event.instance'))<=8192 THEN json_extract(event_json,'$.event.instance') END FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_started' AND sequence>?1 AND sequence<=?2 ORDER BY sequence LIMIT ?4 OFFSET ?5";
+const NODE_TERMINAL_SQL: &str = "SELECT event_timestamp,json_extract(event_json,'$.event.outcome') FROM events INDEXED BY events_workflow_node_instance_kind_idx WHERE json_extract(event_json,'$.event.instance')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_settled' AND sequence>?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1";
+const NODE_IO_SQL: &str = "SELECT sequence,json_extract(event_json,'$.event.kind'),substr(json_extract(event_json,'$.event.value'),1,192),CASE WHEN json_type(event_json,'$.event.value')='text' THEN octet_length(json_quote(json_extract(event_json,'$.event.value'))) END FROM events INDEXED BY events_workflow_node_instance_kind_idx WHERE json_extract(event_json,'$.event.instance')=?4 AND json_extract(event_json,'$.event.type')=?1 AND sequence>?2 AND sequence<=?3 ORDER BY sequence LIMIT 1";
+
 fn invalid() -> ConversationStoreError {
     ConversationStoreError::InvalidReference("invalid original Workflow node selection".into())
 }
@@ -43,16 +55,19 @@ pub(super) fn page(
         "SELECT min(sequence) FROM events INDEXED BY events_run_id_kind_idx WHERE json_extract(event_json,'$.event.run_id')=?1 AND json_extract(event_json,'$.event.type') IN ('workflow_completed','workflow_failed','workflow_cancelled') AND sequence>?2 AND sequence<=?3",
         params![run,start,cut.read.journal], |row| row.get(0)).map_err(|error|storage(error.to_string()))?;
     let through = end.unwrap_or(cut.read.journal);
-    let predicate = "json_extract(event_json,'$.event.type')='workflow_node_started' AND sequence>?1 AND sequence<=?2 AND json_extract(event_json,'$.event.instance.block.run')=?3";
     let total: u64 = connection
-        .query_row(
-            &format!("SELECT count(*) FROM events INDEXED BY events_kind_idx WHERE {predicate}"),
-            params![start, through, run],
-            |row| row.get(0),
-        )
+        .query_row(RUN_TOTAL_SQL, params![start, through, run], |row| {
+            row.get(0)
+        })
         .map_err(|error| storage(error.to_string()))?;
-    let revision:Option<u64>=connection.query_row("SELECT max(sequence) FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type') IN ('workflow_node_started','workflow_node_waiting','workflow_node_settled') AND sequence>?1 AND sequence<=?2 AND json_extract(event_json,'$.event.instance.block.run')=?3",params![start,through,run],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
-    let mut statement=connection.prepare_cached(&format!("SELECT sequence,event_timestamp,CASE WHEN octet_length(json_extract(event_json,'$.event.instance'))<=8192 THEN json_extract(event_json,'$.event.instance') END FROM events INDEXED BY events_kind_idx WHERE {predicate} ORDER BY sequence LIMIT ?4 OFFSET ?5")).map_err(|error|storage(error.to_string()))?;
+    let revision: Option<u64> = connection
+        .query_row(RUN_REVISION_SQL, params![start, through, run], |row| {
+            row.get(0)
+        })
+        .map_err(|error| storage(error.to_string()))?;
+    let mut statement = connection
+        .prepare_cached(RUN_NODES_SQL)
+        .map_err(|error| storage(error.to_string()))?;
     let starts = statement
         .query_map(params![start, through, run, limit as u64, offset], |row| {
             Ok((
@@ -105,9 +120,14 @@ fn node(
     )?;
     // A recorded wait is historical evidence, never proof that its process is
     // alive. Only a terminal establishes durable lifecycle at this read cut.
-    let ending:Option<(String,String)>=connection.query_row(
-            "SELECT event_timestamp,json_extract(event_json,'$.event.outcome') FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='workflow_node_settled' AND sequence>?1 AND sequence<=?2 AND json_extract(event_json,'$.event.instance')=?3 ORDER BY sequence DESC LIMIT 1",
-            params![sequence,through,instance],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let ending: Option<(String, String)> = connection
+        .query_row(
+            NODE_TERMINAL_SQL,
+            params![sequence, through, instance],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| storage(error.to_string()))?;
     let started_at = timestamp
         .parse::<chrono::DateTime<chrono::Utc>>()
         .map_err(|error| storage(error.to_string()))?;
@@ -163,9 +183,14 @@ fn io(
     event: &str,
     field: TraceFieldKind,
 ) -> Result<Option<Io>, ConversationStoreError> {
-    let row:Option<IoHeader>=connection.query_row(
-        "SELECT sequence,json_extract(event_json,'$.event.kind'),substr(json_extract(event_json,'$.event.value'),1,192),CASE WHEN json_type(event_json,'$.event.value')='text' THEN octet_length(json_quote(json_extract(event_json,'$.event.value'))) END FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')=?1 AND sequence>?2 AND sequence<=?3 AND json_extract(event_json,'$.event.instance')=?4 ORDER BY sequence LIMIT 1",
-        params![event,start,through,instance],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let row: Option<IoHeader> = connection
+        .query_row(
+            NODE_IO_SQL,
+            params![event, start, through, instance],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|error| storage(error.to_string()))?;
     Ok(row.map(|(sequence, kind, preview, length)| Io {
         kind,
         preview,

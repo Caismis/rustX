@@ -18,6 +18,8 @@ use tokio::sync::{mpsc, oneshot};
 
 #[path = "model_capacity.rs"]
 mod capacity_admission;
+#[path = "model_inspection.rs"]
+mod inspection;
 #[path = "model_publication.rs"]
 mod publication;
 

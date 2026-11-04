@@ -1,10 +1,14 @@
 import { readJson } from '../../../../../../shared/json-numbers';
+import clsx from 'clsx';
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from '../../../../../locale/react';
 import { IconChevronDownOutline14 } from '../../../../../presentation/primitives/icons';
 import type { Value } from '../../../document/model';
 import type { FieldAddress } from '../../../document/fields';
 import { TemplateInput } from '../forms/TemplateInput';
+import { ReferencePicker } from '../forms/ReferencePicker';
+import { ValueEditor } from '../forms/ValueEditor';
+import { IconPencil } from '../../icons';
 import type { Edit } from './shared';
 import css from '../Editor.module.css';
 import styles from './DataPanels.module.css';
@@ -110,4 +114,28 @@ export function ScalarInput({
       />
     </div>
   );
+}
+
+/** Boolean operands keep reference and constant changes explicit, as Tool inputs do. */
+export function BooleanInput({ value, address, edit, label, onChange }: {
+  value: Value; address: FieldAddress; edit: Edit; label: string; onChange: (value: Value) => void;
+}) {
+  const tx = useTranslation(), variable = value.type === 'reference';
+  if (!variable && !(value.type === 'literal' && typeof value.value === 'boolean')) {
+    return <ValueEditor label={label} address={address} value={value} edit={edit} />;
+  }
+  return <div className={css.toolArgumentRow} role="group" aria-label={label}>
+    <div className={css.typeSwitch} role="radiogroup" aria-label={tx('workflows:value.kind')}>
+      <button type="button" role="radio" aria-checked={variable} aria-label={tx('workflows:tool.variable')} title={tx('workflows:tool.variable')} className={clsx(variable && css.typeSwitchActive)}
+        onClick={() => { if (!variable) onChange({ type: 'reference', path: [] }); }}>{/* i18n-raw: Dify's variable glyph */ '{x}'}</button>
+      <button type="button" role="radio" aria-checked={!variable} aria-label={tx('workflows:tool.constant')} title={tx('workflows:tool.constant')} className={clsx(!variable && css.typeSwitchActive)}
+        onClick={() => { if (variable) onChange({ type: 'literal', value: false }); }}><IconPencil size={14} /></button>
+    </div>
+    {variable ? <ReferencePicker token address={address} path={value.path} edit={edit} />
+      : <select className={css.input} aria-label={label} value={String(value.value)}
+        onChange={event => onChange({ type: 'literal', value: event.target.value === 'true' })}>
+        <option value="true">{/* i18n-raw: boolean literal */ 'True'}</option>
+        <option value="false">{/* i18n-raw: boolean literal */ 'False'}</option>
+      </select>}
+  </div>;
 }

@@ -7,6 +7,9 @@ import { viewId } from '../../src/app/workflows/ui/editor/selection';
 import { startDogfood } from './dogfood-server';
 import { connectRemote, openEmptySession, choose } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
+import type { WorkflowCheckReport } from '../../../protocol/app-server/v69';
+import type { WorkflowDocument } from '../../src/app/workflows/document/model';
+import { rootBlock } from '../workflow-root';
 
 for (const width of [1440, 390])
   test.describe(`List and Aggregate ${width}`, () => {
@@ -70,8 +73,13 @@ for (const width of [1440, 390])
         await comparison.fill('');
         await comparison.press('/');
         await expect(picker).toBeVisible();
-        await expect(picker.getByRole('button', { name: /^args \/ query / })).toHaveCount(0);
-        await picker.getByRole('button', { name: /^args \/ threshold / }).click();
+        const threshold = picker.getByRole('button', { name: /^args \/ threshold / });
+        await expect(threshold).toBeEnabled();
+        // Native numeric List operands accept numbers and numeric text; objects
+        // remain incompatible. Await a real choice before checking exclusions.
+        await expect(picker.getByRole('button', { name: /^args \/ query / })).toBeEnabled();
+        await expect(picker.getByRole('button', { name: /^args \/ memo / })).toHaveCount(0);
+        await threshold.click();
         await panel.getByRole('switch', { name: 'Extract by serial number', exact: true }).click();
         const serial = panel.getByRole('textbox', { name: 'Serial number', exact: true });
         await serial.fill('');
@@ -125,6 +133,7 @@ for (const width of [1440, 390])
         await panel.getByRole('button', { name: 'Add variable to Group2', exact: true }).click();
         await picker.getByRole('button', { name: /^args \/ priority / }).click();
         await panel.getByRole('button', { name: 'Add variable to Group2', exact: true }).click();
+        await expect(picker.getByRole('button', { name: /^args \/ priority / })).toBeEnabled();
         await expect(picker.getByRole('button', { name: /^args \/ query / })).toHaveCount(0);
         await picker.getByRole('button', { name: /^args \/ priority / }).click();
         await expect(panel.getByRole('button', { name: 'Choose a variable', exact: true })).toHaveCount(3);
@@ -193,3 +202,78 @@ for (const width of [1440, 390])
       }
     });
   });
+
+for (const width of [1440, 390]) test(`Boolean List references remain dynamic until an explicit constant switch at ${width}px`, async ({ page }) => {
+  page.setDefaultTimeout(15000);
+  await page.setViewportSize({ width, height: 844 });
+  const fixture = await startDogfood('web_console_dogfood'), errors: string[] = [];
+  const checks: { value: unknown; report: WorkflowCheckReport }[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    const document: WorkflowDocument = { description: 'Boolean reference filter', block: rootBlock() };
+    document.block.input = { type: 'object', properties: {
+      flags: { type: 'array', items: { type: 'boolean' } }, keep: { type: 'boolean' }, other: { type: 'boolean' },
+    }, required: ['flags', 'keep', 'other'], additionalProperties: false };
+    document.block.nodes.list = { type: 'list', input: { type: 'reference', path: ['args', 'flags'] },
+      filter: { path: [], operator: 'equal', value: { type: 'reference', path: ['args', 'keep'] } } };
+    document.block.nodes.done = { type: 'return', outputs: [{ variable: 'flags', value_selector: ['list', 'result'] }] };
+    document.block.edges = [{ from: 'start', to: 'list' }, { from: 'list', to: 'done' }];
+    const directory = join(fixture.workspaceA, '.agents/workflows');
+    mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'boolean_filter.yaml');
+    writeFileSync(file, JSON.stringify(document));
+    await routeWorkspaceHost(page, fixture, undefined, (request, response) => {
+      if (!request.url().endsWith('/workflow') || response.status !== 200) return;
+      const operation = request.postDataJSON().operation;
+      if (operation.kind !== 'check') return;
+      const result = JSON.parse(response.body.toString());
+      if (result.kind !== 'check') throw Error('Unexpected native Workflow check response');
+      checks.push({ value: operation.document.block.nodes.list.filter.value, report: result.report });
+    });
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'boolean_filter', exact: true }).click();
+    await expect(page).toHaveTitle(/rustX$/);
+    const activate = async () => {
+      const card = page.locator(`.react-flow__node[data-id='${viewId([], 'node', 'list')}']`);
+      await card.focus(); await card.press('Enter');
+    };
+    await activate();
+    const panel = page.getByRole('complementary', { name: 'Inspector', exact: true });
+    const comparison = panel.getByRole('group', { name: 'Comparison value', exact: true });
+    await expect(comparison.getByRole('radio', { name: 'Variable', exact: true })).toBeChecked();
+    await expect(comparison.getByRole('button', { name: 'Choose a variable', exact: true })).toContainText('keep');
+    await expect(comparison.getByRole('combobox')).toHaveCount(0);
+    await comparison.getByRole('radio', { name: 'Variable', exact: true }).click();
+    await comparison.getByRole('button', { name: 'Choose a variable', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: 'Choose a variable', exact: true });
+    await expect(picker.getByRole('button', { name: /^args \/ other / })).toBeEnabled();
+    await expect(picker.getByRole('button', { name: /^args \/ flags / })).toHaveCount(0);
+    await picker.getByRole('button', { name: /^args \/ other / }).click();
+    const reference = { type: 'reference', path: ['args', 'other'] };
+    await expect.poll(() => [...checks].reverse().find(check => JSON.stringify(check.value) === JSON.stringify(reference))?.report)
+      .toMatchObject({ structure: { status: 'valid' } });
+    const save = page.getByRole('button', { name: 'Save File', exact: true });
+    await save.click(); await expect(save).toBeDisabled();
+    expect(parse(readFileSync(file, 'utf8')).block.nodes.list.filter.value).toEqual(reference);
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).first().click();
+    await page.getByRole('button', { name: 'boolean_filter', exact: true }).click(); await activate();
+    await expect(comparison.getByRole('radio', { name: 'Variable', exact: true })).toBeChecked();
+    await expect(comparison.getByRole('button', { name: 'Choose a variable', exact: true })).toContainText('other');
+    await expect(comparison.getByRole('combobox')).toHaveCount(0);
+    await panel.screenshot({ path: `/tmp/rustx-list-boolean-reference-${width}.png` });
+    await comparison.getByRole('radio', { name: 'Constant', exact: true }).click();
+    await expect(comparison.getByRole('combobox', { name: 'Comparison value', exact: true })).toHaveValue('false');
+    await comparison.getByRole('combobox', { name: 'Comparison value', exact: true }).selectOption('true');
+    await expect.poll(() => [...checks].reverse().find(check => JSON.stringify(check.value) === JSON.stringify({ type: 'literal', value: true }))?.report)
+      .toMatchObject({ structure: { status: 'valid' } });
+    await save.click(); await expect(save).toBeDisabled();
+    expect(parse(readFileSync(file, 'utf8')).block.nodes.list.filter.value).toEqual({ type: 'literal', value: true });
+    expect(await page.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});

@@ -1,5 +1,5 @@
 use crate::runtime::cancellation::{CancellationSignal, ExecutionCancellation};
-use crate::runtime::process_runner::RunnerTestControl;
+use crate::runtime::process_runner::{RunnerTerminalHold, RunnerTestControl};
 use crate::runtime::types::CancellationReason;
 use crate::runtime::workflow::transform;
 use crate::runtime::workflow::{WorkflowRunError, WorkflowValue};
@@ -126,6 +126,57 @@ async fn cancellation_waits_for_the_owned_renderer_to_be_reaped() {
     )
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn template_process_control_failure_preserves_its_diagnostic_and_outranks_late_cancellation()
+{
+    for cancel_after_terminal in [false, true] {
+        let hold = RunnerTerminalHold::new();
+        let mut control = RunnerTestControl::new();
+        control.fail_wait = true;
+        control.terminal_hold = Some(hold.clone());
+        let lifecycle = control.lifecycle.clone();
+        let (signal, cancellation) = cancellation();
+        let running = tokio::spawn(async move {
+            transform::template_worker::render_with_control(
+                "healthy",
+                &json!({}),
+                &cancellation,
+                Some(control),
+            )
+            .await
+        });
+        // The injected wait failure precedes AllChildrenReaped on the same
+        // control channel. Hold that authoritative physical-terminal event
+        // before the runner publishes its already-determined failure intent.
+        tokio::time::timeout(Duration::from_secs(12), hold.await_held())
+            .await
+            .expect("the failed renderer must reach physical terminality");
+        assert!(!running.is_finished(), "the terminal event is still held");
+        if cancel_after_terminal {
+            signal.cancel();
+        }
+        hold.release();
+        let result = tokio::time::timeout(Duration::from_secs(12), running)
+            .await
+            .expect("the renderer must settle after terminality is released")
+            .expect("the renderer task must finish normally");
+        let Err(WorkflowRunError::InvalidValue(message)) = result else {
+            panic!("process-control failure must remain explicit: {result:?}");
+        };
+        assert!(message.contains("Template renderer supervision failed"));
+        assert!(message.contains("injected bash wait failure"), "{message}");
+        tokio::time::timeout(Duration::from_secs(1), lifecycle.await_terminal())
+            .await
+            .expect("the owned renderer group must be terminal before return");
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            lifecycle.await_direct_child_reaped(),
+        )
+        .await
+        .expect("the direct supervisor must be reaped before return");
+    }
 }
 
 #[tokio::test]

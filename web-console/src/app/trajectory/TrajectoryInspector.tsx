@@ -721,7 +721,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     if (record.kind === 'compaction') {
       return <>
         <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
-          <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} /></div>
+          <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} nativeState={record.state} /></div>
           <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms))}</dd></div>
           <div><dt>{tx('trajectory:usage.tokens')}</dt><dd>—</dd></div>
         </dl>

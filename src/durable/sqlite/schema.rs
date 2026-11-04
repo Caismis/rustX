@@ -462,6 +462,14 @@ pub(super) const PRESENTATION_INDEXES: &[(&str, &str)] = &[
         "json_extract(event_json, '$.event.run_id'), json_extract(event_json, '$.event.type'), sequence",
     ),
     (
+        "events_workflow_node_run_kind_idx",
+        "json_extract(event_json, '$.event.instance.block.run'), json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
+        "events_workflow_node_instance_kind_idx",
+        "json_extract(event_json, '$.event.instance'), json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
         "events_interaction_id_kind_idx",
         "json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type'), sequence",
     ),

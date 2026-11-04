@@ -477,11 +477,11 @@ wire JSON dump. Form validation remains local and terminal model failures stay
 at their durable turn positions. Dismissing a transient notice never verifies a
 native uncertain outcome or replays a request.
 
-The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 83 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 84 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
 
 ## Request field metadata
 
-SQLite schema 83 stores frozen Request metadata separately from the native
+SQLite schema 84 stores frozen Request metadata separately from the native
 immutable selected-input tree. The Store owns that balanced tree and its canonical
 Original/Derived provenance. Request rows bind its root identity, digest and count;
 explicit historical reconstruction loads the selected input, while publication and
@@ -577,7 +577,7 @@ before successful completion; it does not prescan bodies under the capture barri
 
 ## Canonical append frontier
 
-Upstream schema 70 removed `surface_head.active_json`; the integrated schema 83 retains that layout.
+Upstream schema 70 removed `surface_head.active_json`; the integrated schema 84 retains that layout.
 The immutable Ledger and selected checkpoint remain the active-identity authorities.
 Cold/invalidated append validates the same bounded suffix and Original dependencies.
 Warm append may reuse a disposable connection-local validation count, checked
@@ -596,3 +596,11 @@ no migration, compatibility reader or dual write.
 ## Ephemeral auxiliary output
 
 `auxiliary/status`, `auxiliary/result` and `auxiliary/submissionLookup` use current attachment read authority and DeliveryAccess. Results are repeatable five-minute retained reads without ACK, ContentRef or persistent reconstruction. `auxiliary/segment` is registration-fenced provisional output, separate from the one durable cursor owner. Source unavailability preserves loaded output and stops automatic reading; exact native Call cancellation uses the current controller independently. See [auxiliary consumer bounds and display repair](auxiliary-consumers.md).
+
+Workflow trace pages read original node visits at one immutable Journal cut.
+SQLite schema 84 requires separate run/type/sequence and full-instance/type/sequence
+indexes. Admission counts, revisions and pages seek the selected run; terminal and
+input/output selectors seek the complete visit identity before applying sequence
+bounds. Missing facts do not scan later visits or unrelated runs. Deterministic
+query-plan and VM-step regressions cover 3,903 completed visits and an incomplete
+run followed by 4,096 unrelated runs; pagination remains limited to 32 visits.

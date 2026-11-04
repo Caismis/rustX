@@ -271,7 +271,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 83);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 84);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -336,7 +336,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 83);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 84);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -514,7 +514,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
     use crate::runtime::identity::AuxiliaryCallId;
     use crate::runtime::workflow::read_model::WorkflowWait;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 83);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 84);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-wait.sqlite");
@@ -568,10 +568,10 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
 }
 
 #[test]
-fn workflow_node_io_vocabulary_requires_schema_83_without_rewrite() {
+fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
     use crate::runtime::workflow::read_model::WorkflowNodeKind;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 83);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 84);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-node-io.sqlite");
@@ -612,7 +612,11 @@ fn workflow_node_io_vocabulary_requires_schema_83_without_rewrite() {
     {
         let connection = Connection::open(&path).unwrap();
         connection
-            .execute("UPDATE rustx_store SET schema_version=82 WHERE id=1", [])
+            .execute_batch(
+                "UPDATE rustx_store SET schema_version=83 WHERE id=1;
+             DROP INDEX events_workflow_node_run_kind_idx;
+             DROP INDEX events_workflow_node_instance_kind_idx;",
+            )
             .unwrap();
     }
     let before = std::fs::read(&path).unwrap();
@@ -625,8 +629,8 @@ fn workflow_node_io_vocabulary_requires_schema_83_without_rewrite() {
         assert!(matches!(
             result,
             Err(ConversationStoreError::SchemaVersionMismatch {
-                stored: 82,
-                expected: 83,
+                stored: 83,
+                expected: SQLITE_SCHEMA_VERSION,
             })
         ));
         assert_eq!(std::fs::read(&path).unwrap(), before);

@@ -8,7 +8,7 @@ import { comparisonSymbols } from '../summary';
 import { useReferenceSchema } from '../forms/useReferenceSchema';
 import { ReferencePicker } from '../forms/ReferencePicker';
 import { NumberField } from '../forms/fields';
-import { DataOutputs, DataSection, ScalarInput } from './DataFields';
+import { BooleanInput, DataOutputs, DataSection, ScalarInput } from './DataFields';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 import styles from './DataPanels.module.css';
@@ -146,17 +146,8 @@ export function ListPanel(props: PanelProps) {
               </select>
               {!['empty', 'not_empty'].includes(filter.operator) &&
                 (kind === 'boolean' ? (
-                  <select
-                    className={css.input}
-                    aria-label={tx('workflows:data.compare-value')}
-                    value={filter.value.type === 'literal' ? String(filter.value.value) : 'false'}
-                    onChange={(event) =>
-                      changeFilter({ ...filter, value: { type: 'literal', value: event.target.value === 'true' } })
-                    }
-                  >
-                    <option value="true">{/* i18n-raw: boolean literal */ 'True'}</option>
-                    <option value="false">{/* i18n-raw: boolean literal */ 'False'}</option>
-                  </select>
+                  <BooleanInput value={filter.value} address={at('filter', 'value')} edit={props.edit}
+                    label={tx('workflows:data.compare-value')} onChange={value => changeFilter({ ...filter, value })} />
                 ) : (
                   <ScalarInput
                     numeric={kind === 'number'}

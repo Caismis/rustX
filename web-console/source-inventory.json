@@ -986,7 +986,7 @@
           "treatment": "Share semantic between-Turn classification across ledger, Inspector and bilingual search. Preserve compaction/reused-history labels without treating unowned native Agent/Background/Workflow activities as between-Turn material or inventing nearby execution ownership."
         }
       ],
-      "local_sha256": "d7ae64aa53de0b7589f0b99c8ed263f1b1928efa2eacb8a59bcf1db3b69c4f09"
+      "local_sha256": "c8ef3abfb5c98119e779ce923d8f1940770d3f970d308241bcb838334912765f"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -3321,7 +3321,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "97c669b9fc24e08b0c49c011f2f9882a085655084c42143b65446d46477baac2"
+      "local_sha256": "cc15311c02190638b7c265ca0b6c6e5642be2f6bde31f8c29d25b914870e36f0"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",

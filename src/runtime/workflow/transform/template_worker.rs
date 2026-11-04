@@ -100,6 +100,14 @@ pub(super) async fn render_with_control(
         .await
         .map_err(|error| runtime(error.to_string()))?
         .map_err(|error| runtime(format!("Template renderer supervision failed: {error}")))?;
+    // The shared runner has already settled and reaped the owned invocation.
+    // Its control failure outranks a cancellation that became visible later.
+    if let ProcessOutcomeIntent::ProcessControlFailed(message) = &result.intent {
+        let detail = crate::runtime::workflow::bound_workflow_diagnostic(message);
+        return Err(runtime(format!(
+            "Template renderer supervision failed: {detail}"
+        )));
+    }
     if cancellation.is_cancelled() || result.intent == ProcessOutcomeIntent::Cancelled {
         return Err(WorkflowRunError::from_cancellation(cancellation));
     }

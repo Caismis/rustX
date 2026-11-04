@@ -342,5 +342,5 @@ S4b and current-Human model authority extend the native inbound foundation and
 S4a preparation seam. The integration and resource results are recorded in
 [validation](issue-85-scheduler-validation.md) and
 [performance acceptance](issue-85-scheduler-performance.md). The current formats
-are SQLite 83, App Server 68, Runtime Client 80 and child IPC 37, with Session
+are SQLite 84, App Server 69, Runtime Client 81 and child IPC 37, with Session
 catalog 18 and Scheduled Workflow compiler contract 3. Older formats are refused without compatibility readers or migrations.
