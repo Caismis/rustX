@@ -415,15 +415,15 @@ impl RuntimeInner {
             resources
         };
         let previous_binding = state.binding_revision;
-        let change = ConfigurationChange::between(
-            reason,
-            previous_binding,
-            (&state.resources, &state.model),
-            (&resources, &prepared.model),
-        );
         let binding_revision = previous_binding
             .checked_add(1)
             .expect("Session binding revision exhausted");
+        let change = ConfigurationChange::between(
+            reason,
+            (previous_binding, binding_revision),
+            (&state.resources, &state.model),
+            (&resources, &prepared.model),
+        );
         retain(binding_revision);
         if !preserves_failure {
             state.runtime_catalog_failure = None;
@@ -441,20 +441,7 @@ impl RuntimeInner {
         // critical section: no Attempt can be admitted between them. A record
         // that cannot be made durable fences admission instead of letting new
         // work run on an unrecorded generation.
-        let outcome = match change {
-            None => StagedOutcome::Committed,
-            Some(change) => match self.record_configuration_change(change) {
-                Ok(()) => StagedOutcome::Committed,
-                Err(diagnostic) => {
-                    self.record_durability_failure(
-                        state,
-                        DurableOperation::RecordConfigurationChange,
-                        diagnostic.clone(),
-                    );
-                    StagedOutcome::Uncertain { diagnostic }
-                }
-            },
-        };
+        let outcome = self.record_effective_change(state, change);
         self.observe_resources(state, availability);
         if reopens {
             // Work accepted before the selection became unavailable was held,
@@ -464,9 +451,48 @@ impl RuntimeInner {
         self.report_staged_outcome(None, settled, outcome);
     }
 
+    /// Record the change fact of a generation just installed under the
+    /// coordinator lock. No effective change records nothing; a record that
+    /// cannot be made durable fences admission and leaves the commit
+    /// uncertain, since the generation is already published.
+    fn record_effective_change(
+        &self,
+        state: &mut CoordinatorState,
+        change: Option<(ConfigurationChange, String)>,
+    ) -> StagedOutcome {
+        let Some((change, instructions)) = change else {
+            return StagedOutcome::Committed;
+        };
+        match self.record_configuration_change(change, &instructions) {
+            Ok(()) => StagedOutcome::Committed,
+            Err(diagnostic) => {
+                self.record_durability_failure(
+                    state,
+                    DurableOperation::RecordConfigurationChange,
+                    diagnostic.clone(),
+                );
+                StagedOutcome::Uncertain { diagnostic }
+            }
+        }
+    }
+
     /// Append the Session-level change fact with its transcript position and
     /// release it to observers in Journal order. It belongs to no Attempt.
-    fn record_configuration_change(&self, change: ConfigurationChange) -> Result<(), String> {
+    fn record_configuration_change(
+        &self,
+        change: ConfigurationChange,
+        instructions: &str,
+    ) -> Result<(), String> {
+        #[cfg(test)]
+        if self
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_mut()
+            .is_some_and(|probe| std::mem::take(&mut probe.fail_configuration_record))
+        {
+            return Err("fault injected: configuration change record".into());
+        }
         let event = crate::events::types::RuntimeEventEnvelope {
             tool_occurrence: None,
             observation: None,
@@ -481,7 +507,7 @@ impl RuntimeInner {
         };
         let (event, cursor) = self
             .store
-            .append_configuration_change(event)
+            .append_configuration_change(event, instructions)
             .map_err(|error| error.to_string())?;
         // The wrapper releases the fact's transcript position and Journal
         // sequence in order; the inner fact becomes the clients' live row.
@@ -789,6 +815,12 @@ impl ConversationRuntime {
         self.inner.wake.eligibility.notify_one();
     }
 
+    /// The identity of this runtime allocation, shared with every candidate
+    /// it prepares.
+    pub(crate) fn configuration_owner(&self) -> &Arc<()> {
+        &self.inner.configuration_owner
+    }
+
     /// Whether a candidate is staged and waiting for the safe boundary.
     #[cfg(test)]
     pub(crate) fn has_staged_configuration(&self) -> bool {
@@ -903,13 +935,13 @@ impl ConversationRuntime {
     pub(crate) fn apply_execution_policy(
         &self,
         compose: impl FnOnce(&RuntimeConfiguration) -> Option<RuntimeConfiguration>,
-    ) -> Result<bool, String> {
+    ) -> Result<StagedOutcome, String> {
         let mut state = self.inner.lock_state();
         if !self.inner.lifecycle.is_running() {
             return Err("runtime is not running".into());
         }
         let Some(configuration) = state.resources.configuration().and_then(|c| compose(c)) else {
-            return Ok(false);
+            return Ok(StagedOutcome::Committed);
         };
         let approval_mode = configuration.config.approval_mode;
         let resources = Arc::new(
@@ -918,11 +950,20 @@ impl ConversationRuntime {
                 .with_configuration(configuration)
                 .with_revision(state.resources.revision().next()),
         );
+        // The unit keeps its own commit identity: it changes the generation
+        // future Attempts freeze, never the Session binding.
+        let change = ConfigurationChange::between(
+            crate::runtime::configuration_commit::ConfigurationChangeReason::Source,
+            (state.binding_revision, state.binding_revision),
+            (&state.resources, &state.model),
+            (&resources, &state.model),
+        );
         state.effective_approval_mode = approval_mode;
         let availability = resources.capability_availability().clone();
         state.resources = resources;
+        let outcome = self.inner.record_effective_change(&mut state, change);
         self.inner.observe_resources(&state, availability);
-        Ok(true)
+        Ok(outcome)
     }
 
     /// Reads the adopted generation, Session intent and admitted work in one

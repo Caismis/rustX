@@ -40,6 +40,7 @@ fn record() -> TraceRecord {
         tool: None,
         calls: Vec::new(),
         configuration: None,
+        configuration_instructions: None,
         native_id: None,
         agent_id: None,
         activation_id: None,

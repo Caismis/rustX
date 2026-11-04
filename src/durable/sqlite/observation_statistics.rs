@@ -178,23 +178,18 @@ pub(super) fn seed(
     Ok(())
 }
 pub(super) fn is_trace_anchor(event: &RuntimeEvent) -> bool {
-    match event {
-        RuntimeEvent::ModelRequestStarted { owner, .. } => matches!(
+    if let RuntimeEvent::ModelRequestStarted { owner, .. } = event
+        && !matches!(
             owner,
             crate::model::snapshot::ModelRequestOwner::Agent { .. }
-        ),
-        RuntimeEvent::AttemptStarted { .. }
-        | RuntimeEvent::TurnStarted
-        | RuntimeEvent::InboundTurnAdopted { .. }
-        | RuntimeEvent::AssistantMessageCommitted { .. }
-        | RuntimeEvent::ToolExecutionStarted { .. }
-        | RuntimeEvent::CompactionStarted { .. }
-        | RuntimeEvent::BackgroundExecutionCommitted { .. }
-        | RuntimeEvent::SubagentOwnershipCommitted { .. }
-        | RuntimeEvent::WorkflowStarted { .. }
-        | RuntimeEvent::InteractionRequested { .. } => true,
-        _ => false,
+        )
+    {
+        return false;
     }
+    super::observation_event::native_kind(event)
+        .ok()
+        .and_then(|kind| crate::durable::trace::TraceFactKind::parse(&kind))
+        .is_some_and(crate::durable::trace::TraceFactKind::is_anchor)
 }
 fn record_trace_anchor(
     connection: &Connection,

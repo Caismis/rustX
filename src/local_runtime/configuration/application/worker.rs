@@ -156,6 +156,9 @@ impl ConfigurationApplications {
                     })
                 }) {
                     Some(Err(diagnostic)) => UnitApplication::Failed { diagnostic },
+                    Some(Ok(crate::runtime::configuration_commit::StagedOutcome::Uncertain {
+                        diagnostic,
+                    })) => UnitApplication::Uncertain { diagnostic },
                     _ => UnitApplication::Applied,
                 },
             );
@@ -579,6 +582,9 @@ impl ConfigurationApplications {
         }
         let reason = state.reason(scope);
         let desired = state.desired(scope, identity);
+        state
+            .staged_in
+            .insert(scope.to_owned(), prepared.owner.clone());
         let bindings_owner = manager.clone();
         let retain_session = session.clone();
         let owner = self.clone();
@@ -632,6 +638,7 @@ impl ConfigurationApplications {
         if !state.current(scope, identity) {
             return;
         }
+        state.staged_in.remove(scope);
         let unit_outcome = match outcome {
             StagedOutcome::Committed => UnitApplication::Applied,
             StagedOutcome::Failed { diagnostic } => UnitApplication::Failed { diagnostic },

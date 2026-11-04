@@ -181,3 +181,65 @@ fn adopted_files() -> (
     let gap = store.presentation_frontier().unwrap();
     (store, early, gap)
 }
+
+/// A configuration-only history and one interleaved with an Attempt count
+/// every configuration record, and a change naming a Tool far larger than
+/// the Trace header bound still commits a readable record.
+#[test]
+fn configuration_records_are_counted_and_unbounded_names_stay_readable() {
+    use crate::runtime::configuration_commit::{
+        ConfigurationChange, ConfigurationChangeReason, ConfigurationDomain, NamedChanges,
+    };
+    let store = Arc::new(store("conv_0f6f1d2e-5a3b-7c4d-8e9f-0a1b2c3d4e5f"));
+    let names = std::collections::BTreeMap::from([
+        ("x".repeat(20 * 1024), 0_u8),
+        ("\"\u{1}水".repeat(300), 0),
+        ("read".to_owned(), 0),
+    ]);
+    let record = |seconds| {
+        let change = ConfigurationChange {
+            reason: ConfigurationChangeReason::Source,
+            previous_binding_revision: 1,
+            binding_revision: 2,
+            domains: vec![ConfigurationDomain::Tools],
+            tools: NamedChanges::between(&std::collections::BTreeMap::new(), &names),
+            skills: NamedChanges::default(),
+            instructions_bytes: 1,
+        };
+        let mut envelope = event(store.as_ref(), E::ConfigurationApplied { change }, seconds);
+        envelope.attempt_id = None;
+        envelope.turn_id = None;
+        store.append_configuration_change(envelope, "I").unwrap();
+    };
+    let total = || {
+        let host = RuntimeClientHost::new_durable(store.clone(), None).unwrap();
+        let live = host.checkpoint().unwrap().read_cut;
+        let page = host
+            .inner
+            .checkpoint_page(&live, "trace.records", 0, 32)
+            .unwrap();
+        assert_eq!(page.items.len() as u64, page.total, "{page:?}");
+        page.total
+    };
+    record(0);
+    assert_eq!(total(), 1);
+    start(store.as_ref());
+    record(2);
+    assert_eq!(total(), 4);
+    let page = TraceProjection::new(store.as_ref())
+        .unwrap()
+        .page(None, 32)
+        .unwrap();
+    let configurations = page
+        .records
+        .iter()
+        .filter(|record| record.kind == TraceKind::Configuration)
+        .collect::<Vec<_>>();
+    assert_eq!(configurations.len(), 2);
+    for record in configurations {
+        let change = record.configuration.as_ref().unwrap();
+        assert_eq!(change.tools.added.total, 3);
+        assert_eq!(change.tools.added.names, ["read"]);
+        assert!(record.configuration_instructions.is_some());
+    }
+}

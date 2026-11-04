@@ -650,19 +650,5 @@ pub(crate) use live::{repair_agent_records, repair_records};
 mod tests;
 
 fn anchor_kinds() -> Vec<TraceFactKind> {
-    use TraceFactKind as K;
-    vec![
-        K::AttemptStarted,
-        K::TurnStarted,
-        K::InboundTurnAdopted,
-        K::ModelRequestStarted,
-        K::AssistantMessageCommitted,
-        K::ToolExecutionStarted,
-        K::CompactionStarted,
-        K::BackgroundExecutionCommitted,
-        K::SubagentOwnershipCommitted,
-        K::WorkflowStarted,
-        K::InteractionRequested,
-        K::ConfigurationApplied,
-    ]
+    TraceFactKind::anchors()
 }

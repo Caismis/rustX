@@ -224,6 +224,7 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
 /// derived layout (so ordered observation never stalls on it), and reads back
 /// as a configuration transcript item rather than an Attempt terminal.
 #[test]
+#[allow(clippy::too_many_lines)] // scenario bodies are deliberately linear
 fn configuration_change_fact_is_a_complete_transcript_row() {
     use crate::durable::{CanonicalStore, ObservationStore};
     let conversation = ConversationId::new("conv_385a385a-3850-7385-8385-385385385386");
@@ -235,6 +236,7 @@ fn configuration_change_fact_is_a_complete_transcript_row() {
         domains: vec![crate::runtime::configuration_commit::ConfigurationDomain::Instructions],
         tools: crate::runtime::configuration_commit::NamedChanges::default(),
         skills: crate::runtime::configuration_commit::NamedChanges::default(),
+        instructions_bytes: 14,
     };
     let envelope = |attempt: Option<crate::runtime::identity::AttemptId>| {
         crate::events::types::RuntimeEventEnvelope {
@@ -254,7 +256,10 @@ fn configuration_change_fact_is_a_complete_transcript_row() {
     };
     assert!(
         store
-            .append_configuration_change(envelope(Some(AttemptId::new("attempt"))))
+            .append_configuration_change(
+                envelope(Some(AttemptId::new("attempt"))),
+                "Instructions B"
+            )
             .is_err(),
         "a configuration change belongs to no Attempt"
     );
@@ -265,7 +270,11 @@ fn configuration_change_fact_is_a_complete_transcript_row() {
     // A failed append commits nothing: no row, no cursor, no partial fact.
     // The runtime reports that commit as uncertain and absorbs the failure.
     store.arm_fail_event_times(1);
-    assert!(store.append_configuration_change(envelope(None)).is_err());
+    assert!(
+        store
+            .append_configuration_change(envelope(None), "Instructions B")
+            .is_err()
+    );
     assert!(
         store
             .load_transcript_page(None, 8)
@@ -273,7 +282,49 @@ fn configuration_change_fact_is_a_complete_transcript_row() {
             .entries
             .is_empty()
     );
-    let (event, cursor) = store.append_configuration_change(envelope(None)).unwrap();
+    let (event, cursor) = store
+        .append_configuration_change(envelope(None), "Instructions B")
+        .unwrap();
+    // A second commit before any request: each fact keeps its own text.
+    let (later, _) = store
+        .append_configuration_change(envelope(None), "Instructions C")
+        .unwrap();
+    for (sequence, text) in [
+        (event.sequence, "Instructions B"),
+        (later.sequence, "Instructions C"),
+    ] {
+        let reference = crate::observation::content::ContentRef::configuration_instructions(
+            conversation.clone(),
+            sequence,
+            text.len() as u64,
+        );
+        let mut read = Vec::new();
+        let mut offset = 0;
+        loop {
+            let chunk = store.content_read(&reference, offset, 5).unwrap();
+            read.extend(
+                base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &chunk.data_base64,
+                )
+                .unwrap(),
+            );
+            match chunk.next_offset {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        assert_eq!(read, text.as_bytes());
+    }
+    // A reference that names no retained fact or claims other bytes is refused.
+    for (sequence, bytes) in [(later.sequence + 7, 14), (event.sequence, 3)] {
+        let reference = crate::observation::content::ContentRef::configuration_instructions(
+            conversation.clone(),
+            sequence,
+            bytes,
+        );
+        assert!(store.content_read(&reference, 0, 64).is_err());
+    }
     let witness = store
         .observation_event_witness(event.sequence, event.sequence)
         .unwrap()
@@ -283,9 +334,15 @@ fn configuration_change_fact_is_a_complete_transcript_row() {
     let page = store.load_transcript_page(None, 8).unwrap();
     assert!(matches!(
         &page.entries[..],
-        [crate::durable::TranscriptEntry {
-            item: crate::durable::TranscriptItem::ConfigurationApplied { .. },
-            ..
-        }]
+        [
+            crate::durable::TranscriptEntry {
+                item: crate::durable::TranscriptItem::ConfigurationApplied { .. },
+                ..
+            },
+            crate::durable::TranscriptEntry {
+                item: crate::durable::TranscriptItem::ConfigurationApplied { .. },
+                ..
+            }
+        ]
     ));
 }

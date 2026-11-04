@@ -159,16 +159,21 @@ pub enum ConfigurationDomain {
 }
 
 /// Most names one change category records; the total stays exact.
-/// Tool and Skill names are themselves bounded, so one complete change fits
-/// the bounded transcript and Trace headers.
 pub const CONFIGURATION_CHANGE_NAME_LIMIT: usize = 16;
+
+/// Most JSON-encoded bytes the recorded names of one category occupy. Names
+/// are not bounded at their source (an MCP server chooses its own), so the
+/// six categories of one change stay within the 16 KiB transcript and Trace
+/// headers by this budget, never by an assumed name length.
+pub const CONFIGURATION_CHANGE_NAME_BYTES: usize = 1024;
 
 /// A bounded, ordered list of names with its exact total.
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 pub struct BoundedNames {
-    /// At most [`CONFIGURATION_CHANGE_NAME_LIMIT`] names in sorted order.
+    /// Sorted names: at most [`CONFIGURATION_CHANGE_NAME_LIMIT`] of them,
+    /// within [`CONFIGURATION_CHANGE_NAME_BYTES`] encoded bytes.
     pub names: Vec<String>,
     /// The exact number of names in this category.
     pub total: u32,
@@ -178,6 +183,17 @@ impl BoundedNames {
     fn from_names(mut names: Vec<String>) -> Self {
         names.sort();
         let total = u32::try_from(names.len()).unwrap_or(u32::MAX);
+        // A name that alone would overflow the budget is counted, not
+        // recorded; the shorter names after it still are.
+        let mut bytes = 0;
+        names.retain(|name| {
+            let encoded = serde_json::to_string(name).map_or(usize::MAX, |encoded| encoded.len());
+            let fits = bytes + encoded < CONFIGURATION_CHANGE_NAME_BYTES;
+            if fits {
+                bytes += encoded + 1;
+            }
+            fits
+        });
         names.truncate(CONFIGURATION_CHANGE_NAME_LIMIT);
         Self { names, total }
     }
@@ -200,7 +216,10 @@ pub struct NamedChanges {
 }
 
 impl NamedChanges {
-    fn between<T: PartialEq>(before: &BTreeMap<String, T>, after: &BTreeMap<String, T>) -> Self {
+    pub(crate) fn between<T: PartialEq>(
+        before: &BTreeMap<String, T>,
+        after: &BTreeMap<String, T>,
+    ) -> Self {
         let added = after
             .keys()
             .filter(|name| !before.contains_key(*name))
@@ -248,34 +267,68 @@ pub struct ConfigurationChange {
     pub domains: Vec<ConfigurationDomain>,
     pub tools: NamedChanges,
     pub skills: NamedChanges,
+    /// The byte length of the effective system instructions this commit
+    /// installed. The fact retains them exactly, readable in bounded ranges
+    /// even when no request ever used them.
+    pub instructions_bytes: u64,
 }
 
 impl ConfigurationChange {
-    /// The effective differences between two committed generations, or `None`
-    /// when nothing future work observes changed.
+    /// The effective differences between two committed generations with the
+    /// successor's effective instructions, or `None` when nothing future work
+    /// observes changed. An independently published unit changes the
+    /// generation without rebinding the Session, so both revisions are then
+    /// the same.
     pub(crate) fn between(
         reason: ConfigurationChangeReason,
-        previous_binding_revision: u64,
+        (previous_binding_revision, binding_revision): (u64, u64),
         before: (&RuntimeResourceSnapshot, &SessionModelState),
         after: (&RuntimeResourceSnapshot, &SessionModelState),
-    ) -> Option<Self> {
+    ) -> Option<(Self, String)> {
         let (old, old_model) = before;
         let (new, new_model) = after;
+        // A Tool is its whole definition and the executable binding of the
+        // server it runs on; a same-name implementation change is `changed`
+        // even when the model-visible declaration is byte-identical.
         let tools = |snapshot: &RuntimeResourceSnapshot| {
-            snapshot
-                .capability()
-                .tool_registry()
-                .model_definitions()
+            let capability = snapshot.capability();
+            let registry = capability.tool_registry();
+            registry
+                .definitions()
                 .into_iter()
-                .map(|definition| (definition.name.clone(), definition))
+                .zip(registry.model_definitions())
+                .map(|(definition, model)| {
+                    let server = match &definition.origin {
+                        crate::tools::types::ToolOrigin::Builtin => None,
+                        crate::tools::types::ToolOrigin::Mcp { server_id } => {
+                            Some(server_id.clone())
+                        }
+                        crate::tools::types::ToolOrigin::ManagedPython { package } => {
+                            Some(crate::tools::python::python_server_id(package))
+                        }
+                    };
+                    let binding = server.and_then(|id| capability.mcp_servers().get(&id).cloned());
+                    (definition.name.clone(), (model, definition, binding))
+                })
                 .collect::<BTreeMap<_, _>>()
         };
+        // A Skill is its catalog entry and its content-derived version, so a
+        // body or script edit under unchanged frontmatter is `changed`.
         let skills = |snapshot: &RuntimeResourceSnapshot| {
-            snapshot
-                .capability()
+            let capability = snapshot.capability();
+            let versions = capability
+                .skills()
+                .bindings()
+                .iter()
+                .map(|binding| (binding.skill_id.as_str(), &binding.version_id))
+                .collect::<BTreeMap<_, _>>();
+            capability
                 .model_skill_entries()
                 .iter()
-                .map(|entry| (entry.name.clone(), entry.clone()))
+                .map(|entry| {
+                    let version = versions.get(entry.name.as_str()).copied().cloned();
+                    (entry.name.clone(), (entry.clone(), version))
+                })
                 .collect::<BTreeMap<_, _>>()
         };
         let prompt = |snapshot: &RuntimeResourceSnapshot| {
@@ -296,7 +349,8 @@ impl ConfigurationChange {
         let tools = NamedChanges::between(&tools(old), &tools(new));
         let skills = NamedChanges::between(&skills(old), &skills(new));
         let mut domains = Vec::new();
-        if prompt(old) != prompt(new) {
+        let instructions = prompt(new);
+        if prompt(old) != instructions {
             domains.push(ConfigurationDomain::Instructions);
         }
         let (old_configuration, new_configuration) = (configuration(old), configuration(new));
@@ -315,14 +369,19 @@ impl ConfigurationChange {
         if old_configuration.map(|c| c.1) != new_configuration.map(|c| c.1) {
             domains.push(ConfigurationDomain::ApprovalMode);
         }
-        (!domains.is_empty()).then(|| Self {
-            reason,
-            previous_binding_revision,
-            binding_revision: previous_binding_revision + 1,
-            domains,
-            tools,
-            skills,
-        })
+        let instructions = instructions.unwrap_or_default();
+        (!domains.is_empty()).then_some((
+            Self {
+                reason,
+                previous_binding_revision,
+                binding_revision,
+                domains,
+                tools,
+                skills,
+                instructions_bytes: instructions.len() as u64,
+            },
+            instructions,
+        ))
     }
 }
 
@@ -362,6 +421,62 @@ mod tests {
         assert_eq!(changes.added.total, 100);
         assert_eq!(changes.added.names.len(), CONFIGURATION_CHANGE_NAME_LIMIT);
         assert_eq!(changes.added.names[0], "tool_000");
+    }
+
+    #[test]
+    fn name_lists_are_bounded_by_encoded_bytes() {
+        let long = "x".repeat(20 * 1024);
+        let escaped = "\"\u{1}水".repeat(200);
+        let after = BTreeMap::from([
+            (long.clone(), 0_u8),
+            (escaped.clone(), 0),
+            ("a".to_owned(), 0),
+        ]);
+        let changes = NamedChanges::between(&BTreeMap::new(), &after);
+        assert_eq!(changes.added.total, 3);
+        // Sorted, so the short name is kept and the oversized ones are counted.
+        assert_eq!(changes.added.names, ["a"]);
+        let change = ConfigurationChange {
+            reason: ConfigurationChangeReason::Source,
+            previous_binding_revision: 1,
+            binding_revision: 2,
+            domains: vec![ConfigurationDomain::Tools, ConfigurationDomain::Skills],
+            tools: NamedChanges {
+                added: changes.added.clone(),
+                removed: NamedChanges::between(&after, &BTreeMap::new()).removed,
+                changed: changes.added.clone(),
+            },
+            skills: NamedChanges {
+                added: changes.added.clone(),
+                removed: changes.added.clone(),
+                changed: changes.added,
+            },
+            instructions_bytes: 0,
+        };
+        let worst = (0..CONFIGURATION_CHANGE_NAME_LIMIT)
+            .map(|index| (format!("{index:02}{}", "\"".repeat(200)), 0_u8))
+            .collect::<BTreeMap<_, _>>();
+        let worst = NamedChanges::between(&BTreeMap::new(), &worst).added;
+        assert!(
+            serde_json::to_string(&worst.names).unwrap().len()
+                <= CONFIGURATION_CHANGE_NAME_BYTES + 2
+        );
+        let full = ConfigurationChange {
+            tools: NamedChanges {
+                added: worst.clone(),
+                removed: worst.clone(),
+                changed: worst.clone(),
+            },
+            skills: NamedChanges {
+                added: worst.clone(),
+                removed: worst.clone(),
+                changed: worst,
+            },
+            ..change.clone()
+        };
+        for change in [change, full] {
+            assert!(serde_json::to_vec(&change).unwrap().len() < 8 * 1024);
+        }
     }
 
     #[test]

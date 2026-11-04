@@ -108,8 +108,17 @@ pub enum ContentSource {
         publication_request_id: RequestId,
         block_index: ContentBlockIndex,
     },
+    /// The effective system instructions one Session configuration commit
+    /// installed, retained with its Journal change fact.
+    ConfigurationInstructions {
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        journal_sequence: u64,
+    },
 }
 impl ContentSource {
+    /// The store key of the instructions a configuration change fact retains.
+    pub(crate) const CONFIGURATION_INSTRUCTIONS: &'static str = "configuration_instructions";
+
     pub(crate) fn key(&self) -> (&'static str, std::borrow::Cow<'_, str>, u32) {
         match self {
             Self::CanonicalMessageBlock {
@@ -143,6 +152,11 @@ impl ContentSource {
                 std::borrow::Cow::Borrowed(stream_id.as_str()),
                 block_index.get(),
             ),
+            Self::ConfigurationInstructions { journal_sequence } => (
+                Self::CONFIGURATION_INSTRUCTIONS,
+                std::borrow::Cow::Owned(journal_sequence.to_string()),
+                0,
+            ),
         }
     }
 }
@@ -160,6 +174,25 @@ pub struct ContentRef {
     pub content_revision: u64,
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub readable_end: u64,
+}
+impl ContentRef {
+    /// The retained instructions of the configuration change fact at
+    /// `journal_sequence`, `bytes` long.
+    #[must_use]
+    pub fn configuration_instructions(
+        conversation_id: ConversationId,
+        journal_sequence: u64,
+        bytes: u64,
+    ) -> Self {
+        Self {
+            conversation_id,
+            source: ContentSource::ConfigurationInstructions { journal_sequence },
+            representation: ContentRepresentation::Utf8Text,
+            version: 1,
+            content_revision: 1,
+            readable_end: bytes,
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

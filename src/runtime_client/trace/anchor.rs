@@ -310,6 +310,8 @@ fn configuration_start(
     facts.state = TraceState::Completed;
     facts.timing.ended_at = Some(facts.timing.started_at);
     facts.timing.duration_ms = Some(0);
+    // The retained instructions are read through the record's detail cut.
+    facts.has_detail = true;
     facts.configuration = Some(change.clone());
     Vec::new()
 }

@@ -77,6 +77,13 @@ impl TraceProjection<'_> {
             truncated,
             fields,
             collections,
+            configuration_instructions: configuration.as_ref().map(|change| {
+                crate::observation::content::ContentRef::configuration_instructions(
+                    self.store.conversation_id().clone(),
+                    anchor.sequence,
+                    change.instructions_bytes,
+                )
+            }),
             configuration,
             request: summary,
         })

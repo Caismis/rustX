@@ -141,6 +141,9 @@ pub struct RuntimeClientTranscriptConfigurationApplied {
     pub timestamp: DateTime<Utc>,
     /// The bounded semantic summary of the commit.
     pub change: crate::runtime::configuration_commit::ConfigurationChange,
+    /// The exact effective instructions the commit installed, read in
+    /// bounded ranges through `content_read`.
+    pub instructions: super::content::ContentRef,
 }
 /// The explicit Runtime Client transcript vocabulary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -401,6 +404,11 @@ pub(crate) fn configuration_applied_item(
         return Err("a configuration change belongs to no Attempt".into());
     }
     Ok(RuntimeClientTranscriptConfigurationApplied {
+        instructions: super::content::ContentRef::configuration_instructions(
+            event.conversation_id,
+            event.sequence,
+            change.instructions_bytes,
+        ),
         event_id: event.event_id,
         timestamp: event.timestamp,
         change,

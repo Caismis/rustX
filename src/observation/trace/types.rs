@@ -456,6 +456,10 @@ pub struct TraceRecord {
     pub attachments: Vec<TraceArtifact>,
     /// The committed change of a `configuration` record, as recorded.
     pub configuration: Option<crate::runtime::configuration_commit::ConfigurationChange>,
+    /// The exact effective instructions that `configuration` record's commit
+    /// installed, read through `content_read` whether or not a request used
+    /// them.
+    pub configuration_instructions: Option<crate::observation::content::ContentRef>,
     /// Whether this record has heavy detail available for inspection.
     pub has_detail: bool,
     pub truncated: bool,
