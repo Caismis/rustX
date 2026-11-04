@@ -71,6 +71,7 @@
 }
 
 .controlsLeft, .controlsRight { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.controlsRight { margin-inline-start: auto; }
 .subtle { font-size: 12px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
 
 .chooserWrap { position: relative; }
@@ -93,7 +94,6 @@
   cursor: pointer;
 }
 
-span.chooser { cursor: default; }
 .chooserValue { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--dsw-alias-label-secondary); }
 
 .popover {

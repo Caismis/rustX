@@ -7,7 +7,7 @@ import { useTranslation } from '../../../../locale/react';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Menu } from '../../../../presentation/primitives/Menu';
 import { Switch } from '../../../../presentation/primitives/Switch';
-import { IconChevronDownOutline14, IconCopyOutline16, IconEditOutline16, IconEllipsisOutline16, IconGlobeOutline14, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
+import { IconChevronDownOutline14, IconCopyOutline16, IconEditOutline16, IconEllipsisOutline16, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
 import type { WorkspaceAuthority } from '../../../../workspaces/authority';
 import type { LibraryOperation } from '../../machines/library';
 import type { WorkflowSurfaceActor } from '../../machines/surface';
@@ -155,12 +155,10 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
       </button>)}
     </div>
     <div className={css.controls}>
-      <div className={css.controlsLeft}>
-        <span className={css.subtle}>{tx(showingWorkspace ? 'workflows:scope.choose-workspace' : 'workflows:scope.file-scope')}</span>
-        {showingWorkspace
-          ? <WorkspaceChooser workspaces={workspaces} selected={workspace?.id} onSelect={id => select({ kind: 'workspace', workspaceId: id })} />
-          : <span className={css.chooser} aria-live="polite"><span className={css.chooserValue}><IconGlobeOutline14 />{tx('workflows:scope.global-files')}</span></span>}
-      </div>
+      {showingWorkspace && <div className={css.controlsLeft}>
+        <span className={css.subtle}>{tx('workflows:scope.choose-workspace')}</span>
+        <WorkspaceChooser workspaces={workspaces} selected={workspace?.id} onSelect={id => select({ kind: 'workspace', workspaceId: id })} />
+      </div>}
       <div className={css.controlsRight}>
         <label className={css.search}><IconSearchOutline16 /><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('workflows:library.search')} aria-label={tx('workflows:library.search')} /></label>
         <div className={css.viewSwitch} role="group" aria-label={tx('workflows:library.view')}>
