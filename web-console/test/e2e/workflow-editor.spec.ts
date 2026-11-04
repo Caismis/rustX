@@ -322,6 +322,11 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.getByRole('complementary', { name: 'Inspector' })).toBeVisible();
     await expect(page.getByRole('complementary', { name: 'Inspector' })).toHaveCSS('position', 'absolute');
+    // Native Boolean predicates retain their original value semantics through
+    // the full editor rather than being projected as binary equality to true.
+    const predicates = page.getByRole('complementary', { name: 'Inspector' }).getByRole('combobox', { name: 'Predicate', exact: true });
+    await expect(predicates).toHaveCount(2);
+    for (const predicate of await predicates.all()) await expect(predicate).toHaveValue('boolean');
     await expectStableScreenshot(page, 'workflow-editor-narrow.png');
   } finally { await fixture.stop(false); }
 });

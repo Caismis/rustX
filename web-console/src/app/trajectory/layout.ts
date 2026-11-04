@@ -14,6 +14,7 @@ export interface TrajectorySelection {
   facet: TrajectoryFacet;
   cell_type?: 'SystemPromptCell' | 'ContextRow';
   context_message_id?: string;
+  workflow_node?: Pick<WorkflowTraceNode, 'id' | 'instance'>;
 }
 interface Origin extends TrajectorySelection {
   record: TraceRecord;
@@ -280,16 +281,28 @@ export function displayUniverse(base: readonly TrajectoryDisplayItem[], current:
   return [...new Map([...base, ...current].map(item => [item.display_key, item])).values()];
 }
 
-/** Same semantic facet first, then same native owner, never a numeric position. */
+function workflowNodeIdentity(node: Pick<WorkflowTraceNode, 'id' | 'instance'>): string {
+  const { block, node: name, visit } = node.instance, { run, definition } = block;
+  return JSON.stringify([node.id, run.conversation_id, run.origin.type,
+    run.origin.type === 'tool' ? run.origin.attempt_id : run.origin.start_id, run.invocation,
+    definition.workflow_id, definition.blocks, block.invocations, name, visit]);
+}
+
+/** Workflow visits resolve exactly; other cells may follow semantic regrouping. */
 export function preferredItem(items: readonly TrajectoryDisplayItem[], owner: string, selection?: TrajectorySelection): InspectableDisplayItem | undefined {
   const candidates = items.filter((item): item is InspectableDisplayItem => isInspectable(item) && item.owner_record_id === owner);
-  return candidates.find(item => item.display_key === selection?.display_key)
+  const exact = candidates.find(item => item.display_key === selection?.display_key);
+  // Reader renewal can temporarily hide all visits. Sharing an owner with
+  // another visit or the Scheduled run never authorizes a selection migration.
+  if (selection?.workflow_node) return exact?.type === 'WorkflowNode'
+    && workflowNodeIdentity(exact.workflowNode) === workflowNodeIdentity(selection.workflow_node) ? exact : undefined;
+  return exact
     ?? candidates.find(item => item.facet === selection?.facet && item.context_message_id === selection?.context_message_id)
     ?? candidates.find(item => item.type === 'RequestBoundary' || item.type === 'RecordRow')
     ?? candidates[0];
 }
 export function selectionOf(item: InspectableDisplayItem): TrajectorySelection {
-  return { display_key: item.display_key, owner_record_id: item.owner_record_id, facet: item.facet, ...(item.type === 'SystemPromptCell' || item.type === 'ContextRow' ? { cell_type: item.type } : {}), ...(item.context_message_id ? { context_message_id: item.context_message_id } : {}) };
+  return { display_key: item.display_key, owner_record_id: item.owner_record_id, facet: item.facet, ...(item.type === 'SystemPromptCell' || item.type === 'ContextRow' ? { cell_type: item.type } : {}), ...(item.context_message_id ? { context_message_id: item.context_message_id } : {}), ...(item.type === 'WorkflowNode' ? { workflow_node: { id: item.workflowNode.id, instance: item.workflowNode.instance } } : {}) };
 }
 
 /** A measurable ledger seat. Turn and Step structure is metadata on content

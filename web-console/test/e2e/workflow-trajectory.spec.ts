@@ -5,6 +5,51 @@ import { connectRemote, openEmptySession } from './shell-actions';
 import { translator } from '../../src/locale/translation';
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 for (const width of [1440, 390])
+  test(`cold Scheduled Workflow selection survives Load Earlier reader replacement at ${width}px`, async ({ page }, info) => {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto(`${origin}/test/fixtures/workflow-trace-cold.html`);
+    await expect(page).toHaveTitle('Cold workflow trajectory contracts');
+    const ledger = page.getByRole('table', { name: 'Trace ledger', exact: true });
+    const root = ledger.locator('[data-workflow-entry="trace:30"]');
+    await root.getByRole('button', { name: 'Expand workflow nodes', exact: true }).click();
+    await expect(ledger.locator('[data-workflow-node]')).toHaveCount(73);
+    const selected = ledger.locator('[data-workflow-node="node-0-60"]');
+    await selected.scrollIntoViewIfNeeded(); await selected.click();
+    const identity = await selected.getAttribute('data-display-key');
+    const details = page.getByRole('complementary', { name: 'Event details', exact: true });
+    await details.getByRole('tab', { name: 'Result', exact: true }).click();
+    await expect(details.getByRole('tabpanel')).toContainText('output-60');
+    const epoch = await page.evaluate(() => window.workflowColdTrace.epoch());
+    // The timeline stays above the mobile Inspector overlay; its history
+    // control invokes the same real cold Load Earlier path as the ledger.
+    await page.getByRole('region', { name: 'Trajectory timeline', exact: true })
+      .getByRole('button', { name: 'Load earlier history', exact: true }).click();
+    for (const offset of [0, 32, 64]) {
+      await expect.poll(() => page.evaluate(() => window.workflowColdTrace.requested())).toContain(offset);
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+      expect(await page.evaluate(() => window.workflowColdTrace.epoch())).toBe(epoch);
+      await expect(ledger.locator('[data-workflow-node]')).toHaveCount(0);
+      await expect(root).not.toHaveAttribute('aria-selected', 'true');
+      // Retired reader content must not remain visible or be replaced by root
+      // details while the complete replacement node set is still pending.
+      await expect(page.getByRole('tabpanel').filter({ hasText: 'output-60' })).toHaveCount(0);
+      await page.evaluate(offset => window.workflowColdTrace.release(offset), offset);
+    }
+    await expect(ledger.locator('[data-workflow-node]')).toHaveCount(73);
+    await expect(selected).toHaveAttribute('aria-selected', 'true');
+    expect(await selected.getAttribute('data-display-key')).toBe(identity);
+    await expect(details.getByRole('tab', { name: 'Result', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(details.getByRole('tabpanel')).toContainText('output-60');
+    await page.screenshot({ path: info.outputPath(`cold-workflow-selection-${width}.png`) });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
+for (const width of [1440, 390])
   test(`workflow snapshot refresh preserves a selected later-page visit at ${width}px`, async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));

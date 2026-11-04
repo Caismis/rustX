@@ -7,6 +7,7 @@ import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
 import { rootBlock } from '../workflow-root';
+import type { WorkflowCheckReport } from '../../../protocol/app-server/v69';
 import { setNodePresentation } from '../../src/app/workflows/document/geometry';
 import type { WorkflowDocument } from '../../src/app/workflows/document/model';
 
@@ -15,6 +16,62 @@ const canvas = (page: Page) => page.getByRole('region', { name: 'Workflow canvas
 async function activate(page: Page) {
   const node = canvas(page).getByLabel('Branch node choose', { exact: true }); await node.focus(); await node.press('Enter');
 }
+
+for (const width of [1440, 390]) test(`single integer token retains string template semantics after save at ${width}px`, async ({ page }, info) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const checks: { condition: unknown; report: WorkflowCheckReport }[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    const document: WorkflowDocument = { description: 'String template condition', block: rootBlock() };
+    document.block.input = { type: 'object', properties: { text: { type: 'string' }, count: { type: 'integer' } }, required: ['text', 'count'], additionalProperties: false };
+    const predicate = { type: 'contains' as const, left: { type: 'reference' as const, path: ['args', 'text'] },
+      right: { type: 'template' as const, parts: [{ type: 'literal' as const, value: 'n=' }, { type: 'reference' as const, path: ['args', 'count'] }] } };
+    document.block.nodes.choose = { type: 'branch', cases: [{ id: 'true', condition: predicate }] };
+    document.block.edges = [{ from: 'start', to: 'choose' }, { from: 'choose', to: 'done', port: 'true' }, { from: 'choose', to: 'done', port: 'false' }];
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'string_template.yaml'); writeFileSync(file, JSON.stringify(document));
+    await page.setViewportSize({ width, height: 844 });
+    await routeWorkspaceHost(page, fixture, undefined, (request, response) => {
+      if (!request.url().endsWith('/workflow')) return;
+      const operation = request.postDataJSON().operation;
+      if (operation.kind !== 'check' || response.status !== 200) return;
+      const result = JSON.parse(response.body.toString());
+      if (result.kind !== 'check') throw Error('Unexpected native Workflow check response');
+      const condition = operation.document.block.nodes.choose.cases[0].condition;
+      checks.push({ condition: condition.type === 'and' ? condition.predicates[0] : condition, report: result.report });
+    }); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'string_template', exact: true }).click(); await activate(page);
+    const value = () => inspector(page).getByRole('textbox', { name: 'Value', exact: true });
+    await expect(value()).toContainText('n=');
+    await expect(value().getByRole('button', { name: 'Choose a variable', exact: true })).toHaveText(/count/);
+    // Delete only the fixed prefix through real keyboard input. The variable
+    // token remains untouched, so its string coercion must remain explicit.
+    await value().focus(); await value().press('Control+Home');
+    await value().press('Delete'); await value().press('Delete');
+    await expect(value()).not.toContainText('n=');
+    await expect(value().getByRole('button', { name: 'Choose a variable', exact: true })).toHaveText(/count/);
+    const expected = { ...predicate, right: { type: 'template', parts: [{ type: 'reference', path: ['args', 'count'] }] } };
+    await expect.poll(() => [...checks].reverse().find(check => JSON.stringify(check.condition) === JSON.stringify(expected))?.report)
+      .toMatchObject({ structure: { status: 'valid' } });
+    await page.getByRole('button', { name: 'Save File', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();
+    await expect.poll(() => {
+      const condition = parse(readFileSync(file, 'utf8')).block.nodes.choose.cases[0].condition;
+      return condition.type === 'and' ? condition.predicates[0] : condition;
+    }).toEqual(expected);
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'string_template', exact: true }).click(); await activate(page);
+    await expect(value().getByRole('button', { name: 'Choose a variable', exact: true })).toHaveText(/count/);
+    await expect(value()).not.toContainText('n=');
+    await captureEvidence(page, `string-template-${width}`, info);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
 
 for (const width of [1440, 390]) test(`object-array membership retains its full operand through editing and save at ${width}px`, async ({ page }, info) => {
   const fixture = await startDogfood('web_console_dogfood');

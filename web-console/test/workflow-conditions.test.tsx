@@ -1,6 +1,7 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createActor } from 'xstate';
+import { $getRoot, $isTextNode, getNearestEditorFromDOMNode } from 'lexical';
 import type { WorkflowEdit, WorkflowFileDocument } from '../../protocol/app-server/v69';
 import type { Predicate, Value, WorkflowDocument } from '../src/app/workflows/document/model';
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
@@ -28,9 +29,9 @@ const objectItem = { type: 'object', properties: { id: { type: 'string' } }, req
 const objects = { type: 'array', items: objectItem };
 
 /** Open the real inspector and capture the document sent by its Save action. */
-async function open(condition: Predicate, schema: Record<string, unknown>) {
+async function open(condition: Predicate, schema: Record<string, unknown>, properties: Record<string, Record<string, unknown>> = { records: schema }) {
   const document: WorkflowDocument = { description: 'Condition values', block: rootBlock() };
-  document.block.input = { type: 'object', properties: { records: schema }, required: ['records'], additionalProperties: false };
+  document.block.input = { type: 'object', properties, required: Object.keys(properties), additionalProperties: false };
   document.block.nodes.choose = { type: 'branch', cases: [{ id: 'true', condition }] };
   document.block.edges = [{ from: 'start', to: 'choose' }, { from: 'choose', to: 'done', port: 'true' }, { from: 'choose', to: 'done', port: 'false' }];
   const writes: WorkflowEdit[] = [];
@@ -43,7 +44,7 @@ async function open(condition: Predicate, schema: Record<string, unknown>) {
       id, generation, query, target: { kind: 'user' }, candidate_revision: `sha256:${'a'.repeat(64)}`, presentation: [],
       analysis: {
         incomplete: false, truncated: false, outputs: [], references: [],
-        ...(query?.reference ? { selected: { path: query.reference, schema, availability: 'available', compatibility: 'compatible' } } : {}),
+        ...(query?.reference ? { selected: { path: query.reference, schema: properties[query.reference[1]] ?? schema, availability: 'available', compatibility: 'compatible' } } : {}),
       },
     }),
   };
@@ -139,4 +140,32 @@ it('preserves a native unary boolean predicate instead of presenting an editable
   expect((view.panel.getByRole('combobox', { name: 'Predicate' }) as HTMLSelectElement).value).toBe('boolean');
   expect(view.panel.queryByRole('button', { name: 'Operator' })).toBeNull();
   expect(view.condition()).toEqual(condition);
+});
+
+it('keeps string template semantics when deleting ordinary text leaves only an integer reference token', async () => {
+  const count: Value = { type: 'reference', path: ['args', 'count'] };
+  const condition: Predicate = {
+    type: 'contains', left: { type: 'reference', path: ['args', 'text'] },
+    right: { type: 'template', parts: [{ type: 'literal', value: 'n=' }, count] },
+  };
+  const view = await open(condition, { type: 'string' }, { text: { type: 'string' }, count: { type: 'integer' } });
+  const value = view.panel.getByRole('textbox', { name: 'Value' });
+  expect(value.textContent).toContain('n=');
+  const token = within(value).getByRole('button');
+  expect(token.textContent).toContain('count');
+  const lexical = getNearestEditorFromDOMNode(value)!;
+  await act(async () => {
+    value.focus();
+    lexical.update(() => {
+      const text = $getRoot().getFirstDescendant();
+      if (!$isTextNode(text)) throw new Error('expected the ordinary template prefix');
+      text.select(0, text.getTextContentSize());
+    }, { discrete: true });
+    fireEvent.keyDown(value, { key: 'Backspace', code: 'Backspace' });
+  });
+  const expected = { ...condition, right: { type: 'template', parts: [count] } };
+  await waitFor(() => expect(view.condition()).toEqual(expected));
+  expect(value.textContent).not.toContain('n=');
+  expect(within(value).getByRole('button')).toBe(token);
+  expect(view.save()).toEqual(expected);
 });

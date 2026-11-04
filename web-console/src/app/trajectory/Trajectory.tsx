@@ -5,7 +5,7 @@ import { useTranslation } from '../../locale/react';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { type TraceCache } from '../../client/trace';
 import { IconSearchOutline16 } from '../../presentation/primitives/icons';
-import { TrajectoryInspector, inspectorTabs } from './TrajectoryInspector';
+import { PendingWorkflowNodeInspector, TrajectoryInspector, inspectorTabs } from './TrajectoryInspector';
 import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
 import type { TrajectoryRowActions } from './TrajectoryRow';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
@@ -161,7 +161,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   };
   const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers, workflows: workflowMap, openedWorkflows,
     toggleWorkflow: id => {
-      if (openedWorkflows.has(id) && selectedItem?.type === 'WorkflowNode' && selectedItem.owner_record_id === id) select();
+      if (openedWorkflows.has(id) && selection?.workflow_node && selection.owner_record_id === id) select();
       setWorkflowExpansion(current => { const ids = new Set(current.epoch === cache.epoch ? current.ids : []); if (!ids.delete(id)) ids.add(id); return { epoch: cache.epoch, ids }; });
     } };
   // Harness locates a detail by its section and group: "Turn 2 · Step 1".
@@ -173,11 +173,15 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
     const group = allItems.find((item): item is StructuralDisplayItem => item.type === 'GroupHeader' && item.ownerKey === attempt && item.stepKey === step);
     return { turn: turn?.label, group: group?.label };
   })();
+  const unresolvedWorkflow = selection?.workflow_node && !selectedItem && openedWorkflows.has(selection.owner_record_id)
+    && workflowRoots.some(root => root.id === selection.owner_record_id)
+    && (!workflowNodes.has(selection.owner_record_id) || workflowNodes.get(selection.owner_record_id)?.loading)
+    ? selection.workflow_node : undefined;
   const inspector = selected && selection && selectedItem
     ? <TrajectoryInspector key={`${cache.epoch}:${selection.display_key}`} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} stale={selectedDetail?.stale} error={selectedDetail?.error}
       facet={selection.facet} onFacet={setFacet} onLoadDetail={onLoadDetail} onClose={close} location={location}
       records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={!cache.page.next_cursor} onOpen={openRecord} />
-    : null;
+    : unresolvedWorkflow ? <PendingWorkflowNodeInspector node={unresolvedWorkflow.instance} onClose={close} /> : null;
   const splitStyle = toolRequestOffset === null ? undefined : { '--trajectory-tool-request-width': `calc(58cqw - ${toolRequestOffset}px)` } as CSSProperties;
   const turnIds = projection.sections.flatMap(section => section.kind === 'turn' ? [section.ownerKey] : []);
   const allTurnsCollapsed = foldableTurns.size > 0 && [...foldableTurns].every(id => collapsedTurns.has(id));

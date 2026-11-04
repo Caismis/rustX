@@ -23,7 +23,7 @@ import { recordedToolDetails } from '../../bindings/recorded-tool-details';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v69';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v69';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -125,6 +125,21 @@ function DetailPending({ error, deferred }: { error: string | undefined; deferre
   return error
     ? <p role="alert" className={`${css.noPayload} ${css.error}`}>{error}</p>
     : <p role="status" className={css.noPayload}>{tx(deferred?'common:activity.loading':'trajectory:details.loading')}</p>;
+}
+
+/** Keep panel geometry and close access while a new reader admits this visit. */
+export function PendingWorkflowNodeInspector({ node, onClose }: { node: WorkflowNodeInstance; onClose: () => void }) {
+  const tx = useTranslation();
+  return <>
+    <div className={css.detailsHeader}>
+      <div className={css.detailsTitle}>
+        <span className={css.kindTag} data-role-kind="workflow_node">{cellLabel(tx, 'workflow_node')}</span>
+        <span className={css.detailsLocation}>{node.node}</span>
+      </div>
+      <button type="button" className={css.close} aria-label={tx('trajectory:details.close')} onClick={onClose}><span aria-hidden="true">×</span></button>
+    </div>
+    <div className={css.detailBody} role="status" aria-busy="true" aria-label={tx('trajectory:details.loading')} />
+  </>;
 }
 
 function Json({ value, label, preview = false, error = false }: { value: unknown; label: string; preview?: boolean; error?: boolean }) {

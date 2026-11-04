@@ -406,6 +406,10 @@ Expanded Workflow visits are published as one complete, validated page collectio
 per read cut. A refresh retains the previous complete collection with its original
 field reader and cut until all replacement pages pass validation. Intermediate
 page prefixes cannot remove a selected visit or migrate its Inspector to a sibling.
+Selection retains the full native visit identity across reader replacement in the
+same cache epoch, including cold Load Earlier reads. Until the new reader admits
+that visit, the Inspector remains busy without exposing retired content or
+falling back to the run or another visit. Explicit close or collapse clears it.
 
 The browser has a separate Trace cache (512 history entries / 4 MiB estimated
 encoded UTF-16 size), independent from transcript and live cursors. Its flat list

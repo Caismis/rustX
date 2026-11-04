@@ -15,7 +15,7 @@ import { IconPlus } from '../../icons';
 import { PredicateEditor } from '../forms/ValueEditor';
 import { ReferencePicker } from '../forms/ReferencePicker';
 import { JsonField } from '../forms/fields';
-import { TemplateInput, templateParts } from '../forms/TemplateInput';
+import { TemplateInput, templateParts, templateValue } from '../forms/TemplateInput';
 import { useReferenceSchema } from '../forms/useReferenceSchema';
 import { comparisonSymbols } from '../summary';
 import type { PanelProps } from './shared';
@@ -290,7 +290,7 @@ function SimpleCondition({
               onChange={(parts) =>
                 binary(
                   operator as Exclude<SimpleOperator, 'empty' | 'not_empty'>,
-                  parts.length === 1 ? parts[0] : { type: 'template', parts },
+                  templateValue(parts) ?? { type: 'template', parts: [] },
                 )
               }
             />
