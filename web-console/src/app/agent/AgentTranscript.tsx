@@ -35,7 +35,7 @@ import { CreatedTasks } from '../scheduler/CreatedTasks';
 import { descriptorTranscriptPosition, turnDeliveries } from '../../bindings/present';
 import { Tool, ToolDisclosureContext } from './Tool';
 import { deferredToolDescriptors } from '../../bindings/deferred-tools';
-import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
+import { canonicalLocatorKey, messageSource } from '../../../../protocol/app-server/content-identity';
 import { transcriptPresentation, entryIdentity, turnAnchor, type TranscriptCache } from '../../client/transcript';
 import type { ResponseAction } from '../commands/native';
 import { CopyMessage, MessageTime, TurnTail } from './TurnTail';
@@ -98,7 +98,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       && binding.content_ref.source.type === 'durable_transcript_audit' && entry.item.type === 'publication_audit'
       && binding.content_ref.source.stream_id === entry.item.audit.stream_id
       && binding.content_ref.representation === 'utf8_text'
-      && (binding.deferred || entry.item.audit.content.some(block => block.block_index === binding.content_ref.source.block_index
+      && (binding.deferred || entry.item.audit.content.some(block => block.block_index === messageSource(binding.content_ref.source)?.block_index
         && block.kind !== 'proposed_tool_call' && new TextEncoder().encode(block.text).length !== binding.content_ref.readable_end)));
   const canonical = conversation(snapshot);
   const original = transcriptPresentation(history, snapshot.transcript);
@@ -472,7 +472,7 @@ function DescriptorContent({ descriptor }: { descriptor: RuntimeClientMessageDes
   const hasBlocks = descriptor.collections.some(frontier => frontier.domain.endsWith('.blocks'));
   const request = { locator: descriptor.locator, offset: 0, total: descriptor.block_count };
   const native = useMessageBlocks(hasBlocks ? [request] : []), blocks = hasBlocks ? native.blocks(request) : undefined;
-  const bindings = descriptor.content.filter(binding => binding.content_ref.representation === 'utf8_text' && binding.content_ref.source.component === 'payload');
+  const bindings = descriptor.content.filter(binding => binding.content_ref.representation === 'utf8_text' && messageSource(binding.content_ref.source)?.component === 'payload');
   if (!source && !presentation?.owner || !hasBlocks && !bindings.length) return null;
   if (native.errors.length) return <p role="alert">{native.errors.join("\n")} <button type="button" onClick={native.retry}>{tx('agent:message.retry-content')}</button></p>;
   if (blocks) {

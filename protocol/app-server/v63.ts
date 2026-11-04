@@ -1615,6 +1615,10 @@ export type ContentSource =
       publication_request_id: RequestId;
       block_index: ContentBlockIndex;
       type: 'live_publication_prefix';
+    }
+  | {
+      journal_sequence: number;
+      type: 'configuration_instructions';
     };
 /**
  * Exact deterministic component of one immutable canonical message.
@@ -11259,6 +11263,12 @@ export interface TraceRecord {
    */
   configuration?: ConfigurationChange | null;
   /**
+   * The exact effective instructions that `configuration` record's commit
+   * installed, read through `content_read` whether or not a request used
+   * them.
+   */
+  configuration_instructions?: ContentRef | null;
+  /**
    * Whether this record has heavy detail available for inspection.
    */
   has_detail: boolean;
@@ -11462,6 +11472,12 @@ export interface ConfigurationChange {
   domains: ConfigurationDomain[];
   tools: NamedChanges;
   skills: NamedChanges;
+  /**
+   * The byte length of the effective system instructions this commit
+   * installed. The fact retains them exactly, readable in bounded ranges
+   * even when no request ever used them.
+   */
+  instructions_bytes: string;
 }
 /**
  * Named-item differences of one catalog. A same-name item whose definition
@@ -11483,7 +11499,8 @@ export interface NamedChanges {
  */
 export interface BoundedNames {
   /**
-   * At most [`CONFIGURATION_CHANGE_NAME_LIMIT`] names in sorted order.
+   * Sorted names: at most [`CONFIGURATION_CHANGE_NAME_LIMIT`] of them,
+   * within [`CONFIGURATION_CHANGE_NAME_BYTES`] encoded bytes.
    */
   names: string[];
   /**
@@ -12989,6 +13006,12 @@ export interface ConfigurationChange1 {
   domains: ConfigurationDomain[];
   tools: NamedChanges;
   skills: NamedChanges;
+  /**
+   * The byte length of the effective system instructions this commit
+   * installed. The fact retains them exactly, readable in bounded ranges
+   * even when no request ever used them.
+   */
+  instructions_bytes: string;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -16671,6 +16694,7 @@ export interface RuntimeClientTranscriptConfigurationApplied {
    */
   timestamp: string;
   change: ConfigurationChange2;
+  instructions: ContentRef1;
 }
 /**
  * The typed semantic summary of one actual configuration commit.
@@ -16696,6 +16720,29 @@ export interface ConfigurationChange2 {
   domains: ConfigurationDomain[];
   tools: NamedChanges;
   skills: NamedChanges;
+  /**
+   * The byte length of the effective system instructions this commit
+   * installed. The fact retains them exactly, readable in bounded ranges
+   * even when no request ever used them.
+   */
+  instructions_bytes: string;
+}
+/**
+ * The exact effective instructions the commit installed, read in
+ * bounded ranges through `content_read`.
+ */
+export interface ContentRef1 {
+  conversation_id: ConversationId;
+  source: ContentSource;
+  representation: ContentRepresentation;
+  version: number;
+  /**
+   * Immutable sources use revision 1. For `LivePublicationPrefix` this is
+   * the committed frame sequence plus one, with exact H verified against
+   * the retained staging frontier index and projection release cut.
+   */
+  content_revision: number;
+  readable_end: number;
 }
 /**
  * Authoritative context state at this lifecycle boundary.
@@ -20147,6 +20194,7 @@ export interface RuntimeClientTranscriptConfigurationApplied1 {
    */
   timestamp: string;
   change: ConfigurationChange2;
+  instructions: ContentRef1;
 }
 /**
  * Finite proposal metadata; exact provider identifiers and arguments can be deferred.

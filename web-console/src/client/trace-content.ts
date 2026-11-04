@@ -1,5 +1,5 @@
 import type { CheckpointPage, CheckpointPageItem, CheckpointReadCut, CollectionFrontier, CanonicalContentLocator, ContentBinding, TraceContentBlock, TraceFieldSource, TraceInspectionMessage, TraceInspectionMessages, TraceToolSource, RuntimeClientToolOccurrence } from '../../../protocol/app-server/v63';
-import { checkpointReadCutKey } from '../../../protocol/app-server/content-identity';
+import { checkpointReadCutKey, messageSource } from '../../../protocol/app-server/content-identity';
 import { ContentCache } from '../../../protocol/app-server/content-cache';
 import { readTraceFieldWindow, readTraceSelectedWindow, type TraceValueField, type TraceValueSelector } from '../../../protocol/app-server/trace-field';
 import { validateCanonicalInspectionPage, traceInspectionMessage } from '../../../protocol/app-server/trace-inspection';
@@ -67,9 +67,9 @@ export async function readTraceBlocks(reader: TraceFieldReader, cut: CheckpointR
   const rows = await readTraceCollection(reader, cut, frontier, current, first), blocks: TraceDisplayBlock[] = [];
   for (const row of rows) {
     let metadata = object(row.value);
-    const metadataBinding = row.content.find(binding => binding.content_ref.source.component === 'block_metadata');
+    const metadataBinding = row.content.find(binding => messageSource(binding.content_ref.source)?.component === 'block_metadata');
     if (row.value == null && metadataBinding) metadata = object(await readBinding(reader, cut, metadataBinding, current));
-    const payload = row.content.find(binding => binding.content_ref.source.component === 'payload' && binding.content_ref.representation !== 'binary_bytes');
+    const payload = row.content.find(binding => messageSource(binding.content_ref.source)?.component === 'payload' && binding.content_ref.representation !== 'binary_bytes');
     const value = payload ? await readBinding(reader, cut, payload, current) : undefined;
     const kind = row.identity;
     if (kind === 'text' || kind === 'reasoning' || kind === 'refusal') {

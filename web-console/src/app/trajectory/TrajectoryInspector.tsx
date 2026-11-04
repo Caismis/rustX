@@ -25,6 +25,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type 
 import { structuredPatch } from 'diff';
 import type { BoundedNames, TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v63';
 import { configurationDomainLabel, configurationNames } from '../../bindings/configuration-change';
+import { SourceContent } from '../agent/SourceContent';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -703,7 +704,15 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
           {names('trajectory:configuration.skills-changed', change.skills.changed)}
           <div><dt>{tx('trajectory:configuration.binding')}</dt><dd>{change.previous_binding_revision} → {change.binding_revision}</dd></div>
         </dl>
-        <p className={css.summaryScrollRegion}>{tx('trajectory:configuration.first-use')}</p>
+        {record.configuration_instructions && <section className={`${css.overviewSection} ${css.summaryScrollRegion}`} data-summary-scroll-region="" data-configuration-instructions="">
+          <h3>{tx('trajectory:configuration.instructions')}</h3>
+          {detailReader && detailPage
+            ? <SourceContent bindings={[{ path: [], source_path: null, content_ref: record.configuration_instructions, deferred: true }]} owned={() => true}
+              read={(reference, offset, current) => detailReader.content(detailPage.read_cut, reference, offset, current)}>
+              {text => <pre className={css.payload}>{text}</pre>}
+            </SourceContent>
+            : <DetailPending error={detailError} />}
+        </section>}
       </>;
     }
     if (record.kind === 'compaction') {

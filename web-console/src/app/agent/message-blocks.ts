@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AssistantContentBlock, CanonicalContentLocator, CheckpointReadCut, ContentBinding, MessageBlock, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage, UserContentBlock } from '../../../../protocol/app-server/v63';
 import { messageDescriptor } from '../../../../protocol/app-server/message-descriptor';
-import { canonicalLocatorKey, checkpointReadCutKey, observationReadCutKey } from '../../../../protocol/app-server/content-identity';
+import { canonicalLocatorKey, checkpointReadCutKey, messageSource, observationReadCutKey } from '../../../../protocol/app-server/content-identity';
 import { readBinding, readTraceCollection } from '../../client/trace-content';
 import { childHistoryReadCut, observationSourceIdentity, useObservationSource } from './ObservationSource';
 
@@ -64,9 +64,9 @@ export async function readMessageBlocks(source: Source, request: Request, curren
         || origin.locator.type === request.locator.type && canonicalLocatorKey(origin.locator) !== canonicalLocatorKey(request.locator)) throw Error('Original message block owner changed.');
     }
     let metadata = object(row.value);
-    const header = row.content.find(binding => binding.content_ref.source.component === 'block_metadata');
+    const header = row.content.find(binding => messageSource(binding.content_ref.source)?.component === 'block_metadata');
     if (row.value == null && header) metadata = object(await readBinding(reader, cut, header, current));
-    const payload = row.content.find(binding => binding.content_ref.source.component === 'payload' && binding.content_ref.representation !== 'binary_bytes');
+    const payload = row.content.find(binding => messageSource(binding.content_ref.source)?.component === 'payload' && binding.content_ref.representation !== 'binary_bytes');
     if (payload) {
       const value = await readBinding(reader, cut, payload, current);
       if (['text','reasoning','refusal'].includes(row.identity)) metadata = { ...metadata, text: value };

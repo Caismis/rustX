@@ -1,5 +1,6 @@
 import type { ContentRef, RuntimeClientSnapshot } from '../../../protocol/app-server/v63';
 import { checkpoint, type Server } from '../fixture';
+import { messageSource } from '../../../protocol/app-server/content-identity';
 
 /** Native settlement replaces the live text with bounded canonical headers. */
 export function deferredReplyFixture(server: Server, snapshot: RuntimeClientSnapshot) {
@@ -25,8 +26,8 @@ export function deferredReplyFixture(server: Server, snapshot: RuntimeClientSnap
   server.handlers.set('session/checkpoint', () => ({ type: 'checkpoint', checkpoint: currentCheckpoint() }));
   server.handlers.set('conversation/contentRead', request => {
     if (request.method !== 'conversation/contentRead') throw Error('Expected original content read');
-    const ref = request.params.content_ref, bytes = values[ref.source.block_index];
-    if (JSON.stringify(ref) !== JSON.stringify(refs[ref.source.block_index])) throw Error('Unexpected content reference');
+    const ref = request.params.content_ref, bytes = values[messageSource(ref.source)!.block_index];
+    if (JSON.stringify(ref) !== JSON.stringify(refs[messageSource(ref.source)!.block_index])) throw Error('Unexpected content reference');
     const offset = request.params.offset, end = Math.min(offset + request.params.max_bytes, bytes.length);
     return { type: 'content_chunk', chunk: { content_ref: ref, offset, end_offset: end, readable_end: bytes.length,
       data_base64: btoa(String.fromCharCode(...bytes.slice(offset, end))), next_offset: end < bytes.length ? end : null, complete: end === bytes.length } };

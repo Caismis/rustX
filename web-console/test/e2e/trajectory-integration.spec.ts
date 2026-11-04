@@ -83,6 +83,10 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     await expect.poll(async () => (await trace()).records.filter(record => record.kind === 'configuration').length).toBe(1);
     const committed = (await trace()).records.find(record => record.kind === 'configuration')!;
     expect(committed.configuration).toMatchObject({ reason: 'source', domains: expect.arrayContaining(['instructions', 'tools']), tools: { removed: { names: ['read'], total: 1 } } });
+    // Before any request uses it, the fact retains the exact instructions it installed.
+    const { chunk: instructions } = await remote.client.call('conversation/contentRead', { target: attachedA.target, agent_id: null, content_ref: committed.configuration_instructions!, offset: 0, max_bytes: 65_536 }, 'content_chunk');
+    expect(instructions.complete).toBe(true);
+    expect(Buffer.from(instructions.data_base64, 'base64').toString('utf8')).toContain('TRACE_NEW_INSTRUCTIONS');
     expect(immutable(await detail(oldRecord.id))).toEqual(before);
     const afterB = await readEffective(remote, attachedB.target);
     expect(afterB.adopted_binding).toBe(bindingB);
@@ -125,6 +129,8 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     await page.screenshot({ path: '/tmp/rustx-configuration-chat-mobile.png' });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
+    await page.locator(`[data-trace-id="${committed.id}"]`).first().click();
+    await expect(page.getByRole('complementary', { name: 'Event details' }).locator('[data-configuration-instructions]')).toContainText('TRACE_NEW_INSTRUCTIONS');
     const boundary = page.locator(`[data-display-type="SystemPromptCell"][data-owner="${current.id}"]`);
     await expect(boundary).toContainText('System Prompt and Tools Updated');
     await boundary.click();

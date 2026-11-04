@@ -4,6 +4,7 @@ import type { ContentBinding, ContentRef, RuntimeClientSnapshot, TurnProcessView
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { Server, readCut, snapshot } from './fixture';
+import { messageSource } from '../../protocol/app-server/content-identity';
 
 afterEach(cleanup);
 
@@ -30,12 +31,12 @@ it.each(['live', 'child', 'history', 'evicted-inline'] as const)('%s reply survi
     const method = mode === 'history' ? 'session/historyContentRead' : 'conversation/contentRead';
     server.handlers.set(method, request => {
       if (request.method !== 'session/historyContentRead' && request.method !== 'conversation/contentRead') throw Error('Expected original content read');
-      const ref = request.params.content_ref, bytes = new TextEncoder().encode(values[ref.source.block_index]);
-      expect(ref).toEqual(refs[ref.source.block_index]);
+      const ref = request.params.content_ref, bytes = new TextEncoder().encode(values[messageSource(ref.source)!.block_index]);
+      expect(ref).toEqual(refs[messageSource(ref.source)!.block_index]);
       if (request.method === 'session/historyContentRead') expect(request.params.cut).toEqual(historyCut);
       else expect(request.params.agent_id).toBe(mode === 'child' ? 'worker' : null);
       return { type: 'content_chunk', chunk: { content_ref: ref, offset: 0, end_offset: bytes.length, readable_end: bytes.length,
-        data_base64: btoa(values[ref.source.block_index]), next_offset: null, complete: true } };
+        data_base64: btoa(values[messageSource(ref.source)!.block_index]), next_offset: null, complete: true } };
     });
     const source = mode === 'history' ? { client: server.client, sessionId: 'A', historyCut, cut: () => undefined, owned: () => true }
       : { client: server.client, target: server.target('A'), agentId: mode === 'child' ? 'worker' : undefined, cut: () => undefined, owned: () => true };

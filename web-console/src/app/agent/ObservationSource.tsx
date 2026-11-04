@@ -1,5 +1,6 @@
 import { createContext, useContext, useCallback, useRef, type ReactNode } from 'react';
 import type { AttachmentTarget, CheckpointReadCut, ObservationReadCut, ContentRef, ContentBinding, MessageBlock, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v63';
+import { messageSource } from '../../../../protocol/app-server/content-identity';
 import type { AppServerClient } from '../../client/app-server';
 import type { TraceFieldReader } from '../../client/trace';
 
@@ -66,8 +67,8 @@ export function useContentSource() {
 export function messageContentBinding(source: Pick<Presentation, 'content' | 'messages' | 'transcript' | 'history'> | undefined, id: string, index: number, publicationStream?: string) {
   return source?.content?.find(binding => {
     if (binding.content_ref.representation !== 'utf8_text') return false;
-    const reference = binding.content_ref.source;
-    if (reference.component !== 'payload' || reference.block_index !== index) return false;
+    const reference = messageSource(binding.content_ref.source);
+    if (reference?.component !== 'payload' || reference.block_index !== index) return false;
     if (publicationStream !== undefined && (reference.type !== 'durable_transcript_audit' || reference.stream_id !== publicationStream)) return false;
     if ('message_id' in reference) return reference.message_id === id;
     if (reference.type === 'canonical_message_block' && reference.locator.type === 'by_message_id') return reference.locator.message_id === id;

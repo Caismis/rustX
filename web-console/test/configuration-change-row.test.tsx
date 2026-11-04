@@ -7,7 +7,7 @@ afterEach(cleanup);
 const none: BoundedNames = { names: [], total: 0 };
 const change = (added: BoundedNames, removed: BoundedNames, domains: ConfigurationChange['domains'] = ['tools']): ConfigurationChange => ({
   reason: 'source', previous_binding_revision: '1', binding_revision: '2', domains,
-  tools: { added, removed, changed: none }, skills: { added: none, removed: none, changed: none },
+  tools: { added, removed, changed: none }, skills: { added: none, removed: none, changed: none }, instructions_bytes: '0',
 });
 
 it('has a Chat row only for Tool additions and removals, as in the Harness hidden-rows contract', () => {

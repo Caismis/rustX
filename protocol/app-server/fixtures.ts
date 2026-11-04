@@ -452,6 +452,7 @@ export const fixtures = [
             "message_id": null,
             "attachments": [],
             "configuration": null,
+            "configuration_instructions": null,
             "has_detail": true,
             "truncated": false
           }
