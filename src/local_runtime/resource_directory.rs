@@ -93,22 +93,23 @@ pub(crate) fn read_resource(
 /// The entries of a resource root (`.agents`) that configuration reads.
 pub(crate) const SOURCE_ENTRIES: [&str; 5] = ["agents", "mcp.toml", "skills", "tools", "workflows"];
 
-/// Whether `name`, directly under a resource root, is configuration input:
-/// a source entry or a guidance file the loader reads. Anything else there —
-/// Session uploads in particular — is not.
-pub(crate) fn is_source_entry(name: &std::ffi::OsStr) -> bool {
-    SOURCE_ENTRIES.iter().any(|entry| name == *entry)
-        || crate::runtime::resources::PROJECT_CONTEXT_FILENAMES
-            .iter()
-            .any(|guidance| name == *guidance)
+/// The names, directly under a resource root, that configuration reads: the
+/// source entries and the guidance files. Anything else there — Session
+/// uploads in particular — is not configuration input.
+fn source_entry_names() -> impl Iterator<Item = &'static str> {
+    SOURCE_ENTRIES
+        .into_iter()
+        .chain(crate::runtime::resources::PROJECT_CONTEXT_FILENAMES)
 }
 
 /// Revision of authored resource bytes, including malformed and shadowed entries.
 /// This is change detection, not discovery or configuration authority. Symlinks
 /// are hashed as links and never followed. Traversal is bounded even for invalid
 /// unused trees, and writer locks/staging files do not count as authored input.
-/// Only [`is_source_entry`] entries of the root count, so Session uploads
-/// written beside them never change it.
+/// The root is read through the fixed names the loaders open
+/// ([`source_entry_names`]), never by matching the spelling of what it lists:
+/// each name resolves exactly as the loaders resolve it, on case-insensitive
+/// volumes too, and Session uploads written beside them never count.
 pub(crate) fn revision(root: &Path) -> String {
     use sha2::{Digest, Sha256};
     fn walk(
@@ -137,6 +138,14 @@ pub(crate) fn revision(root: &Path) -> String {
             }
         } else if metadata.is_dir() {
             hash.update(b"directory:");
+            if depth == 0 {
+                for name in source_entry_names() {
+                    hash.update(name.len().to_le_bytes());
+                    hash.update(name);
+                    walk(&path.join(name), hash, remaining, bytes_left, 1);
+                }
+                return;
+            }
             let Ok(entries) = std::fs::read_dir(path) else {
                 hash.update(b"unreadable");
                 return;
@@ -149,10 +158,9 @@ pub(crate) fn revision(root: &Path) -> String {
             entries.sort_by_key(std::fs::DirEntry::file_name);
             for entry in entries {
                 let name = entry.file_name();
-                if (depth == 0 && !is_source_entry(&name))
-                    || (depth <= 1
-                        && (name.as_encoded_bytes().starts_with(b".tmp")
-                            || super::settings::is_writer_artifact(&name)))
+                if depth == 1
+                    && (name.as_encoded_bytes().starts_with(b".tmp")
+                        || super::settings::is_writer_artifact(&name))
                 {
                     continue;
                 }
@@ -214,6 +222,19 @@ mod tests {
         assert_ne!(revision(&root), guided, "a source entry is configuration");
     }
 
+    /// On a case-sensitive volume the loaders never open `Skills`, so its
+    /// content is not configuration and leaves the revision alone.
+    #[test]
+    fn a_case_variant_the_loaders_never_open_is_not_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join(".agents");
+        std::fs::create_dir_all(root.join("Skills/guide")).unwrap();
+        std::fs::write(root.join("Skills/guide/SKILL.md"), b"A").unwrap();
+        let initial = revision(&root);
+        std::fs::write(root.join("Skills/guide/SKILL.md"), b"B").unwrap();
+        assert_eq!(revision(&root), initial);
+    }
+
     #[test]
     fn case_sensitive_discovery_counts_lock_directory_case_variants() {
         let directory = tempfile::tempdir().unwrap();
@@ -254,5 +275,33 @@ mod tests {
             MAX_DIRECTORY_ENTRIES + 2,
             "discovery preserves the exact metadata directory and all 1,025 authored entries"
         );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "../../tests/support/case_insensitive_volume.rs"]
+mod case_insensitive_volume;
+
+#[cfg(all(test, target_os = "macos"))]
+mod case_insensitive_tests {
+    use super::*;
+
+    /// On a case-insensitive volume the loaders open `.agents/skills` and
+    /// read the directory named `Skills`: editing a Skill there changes the
+    /// revision exactly as it changes what they load.
+    #[test]
+    fn a_case_variant_the_loaders_open_is_configuration() {
+        let volume = super::case_insensitive_volume::CaseInsensitiveVolume::new();
+        let root = volume.path().join(".agents");
+        std::fs::create_dir_all(root.join("Skills/guide")).unwrap();
+        std::fs::write(root.join("Skills/guide/SKILL.md"), b"A").unwrap();
+        assert_eq!(
+            std::fs::read(root.join("skills/guide/SKILL.md")).unwrap(),
+            b"A",
+            "the loaders' fixed path resolves to `Skills`"
+        );
+        let initial = revision(&root);
+        std::fs::write(root.join("Skills/guide/SKILL.md"), b"B").unwrap();
+        assert_ne!(revision(&root), initial);
     }
 }

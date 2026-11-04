@@ -78,20 +78,27 @@ impl SessionRuntimeManager {
     /// Whether `incarnation` is the Session's resident now. Callers hold the
     /// application lock, so the answer stands until they release it: the
     /// registry lock is taken after it, never before.
+    /// The incarnation of the Session's resident allocation, if one is loaded.
+    pub(in crate::local_runtime) fn resident_incarnation(
+        &self,
+        session: &SessionId,
+    ) -> Option<super::RuntimeIncarnationId> {
+        let registry = self.registry.0.lock().expect("registry mutex");
+        registry
+            .by_session
+            .get(session)
+            .and_then(|id| match registry.entries.get(id) {
+                Some(super::Entry::Loaded(current)) => Some(current.identity.incarnation),
+                _ => None,
+            })
+    }
+
     pub(super) fn is_current_resident(
         &self,
         session: &SessionId,
         incarnation: super::RuntimeIncarnationId,
     ) -> bool {
-        let registry = self.registry.0.lock().expect("registry mutex");
-        registry
-            .by_session
-            .get(session)
-            .and_then(|id| registry.entries.get(id))
-            .is_some_and(|entry| {
-                matches!(entry, super::Entry::Loaded(current)
-                if current.identity.incarnation == incarnation)
-            })
+        self.resident_incarnation(session) == Some(incarnation)
     }
 
     fn rebase_runtime_catalog(
@@ -209,13 +216,19 @@ impl SessionRuntimeManager {
 
     /// The resident runtime together with the resource preparation of the
     /// same composition, read under one composition lock.
+    /// The resident allocation a preparation runs against, with the
+    /// incarnation it observed: `None` when no allocation is loaded. The
+    /// runtime is absent when that allocation is not `Running`.
     pub(in crate::local_runtime) fn configuration_preparation(
         &self,
         id: &SessionId,
-    ) -> Option<(
-        ConversationRuntime,
-        std::sync::Arc<crate::local_runtime::composition::LocalRuntimeResourceLoader>,
-    )> {
+    ) -> (
+        Option<super::RuntimeIncarnationId>,
+        Option<(
+            ConversationRuntime,
+            std::sync::Arc<crate::local_runtime::composition::LocalRuntimeResourceLoader>,
+        )>,
+    ) {
         let resident = {
             let state = self.registry.0.lock().expect("registry mutex");
             state.by_session.get(id).and_then(|conversation| {
@@ -224,21 +237,41 @@ impl SessionRuntimeManager {
                     _ => None,
                 }
             })
-        }?;
+        };
+        let Some(resident) = resident else {
+            return (None, None);
+        };
+        let incarnation = Some(resident.identity.incarnation);
         let composition = resident.composition.lock().expect("composition mutex");
-        let composition = composition.as_ref()?;
+        let Some(composition) = composition.as_ref() else {
+            return (incarnation, None);
+        };
         // A runtime that left `Running` on its own (a failed physical
         // reclamation drains it in place) can commit nothing; its application
         // defers to the next allocation exactly as a cold Session does.
         if composition.runtime().lifecycle_state()
             != crate::runtime::ConversationLifecycleState::Running
         {
-            return None;
+            return (incarnation, None);
         }
-        Some((
-            composition.runtime().clone(),
-            std::sync::Arc::clone(composition.resource_loader()?),
-        ))
+        let prepared = composition
+            .resource_loader()
+            .map(|loader| (composition.runtime().clone(), std::sync::Arc::clone(loader)));
+        (incarnation, prepared)
+    }
+
+    /// Parks the configuration worker after it looked up the resident
+    /// allocation, before it takes the application lock.
+    #[cfg(test)]
+    pub(crate) async fn park_configuration_resident(&self) {
+        let gate = self
+            .registry
+            .0
+            .lock()
+            .expect("registry mutex")
+            .configuration_resident
+            .clone();
+        gate.park().await;
     }
 
     /// The resident Session's Runtime Client host, for observing the

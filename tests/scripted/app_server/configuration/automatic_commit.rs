@@ -2141,6 +2141,85 @@ async fn a_replaced_skill_directory_keeps_feeding_the_source_watch() {
     .await;
 }
 
+/// A platform rescan names no path, so it recaptures every known source: a
+/// Skill added to Workspace A while notifications were lost is committed
+/// although only Workspace B's document was notified, and a repeated rescan
+/// records nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rescan_recaptures_sources_whose_notifications_were_lost() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 2).await;
+        let id = fixture.sessions[0].id.clone();
+        let skills_root = fixture.workspaces[0].join(".agents/skills");
+        let skill = |name: &str| {
+            let directory = skills_root.join(name);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: Guide {name}\n---\nbody\n"),
+            )
+            .unwrap();
+        };
+        skill("first");
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        select_all_skills(&fixture).await;
+        let skills = |runtime: &crate::runtime::ConversationRuntime| {
+            runtime
+                .runtime_resources()
+                .capability()
+                .model_skill_entries()
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(skills(&runtime), ["first"]);
+        // Added before the watch starts, so no platform notification names it.
+        skill("second");
+        let captured = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_captured
+            .clone();
+        captured.arm();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let rescan =
+            || notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan);
+        let observe = async {
+            while !fixture.manager.notify_source_watch(rescan()) {
+                tokio::task::yield_now().await;
+            }
+            fixture.manager.notify_source_watch(
+                notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
+                    .add_path(fixture.workspaces[1].join("rustx.toml")),
+            );
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            assert_eq!(skills(&runtime), ["first", "second"], "the rescan was lost");
+            let facts = configuration_changes(&runtime).len();
+            captured.release();
+            captured.parked(0).await;
+            captured.arm();
+            assert!(fixture.manager.notify_source_watch(rescan()));
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(configuration_changes(&runtime).len(), facts);
+            captured.release();
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
+        watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
 /// An execution-policy update that really published after an earlier
 /// unrecorded commit is retained: it survives unload/load, and the healthy
 /// replacement allocation recovers the Session's application view.
@@ -2369,6 +2448,105 @@ async fn a_replaced_allocation_never_reattaches_late() {
             fixture.manager.configuration_application(&id)
         );
         assert_eq!(instructions(&b), "published by B, not recorded");
+        let _ = fixture.manager.drain_all_runtimes().await;
+    })
+    .await;
+}
+
+/// The configuration worker never hands an application to the allocation it
+/// looked up once that allocation is gone: A could not record a commit; a
+/// comment-only edit's preparation looks A up and parks before the
+/// application lock; meanwhile A is unloaded and a healthy B loads, with
+/// nothing staged or deferred for its rebind to prepare again. When the
+/// worker resumes, the edit is prepared for B: no unit reports A's
+/// uncertainty or a policy failure from the stopped A.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_preparation_never_attaches_the_allocation_it_outlived() {
+    // A parked worker never finishes the edit: release it however this
+    // test ends.
+    struct Release(std::sync::Arc<AsyncGate>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let loaded = fixture.manager.load(&id, None).await.unwrap();
+        let a = fixture.manager.configuration_runtime(&id).unwrap();
+        a.fail_next_configuration_record();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("published by A, not recorded".into()),
+            },
+        )
+        .await;
+        let uncertain = |fixture: &Fixture| {
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .units
+                .values()
+                .any(|unit| matches!(unit, UnitApplication::Uncertain { .. }))
+        };
+        applied(&fixture, 0).await;
+        assert!(uncertain(&fixture));
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        drop(a);
+        let gate = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .configuration_resident
+            .clone();
+        gate.arm();
+        let _release = Release(gate.clone());
+        let first = fixture.manager.configuration_application(&id).unwrap();
+        let document = fixture.workspaces[0].join("rustx.toml");
+        let mut text = std::fs::read_to_string(&document).unwrap_or_default();
+        text.push_str("\n# comment only\n");
+        std::fs::write(&document, text).unwrap();
+        let reconcile = {
+            let manager = fixture.manager.clone();
+            let directory = fixture.workspaces[0].clone();
+            tokio::spawn(async move {
+                manager
+                    .reconcile_configuration(
+                        &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                            directory,
+                        },
+                    )
+                    .await
+            })
+        };
+        // The worker holds A's handle, before the application lock.
+        gate.entered().await;
+        let _ = fixture.manager.unload(&loaded.conversation).await;
+        fixture.manager.load(&id, None).await.unwrap();
+        let b = fixture.manager.configuration_runtime(&id).unwrap();
+        gate.release();
+        reconcile.await.unwrap().unwrap();
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        let view = applied(&fixture, 0).await;
+        assert_ne!(view.desired, first.desired, "the edit is a new application");
+        assert!(
+            view.units.values().all(|unit| !matches!(
+                unit,
+                UnitApplication::Uncertain { .. } | UnitApplication::Failed { .. }
+            )),
+            "the stopped A owns the application: {view:?}"
+        );
+        assert_eq!(instructions(&b), "published by A, not recorded");
         let _ = fixture.manager.drain_all_runtimes().await;
     })
     .await;

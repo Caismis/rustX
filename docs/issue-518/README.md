@@ -101,9 +101,15 @@ Server protocol/connection layer.
   resident (a client load, a Scheduler cold start, recovery) attaches it at
   that one publication, before reporting it loaded, and only while it is
   still the Session's resident incarnation: a replaced allocation's late
-  attach never takes the application back. The `.agents` resource revision
-  counts only configuration entries, so Session uploads written beside them
-  never conflict with a configuration read or capture.
+  attach never takes the application back. The configuration worker obeys
+  the same rule: every allocation-specific step (attach, policy, staging, cold
+  deferral) re-checks under the application lock that the allocation it
+  looked up is still the resident, and otherwise queues the application again
+  for the allocation resident now. The `.agents` resource revision reads the
+  root through the fixed entry names the loaders open, so it resolves each
+  exactly as they do (a `Skills` directory on a case-insensitive volume
+  counts) and Session uploads written beside them never conflict with a
+  configuration read or capture.
 - **External edits.** A bounded `notify` watcher routes changed paths to their
   owning source target and feeds `observe_source_change`, the same capture,
   fence and validation path as a native write. Coverage: User document
@@ -114,7 +120,10 @@ Server protocol/connection layer.
   notification at or above a watched directory re-registers its watches (a
   directory replaced at the same path), and only a watch that registered is
   active. A batch re-registers its watches before it captures, so an edit
-  landing after that capture is always notified. Session uploads under
+  landing after that capture is always notified. A platform rescan (events
+  may have been lost, such as an overflowed inotify queue) names no path: it
+  re-registers every watch and recaptures every known source target, and
+  unchanged sources stay no-ops. Session uploads under
   `.agents/uploads` are never watched (the full browser suite caught an early
   version that did).
 
@@ -154,9 +163,12 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | A runtime only the Scheduler starts cold recovers the uncertain view and notifies observers | `schedule::workflow::a_scheduler_cold_start_recovers_the_configuration_application` |
 | `load()` returns only after its runtime owns the application; parked before the attach, it has not returned | `automatic_commit::a_load_returns_only_after_its_runtime_owns_the_application` |
 | A replaced allocation parked before the application lock never reattaches over its successor's unrecorded commit | `automatic_commit::a_replaced_allocation_never_reattaches_late` |
+| A worker preparation parked after looking up a replaced allocation prepares the edit for its successor: no stale uncertainty, no policy failure from the stopped runtime | `automatic_commit::a_preparation_never_attaches_the_allocation_it_outlived` |
 | A failed preparation of a Workflow-model and Workflow-prompt capture reports Provider failed and installs nothing | `automatic_commit::a_failed_preparation_never_reports_an_uninstalled_workflow_model` |
 | A new shared Skill environment root is `execution_policy` with every authorized entry, Tool and Skill unchanged; no path is retained | `automatic_commit::a_new_skill_environment_is_execution_policy` |
 | Session uploads and unread `.agents` entries leave the resource revision unchanged | `resource_directory::tests::only_configuration_entries_change_the_revision` |
+| The revision follows the loaders' fixed paths: `Skills` counts on a case-insensitive volume and not on a case-sensitive one | `resource_directory::case_insensitive_tests::a_case_variant_the_loaders_open_is_configuration` (macOS), `resource_directory::tests::a_case_variant_the_loaders_never_open_is_not_configuration` |
+| A platform rescan without a path recaptures a Workspace whose notifications were lost; a repeated rescan records nothing | `automatic_commit::a_rescan_recaptures_sources_whose_notifications_were_lost` |
 | A parameter change of a model only a direct Workflow Model node names is one Model fact; an unselected model records nothing | `automatic_commit::a_workflow_model_node_is_a_model_that_runs` |
 | An environment value change changes `subagent` and execution policy; the catalog names the variable, never its value | `automatic_commit::an_environment_value_change_is_recorded_without_its_value` |
 | A credential reference switch on a source only a lazy child runs on changes `subagent`; no credential reaches the catalog | `mcp_readiness::a_hidden_source_credential_switch_changes_the_tool_that_runs_it` |

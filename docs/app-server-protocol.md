@@ -1969,7 +1969,10 @@ Invariants:
   retained across reload either way; a healthy replacement allocation recovers
   the view and notifies its observers, whichever entry (client load,
   Scheduler or recovery) published it, before that entry reports it loaded
-  and only while it is still the Session's resident incarnation.
+  and only while it is still the Session's resident incarnation. The
+  configuration worker attaches, applies policy to, stages in or defers for
+  only the allocation still resident under the application lock; otherwise
+  it prepares the application again for the current one.
 - The fact never enters model context. Web Chat shows only Tool additions and
   removals from it; instruction, context, Skill and same-name Tool changes stay
   in Trace and inspection.

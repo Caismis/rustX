@@ -110,14 +110,17 @@ impl ConfigurationApplications {
             .reach("configuration_policy_prepared");
         // The runtime and the resource preparation it was composed with are
         // taken from one resident composition, never from two lookups.
-        let (runtime, resource_loader) = manager
-            .configuration_preparation(&session)
-            .map_or((None, None), |(runtime, loader)| {
-                (Some(runtime), Some(loader))
-            });
+        let (resident, prepared) = manager.configuration_preparation(&session);
+        let (runtime, resource_loader) = prepared.map_or((None, None), |(runtime, loader)| {
+            (Some(runtime), Some(loader))
+        });
+        #[cfg(test)]
+        manager.park_configuration_resident().await;
         {
             let mut state = self.lock();
-            if !state.current(scope, identity) {
+            if !state.current(scope, identity)
+                || !state.still_resident(manager, &session, identity, resident)
+            {
                 return;
             }
             // One process owner performs the change; Session views only project
@@ -333,7 +336,9 @@ impl ConfigurationApplications {
         }
         let Some(runtime) = runtime else {
             let mut state = self.lock();
-            if state.current(scope, identity) {
+            if state.current(scope, identity)
+                && state.still_resident(manager, &session, identity, resident)
+            {
                 state.deferred.insert(scope.to_owned());
                 // A source-only context/provider edit can be prepared against
                 // the retained, already available capability definitions. New
@@ -524,7 +529,9 @@ impl ConfigurationApplications {
         #[cfg(test)]
         manager.configuration_test_gate(&session, true).await;
         let mut state = self.lock();
-        if !state.current(scope, identity) {
+        if !state.current(scope, identity)
+            || !state.still_resident(manager, &session, identity, resident)
+        {
             return;
         }
         // Availability composes from source-owned validated units, never from
@@ -757,5 +764,27 @@ impl ConfigurationApplications {
             }
         }
         self.notify(&state);
+    }
+}
+
+impl super::ApplicationState {
+    /// Whether the allocation a preparation looked up is still the Session's
+    /// resident. Checked under the application lock (lock order application,
+    /// then registry), so only the current allocation becomes the
+    /// application's health owner or receives its outcomes. When it moved, the
+    /// application is queued again for the allocation resident now, never
+    /// lost.
+    fn still_resident(
+        &mut self,
+        manager: &SessionRuntimeManager,
+        session: &SessionId,
+        identity: &ApplicationIdentity,
+        observed: Option<crate::local_runtime::session_runtime_manager::RuntimeIncarnationId>,
+    ) -> bool {
+        if manager.resident_incarnation(session) == observed {
+            return true;
+        }
+        self.pending.insert(session.to_string(), identity.clone());
+        false
     }
 }

@@ -474,9 +474,13 @@ struct RegistryState {
     #[cfg(test)]
     source_watch_captured: Arc<tests::AsyncGate>,
     #[cfg(test)]
+    source_watch_signals: Option<tokio::sync::mpsc::UnboundedSender<source_watch::Signal>>,
+    #[cfg(test)]
     configuration_settlement: Arc<tests::AsyncGate>,
     #[cfg(test)]
     resident_attach: Arc<tests::AsyncGate>,
+    #[cfg(test)]
+    configuration_resident: Arc<tests::AsyncGate>,
     #[cfg(test)]
     schedule_activation_started: watch::Sender<Option<ConversationId>>,
     #[cfg(test)]
@@ -765,9 +769,13 @@ impl SessionRuntimeManager {
                 #[cfg(test)]
                 source_watch_captured: Arc::default(),
                 #[cfg(test)]
+                source_watch_signals: None,
+                #[cfg(test)]
                 configuration_settlement: Arc::default(),
                 #[cfg(test)]
                 resident_attach: Arc::default(),
+                #[cfg(test)]
+                configuration_resident: Arc::default(),
                 #[cfg(test)]
                 schedule_activation_started: watch::channel(None).0,
                 #[cfg(test)]

@@ -21,6 +21,11 @@
 //! the same path, so its watches are registered again; only a watch that
 //! actually registered counts as active.
 //!
+//! When the platform reports that notifications may have been lost (an
+//! overflowed queue, for one), no path says what changed: every known source
+//! target is captured again and every watch registered again. Unchanged
+//! sources stay no-ops, so a repeated rescan records nothing.
+//!
 //! Anything else under `.agents` — Session uploads in particular — is not a
 //! configuration source and is neither watched nor routed.
 //!
@@ -102,6 +107,34 @@ pub(super) fn route(
         })
 }
 
+/// What one platform notification invalidates.
+#[derive(Debug)]
+pub(super) enum Signal {
+    /// A path that may have changed.
+    Path(PathBuf),
+    /// Notifications may have been lost: every source may have changed.
+    Rescan,
+}
+
+/// Forward one platform notification as the signals it carries. A rescan
+/// carries no path, so it is kept apart from the paths it may also name.
+pub(super) fn forward(
+    result: notify::Result<notify::Event>,
+    sender: &tokio::sync::mpsc::UnboundedSender<Signal>,
+) {
+    let Ok(event) = result else {
+        return;
+    };
+    if event.need_rescan() {
+        let _ = sender.send(Signal::Rescan);
+    }
+    if !event.kind.is_access() {
+        for path in event.paths {
+            let _ = sender.send(Signal::Path(path));
+        }
+    }
+}
+
 /// A notification at `path` may mean that directory was removed or replaced
 /// in place, which silently ends the platform watches at or below it: those
 /// are registered again on the next pass.
@@ -179,6 +212,18 @@ impl SessionRuntimeManager {
         self.applications.lock().watched_source_directories()
     }
 
+    /// Deliver `event` as the platform watcher of the running source watch
+    /// would. Returns `false` while no source watch has started.
+    #[cfg(test)]
+    pub(crate) fn notify_source_watch(&self, event: notify::Event) -> bool {
+        let registry = self.registry.0.lock().expect("registry mutex");
+        let Some(sender) = &registry.source_watch_signals else {
+            return false;
+        };
+        forward(Ok(event), sender);
+        true
+    }
+
     /// Observe the supported sources until `stop`. Each batch of notifications
     /// is routed to its owning targets and captured once per target through
     /// the same path as a native source write; nothing here reads content.
@@ -194,16 +239,18 @@ impl SessionRuntimeManager {
         &self,
         stop: tokio_util::sync::CancellationToken,
     ) -> Result<(), String> {
-        let (sender, mut paths) = tokio::sync::mpsc::unbounded_channel::<PathBuf>();
+        let (sender, mut signals) = tokio::sync::mpsc::unbounded_channel::<Signal>();
+        #[cfg(test)]
+        {
+            self.registry
+                .0
+                .lock()
+                .expect("registry mutex")
+                .source_watch_signals = Some(sender.clone());
+        }
         let mut watcher =
             notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-                if let Ok(event) = result
-                    && !event.kind.is_access()
-                {
-                    for path in event.paths {
-                        let _ = sender.send(path);
-                    }
-                }
+                forward(result, &sender);
             })
             .map_err(|error| error.to_string())?;
         let mut changes = self.configuration_changes();
@@ -215,19 +262,34 @@ impl SessionRuntimeManager {
             tokio::select! {
                 () = stop.cancelled() => return Ok(()),
                 result = changes.changed() => if result.is_err() { return Ok(()) },
-                Some(path) = paths.recv() => {
+                Some(signal) = signals.recv() => {
                     // Coalesce everything already queued into one capture per
                     // owning target, in a stable order: User composes first.
                     let mut targets = Vec::new();
-                    let mut next = Some(path);
-                    while let Some(path) = next {
-                        invalidate(&mut active, &path);
-                        if let Some(target) = route(&path, &user, &workspaces)
-                            && !targets.contains(&target)
-                        {
-                            targets.push(target);
+                    let mut next = Some(signal);
+                    while let Some(signal) = next {
+                        let owners = match signal {
+                            Signal::Path(path) => {
+                                invalidate(&mut active, &path);
+                                route(&path, &user, &workspaces).into_iter().collect()
+                            }
+                            Signal::Rescan => {
+                                active.clear();
+                                std::iter::once(SourceTarget::User)
+                                    .chain(workspaces.iter().map(|directory| {
+                                        SourceTarget::Workspace {
+                                            directory: directory.clone(),
+                                        }
+                                    }))
+                                    .collect::<Vec<_>>()
+                            }
+                        };
+                        for target in owners {
+                            if !targets.contains(&target) {
+                                targets.push(target);
+                            }
                         }
-                        next = paths.try_recv().ok();
+                        next = signals.try_recv().ok();
                     }
                     // Watch the replacements before capturing them, so an
                     // edit after the capture reads is always notified.
