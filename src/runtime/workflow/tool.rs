@@ -87,18 +87,24 @@ impl WorkflowToolProjection {
         &self,
         result: &ToolExecutionResult,
         node: &WorkflowNodeInstance,
+        stdout: Option<&crate::tools::output::BoundedStdoutCapture>,
     ) -> Result<Value, WorkflowRunError> {
         match self {
             Self::Native(projection) => projection.project(result, node),
             Self::Code { schema } => {
-                let native = WorkflowToolResult::declared(
-                    crate::tools::native::output_schema("bash").as_ref(),
-                )
-                .project(result, node)?;
-                let text = native["stdout"].as_str().ok_or_else(|| {
-                    WorkflowRunError::InvalidValue("Code produced no stdout".into())
-                })?;
-                let value: Value = serde_json::from_str(text).map_err(|_| {
+                if result.status != ToolExecutionStatus::Success {
+                    return Err(WorkflowRunError::ToolFailed {
+                        node: node.to_string(),
+                        status: bounded_status(&result.status),
+                    });
+                }
+                let bytes = stdout
+                    .ok_or_else(|| {
+                        WorkflowRunError::InvalidValue("Code has no result channel".into())
+                    })?
+                    .take_complete()
+                    .map_err(|error| WorkflowRunError::InvalidValue(error.into()))?;
+                let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
                     WorkflowRunError::InvalidValue("Code stdout must be one JSON object".into())
                 })?;
                 expressions::bounded_value_bytes(&value)?;
@@ -151,6 +157,7 @@ impl WorkflowRuntime {
         node: &WorkflowNodeInstance,
         selector: &ExactToolSelector,
         arguments: Value,
+        stdout: Option<crate::tools::output::BoundedStdoutCapture>,
         retry: u32,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<(ToolExecutionResult, bool), WorkflowRunError> {
@@ -273,7 +280,7 @@ impl WorkflowRuntime {
                     }
                 });
                 let progress = NativeProgress(std::sync::Mutex::new(Vec::new()));
-                let native_context = ToolExecutionContext::new(
+                let mut native_context = ToolExecutionContext::new(
                     &run.run_id.conversation_id,
                     None,
                     cancellation.clone(),
@@ -283,6 +290,7 @@ impl WorkflowRuntime {
                     services.runtime.tool_output(),
                     context.resources().capability().effective_environment(),
                 );
+                native_context.stdout_capture = stdout;
                 let requester = services
                     .lifecycle
                     .native_interaction_coordinator()

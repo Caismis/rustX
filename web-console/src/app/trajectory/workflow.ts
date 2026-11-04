@@ -1,14 +1,9 @@
-import type { CheckpointReadCut, TraceFieldSource, TraceRecord, TraceTiming, WorkflowNodeInstance, WorkflowNodeKind, WorkflowState } from '../../../../protocol/app-server/v68';
+import type { CheckpointReadCut, TraceRecord, WorkflowTraceNode } from '../../../../protocol/app-server/v69';
+export type { WorkflowTraceNode } from '../../../../protocol/app-server/v69';
 import { sameTraceStep } from '../../../../protocol/app-server/trace-identity';
 import type { TraceFieldReader } from '../../client/trace';
 import type { InspectableDisplayItem, TrajectoryLedgerRow } from './layout';
 
-/** The native Workflow node collection's finite header. Bodies use advertised fields. */
-export interface WorkflowTraceNode {
-  id: string; instance: WorkflowNodeInstance; kind: WorkflowNodeKind | null; state: WorkflowState; timing: TraceTiming;
-  input: TraceFieldSource | null; output: TraceFieldSource | null; input_preview: string | null; output_preview: string | null;
-  input_omitted: boolean; output_omitted: boolean;
-}
 export interface WorkflowNodes {
   root: TraceRecord; nodes: WorkflowTraceNode[]; cut: CheckpointReadCut; reader: TraceFieldReader; loading: boolean; error?: string;
 }

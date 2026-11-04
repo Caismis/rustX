@@ -420,6 +420,7 @@ mod tests {
                     arguments: serde_json::json!({ "path": path }),
                 },
                 ToolExecutionContext {
+                    stdout_capture: None,
                     workspace_changes: None,
                     model_invocation: None,
                     goal: None,
@@ -613,6 +614,7 @@ mod tests {
                 arguments,
             };
             let context = ToolExecutionContext {
+                stdout_capture: None,
                 workspace_changes: None,
                 model_invocation: None,
                 goal: None,

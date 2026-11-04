@@ -380,6 +380,24 @@ impl WorkflowReadModel {
         });
     }
 
+    /// Exercise native mutation, revision retention and the installed host
+    /// callback together in cross-owner publication contract tests.
+    #[cfg(test)]
+    pub(crate) fn publish_run_for_test(&self, run: WorkflowRunView, sequence: u64) {
+        if self
+            .snapshot()
+            .runs
+            .iter()
+            .any(|current| current.id == run.id)
+        {
+            let id = run.id.clone();
+            self.update(&id, |current| *current = run);
+        } else {
+            self.register(run);
+        }
+        self.publish_committed(sequence);
+    }
+
     pub(super) fn update(&self, id: &WorkflowRunId, mutate: impl FnOnce(&mut WorkflowRunView)) {
         self.commit(|state| {
             let Some(run) = state.runs.iter_mut().find(|run| &run.id == id) else {

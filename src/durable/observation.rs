@@ -17,13 +17,30 @@ pub use super::trace::{
 pub const HEADER_PAGE_MAX: usize = 32;
 pub const HEADER_ENCODED_MAX: usize = 16_384;
 
+/// Durable visit lifecycle; transient labels additionally require a live owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowNodeTraceState {
+    /// A durable admission without a proven terminal or current live owner.
+    Incomplete,
+    Pending,
+    Running,
+    Waiting {
+        reason: crate::runtime::workflow::read_model::WorkflowWait,
+    },
+    Draining,
+    Settled {
+        outcome: crate::runtime::workflow::WorkflowExecutionOutcome,
+    },
+}
+
 /// Actual admitted nodes at one immutable Journal cut, not the program's nodes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkflowTraceNode {
     pub id: String,
     pub instance: crate::runtime::workflow::WorkflowNodeInstance,
     pub kind: Option<crate::runtime::workflow::read_model::WorkflowNodeKind>,
-    pub state: crate::runtime::workflow::read_model::WorkflowState,
+    pub state: WorkflowNodeTraceState,
     pub timing: crate::observation::trace::TraceTiming,
     pub input: Option<crate::observation::trace::TraceFieldSource>,
     pub output: Option<crate::observation::trace::TraceFieldSource>,

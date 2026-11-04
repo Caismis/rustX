@@ -638,7 +638,7 @@ completed. Native analysis exposes possible ancestors for these selectors.
 The compiler still requires matching types and proves at least one source on
 every activation, preserving rustX's definite-reference contract; ordinary
 nodes do not gain access to optional branch producers. The old flat named
-group output format is removed; App Server v68 requires the grouping flag.
+group output format is removed; App Server v69 requires the grouping flag.
 
 ### Code Execution and Variable Assigner
 
@@ -672,6 +672,12 @@ JavaScript uses its ordinary Number semantics. Return an object from `main`;
 the runner serializes it automatically. Normal `print`, `console.log` and
 stdout writes are recorded as native stderr logs and do not pollute the result.
 All declared outputs are required and undeclared extra fields are rejected.
+Each Code invocation receives a separate complete stdout capture bounded to
+64 KiB. The runtime parses its original bytes only after EOF and native
+settlement, independently of Bash's 16 KiB model-facing previews and combined
+stdout/stderr spill. Overflow is an explicit output error, never a truncated
+JSON return. Valid large returns therefore do not trigger retries merely
+because the presentation preview is shorter than the result.
 
 The node lowers to one ordinary admitted builtin Bash invocation in the
 calling Session's workspace. `python3` or `node` must be available in that

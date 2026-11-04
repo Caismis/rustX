@@ -3219,6 +3219,11 @@ the launch-boundary policy inheritance.
   phase. A crash does not replay a nonterminal WorkflowRun; durable Workflow
   resume is intentionally absent. A future Canvas can edit the same canonical
   Definition without adding layout metadata.
+- **Historical node activity requires a live owner.** A Workflow node admission
+  without a durable terminal is `incomplete`, including recorded waits. Only
+  the exact resident runtime, current published read cut and complete node
+  instance identity may overlay running/waiting. Retained settled projections
+  cannot create activity or overwrite a persisted terminal or an older cut.
 
 ## CFG3 configuration, resource and Session authority
 

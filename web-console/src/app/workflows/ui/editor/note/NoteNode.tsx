@@ -16,7 +16,7 @@ import { $createParagraphNode, $createTextNode, $getNodeByKey, $getRoot, $getSel
 import clsx from 'clsx';
 import { createContext, memo, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import type { WorkflowNote, WorkflowNoteTheme } from '../../../../../../../protocol/app-server/v68';
+import type { WorkflowNote, WorkflowNoteTheme } from '../../../../../../../protocol/app-server/v69';
 import { useTranslation } from '../../../../../locale/react';
 import { ShortcutKeys } from '../../../../../presentation/primitives/ShortcutKeys';
 import { IconCheckOutline16, IconEllipsisOutline16 } from '../../../../../presentation/primitives/icons';

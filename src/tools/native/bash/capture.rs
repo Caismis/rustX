@@ -118,6 +118,7 @@ pub(super) type StreamHandle = tokio::task::JoinHandle<Result<(), CaptureFailure
 pub(super) async fn capture_stream<R>(
     mut pipe: R,
     capture: Arc<Mutex<PreviewCapture>>,
+    complete: Option<crate::tools::output::BoundedStdoutCapture>,
     combined_tx: tokio::sync::mpsc::Sender<(u8, String)>,
     stream_id: u8,
     name: &'static str,
@@ -140,6 +141,9 @@ where
                 )));
             }
         };
+        if let Some(complete) = &complete {
+            complete.push(&buffer[..read]);
+        }
         let text = decoder.push(&buffer[..read]);
         if text.is_empty() {
             continue;
@@ -159,6 +163,9 @@ where
             .map_err(|_| CaptureFailure::ConsumerClosed(name))?;
     }
     drop(combined_tx);
+    if let Some(complete) = complete {
+        complete.finish();
+    }
     #[cfg(test)]
     if let Some(park) = park {
         park.parked.send(true).ok();
@@ -290,6 +297,7 @@ mod settlement_tests {
                 let result = capture_stream(
                     &b"later chunk"[..],
                     Arc::new(Mutex::new(PreviewCapture::new(128))),
+                    None,
                     tx,
                     0,
                     "stdout",

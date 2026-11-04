@@ -281,7 +281,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 79 combines Scheduled execution/recovery origins with reasoning-free
 /// Workflow, workspace changes and live MCP preparation projections.
 /// Version 80 adds native Workflow data-node and classifier observation kinds.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 80;
+/// Version 81 distinguishes incomplete historical Workflow nodes from proven live activity.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 81;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1381,7 +1382,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 80);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 81);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

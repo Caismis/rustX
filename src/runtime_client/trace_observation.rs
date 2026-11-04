@@ -564,7 +564,7 @@ pub(crate) fn history_page(
         return messages_page(store, cut, domain, offset, limit);
     }
     if workflow_selection(domain).is_some() {
-        return workflow_page(store, cut, domain, offset, limit);
+        return workflow_page(store, cut, domain, offset, limit, None);
     }
     if context_selection(domain).is_some() {
         return context_page(store, cut, domain, offset, limit);

@@ -1054,6 +1054,120 @@ fn array_choices_share_native_common_element_proofs_for_every_receiver() {
 }
 
 #[test]
+fn nullable_list_consumers_and_compilation_share_the_same_contract() {
+    let candidate = definition(json!({"input":object(json!({
+        "items":{"type":"array","items":{"type":"string"}},
+        "text":{"type":"string"},"nothing":{"type":"null"},
+        "number":{"type":"number"},"flag":{"type":"boolean"}
+    }), &["items","text","nothing","number","flag"]),
+        "nodes":{
+            "start":{"type":"start"},
+            "select":{"type":"list","input":reference(&["args","items"])},
+            "receive":{"type":"list","input":{"type":"array","items":[reference(&["select","first_record"]),reference(&["select","last_record"])]}},
+            "choose":{"type":"branch","cases":[{"id":"yes","condition":{"type":"contains","left":reference(&["receive","result"]),"right":reference(&["select","first_record"])}}]},
+            "done":{"type":"return","outputs":[{"variable":"records","value_selector":["receive","result"]}]}
+        },
+        "edges":[{"from":"start","to":"select"},{"from":"select","to":"receive"},{"from":"receive","to":"choose"},{"from":"choose","to":"done","port":"yes"},{"from":"choose","to":"done","port":"false"}]
+    }));
+    for (path, compatible) in [
+        (["select", "first_record"], true),
+        (["select", "last_record"], true),
+        (["args", "text"], true),
+        (["args", "nothing"], true),
+        (["args", "number"], false),
+        (["args", "flag"], false),
+    ] {
+        let mut query = query(
+            "choose",
+            WorkflowConsumerField::Condition {
+                case_id: "yes".into(),
+            },
+            &path,
+        );
+        query.consumer.path = vec![WorkflowExpressionStep::Right];
+        let report = analyze(&candidate, Some(&query)).unwrap();
+        assert!(!report.incomplete && !report.truncated);
+        for choice in selected_and_catalog(&report) {
+            assert_eq!(choice.availability, Available, "{path:?}");
+            assert_eq!(
+                choice.compatibility,
+                if compatible { Compatible } else { Incompatible },
+                "{path:?}"
+            );
+        }
+        let mut changed = candidate.clone();
+        let WorkflowNodeDefinition::Branch { cases } =
+            changed.block.nodes.get_mut("choose").unwrap()
+        else {
+            unreachable!()
+        };
+        let WorkflowPredicate::Contains { right, .. } = &mut cases[0].condition else {
+            unreachable!()
+        };
+        *right = serde_json::from_value(reference(&path)).unwrap();
+        let compiled = super::super::WorkflowProgram::compile(
+            super::super::WorkflowId::parse("nullable-array").unwrap(),
+            changed,
+        );
+        assert_eq!(compiled.is_ok(), compatible, "{path:?}: {compiled:?}");
+    }
+}
+
+#[test]
+fn nullable_schema_proofs_preserve_constraints_and_authoring_budgets() {
+    let nullable = |schema| json!({"anyOf":[schema,{"type":"null"}]});
+    let string = json!({"type":"string"});
+    let narrow = nullable(json!({"type":"string","maxLength":3}));
+    let wide = nullable(string.clone());
+    let declarations = SchemaMap::default();
+    for (actual, expected, compatible) in [
+        (wide.clone(), wide.clone(), true),
+        (narrow.clone(), wide.clone(), true),
+        (wide.clone(), narrow, false),
+        (string.clone(), wide.clone(), true),
+        (json!({"type":"null"}), wide.clone(), true),
+        (wide.clone(), string, false),
+        (nullable(json!({"type":"boolean"})), wide.clone(), false),
+        (
+            nullable(json!({"type":"integer"})),
+            nullable(json!({"type":"number"})),
+            true,
+        ),
+        (
+            object(json!({"value":wide.clone()}), &["value"]),
+            object(json!({"value":wide.clone()}), &["value"]),
+            true,
+        ),
+        (
+            json!({"type":"array","items":wide.clone()}),
+            json!({"type":"array","items":{"type":"string"}}),
+            false,
+        ),
+    ] {
+        assert_eq!(
+            super::super::schemas_compatible(&actual, &expected),
+            compatible,
+            "{actual} -> {expected}"
+        );
+        let mut inference = SchemaInference::new(&declarations, "receive", SchemaBudget::default());
+        assert_eq!(
+            inference.compatible(&actual, &expected).unwrap(),
+            compatible,
+            "bounded: {actual} -> {expected}"
+        );
+    }
+    let mut inference = SchemaInference::new(
+        &declarations,
+        "receive",
+        SchemaBudget::limited(1024 * 1024, 1024 * 1024, 1),
+    );
+    assert!(matches!(
+        inference.compatible(&wide, &wide),
+        Err(InferenceError::Budget)
+    ));
+}
+
+#[test]
 fn large_repeated_array_schemas_are_borrowed_before_any_proof_or_copy() {
     let (mut candidate, mut query) = array_reference_candidate(&vec![reference(&["args"]); 1500]);
     let keys: Vec<_> = (0..100).map(|index| format!("p{index:03}")).collect();

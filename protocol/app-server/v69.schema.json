@@ -4123,6 +4123,218 @@
         }
       ]
     },
+    "WorkflowTraceNode": {
+      "description": "Actual admitted nodes at one immutable Journal cut, not the program's nodes.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "instance": {
+          "$ref": "#/$defs/WorkflowNodeInstance"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowNodeKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/WorkflowNodeTraceState"
+        },
+        "timing": {
+          "$ref": "#/$defs/TraceTiming"
+        },
+        "input": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceFieldSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceFieldSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input_preview": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output_preview": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input_omitted": {
+          "type": "boolean"
+        },
+        "output_omitted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "instance",
+        "state",
+        "timing",
+        "input_omitted",
+        "output_omitted"
+      ]
+    },
+    "WorkflowNodeKind": {
+      "type": "string",
+      "enum": [
+        "template",
+        "list",
+        "aggregate",
+        "classifier",
+        "block",
+        "agent",
+        "model",
+        "tool",
+        "branch",
+        "start",
+        "review",
+        "loop",
+        "iteration",
+        "loop_end",
+        "assigner",
+        "return"
+      ]
+    },
+    "WorkflowNodeTraceState": {
+      "description": "Durable visit lifecycle; transient labels additionally require a live owner.",
+      "oneOf": [
+        {
+          "description": "A durable admission without a proven terminal or current live owner.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "incomplete"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "pending"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "running"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/WorkflowWait"
+            },
+            "type": {
+              "type": "string",
+              "const": "waiting"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "draining"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "$ref": "#/$defs/WorkflowExecutionOutcome"
+            },
+            "type": {
+              "type": "string",
+              "const": "settled"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "outcome"
+          ]
+        }
+      ]
+    },
+    "WorkflowWait": {
+      "type": "string",
+      "enum": [
+        "tool",
+        "agent",
+        "model",
+        "capacity",
+        "questionnaire",
+        "approval",
+        "review",
+        "settlement"
+      ]
+    },
+    "WorkflowExecutionOutcome": {
+      "description": "Bounded block/node observation; live state stays in the executor.",
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed",
+        "cancelled",
+        "denied",
+        "timed_out",
+        "outcome_unknown"
+      ]
+    },
     "RuntimeClientModelName": {
       "description": "Finite metadata for one original model name at its native request owner.\nThe original model JSON remains readable from the enclosing domain/item/path[].",
       "type": "object",
@@ -24774,31 +24986,6 @@
         }
       ]
     },
-    "WorkflowWait": {
-      "type": "string",
-      "enum": [
-        "tool",
-        "agent",
-        "model",
-        "capacity",
-        "questionnaire",
-        "approval",
-        "review",
-        "settlement"
-      ]
-    },
-    "WorkflowExecutionOutcome": {
-      "description": "Bounded block/node observation; live state stays in the executor.",
-      "type": "string",
-      "enum": [
-        "completed",
-        "failed",
-        "cancelled",
-        "denied",
-        "timed_out",
-        "outcome_unknown"
-      ]
-    },
     "WorkflowInstanceView": {
       "type": "object",
       "properties": {
@@ -24928,27 +25115,6 @@
         "block",
         "kind",
         "state"
-      ]
-    },
-    "WorkflowNodeKind": {
-      "type": "string",
-      "enum": [
-        "template",
-        "list",
-        "aggregate",
-        "classifier",
-        "block",
-        "agent",
-        "model",
-        "tool",
-        "branch",
-        "start",
-        "review",
-        "loop",
-        "iteration",
-        "loop_end",
-        "assigner",
-        "return"
       ]
     },
     "WorkflowLoopExit": {

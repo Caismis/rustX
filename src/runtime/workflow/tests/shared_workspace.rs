@@ -180,9 +180,115 @@ async function main({message, payload}) {
             std::fs::read_to_string(workspace.join("directory.txt"))
                 .unwrap()
                 .trim(),
-            workspace.to_str().unwrap()
+            // macOS temp paths may use /var, while cwd reports /private/var.
+            workspace.canonicalize().unwrap().to_str().unwrap()
         );
         assert!(!workspace.join("injected").exists());
+    }
+}
+
+#[tokio::test]
+async fn code_large_results_bypass_previews_and_do_not_retry_successful_side_effects() {
+    for (language, script) in [
+        (
+            "python3",
+            r"from pathlib import Path
+import sys
+def main():
+    with Path('executions').open('a') as count: count.write('x')
+    print('stdout log ' + 'l' * 20000)
+    print('stderr log ' + 'e' * 20000, file=sys.stderr)
+    return {'result':'界' * 18000}
+",
+        ),
+        (
+            "javascript",
+            r"const fs = require('node:fs');
+function main() {
+    fs.appendFileSync('executions', 'x');
+    console.log('stdout log ' + 'l'.repeat(20000));
+    console.error('stderr log ' + 'e'.repeat(20000));
+    return {result:'界'.repeat(18000)};
+}
+",
+        ),
+    ] {
+        let plane = workflow_test_plane(1);
+        let definition = code_definition(
+            script,
+            json!({"code_language":language,"retry":{"max_retries":1,"interval_ms":100}}),
+        );
+        let runtime = workflow_runtime(&plane);
+        let (_, cancellation) = workflow_cancellation();
+        let output = runtime
+            .run_test_foreground(
+                Arc::new(compile_test(definition).unwrap()),
+                ToolCallId::new("large-code-result"),
+                code_context(&plane),
+                json!({}),
+                cancellation,
+            )
+            .await
+            .unwrap();
+        assert_eq!(output, json!({"result":"界".repeat(18000)}));
+        assert_eq!(
+            std::fs::read_to_string(plane.dir.path().join("workspace/executions")).unwrap(),
+            "x"
+        );
+        assert_eq!(
+            plane
+                .store
+                .read_events(None, 256)
+                .unwrap()
+                .events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    RuntimeEvent::NativeToolInvocation {
+                        fact: NativeInvocationFact::Completed { .. },
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn code_results_over_the_workflow_bound_are_explicitly_rejected() {
+    for (language, script) in [
+        (
+            "python3",
+            "def main():\n    return {'result':'x' * 65536}\n",
+        ),
+        (
+            "javascript",
+            "function main() { return {result:'x'.repeat(65536)}; }",
+        ),
+    ] {
+        let plane = workflow_test_plane(1);
+        let runtime = workflow_runtime(&plane);
+        let (_, cancellation) = workflow_cancellation();
+        let error = runtime
+            .run_test_foreground(
+                Arc::new(
+                    compile_test(code_definition(script, json!({"code_language":language})))
+                        .unwrap(),
+                ),
+                ToolCallId::new("oversized-code-result"),
+                code_context(&plane),
+                json!({}),
+                cancellation,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("structured stdout exceeds its byte bound"),
+            "{error}"
+        );
     }
 }
 

@@ -7223,6 +7223,33 @@ export type WorkflowRunOrigin =
       type: 'scheduled';
     };
 /**
+ * Durable visit lifecycle; transient labels additionally require a live owner.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNodeTraceState".
+ */
+export type WorkflowNodeTraceState =
+  | {
+      type: 'incomplete';
+    }
+  | {
+      type: 'pending';
+    }
+  | {
+      type: 'running';
+    }
+  | {
+      reason: WorkflowWait;
+      type: 'waiting';
+    }
+  | {
+      type: 'draining';
+    }
+  | {
+      outcome: WorkflowExecutionOutcome;
+      type: 'settled';
+    };
+/**
  * The bounded native interaction vocabulary of the 0.1 protocol.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -19362,6 +19389,25 @@ export interface TraceSystemPromptPresentation1 {
    * A present but empty preview records an empty historical prompt.
    */
   preview?: TracePreview | null;
+}
+/**
+ * Actual admitted nodes at one immutable Journal cut, not the program's nodes.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowTraceNode".
+ */
+export interface WorkflowTraceNode {
+  id: string;
+  instance: WorkflowNodeInstance;
+  kind?: WorkflowNodeKind | null;
+  state: WorkflowNodeTraceState;
+  timing: TraceTiming;
+  input?: TraceFieldSource | null;
+  output?: TraceFieldSource | null;
+  input_preview?: string | null;
+  output_preview?: string | null;
+  input_omitted: boolean;
+  output_omitted: boolean;
 }
 /**
  * Finite metadata for one original model name at its native request owner.

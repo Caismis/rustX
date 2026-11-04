@@ -1176,10 +1176,15 @@ impl WorkflowRuntime {
                     // Only a proven-settled failure or timeout is retried or
                     // handled; anything else is projected and stops as before.
                     let outcome = loop {
+                        // The runner reserves stdout for its JSON return;
+                        // user logs go to stderr. Capture full bounded bytes
+                        // per invocation, independently of Bash's preview.
+                        let stdout = matches!(result, super::tool::WorkflowToolProjection::Code { .. })
+                            .then(|| crate::tools::output::BoundedStdoutCapture::new(super::MAX_VALUE_BYTES));
                         let (native, settled) = self
-                            .invoke_tool(run, context, &node_instance, selector, arguments.clone(), retries, cancellation)
+                            .invoke_tool(run, context, &node_instance, selector, arguments.clone(), stdout.clone(), retries, cancellation)
                             .await?;
-                        let projected = result.project(&native, &node_instance);
+                        let projected = result.project(&native, &node_instance, stdout.as_ref());
                         let output_error = matches!(result, super::tool::WorkflowToolProjection::Code { .. })
                             && native.status == crate::tools::types::ToolExecutionStatus::Success && projected.is_err();
                         let handled = settled && !cancellation.is_cancelled()

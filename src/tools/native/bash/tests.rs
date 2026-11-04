@@ -106,6 +106,7 @@ async fn run_with_control(
     let tool = BashTool::with_test_control(control);
     let reporter = NoopProgress;
     let context = ToolExecutionContext {
+        stdout_capture: None,
         workspace_changes: None,
         model_invocation: None,
         goal: None,

@@ -76,6 +76,9 @@ pub trait ProgressReporter: Send + Sync {
 /// resources (process ids, MCP SDK types) belong inside executor
 /// implementations and never appear here.
 pub struct ToolExecutionContext<'a> {
+    /// An invocation-local complete stdout channel requested by a native
+    /// runtime consumer. It never changes the model-facing preview policy.
+    pub(crate) stdout_capture: Option<crate::tools::output::BoundedStdoutCapture>,
     pub(crate) workspace_changes: Option<Arc<crate::workspace_changes::ChangeRecording>>,
     /// The owning conversation of the invocation.
     pub conversation_id: &'a ConversationId,
@@ -172,6 +175,7 @@ impl<'a> ToolExecutionContext<'a> {
         progress: &'b dyn ProgressReporter,
     ) -> ToolExecutionContext<'b> {
         ToolExecutionContext {
+            stdout_capture: self.stdout_capture.clone(),
             workspace_changes: self.workspace_changes.clone(),
             conversation_id: self.conversation_id,
             execution_id: self.execution_id,
@@ -212,6 +216,7 @@ impl<'a> ToolExecutionContext<'a> {
         environment: &'a ToolEnvironment,
     ) -> Self {
         Self {
+            stdout_capture: None,
             conversation_id,
             execution_id,
             cancellation,
@@ -2143,6 +2148,7 @@ mod tests {
         .expect("managed tool output");
         let reporter = Capturing;
         let context = ToolExecutionContext {
+            stdout_capture: None,
             model_invocation: None,
             goal: None,
             schedule: None,

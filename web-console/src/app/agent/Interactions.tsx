@@ -65,7 +65,7 @@ export function Interactions({ client, state, view }: {
       return <div key={key} className="interaction">
         {failure?.key===key&&<p role="alert">{failure.message}</p>}
         <ApprovalTakeover title={approval.tool_name} description={approval.reason}
-          detail={<InteractionField client={client} view={view} index={index} identity={key} path={['request','kind','arguments']}/>} disabled={disabled} status={status} onAllow={()=>response('allow')} onDeny={()=>response('deny')}/>
+          detail={<InteractionField client={client} view={view} index={index} identity={key} toolId={approval.tool_id} path={['request','kind','arguments']}/>} disabled={disabled} status={status} onAllow={()=>response('allow')} onDeny={()=>response('deny')}/>
       </div>;
     }
     if(!body)return <section key={key} className="interaction">
@@ -79,7 +79,7 @@ export function Interactions({ client, state, view }: {
     return <div key={key} className="interaction">
       {failure?.key === key && <p role="alert">{failure.message}</p>}
       {item.source.type === 'subagent' && <small className="inset muted">{tx('interactions:interactions.subagent-request')}</small>}
-      {kind.type === 'approval' ? <ApprovalTakeover title={kind.tool_name} description={kind.reason} detail={<pre>{approvalText(kind.arguments)}</pre>}
+      {kind.type === 'approval' ? <ApprovalTakeover title={kind.tool_name} description={kind.reason} detail={<pre>{approvalText(kind.tool_id,kind.arguments)}</pre>}
         disabled={disabled} status={status} onAllow={() => response({ type: 'approval', decision: { type: 'allow' } })}
         onDeny={() => response({ type: 'approval', decision: { type: 'deny', reason: 'Denied by developer in rustX Web Console.' } })} />
         : kind.type === 'questionnaire' ? <PendingQuestionnaire panelKeys={panelKeys} key={key} questions={kind.questionnaire.questions} disabled={disabled}
@@ -105,9 +105,9 @@ function PendingQuestionnaire({ panelKeys, ...props }: QuestionnaireProps & { pa
   useEffect(() => register?.(JSON.parse(key), () => panel.current?.reveal()), [register, key]);
   return <Questionnaire {...props} ref={panel}/>;
 }
-function InteractionField({client,view,index,identity,path}:{client:AppServerClient;view:SessionView;index:number;identity:string;path:string[]}) {
+function InteractionField({client,view,index,identity,toolId,path}:{client:AppServerClient;view:SessionView;index:number;identity:string;toolId?:string|null;path:string[]}) {
   const tx=useTranslation(),generation=useRef(0);
-  const owner=JSON.stringify([view.target,view.attachmentObservation,identity,path]);
+  const owner=JSON.stringify([view.target,view.attachmentObservation,identity,toolId,path]);
   const [state,setState]=useState<{owner:string;client:AppServerClient;text?:string;loading?:boolean;error?:string}>();
   const shown=state?.owner===owner&&state.client===client?state:undefined;
   const key=JSON.stringify([owner,view.checkpoint?.read_cut.domain_revisions.pending_interactions,view.interactionPage?.offset,index]);
@@ -118,13 +118,13 @@ function InteractionField({client,view,index,identity,path}:{client:AppServerCli
     void(async()=>{
       const parts:string[]=[];let offset:number|undefined=0;
       do {const chunk=await client.interactionValueChunk(view.id,index,path,offset,current);if(!current())return;parts.push(decoder.decode(chunk.bytes,{stream:chunk.next!==undefined}));offset=chunk.next;}while(offset!==undefined);
-      if(current())setState({owner,client,text:approvalText(JSON.parse(parts.join('')))});
+      if(current())setState({owner,client,text:approvalText(toolId,JSON.parse(parts.join('')))});
     })().catch(error=>{if(current())setState(previous=>({owner,client,text:previous?.owner===owner&&previous.client===client?previous.text:undefined,error:String(error).slice(0,512)}));});
     return()=>{generation.current++;};
   },[key,client]);
   return <>{shown?.loading&&shown.text===undefined&&<p role="status">{tx('common:activity.loading')}</p>}{shown?.text!==undefined&&<pre aria-busy={shown.loading}>{shown.text}</pre>}{shown?.error&&<p role="alert">{shown.error}</p>}</>;
 }
-/** Harness ApprovalCommand: show an authored shell command, otherwise native arguments. */
-function approvalText(value: unknown): string {
-  return value !== null && typeof value === 'object' && 'command' in value && typeof value.command === 'string' ? value.command : json(value);
+/** Harness ApprovalCommand applies only to the canonical native Bash identity. */
+function approvalText(toolId:string|null|undefined,value: unknown): string {
+  return toolId === 'tool-bash' && value !== null && typeof value === 'object' && 'command' in value && typeof value.command === 'string' ? value.command : json(value);
 }

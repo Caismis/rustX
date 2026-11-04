@@ -148,6 +148,74 @@ fn list_operations_are_ordered_stable_and_keep_exact_integer_order() {
     assert!(run_list(json!(["x".repeat(MAX_VALUE_BYTES / 2)]), None, None, None).is_err());
 }
 
+fn nullable_list_returns(record: &str) -> WorkflowDefinition {
+    document(
+        json!({"description":"Return the same nullable List field on either branch","block":{
+            "input":{"type":"object","properties":{"flag":{"type":"boolean"},"items":{"type":"array","items":{"type":"string"}}},"required":["flag","items"],"additionalProperties":false},
+            "nodes":{
+                "start":{"type":"start"},
+                "select":{"type":"list","input":{"type":"reference","path":["args","items"]}},
+                "choose":{"type":"branch","cases":[{"id":"yes","condition":{"type":"boolean","value":{"type":"reference","path":["args","flag"]}}}]},
+                "left":{"type":"return","outputs":[{"variable":"selected","value_selector":["select",record]}]},
+                "right":{"type":"return","outputs":[{"variable":"selected","value_selector":["select",record]}]}
+            },
+            "edges":[{"from":"start","to":"select"},{"from":"select","to":"choose"},{"from":"choose","to":"left","port":"yes"},{"from":"choose","to":"right","port":"false"}]
+        }}),
+    )
+}
+
+#[test]
+fn exclusive_returns_merge_nullable_list_records_but_reject_different_types() {
+    for record in ["first_record", "last_record"] {
+        let definition = nullable_list_returns(record);
+        let program = compile_test(definition.clone()).unwrap();
+        assert_eq!(
+            program.output_schema()["properties"]["selected"],
+            json!({"anyOf":[{"type":"string"},{"type":"null"}]})
+        );
+        let mut mismatched = definition;
+        let WorkflowNodeDefinition::Return { outputs } =
+            mismatched.block.nodes.get_mut("right").unwrap()
+        else {
+            unreachable!()
+        };
+        outputs[0].value_selector = vec!["args".into(), "flag".into()];
+        assert!(matches!(
+            compile_test(mismatched).unwrap_err().cause(),
+            WorkflowCompileError::IncompatibleReference(_)
+        ));
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn exclusive_returns_preserve_nullable_list_records_for_empty_and_nonempty_input() {
+    for (record, selected) in [("first_record", "first"), ("last_record", "last")] {
+        let program = Arc::new(compile_test(nullable_list_returns(record)).unwrap());
+        for flag in [false, true] {
+            for (items, expected) in [
+                (json!([]), Value::Null),
+                (json!(["first", "last"]), json!(selected)),
+            ] {
+                let plane = workflow_test_plane(1);
+                let runtime = workflow_runtime(&plane);
+                let (_, cancellation) = workflow_cancellation();
+                let result = runtime
+                    .run_test_foreground(
+                        Arc::clone(&program),
+                        ToolCallId::new("nullable-list-return"),
+                        workflow_test_context(&plane),
+                        json!({"flag":flag,"items":items}),
+                        cancellation,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(result, json!({"selected":expected}), "{record}/{flag}");
+            }
+        }
+    }
+}
+
 fn aggregate_document() -> WorkflowDefinition {
     document(json!({"description":"Converge exclusive branches","block":{
         "input":{"type":"object","properties":{"flag":{"type":"boolean"}},"required":["flag"],"additionalProperties":false},

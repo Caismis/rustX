@@ -4,7 +4,7 @@ import { useTranslation } from '../../locale/react';
 import { CellContent, KindTag, cellKind, cellLabel, isErrorRecord, listText } from './TrajectoryCell';
 import type { InspectableDisplayItem, TrajectoryLedgerRow } from './layout';
 import css from './Trajectory.module.css';
-import type { TraceRecord } from '../../../../protocol/app-server/v68';
+import type { TraceRecord } from '../../../../protocol/app-server/v69';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
 
 export interface TrajectoryRowActions {
@@ -40,7 +40,7 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
   const turn = row.turn;
   // As in Harness, the promoted initial prompt precedes the Turn's rail.
   const initialSystem = item?.type === 'SystemPromptCell' && record?.request?.system_prompt.state === 'initial';
-  const running = node ? node.state.type !== 'settled' : record?.state === 'running';
+  const running = node ? ['running', 'waiting', 'draining'].includes(node.state.type) : record?.state === 'running';
   const focusId = item?.type === 'WorkflowNode' ? item.parent_record_id : record?.id;
   const error = node ? node.state.type === 'settled' && node.state.outcome === 'failed' : record !== undefined && item?.type === 'RecordRow' && isErrorRecord(record);
   const toggleSummary = () => {

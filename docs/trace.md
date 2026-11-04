@@ -388,6 +388,18 @@ Workflow run ID, and the existing exact Attempt/request/Tool/interaction identit
 are the only correlations. Durable terminal facts win; absent native evidence
 stays incomplete. No in-flight duration is synthesized.
 
+Workflow node visit headers use the separate `WorkflowNodeTraceState` contract.
+A durable `WorkflowNodeStarted` or `WorkflowNodeWaiting` without a recorded node
+terminal is `incomplete`, including after store reopen; a historic wait does not
+prove a surviving process. Recorded node terminals always win. The live host may
+refine only incomplete visits at its exact current published checkpoint, using
+the complete run origin, conversation, invocation, block definition/iteration,
+node and visit identity from the resident native Workflow owner. Finished native
+runs or instances do not establish a missing durable outcome. Older selected
+cuts and inactive durable hosts receive no live overlay, even when a retained
+projection contains an earlier running or waiting label. Lifecycle labels never
+invent an end time or duration, and the UI renders incomplete visits as inactive.
+
 The browser has a separate Trace cache (512 history entries / 4 MiB estimated
 encoded UTF-16 size), independent from transcript and live cursors. Its flat list
 represents one contiguous server-proven interval. An overlapping newest tail

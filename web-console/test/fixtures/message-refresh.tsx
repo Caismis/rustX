@@ -1,6 +1,6 @@
 import { useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { RuntimeClientGoalSnapshot, RuntimeClientJob } from '../../../protocol/app-server/v68';
+import type { RuntimeClientGoalSnapshot, RuntimeClientJob } from '../../../protocol/app-server/v69';
 import { useComposerContent } from '../../src/app/agent/useComposerContent';
 import { useWorkflowContent } from '../../src/app/agent/useWorkflowContent';
 import { WorkflowRunPanel } from '../../src/app/agent/WorkflowRunPanel';
@@ -35,7 +35,7 @@ const nextRun = { ...run, instances: [...run.instances, { ...run.instances[1], n
 const job: RuntimeClientJob = { job_id: 'refresh-job', tool_id: 'tool-bash', tool_name: 'bash', state: 'succeeded', bash: { command: 'printf rustX', description: 'Refresh output' }, result: { status: { type: 'success' }, duration_ms: '2500', content: [{ type: 'text', text: 'Original job output\nPreserve this reading while refreshing.' }] } };
 const nextJob = { ...job, result: { ...job.result!, content: [{ type: 'text' as const, text: 'Updated job output\nThe complete result arrived.' }] } };
 const head = { ...projectionHead('Visible summary preview'), summary_preview: { text: 'Visible summary preview', truncated: true } };
-const approval = { ...interaction('approval'), body: null, body_complete: false, approval: { tool_name: 'bash', reason: 'Developer approval required', mode: 'foreground' as const, deferred_fields: [['arguments']] } };
+const approval = { ...interaction('approval'), body: null, body_complete: false, approval: { tool_id: 'tool-bash', tool_name: 'bash', reason: 'Developer approval required', mode: 'foreground' as const, deferred_fields: [['arguments']] } };
 server.snapshots.set('A', { ...snapshot(), goal: { current: goal }, workflows: { revision: '1', runs: [run], omitted_runs: 0 }, jobs: [job], pending_interactions: [controls ? { ...interaction('questionnaire'), body: null, body_complete: false } : approval] });
 server.handlers.set('session/checkpoint', () => {
   const value = checkpoint(server.snapshots.get('A')!); value.read_cut.domain_revisions.pending_interactions = '1';

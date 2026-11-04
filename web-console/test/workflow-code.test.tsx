@@ -9,7 +9,7 @@ import { viewId } from '../src/app/workflows/ui/editor/selection';
 import { codeDocument } from './workflow-code-document';
 import { statusSource } from './workflow-fixtures';
 import { WorkflowAnalysisSession } from '../src/app/workflows/document/analysis';
-import type { WorkflowAnalysisReport } from '../../protocol/app-server/v68';
+import type { WorkflowAnalysisReport } from '../../protocol/app-server/v69';
 import { blockAt, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../src/app/workflows/document/model';
 
 vi.mock('../src/app/workflows/ui/editor/forms/WorkflowCodeView',()=>({default:({label,value,onChange,onBlur}:{label:string;value:string;onChange:(value:string)=>void;onBlur:()=>void})=><textarea aria-label={label} value={value} onChange={event=>onChange(event.target.value)} onBlur={onBlur}/>}));

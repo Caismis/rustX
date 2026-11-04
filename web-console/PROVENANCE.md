@@ -22,7 +22,7 @@ uses Graphon `4fa22141774dff80e90e4dfa98ea3e6fbf0421bb`'s
 | Native distinctions | Definite-reference coverage, exact integer comparison and 64 KiB node values remain; required JSON object field selectors remain, without inventing Dify File metadata |
 
 Original composition; no Dify stores, code, styling or assets are copied.
-App Server is v67 and Runtime Client remains v80. The changed list operand and
+App Server is v67 and Runtime Client remains v81. The changed list operand and
 grouped-output contracts replace the old format without compatibility readers
 or migrations. Earlier sections below record their implementation baselines.
 Vision and AI generation remain excluded. Browser plugin is not available;
@@ -63,7 +63,7 @@ input and node output budgets remain 64 KiB, with 50,000 fuel and recursion 32,
 rather than adopting Dify's larger 400,000-character output limit. Both sandbox
 implementations bound range to 100,000 entries. No file loader/host objects,
 compatibility reader, migration or new wire format is introduced. App Server
-remains v66 and Runtime Client v80. Browser plugin is unavailable; the pinned
+remains v66 and Runtime Client v81. Browser plugin is unavailable; the pinned
 Playwright container exercises actual desktop/light and touch/mobile/dark
 editing, insertion, focus restoration, expansion, copy and save/reopen.
 
@@ -87,7 +87,7 @@ The panel and runtime adapters are original composition.
 | AI code generation | Omitted under the user's Dify alignment scope |
 
 App Server v66 requires code_language; the Bash-only Code format is removed,
-without compatibility inference or migration. Runtime Client remains v80:
+without compatibility inference or migration. Runtime Client remains v81:
 Code compiles to a native Tool program, executing python3 or node through the
 existing Bash registration and its frozen workspace/environment. It neither
 starts a separate process owner nor inherits an uncontrolled parent PATH.
@@ -124,7 +124,7 @@ features require an explicit product request.
 
 This is original composition with existing components, without Dify source,
 styles, assets, stores or Graphon runtime. The App Server contract is v66;
-Runtime Client remains v80. Classifier descriptions and instructions use typed
+Runtime Client remains v81. Classifier descriptions and instructions use typed
 parts, and classes carry authored labels. The old string configuration and
 nested classifier output path are removed, without fallback or migration.
 Browser plugin is not available; the repository's pinned Playwright image
@@ -2884,7 +2884,7 @@ file/artifact access resolves the owned child conversation and workspace.
 WebUI reuses AgentComposer and AttachmentIntake, scopes both conversation and
 trajectory preview resources to the Agent, and retires native observation reads
 when navigation changes. No child model settings are introduced. App Server v50,
-Runtime Client v68, child IPC v30 and Product Host file-read v3 are synchronized.
+Runtime Client v69, child IPC v30 and Product Host file-read v3 are synchronized.
 The Browser plugin is unavailable; the repository's pinned Playwright browser
 validates real native child processes and deterministic provider streams.
 
@@ -3065,7 +3065,7 @@ configured Profile is pinned, so the pin can be cleared.
 
 ### PR #461: integrating the current main contracts
 
-The main integration keeps App Server v50 and Runtime Client v68, which remain
+The main integration keeps App Server v50 and Runtime Client v69, which remain
 newer than main's v39/v61, and SQLite 51's checkpoint/Model Profile contract.
 Subagent IPC becomes v31 because main and this branch had different v30
 vocabularies; either old peer is rejected. The current generated protocol and
@@ -5001,7 +5001,7 @@ changing the pinned Harness baseline or licenses.
 
 ## Issue #499: live readiness and submission receipt
 
-The current mandatory contracts are App Server v66 and Runtime Client v80.
+The current mandatory contracts are App Server v66 and Runtime Client v81.
 Only the current generated artifacts and strict decoders are retained. Scheduled
 Workflow recovery and execution origins share this generation with live MCP
 readiness. The shared native
@@ -5068,7 +5068,7 @@ mutation receipts, pause/resume, Workflow arguments/results and physical
 settlement diagnostics. Harness Host/Peer services, Cordis stores and schedule
 execution APIs are excluded. Native `schedule/catalog` and `schedule/changed`
 provide bounded cold reads and invalidation under mandatory App Server v66;
-The current internal versions are Runtime Client v80, SQLite 82 and child IPC 37. Ordinary message
+The current internal versions are Runtime Client v81, SQLite 82 and child IPC 37. Ordinary message
 admission is presented separately from execution success, and the UI explicitly
 states that only the latest trigger is retained.
 
@@ -5122,7 +5122,7 @@ The exact frontend and Graphon execution source revisions and inspected paths
 are recorded in [the editor reference](../docs/workflow-visual-editor.md). No
 Dify or Graphon source, assets or Python runtime are copied into rustX.
 
-App Server v68 and Runtime Client v80 are mandatory. The sole generated schema
+App Server v69 and Runtime Client v81 are mandatory. The sole generated schema
 and TypeScript pair describe the new definitions and consumer addresses; old
 protocol artifacts are removed. Derived presentation files only change their
 protocol import paths, with current hashes and dependency paths recorded in the
@@ -5142,8 +5142,8 @@ conditions, reuse exact numeric comparison, preserve prompt editor DOM during
 bounded expansion, correct inline variable spacing and narrow Loop/Assigner
 rows, and avoid automatic Output-name collisions. Dify's stores, component
 source and assets are not copied. No dependencies are added. Vision and AI
-generation controls are omitted. App Server v68 is the sole wire contract;
-v67 artifacts are removed. Runtime Client v80 is unchanged.
+generation controls are omitted. App Server v69 is the sole wire contract;
+v67 artifacts are removed. Runtime Client v81 is unchanged.
 
 Actual desktop and touch browser checks use the repository's exact pinned
 Playwright container: no Browser plugin is available in this session. Screenshots

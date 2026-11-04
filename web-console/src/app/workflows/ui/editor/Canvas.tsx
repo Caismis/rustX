@@ -1,5 +1,5 @@
 import type { ArrayEdit } from '../../document/fields';
-import type { WorkflowNote, WorkflowToolChoice } from '../../../../../../protocol/app-server/v68';
+import type { WorkflowNote, WorkflowToolChoice } from '../../../../../../protocol/app-server/v69';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import { Background, BackgroundVariant, MiniMap, ReactFlow, applyNodeChanges, useReactFlow, useViewport, useNodesInitialized, type Connection, type EdgeChange, type NodeChange, type Viewport } from '@xyflow/react';

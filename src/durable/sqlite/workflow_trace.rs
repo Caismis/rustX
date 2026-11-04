@@ -1,8 +1,9 @@
 //! Original Workflow node admissions and field selectors at one immutable cut.
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
-use crate::durable::observation::{ObservationReadCut, WorkflowTraceNode, WorkflowTraceNodes};
+use crate::durable::observation::{
+    ObservationReadCut, WorkflowNodeTraceState, WorkflowTraceNode, WorkflowTraceNodes,
+};
 use crate::observation::trace::{TraceFieldKind, TraceFieldSource, TraceTiming};
-use crate::runtime::workflow::read_model::WorkflowState;
 
 fn invalid() -> ConversationStoreError {
     ConversationStoreError::InvalidReference("invalid original Workflow node selection".into())
@@ -102,33 +103,26 @@ fn node(
         "workflow_node_output_recorded",
         TraceFieldKind::Result,
     )?;
-    let ending:Option<(String,String,Option<String>,Option<String>)>=connection.query_row(
-            "SELECT json_extract(event_json,'$.event.type'),event_timestamp,json_extract(event_json,'$.event.outcome'),json_extract(event_json,'$.event.reason') FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type') IN ('workflow_node_settled','workflow_node_waiting') AND sequence>?1 AND sequence<=?2 AND json_extract(event_json,'$.event.instance')=?3 ORDER BY sequence DESC LIMIT 1",
-            params![sequence,through,instance],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional().map_err(|error|storage(error.to_string()))?;
+    // A recorded wait is historical evidence, never proof that its process is
+    // alive. Only a terminal establishes durable lifecycle at this read cut.
+    let ending:Option<(String,String)>=connection.query_row(
+            "SELECT event_timestamp,json_extract(event_json,'$.event.outcome') FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='workflow_node_settled' AND sequence>?1 AND sequence<=?2 AND json_extract(event_json,'$.event.instance')=?3 ORDER BY sequence DESC LIMIT 1",
+            params![sequence,through,instance],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
     let started_at = timestamp
         .parse::<chrono::DateTime<chrono::Utc>>()
         .map_err(|error| storage(error.to_string()))?;
     let (state, ended_at) = match ending {
-        Some((kind, time, outcome, _)) if kind == "workflow_node_settled" => (
-            WorkflowState::Settled {
-                outcome: serde_json::from_value(serde_json::Value::String(
-                    outcome.ok_or_else(invalid)?,
-                ))
-                .map_err(|error| storage(error.to_string()))?,
+        Some((time, outcome)) => (
+            WorkflowNodeTraceState::Settled {
+                outcome: serde_json::from_value(serde_json::Value::String(outcome))
+                    .map_err(|error| storage(error.to_string()))?,
             },
             Some(
                 time.parse::<chrono::DateTime<chrono::Utc>>()
                     .map_err(|error| storage(error.to_string()))?,
             ),
         ),
-        Some((_, _, _, Some(reason))) => (
-            WorkflowState::Waiting {
-                reason: serde_json::from_value(serde_json::Value::String(reason))
-                    .map_err(|error| storage(error.to_string()))?,
-            },
-            None,
-        ),
-        _ => (WorkflowState::Running, None),
+        None => (WorkflowNodeTraceState::Incomplete, None),
     };
     Ok(WorkflowTraceNode {
         id: format!("workflow-node:{sequence}"),
@@ -261,7 +255,7 @@ mod tests {
             .observation_workflow_nodes(&before, start, 0, 32)
             .unwrap();
         assert_eq!(old.total, 1);
-        assert_eq!(old.nodes[0].state, WorkflowState::Running);
+        assert_eq!(old.nodes[0].state, WorkflowNodeTraceState::Incomplete);
         assert!(old.nodes[0].input.is_none());
         let first_page = store.observation_workflow_nodes(&cut, start, 0, 1).unwrap();
         assert_eq!(first_page.total, 2);
@@ -269,7 +263,7 @@ mod tests {
         assert_eq!(first_page.nodes[0].instance, first);
         assert_eq!(
             first_page.nodes[0].state,
-            WorkflowState::Settled {
+            WorkflowNodeTraceState::Settled {
                 outcome: Outcome::Completed
             }
         );
@@ -295,5 +289,86 @@ mod tests {
                 .observation_workflow_nodes(&cut, start + 1, 0, 1)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn reopened_workflow_nodes_require_terminals_and_preserve_original_cuts() {
+        use crate::durable::SqliteConversationStore;
+        use crate::runtime::workflow::read_model::WorkflowWait;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workflow-trace.sqlite");
+        let conversation = crate::runtime::identity::ConversationId::generate();
+        let owner = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+        owner.initialize(&[]).unwrap();
+        let mut started = crate::runtime::workflow::test_instance("reopened", "start-only");
+        started.block.run.conversation_id = conversation.clone();
+        let mut waiting = started.clone();
+        waiting.node = "wait-only".into();
+        let mut completed = started.clone();
+        completed.node = "completed".into();
+        let mut ordinal = 0;
+        let mut append = |event| {
+            ordinal += 1;
+            owner
+                .append_event(envelope(
+                    &conversation,
+                    &format!("reopen-node-{ordinal}"),
+                    None,
+                    event,
+                ))
+                .unwrap()
+                .sequence
+        };
+        let start = append(E::WorkflowStarted {
+            tool_call_id: None,
+            workflow_id: WorkflowId::parse("reopened").unwrap(),
+            run_id: started.block.run.clone(),
+        });
+        for instance in [&started, &waiting, &completed] {
+            append(E::WorkflowNodeStarted {
+                instance: instance.clone(),
+            });
+        }
+        append(E::WorkflowNodeWaiting {
+            instance: waiting,
+            reason: WorkflowWait::Review,
+            auxiliary_call_id: None,
+        });
+        let before_terminal = owner.observation_read_cut().unwrap();
+        append(E::WorkflowNodeSettled {
+            instance: completed.clone(),
+            outcome: Outcome::Completed,
+        });
+        let after_terminal = owner.observation_read_cut().unwrap();
+        let finished = owner
+            .observation_workflow_nodes(&after_terminal, start, 0, 32)
+            .unwrap();
+        assert_eq!(
+            finished.nodes[2].state,
+            WorkflowNodeTraceState::Settled {
+                outcome: Outcome::Completed
+            }
+        );
+        assert!(finished.nodes[2].timing.ended_at.is_some());
+        drop(owner);
+
+        // A reopened durable store has no surviving executor or recovery owner.
+        let reopened = SqliteConversationStore::open_existing(conversation, &path).unwrap();
+        let old = reopened
+            .observation_workflow_nodes(&before_terminal, start, 0, 32)
+            .unwrap();
+        assert_eq!(old.nodes.len(), 3);
+        for node in &old.nodes {
+            assert_eq!(node.state, WorkflowNodeTraceState::Incomplete);
+            assert!(node.timing.ended_at.is_none());
+            assert!(node.timing.duration_ms.is_none());
+        }
+        let current = reopened
+            .observation_workflow_nodes(&after_terminal, start, 0, 32)
+            .unwrap();
+        assert_eq!(current.nodes, finished.nodes);
+        assert_eq!(current.nodes[0].state, WorkflowNodeTraceState::Incomplete);
+        assert_eq!(current.nodes[1].state, WorkflowNodeTraceState::Incomplete);
     }
 }

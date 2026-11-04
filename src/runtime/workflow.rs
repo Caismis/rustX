@@ -3495,6 +3495,20 @@ fn schemas_compatible(actual: &Value, expected: &Value) -> bool {
     .unwrap_or_else(|error| match error {})
 }
 
+/// Derived contracts use a pure union for values such as List's nullable
+/// first/last record. User-written schemas still use the closed vocabulary
+/// admitted by `validate_workflow_schema`; union siblings are not discarded.
+fn schema_alternatives(schema: &Value) -> Option<&[Value]> {
+    let object = schema.as_object()?;
+    if object.len() != 1 {
+        return None;
+    }
+    object
+        .get("anyOf")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+}
+
 /// Every recursive proof and finite-value validation is admitted before work.
 /// Compilation supplies an unlimited policy; authoring uses its request budget.
 #[allow(clippy::too_many_lines)]
@@ -3519,6 +3533,25 @@ fn schemas_compatible_with<E>(
             }
         }
         return Ok(true);
+    }
+    if let Some(alternatives) = schema_alternatives(actual) {
+        if alternatives.is_empty() {
+            return Ok(false);
+        }
+        for alternative in alternatives {
+            if !schemas_compatible_with(alternative, expected, admit)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+    if let Some(alternatives) = schema_alternatives(expected) {
+        for alternative in alternatives {
+            if schemas_compatible_with(actual, alternative, admit)? {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
     }
     if finite_schema_values(expected).is_some() {
         return Ok(false);

@@ -1309,9 +1309,10 @@ fn analyze_query(
         Some(NecessaryCondition::ToolArgumentsObject) => DestinationContract::ToolArgumentsObject,
         Some(NecessaryCondition::NumberOrString) => DestinationContract::NumberOrString,
         Some(NecessaryCondition::EqualityOperand) => DestinationContract::Equality(expected),
-        _ => expected
-            .filter(|schema| validate_workflow_schema(schema, "expected").is_ok())
-            .map_or(DestinationContract::Unknown, DestinationContract::Complete),
+        // Position expectations are constructed natively or read from admitted
+        // producer contracts. Derived List item unions are valid expectations
+        // even though authored schemas use a narrower vocabulary.
+        _ => expected.map_or(DestinationContract::Unknown, DestinationContract::Complete),
     };
     let contract = ConsumerContract {
         destination,

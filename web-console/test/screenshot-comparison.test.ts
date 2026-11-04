@@ -129,6 +129,23 @@ it('A: an exact baseline passes with and without a noise policy', () => {
   }
 });
 
+it('the current workflow editor reference retains only its measured one-pixel, three-level corner allowance', () => {
+  const name = 'workflow-editor-linux.png', expected = reference(name);
+  const entry = noisePolicy.find(row => row.reference === name)!;
+  expect(entry.regions).toEqual([{ label: 'Start panel icon corner', x: 786, y: 121, width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: 3 }]);
+  expect(entry.pixels).toEqual([[786, 121, [91, 187, 140, 255], [94, 188, 142, 255]]]);
+  const observed = copy(expected); paint(observed, 786, 121, [94, 188, 142, 255]);
+  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, name, expected, []).ok).toBe(false);
+  const excessive = copy(expected); nudge(excessive, 786, 121, 4);
+  expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  for (const [x, y] of [[785, 121], [787, 121], [786, 120], [786, 122]]) {
+    const neighbor = copy(observed); nudge(neighbor, x, y, 1);
+    const result = compare(neighbor, name, expected, noisePolicy);
+    expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
+  }
+});
+
 it.each([
   ...noisePolicy.map(entry => [entry.reference, entry, reference(entry.reference), noisePolicy] as const),
   ...comparatorPolicy.map(entry => [`frozen ${entry.reference}`, entry, fixture(entry.reference), comparatorPolicy] as const),

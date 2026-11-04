@@ -9,7 +9,7 @@ import { refreshTrace } from '../src/client/trace';
 import { useWorkflowNodes } from '../src/app/trajectory/useWorkflowNodes';
 import { translator } from '../src/locale/translation';
 import { workflowTraceFixture } from './workflow-trace-fixture';
-import type { CheckpointPage } from '../../protocol/app-server/v68';
+import type { CheckpointPage } from '../../protocol/app-server/v69';
 
 afterEach(() => {
   cleanup();
@@ -80,6 +80,26 @@ it('expands native node rows with their own input/output Inspector and keeps uns
   expect(load).not.toHaveBeenCalled();
   fireEvent.click(call.querySelector('button[aria-expanded]')!);
   await waitFor(() => expect(ui.container.querySelectorAll('[data-workflow-node]')).toHaveLength(0));
+});
+
+it('distinguishes incomplete historical visits from positively evidenced live waits', async () => {
+  const fixture = workflowTraceFixture(2);
+  const nodes = fixture.nodes.get(fixture.roots[0].collections[0].domain)!;
+  nodes[0].state = { type: 'incomplete' };
+  nodes[1].state = { type: 'waiting', reason: 'review' };
+  for (const node of nodes) { node.output = null; node.output_preview = null; }
+  const ui = render(<Trajectory cache={fixture.cache} loadEarlier={() => {}} onSelect={() => {}} onLoadDetail={() => {}} />);
+  fireEvent.click(ui.container.querySelector('[data-trace-id="trace:10"] button[aria-expanded]')!);
+  await waitFor(() => expect(ui.container.querySelectorAll('[data-workflow-node]')).toHaveLength(2));
+  const historical = ui.container.querySelector('[data-workflow-node="node-0-0"]')!;
+  const live = ui.container.querySelector('[data-workflow-node="node-0-1"]')!;
+  expect(historical.getAttribute('data-state')).toBe('incomplete');
+  expect(historical.hasAttribute('data-running')).toBe(false);
+  expect(historical.textContent).toContain('incomplete');
+  expect(live.getAttribute('data-state')).toBe('waiting');
+  expect(live.getAttribute('data-running')).toBe('true');
+  fireEvent.click(historical);
+  await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('incomplete'));
 });
 
 it('reads an unchanged workflow at its freshly advertised native cut after the old cut expires', async () => {
