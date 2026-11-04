@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Trajectory } from '../../src/app/trajectory/Trajectory';
 import { workflowTraceFixture } from '../workflow-trace-fixture';
+import { workflowTraceRefreshFixture } from './workflow-trace-refresh';
 import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace } from '../../src/client/trace';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, semanticLedgerRecords, structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v69';
@@ -39,6 +40,8 @@ const records = [
   traceRecord(13, { kind: 'workflow', request: null, location: {}, preview: text('Release checklist run') }),
 ];
 const params = new URLSearchParams(location.search);
+const workflowRefresh = params.has('workflow-refresh') ? workflowTraceRefreshFixture() : undefined;
+if (workflowRefresh) window.workflowTraceRefresh = workflowRefresh.controls;
 const agentInteractions = params.has('agent-interactions');
 const agentCall = traceTool(30, { tool: { ...traceTool(30).tool!, name: 'subagent', tool_id: 'tool-subagent', arguments: text('{"agent":"explore","task":"Review the parser"}') }, preview: text('Started background agent parser-review') });
 const agentRecords = [
@@ -88,12 +91,13 @@ const retainedRecords = [
 ];
 const snapshot = { records: agentInteractions ? agentRecords : backgroundJobs ? backgroundRecords : retainedInputs ? retainedRecords : stepLess ? stepLessRecords().slice(1) : ordered ? orderedRecords : chrome ? chromeRecords : params.has('ledger') ? semanticLedgerRecords() : mixedRecords ?? (long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records), next_cursor: agentInteractions ? null : 'older' };
 function Fixture() {
-  const [cache, setCache] = useState(() => params.has('workflows') ? workflowTraceFixture().cache : replaceTrace(snapshot));
+  const [cache, setCache] = useState(() => workflowRefresh?.cache ?? (params.has('workflows') ? workflowTraceFixture().cache : replaceTrace(snapshot)));
   const [reads, setReads] = useState(0); const [pages, setPages] = useState(0);
   return <main style={{ height: '100dvh', display: 'flex', flexDirection: 'column' }}>
-    <header style={{ padding: '8px 12px', display: 'flex', gap: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)', fontSize: 11 }}><strong>rustX / Workspace review</strong>
+    <header style={{ padding: '8px 12px', display: 'flex', flexWrap: workflowRefresh ? 'wrap' : undefined, gap: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)', fontSize: 11 }}><strong>rustX / Workspace review</strong>
       <button onClick={() => setCache(current => refreshTrace(current, { records: [...current.page.records, traceRecord(Number(current.page.records.at(-1)!.id.split(':')[1]) + 1)], next_cursor: current.page.next_cursor }))}>Append</button>
       <button onClick={() => setCache(current => ({ ...current, page: { ...current.page, records: current.page.records.map(record => ({ ...record, preview: text('Lifecycle updated') })) } }))}>Update</button>
+      {workflowRefresh && <button onClick={() => setCache(current => workflowRefresh.refresh(current))}>Refresh workflow snapshot</button>}
       {retainedInputs && <button onClick={() => setCache(current => refreshTrace(current, { records: [retainedRecords.at(-1)!] }, [0, 3].map((index, i) => {
         const record = retainedRecords[index]!;
         return { id: record.id, location: { attempt_id: i ? 'attempt-b' : 'attempt-a', step_id: null }, state: record.state, timing: record.timing, fields: [], collections: [], attachments: [], truncated: false };

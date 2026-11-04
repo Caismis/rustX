@@ -395,10 +395,17 @@ prove a surviving process. Recorded node terminals always win. The live host may
 refine only incomplete visits at its exact current published checkpoint, using
 the complete run origin, conversation, invocation, block definition/iteration,
 node and visit identity from the resident native Workflow owner. Finished native
-runs or instances do not establish a missing durable outcome. Older selected
+runs or instances do not establish a missing durable outcome. The query uses
+the complete immutable source captured by that publication; count and byte
+limits on display headers never establish the absence of an active visit. Older selected
 cuts and inactive durable hosts receive no live overlay, even when a retained
 projection contains an earlier running or waiting label. Lifecycle labels never
 invent an end time or duration, and the UI renders incomplete visits as inactive.
+
+Expanded Workflow visits are published as one complete, validated page collection
+per read cut. A refresh retains the previous complete collection with its original
+field reader and cut until all replacement pages pass validation. Intermediate
+page prefixes cannot remove a selected visit or migrate its Inspector to a sibling.
 
 The browser has a separate Trace cache (512 history entries / 4 MiB estimated
 encoded UTF-16 size), independent from transcript and live cursors. Its flat list

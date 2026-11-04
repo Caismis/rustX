@@ -17,7 +17,7 @@ pub(crate) fn workflow_page(
     domain: &str,
     offset: u64,
     limit: usize,
-    live: Option<&crate::runtime::workflow::read_model::WorkflowSnapshot>,
+    live: Option<&crate::observation::workflow_source::WorkflowReadSource>,
 ) -> Result<CheckpointPage, RuntimeClientError> {
     let start = workflow_selection(domain).ok_or(RuntimeClientError::ReadCutExpired)?;
     if limit == 0 || limit > 32 || offset > 9_007_199_254_740_991 {
@@ -73,27 +73,16 @@ pub(crate) fn workflow_page(
 /// native owner. Retained finished runs and nodes are never positive evidence.
 fn repair_live(
     node: &mut WorkflowTraceNode,
-    live: &crate::runtime::workflow::read_model::WorkflowSnapshot,
+    live: &crate::observation::workflow_source::WorkflowReadSource,
 ) {
     use crate::runtime::workflow::read_model::WorkflowState as W;
     if node.state != WorkflowNodeTraceState::Incomplete {
         return;
     }
-    let Some(current) = live
-        .runs
-        .iter()
-        .find(|run| run.id == node.instance.block.run && !matches!(run.state, W::Settled { .. }))
-        .and_then(|run| {
-            run.instances.iter().find(|current| {
-                current.block == node.instance.block
-                    && current.node.as_ref() == Some(&node.instance.node)
-                    && current.visit == Some(node.instance.visit)
-            })
-        })
-    else {
+    let Some(current) = live.active_node_state(&node.instance) else {
         return;
     };
-    node.state = match current.state {
+    node.state = match *current {
         W::Pending => WorkflowNodeTraceState::Pending,
         W::Running => WorkflowNodeTraceState::Running,
         W::Waiting { reason } => WorkflowNodeTraceState::Waiting { reason },
@@ -106,6 +95,15 @@ fn repair_live(
 mod tests {
     use super::*;
     use crate::runtime::workflow::read_model::{WorkflowSnapshot, WorkflowState, WorkflowWait};
+
+    fn repair(node: &mut WorkflowTraceNode, live: &WorkflowSnapshot) {
+        repair_live(
+            node,
+            &crate::observation::workflow_source::WorkflowReadSource::new(std::sync::Arc::new(
+                live.clone(),
+            )),
+        );
+    }
 
     fn fixture() -> (WorkflowTraceNode, WorkflowSnapshot) {
         let instance = crate::runtime::workflow::test_instance("trace_live", "review");
@@ -153,7 +151,7 @@ mod tests {
     fn workflow_live_labels_require_every_native_identity_component() {
         let (node, live) = fixture();
         let mut exact = node.clone();
-        repair_live(&mut exact, &live);
+        repair(&mut exact, &live);
         assert_eq!(
             exact.state,
             WorkflowNodeTraceState::Waiting {
@@ -178,13 +176,13 @@ mod tests {
         variants[5].instance.node = "other-node".into();
         variants[6].instance.visit += 1;
         for mut stale in variants {
-            repair_live(&mut stale, &live);
+            repair(&mut stale, &live);
             assert_eq!(stale.state, WorkflowNodeTraceState::Incomplete);
         }
         let mut other_definition = node;
         other_definition.instance.block.definition.workflow_id =
             crate::runtime::workflow::WorkflowId::parse("other-definition").unwrap();
-        repair_live(&mut other_definition, &live);
+        repair(&mut other_definition, &live);
         assert_eq!(other_definition.state, WorkflowNodeTraceState::Incomplete);
     }
 
@@ -197,20 +195,20 @@ mod tests {
         };
         let mut completed = node.clone();
         completed.state = terminal.clone();
-        repair_live(&mut completed, &live);
+        repair(&mut completed, &live);
         assert_eq!(completed.state, terminal, "durable terminal always wins");
         live.runs[0].state = WorkflowState::Settled {
             outcome: Outcome::Completed,
         };
         let mut retained = node.clone();
-        repair_live(&mut retained, &live);
+        repair(&mut retained, &live);
         assert_eq!(retained.state, WorkflowNodeTraceState::Incomplete);
         live.runs[0].state = WorkflowState::Running;
         live.runs[0].instances[0].state = WorkflowState::Settled {
             outcome: Outcome::Completed,
         };
         let mut retained = node;
-        repair_live(&mut retained, &live);
+        repair(&mut retained, &live);
         assert_eq!(retained.state, WorkflowNodeTraceState::Incomplete);
     }
 }

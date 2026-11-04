@@ -5,6 +5,46 @@ import { connectRemote, openEmptySession } from './shell-actions';
 import { translator } from '../../src/locale/translation';
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 for (const width of [1440, 390])
+  test(`workflow snapshot refresh preserves a selected later-page visit at ${width}px`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto(`${origin}/test/fixtures/trajectory.html?workflow-refresh`);
+    await expect(page).toHaveTitle('Trajectory presentation contracts');
+    const ledger = page.getByRole('table', { name: 'Trace ledger', exact: true });
+    await ledger.locator('[data-workflow-entry="trace:30"]').getByRole('button', { name: 'Expand workflow nodes', exact: true }).click();
+    await expect(ledger).toHaveAttribute('aria-rowcount', '78');
+    const selected = ledger.locator('[data-workflow-node="node-0-60"]');
+    await selected.scrollIntoViewIfNeeded(); await selected.click();
+    const identity = await selected.getAttribute('data-display-key');
+    expect(identity).toBeTruthy();
+    const details = page.getByRole('complementary', { name: 'Event details', exact: true });
+    await details.getByRole('tab', { name: 'Result', exact: true }).click();
+    await expect(details.getByRole('tabpanel')).toContainText('output-60');
+    await page.getByRole('button', { name: 'Refresh workflow snapshot', exact: true }).click();
+    for (const offset of [32, 64]) {
+      await expect.poll(() => page.evaluate(() => window.workflowTraceRefresh.requested())).toContain(offset);
+      // The next page gate proves the prior page returned. Give React its paint
+      // turn before checking that no intermediate prefix migrated selection.
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+      await expect(ledger).toHaveAttribute('aria-rowcount', '78');
+      await expect(selected).toHaveAttribute('aria-selected', 'true');
+      expect(await selected.getAttribute('data-display-key')).toBe(identity);
+      await expect(details.getByRole('tabpanel')).toContainText('output-60');
+      await expect(details.getByRole('tabpanel')).not.toContainText('refreshed-output-60');
+      await page.evaluate(offset => window.workflowTraceRefresh.release(offset), offset);
+    }
+    await expect(details.getByRole('tabpanel')).toContainText('refreshed-output-60');
+    await expect(selected).toHaveAttribute('aria-selected', 'true');
+    expect(await selected.getAttribute('data-display-key')).toBe(identity);
+    await page.screenshot({ path: `/tmp/rustx-521-round2-workflow-selection-${width}.png` });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+for (const width of [1440, 390])
   for (const theme of ['light', 'dark'])
   for (const locale of ['en', 'zh'] as const) {
     test(`workflow trace expands real paged node visits ${width} ${theme} ${locale}`, async ({ page }) => {

@@ -144,7 +144,7 @@ function ConditionRow(
 ) {
   const tx = useTranslation(),
     { condition, address } = props;
-  if (condition.type === 'and' || condition.type === 'or' || condition.type === 'not')
+  if (condition.type === 'and' || condition.type === 'or' || condition.type === 'not' || condition.type === 'boolean')
     return (
       <PredicateEditor
         label={tx('workflows:branch.condition')}
@@ -176,7 +176,7 @@ function SimpleCondition({
   onPicked,
 }: PanelProps & {
   address: FieldAddress;
-  condition: Exclude<Predicate, { type: 'and' | 'or' | 'not' }>;
+  condition: Exclude<Predicate, { type: 'and' | 'or' | 'not' | 'boolean' }>;
   left: Extract<Value, { type: 'reference' }>;
   unary: boolean;
   initiallyOpen: boolean;
@@ -185,8 +185,7 @@ function SimpleCondition({
   const tx = useTranslation(),
     location = within(address, [unary ? 'value' : 'left']),
     schema = useReferenceSchema(location, left.path);
-  const right: Value =
-    'right' in condition ? condition.right : constant(condition.type === 'boolean' ? 'boolean' : 'string');
+  const right: Value = 'right' in condition ? condition.right : constant('string');
   const inferred =
     right.type === 'literal'
       ? typeof right.value === 'number'
@@ -199,7 +198,7 @@ function SimpleCondition({
       : 'unknown';
   const kind = kindOf(schema) === 'unknown' ? inferred : kindOf(schema),
     itemKind = kind === 'array' ? kindOf(schema?.items as Record<string, unknown>) : kind;
-  const operator = condition.type === 'boolean' ? 'equal' : condition.type;
+  const operator = condition.type;
   const options: readonly SimpleOperator[] =
     kind === 'number'
       ? numberOperators
@@ -213,6 +212,20 @@ function SimpleCondition({
             ? ['empty', 'not_empty']
             : stringOperators;
   const valueFree = operator === 'empty' || operator === 'not_empty';
+  // The compact text input only understands flat string parts; the other
+  // compact controls edit one scalar or reference. Keep the native editor
+  // for every predicate or value these controls cannot show without loss.
+  const simpleRight =
+    right.type === 'reference' ||
+    (itemKind === 'string' &&
+      ((right.type === 'literal' && typeof right.value === 'string') ||
+        (right.type === 'template' && right.parts.every(part =>
+          part.type === 'reference' || part.type === 'literal' && typeof part.value === 'string')))) ||
+    (right.type === 'literal' &&
+      ((itemKind === 'number' && typeof right.value === 'number') ||
+        (itemKind === 'boolean' && typeof right.value === 'boolean')));
+  if (!options.includes(operator) || (!valueFree && !simpleRight))
+    return <PredicateEditor label={tx('workflows:branch.condition')} address={address} predicate={condition} edit={edit} />;
   const replace = (predicate: Predicate) => edit((document) => setField(document, address, predicate));
   const binary = (type: Exclude<SimpleOperator, 'empty' | 'not_empty'>, value: Value) =>
     replace({ type, left, right: value });
@@ -268,7 +281,7 @@ function SimpleCondition({
       </div>
       {!valueFree && (
         <div className={css.branchConditionValue}>
-          {itemKind === 'string' && !(right.type === 'literal' && right.value === null) ? (
+          {itemKind === 'string' ? (
             <TemplateInput
               parts={templateParts(right)}
               address={within(address, ['right'])}
@@ -334,9 +347,7 @@ function SimpleCondition({
                   <option value="true">{tx('workflows:port.true')}</option>
                   <option value="false">{tx('workflows:port.false')}</option>
                 </select>
-              ) : (
-                <span className={css.branchNull}>{/* i18n-raw: JSON null literal */ 'null'}</span>
-              )}
+              ) : null}
             </>
           )}
         </div>

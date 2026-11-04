@@ -3224,6 +3224,8 @@ the launch-boundary policy inheritance.
   the exact resident runtime, current published read cut and complete node
   instance identity may overlay running/waiting. Retained settled projections
   cannot create activity or overwrite a persisted terminal or an older cut.
+  The overlay queries the complete immutable Workflow source retained by that
+  publication; finite display headers cannot establish absence of activity.
 
 ## CFG3 configuration, resource and Session authority
 

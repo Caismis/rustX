@@ -24,10 +24,16 @@ export function useWorkflowNodes(cache: TraceCache, roots: readonly TraceRecord[
       const publish = (nodes: WorkflowTraceNode[], loading: boolean, error?: string) => {
         if (current()) setState(old => ({ ...old, [root.id]: { key, epoch: cache.epoch, value: { root, nodes, cut, reader, loading, error } } }));
       };
+      const retain = (loading: boolean, error?: string) => {
+        if (!previous) { publish([], loading, error); return; }
+        // A refresh keeps the complete admitted snapshot and its own sources.
+        // An old node's selectors must never be read at the replacement cut.
+        if (current()) setState(old => ({ ...old, [root.id]: { key, epoch: cache.epoch, value: { ...previous.value, loading, error } } }));
+      };
       void (async () => {
         const nodes: WorkflowTraceNode[] = [], ids = new Set<string>();
         let offset: number | null = collection.total === '0' ? null : 0;
-        publish(offset===null?[]:previous?.value.nodes??[],offset!==null);
+        retain(offset !== null);
         while (offset !== null) {
           const page = await reader.page(cut, collection.domain, offset, current);
           if (!current()) return;
@@ -39,9 +45,11 @@ export function useWorkflowNodes(cache: TraceCache, roots: readonly TraceRecord[
             ids.add(node.id); nodes.push(node);
           }
           offset = page.next_offset == null ? null : Number(page.next_offset);
-          publish([...nodes], offset !== null);
         }
-      })().catch(error => publish(previous?.value.nodes ?? [], false, String(error).slice(0, 512)));
+        // Publish a cut atomically: a partial prefix would remove selected
+        // visits on later pages and cause selection to migrate to a sibling.
+        publish(nodes, false);
+      })().catch(error => retain(false, String(error).slice(0, 512)));
     }
     return () => { mounted = false; };
   }, [signature, reader]);

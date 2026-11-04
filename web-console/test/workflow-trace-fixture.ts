@@ -46,5 +46,5 @@ export function workflowTraceFixture(count = 121) {
     content: async () => { throw Error('No guessed workflow content'); },
   };
   const cache: TraceCache = { ...replaceTrace({ records, next_cursor: null }), readCuts: Object.fromEntries(records.map(record => [record.id, cut])), fields: reader };
-  return { cache, roots, calls, nodes, reader, reads, cut };
+  return { cache, roots, calls, nodes, inputs, reader, reads, cut };
 }

@@ -16,6 +16,56 @@ async function activate(page: Page) {
   const node = canvas(page).getByLabel('Branch node choose', { exact: true }); await node.focus(); await node.press('Enter');
 }
 
+for (const width of [1440, 390]) test(`object-array membership retains its full operand through editing and save at ${width}px`, async ({ page }, info) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    const document: WorkflowDocument = { description: 'Object membership', block: rootBlock() };
+    document.block.input = { type: 'object', properties: { items: { type: 'array', items: {
+      type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false,
+    } } }, required: ['items'], additionalProperties: false };
+    const predicate = { type: 'contains' as const, left: { type: 'reference' as const, path: ['args', 'items'] },
+      right: { type: 'object' as const, fields: { id: { type: 'literal' as const, value: 'x' } } } };
+    document.block.nodes.choose = { type: 'branch', cases: [{ id: 'true', condition: predicate }] };
+    document.block.edges = [{ from: 'start', to: 'choose' }, { from: 'choose', to: 'done', port: 'true' }, { from: 'choose', to: 'done', port: 'false' }];
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'object_membership.yaml'); writeFileSync(file, JSON.stringify(document));
+    await page.setViewportSize({ width, height: 844 });
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'object_membership', exact: true }).click(); await activate(page);
+    await expect(page).toHaveTitle(/rustX$/);
+    const settings = inspector(page).getByRole('region', { name: 'Settings', exact: true });
+    await expect(settings.getByRole('combobox', { name: 'Predicate', exact: true })).toHaveValue('contains');
+    const operand = () => settings.getByRole('group', { name: 'Right', exact: true })
+      .getByRole('group', { name: 'id', exact: true }).getByLabel('Literal JSON', { exact: true });
+    await expect(operand()).toHaveValue('"x"');
+    expect(parse(readFileSync(file, 'utf8')).block.nodes.choose.cases[0].condition).toEqual(predicate);
+    await operand().fill('"y"'); await operand().blur();
+    await operand().scrollIntoViewIfNeeded();
+    // Fractional scroll offsets can round a subpixel border out of the viewport.
+    await expect(operand()).toBeInViewport({ ratio: 0.99 });
+    await captureEvidence(page, `object-membership-${width}`, info);
+    await page.getByRole('button', { name: 'Save File', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();
+    await expect.poll(() => {
+      const condition = parse(readFileSync(file, 'utf8')).block.nodes.choose.cases[0].condition;
+      return condition.type === 'and' ? condition.predicates[0] : condition;
+    }).toEqual({ ...predicate, right: { type: 'object', fields: { id: { type: 'literal', value: 'y' } } } });
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'object_membership', exact: true }).click(); await activate(page);
+    await expect(operand()).toHaveValue('"y"');
+    await expect(settings.getByRole('combobox', { name: 'Predicate', exact: true })).toHaveValue('contains');
+    expect(await page.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
 test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-style card and panel', async ({ page }, info) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = [];
