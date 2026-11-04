@@ -87,9 +87,13 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     const { chunk: instructions } = await remote.client.call('conversation/contentRead', { target: attachedA.target, agent_id: null, content_ref: committed.configuration_instructions!, offset: 0, max_bytes: 65_536 }, 'content_chunk');
     expect(instructions.complete).toBe(true);
     expect(Buffer.from(instructions.data_base64, 'base64').toString('utf8')).toContain('TRACE_NEW_INSTRUCTIONS');
-    // Its installed catalog is retained too: a removal installs no definition.
+    // Its catalog is retained too: the removed Tool keeps its definition.
     const { chunk: catalog } = await remote.client.call('conversation/contentRead', { target: attachedA.target, agent_id: null, content_ref: committed.configuration_catalog!, offset: 0, max_bytes: 65_536 }, 'content_chunk');
-    expect(JSON.parse(Buffer.from(catalog.data_base64, 'base64').toString('utf8'))).toEqual({ tools: [], skills: [] });
+    expect(catalog.complete).toBe(true);
+    const affected = JSON.parse(Buffer.from(catalog.data_base64, 'base64').toString('utf8'));
+    expect(affected.skills).toEqual([]);
+    expect(affected.tools).toHaveLength(1);
+    expect(affected.tools[0]).toMatchObject({ name: 'read', change: 'removed', after: null, before: { definition: { name: 'read' } } });
     expect(immutable(await detail(oldRecord.id))).toEqual(before);
     const afterB = await readEffective(remote, attachedB.target);
     expect(afterB.adopted_binding).toBe(bindingB);

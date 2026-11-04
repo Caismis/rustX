@@ -721,7 +721,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
             ? <ConfigurationContent reader={detailReader} cut={detailPage.read_cut} reference={record.configuration_instructions} />
             : <DetailPending error={detailError} />}
         </section>}
-        {record.configuration_catalog && (change.tools.added.total > 0 || change.tools.changed.total > 0 || change.skills.added.total > 0 || change.skills.changed.total > 0) && <section className={`${css.overviewSection} ${css.summaryScrollRegion}`} data-summary-scroll-region="" data-configuration-catalog="">
+        {record.configuration_catalog && (change.tools.added.total > 0 || change.tools.changed.total > 0 || change.tools.removed.total > 0 || change.skills.added.total > 0 || change.skills.changed.total > 0 || change.skills.removed.total > 0) && <section className={`${css.overviewSection} ${css.summaryScrollRegion}`} data-summary-scroll-region="" data-configuration-catalog="">
           <h3>{tx('trajectory:configuration.catalog')}</h3>
           {detailReader && detailPage
             ? <ConfigurationContent reader={detailReader} cut={detailPage.read_cut} reference={record.configuration_catalog} json />
