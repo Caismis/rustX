@@ -124,12 +124,15 @@ Server protocol/connection layer.
   may have been lost, such as an overflowed inotify queue) names no path: it
   re-registers every watch and recaptures every known source target, and
   unchanged sources stay no-ops. A notification path is respelled with the
-  fixed names the loaders open (the `.agents` root, a source entry, a
-  guidance file, `rustx.toml`, the User document) wherever its own spelling
+  fixed names the loaders open (each component of a resource root —
+  `rustx/.agents` beneath the User home, `.agents` in a Workspace — a source
+  entry, a guidance file, `rustx.toml`, the User document) wherever its own spelling
   is the same entry (same file, or both gone after a removal), so an edit
   under `.Agents/Skills` on a case-folding volume is routed and invalidates
   watches as `.agents/skills`, in a Workspace of any name. A spelling that is
-  a distinct entry, or exists without the loaders' one, is not a source. Session uploads under
+  a distinct entry, or exists without the loaders' one, is not a source. A
+  resource root that has no source for the path never ends the search, so a
+  Workspace inside another Workspace's `.agents` still owns its documents. Session uploads under
   `.agents/uploads` are never watched (the full browser suite caught an early
   version that did).
 
@@ -174,7 +177,7 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | A new shared Skill environment root is `execution_policy` with every authorized entry, Tool and Skill unchanged; no path is retained | `automatic_commit::a_new_skill_environment_is_execution_policy` |
 | Session uploads and unread `.agents` entries leave the resource revision unchanged | `resource_directory::tests::only_configuration_entries_change_the_revision` |
 | The revision follows the loaders' fixed paths: `Skills` counts on a case-insensitive volume and not on a case-sensitive one | `resource_directory::case_insensitive_tests::a_case_variant_the_loaders_open_is_configuration` (macOS), `resource_directory::tests::a_case_variant_the_loaders_never_open_is_not_configuration` |
-| On a case-folding volume an ordinary notification for `.Agents/Skills/…`, the only one, commits the Skill version the loaders read with exactly one fact; root, entry, guidance and document variants route and invalidate only as the entry the loaders open, in a Workspace of any name | `automatic_commit::a_case_variant_notification_commits_the_source_the_loaders_read`, `source_watch::tests::a_case_variant_routes_only_as_the_entry_the_loaders_open`, `source_watch::tests::distinct_case_variants_are_not_the_entry_the_loaders_open` (Linux, verified case-sensitive), `source_watch::case_insensitive_tests::a_case_variant_the_loaders_read_routes_to_its_workspace` (macOS: `.agents/Skills`, `.Agents`, `2026/RustX.toml`, a renamed-away root) |
+| On a case-folding volume an ordinary notification for `.Agents/Skills/…`, the only one, commits the Skill version the loaders read with exactly one fact; root, entry, guidance and document variants route and invalidate only as the entry the loaders open, in a Workspace of any name, beneath a `RustX` User home directory, or inside another Workspace's `.agents` | `automatic_commit::a_case_variant_notification_commits_the_source_the_loaders_read`, `source_watch::tests::a_case_variant_routes_only_as_the_entry_the_loaders_open`, `source_watch::tests::distinct_case_variants_are_not_the_entry_the_loaders_open` (Linux, verified case-sensitive), `source_watch::case_insensitive_tests::a_case_variant_the_loaders_read_routes_to_its_workspace` (macOS: `.agents/Skills`, `.Agents`, `2026/RustX.toml`, a nested Workspace's `RustX.toml`, a User Skill under `RustX`, a renamed-away root) |
 | A platform rescan without a path recaptures a Workspace whose notifications were lost; a repeated rescan records nothing | `automatic_commit::a_rescan_recaptures_sources_whose_notifications_were_lost` |
 | A parameter change of a model only a direct Workflow Model node names is one Model fact; an unselected model records nothing | `automatic_commit::a_workflow_model_node_is_a_model_that_runs` |
 | An environment value change changes `subagent` and execution policy; the catalog names the variable, never its value | `automatic_commit::an_environment_value_change_is_recorded_without_its_value` |

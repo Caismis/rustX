@@ -119,29 +119,24 @@ fn loader_path(
     same: &impl Fn(&Path, &Path) -> bool,
 ) -> PathBuf {
     let guidance = || crate::runtime::resources::PROJECT_CONTEXT_FILENAMES.into_iter();
-    let resource_roots = std::iter::once(user.resources.clone())
-        .chain(workspaces.iter().map(|workspace| workspace.join(".agents")));
-    for root in resource_roots {
-        let (Some(base), Some(fixed)) = (root.parent(), root.file_name().and_then(|n| n.to_str()))
+    let mut path = path.to_path_buf();
+    let resource_roots = std::iter::once((
+        user.resources.ancestors().nth(USER_RESOURCES.len()),
+        &USER_RESOURCES[..],
+    ))
+    .chain(
+        workspaces
+            .iter()
+            .map(|workspace| (Some(workspace.as_path()), &[".agents"][..])),
+    );
+    for (base, fixed) in resource_roots {
+        let Some((root, entry, rest)) = base.and_then(|base| loader_root(&path, base, fixed, same))
         else {
             continue;
         };
-        let Ok(relative) = path.strip_prefix(base) else {
-            continue;
-        };
-        let mut components = relative.components();
-        let Some(first) = components.next() else {
-            continue;
-        };
-        let Some(root_name) = loader_name(base, first.as_os_str(), std::iter::once(fixed), same)
-        else {
-            continue;
-        };
-        let root = base.join(root_name);
-        let Some(entry) = components.next() else {
+        let Some(entry) = entry else {
             return root;
         };
-        let rest = components.as_path();
         let names = SOURCE_ENTRIES.into_iter().chain(
             rest.as_os_str()
                 .is_empty()
@@ -149,13 +144,15 @@ fn loader_path(
                 .into_iter()
                 .flatten(),
         );
-        return match loader_name(&root, entry.as_os_str(), names, same) {
-            Some(name) => root.join(name).join(rest),
-            None => root.join(entry).join(rest),
-        };
+        if let Some(name) = loader_name(&root, &entry, names, same) {
+            return root.join(name).join(rest);
+        }
+        // Not a source of this root: a more specific Workspace inside it may
+        // still own the path, under the root's loader spelling.
+        path = root.join(entry).join(rest);
     }
     let (Some(parent), Some(actual)) = (path.parent(), path.file_name()) else {
-        return path.to_path_buf();
+        return path;
     };
     if Some(parent) == user.document.parent()
         && let Some(document) = user.document.file_name().and_then(|name| name.to_str())
@@ -173,7 +170,31 @@ fn loader_path(
     {
         return parent.join(name);
     }
-    path.to_path_buf()
+    path
+}
+
+/// The resource root `base/fixed…` that `path` lies in, spelled as the
+/// loaders open it, with the entry directly beneath it and the rest of the
+/// path; `None` when any fixed component is another entry.
+fn loader_root(
+    path: &Path,
+    base: &Path,
+    fixed: &[&str],
+    same: &impl Fn(&Path, &Path) -> bool,
+) -> Option<(PathBuf, Option<std::ffi::OsString>, PathBuf)> {
+    let mut components = path.strip_prefix(base).ok()?.components();
+    let mut root = base.to_path_buf();
+    for name in fixed {
+        let actual = components.next()?;
+        root.push(loader_name(
+            &root,
+            actual.as_os_str(),
+            std::iter::once(*name),
+            same,
+        )?);
+    }
+    let entry = components.next().map(|entry| entry.as_os_str().to_owned());
+    Some((root, entry, components.as_path().to_path_buf()))
 }
 
 /// The watches of one existing resource root: the root itself, for its
@@ -187,6 +208,10 @@ fn resource_watches(root: &Path, watches: &mut BTreeMap<PathBuf, RecursiveMode>)
         }
     }
 }
+
+/// The fixed components of the User resource root beneath the home
+/// directory.
+const USER_RESOURCES: [&str; 2] = ["rustx", ".agents"];
 
 /// The fixed User source locations of one process.
 #[derive(Debug, Clone)]
@@ -314,11 +339,10 @@ impl SessionRuntimeManager {
     fn user_source_roots(&self) -> UserSourceRoots {
         UserSourceRoots {
             document: self.configuration.sources.config_path.clone(),
-            resources: self
-                .configuration
-                .sources
-                .home_directory
-                .join("rustx/.agents"),
+            resources: USER_RESOURCES.iter().fold(
+                self.configuration.sources.home_directory.clone(),
+                |path, name| path.join(name),
+            ),
         }
     }
 
@@ -558,7 +582,11 @@ mod tests {
     fn a_case_variant_routes_only_as_the_entry_the_loaders_open() {
         let home = Path::new("/home/u");
         let user = roots(home);
-        let workspaces = vec![PathBuf::from("/w"), PathBuf::from("/2026")];
+        let workspaces = vec![
+            PathBuf::from("/w"),
+            PathBuf::from("/2026"),
+            PathBuf::from("/w/.agents/project"),
+        ];
         let aliases = |_: &Path, _: &Path| true;
         let distinct = |_: &Path, _: &Path| false;
         let spelled = |path: &str, same: &dyn Fn(&Path, &Path) -> bool| {
@@ -586,6 +614,24 @@ mod tests {
                 "/2026/.agents/tools/t.toml",
                 "/2026",
             ),
+            // A Workspace inside another's `.agents` owns its own document:
+            // the outer root, which has no `project` source, never ends the
+            // search.
+            (
+                "/w/.agents/project/RustX.toml",
+                "/w/.agents/project/rustx.toml",
+                "/w/.agents/project",
+            ),
+            (
+                "/w/.Agents/project/RustX.toml",
+                "/w/.agents/project/rustx.toml",
+                "/w/.agents/project",
+            ),
+            (
+                "/w/.agents/project/.Agents/skills/x/SKILL.md",
+                "/w/.agents/project/.agents/skills/x/SKILL.md",
+                "/w/.agents/project",
+            ),
         ] {
             let path = spelled(actual, &aliases);
             assert_eq!(path, Path::new(loader));
@@ -605,6 +651,11 @@ mod tests {
                 "/home/u/rustx/.Agents/Workflows/a.yaml",
                 "/home/u/rustx/.agents/workflows/a.yaml",
             ),
+            (
+                "/home/u/RustX/.agents/skills/guide/SKILL.md",
+                "/home/u/rustx/.agents/skills/guide/SKILL.md",
+            ),
+            ("/home/u/RUSTX/.AGENTS", "/home/u/rustx/.agents"),
             ("/home/u/config/RUSTX.toml", "/home/u/config/rustx.toml"),
         ] {
             let path = spelled(actual, &aliases);
@@ -746,15 +797,19 @@ mod case_insensitive_tests {
 
     /// On a case-insensitive volume each source the loaders read through
     /// their fixed spelling — under `.agents/Skills`, under a `.Agents` root,
-    /// and a `RustX.toml` in a Workspace whose name has no letters — routes to
-    /// its Workspace when notified under its own spelling; a renamed-away
-    /// root invalidates the watches beneath the loaders' spelling.
+    /// a `RustX.toml` in a Workspace whose name has no letters or that lies
+    /// inside another Workspace's `.agents`, and a User Skill under `RustX` —
+    /// routes to its owner when notified under its own spelling; a
+    /// renamed-away root invalidates the watches beneath the loaders'
+    /// spelling.
     #[test]
     fn a_case_variant_the_loaders_read_routes_to_its_workspace() {
         let volume = crate::local_runtime::case_insensitive_volume::CaseInsensitiveVolume::new();
         let entry = volume.path().join("entry");
         let root = volume.path().join("root");
         let digits = volume.path().join("2026");
+        let nested = entry.join(".agents/project");
+        let home = volume.path().join("home");
         let files = [
             (
                 entry.join(".agents/Skills/guide/SKILL.md"),
@@ -771,12 +826,19 @@ mod case_insensitive_tests {
                 digits.join("rustx.toml"),
                 &digits,
             ),
+            (
+                nested.join("RustX.toml"),
+                nested.join("rustx.toml"),
+                &nested,
+            ),
         ];
         let user = UserSourceRoots {
             document: volume.path().join("config/rustx.toml"),
-            resources: volume.path().join("rustx/.agents"),
+            resources: USER_RESOURCES
+                .iter()
+                .fold(home.clone(), |path, name| path.join(name)),
         };
-        let workspaces = vec![entry.clone(), root.clone(), digits.clone()];
+        let workspaces = vec![entry.clone(), root.clone(), digits.clone(), nested.clone()];
         for (actual, loader, workspace) in &files {
             std::fs::create_dir_all(actual.parent().unwrap()).unwrap();
             std::fs::write(actual, b"source").unwrap();
@@ -794,6 +856,16 @@ mod case_insensitive_tests {
                 })
             );
         }
+        // A User Skill under `RustX`, which the loaders read through
+        // `rustx/.agents/skills`.
+        let skill = home.join("RustX/.agents/skills/guide/SKILL.md");
+        std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+        std::fs::write(&skill, b"user").unwrap();
+        let loader = user.resources.join("skills/guide/SKILL.md");
+        assert_eq!(std::fs::read(&loader).unwrap(), b"user");
+        let path = loader_path(&skill, &user, &workspaces, &same_entry);
+        assert_eq!(path, loader);
+        assert_eq!(route(&path, &user, &workspaces), Some(SourceTarget::User));
         std::fs::rename(root.join(".Agents"), root.join("old")).unwrap();
         let mut active = BTreeMap::from([
             (root.join(".agents"), RecursiveMode::NonRecursive),
