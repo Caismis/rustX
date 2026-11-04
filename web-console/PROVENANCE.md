@@ -157,6 +157,16 @@ Missing historical IO and oversized capture have explicit distinct states.
 Original collection/cut checks, epoch fences and field-reader fences remain in
 force; repeated displayed Workflow names cannot establish a parent join.
 
+Workflow node collections renew their read cut only when a native refresh
+reissues that Workflow's own header, even if its collection revision is unchanged.
+An unrelated latest checkpoint cannot rebind a retained row. Node-page and body
+requests include the exact cut in their ownership keys, so obsolete failures
+cannot overwrite a renewed view. Resident bodies remain visible during renewal
+only under the same native node, exact field selectors and reader. Empty admitted
+runs expand without requesting a nonexistent node page. Regression coverage
+includes expired old cuts, a renewal during an input read, and completed native
+Workflow input/output inspection on desktop and touch Chromium.
+
 ## Current Harness interaction details (2026-11-03)
 
 Read-only comparison uses the unchanged sibling Harness checkout at

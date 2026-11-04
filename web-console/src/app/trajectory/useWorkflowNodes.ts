@@ -7,7 +7,7 @@ import { workflowCollection, type WorkflowNodes, type WorkflowTraceNode } from '
 /** All admitted visits, including loop bodies, paged at the original native cut. */
 export function useWorkflowNodes(cache: TraceCache, roots: readonly TraceRecord[], opened: ReadonlySet<string>) {
   const selected = roots.filter(root => opened.has(root.id));
-  const keys = selected.map(root => [root.id, JSON.stringify([cache.epoch, root.id, workflowCollection(root)])] as const);
+  const keys = selected.map(root => [root.id, JSON.stringify([cache.epoch, root.id, cache.readCuts?.[root.id], workflowCollection(root)])] as const);
   const signature = JSON.stringify(keys), reader = cache.fields;
   const latest = useRef({ signature, reader }); latest.current = { signature, reader };
   const [state, setState] = useState<Record<string, { key: string; epoch: number; value: WorkflowNodes }>>({});
@@ -26,8 +26,8 @@ export function useWorkflowNodes(cache: TraceCache, roots: readonly TraceRecord[
       };
       void (async () => {
         const nodes: WorkflowTraceNode[] = [], ids = new Set<string>();
-        let offset: number | null = 0;
-        publish(previous?.value.nodes ?? [], true);
+        let offset: number | null = collection.total === '0' ? null : 0;
+        publish(offset===null?[]:previous?.value.nodes??[],offset!==null);
         while (offset !== null) {
           const page = await reader.page(cut, collection.domain, offset, current);
           if (!current()) return;
