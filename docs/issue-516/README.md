@@ -1,11 +1,15 @@
 # CAD sidebar validation
 
-Current implementation: `7044adafc40b6c75e421c6e486b50a7f703083d1`.
+Current implementation: `fbf0a875c27f2b39529793fb032919eb56940797`.
 [Geometry contracts](../geometry-previews.md) define the formats, source authority,
 fixed-copy lifetime, lossless preparation and resource limits.
-[Current performance evidence](performance-optimization.md) contains measured
-results, raw samples, environment/source/artifact digests and the open budget gap.
-The earlier performance reports in this directory are historical baselines.
+[Interaction controls and current validation](interaction-roadmap.md) describe
+isolation, focus, properties, direct axis navigation and bounded default-on
+outlines. The [comment inventory](comment-status.md) lists remaining requests.
+[Performance evidence at implementation 7044adafc](performance-optimization.md)
+preserves the original methods and open 50/200-ms budget gap. The interaction
+increment adds separate diagnostic outline costs; it does not recertify that SLA.
+The earlier performance reports retain their named implementations.
 
 ## Outcome and verification
 
@@ -23,17 +27,16 @@ The explicit budget-gate run fails, while correctness and lifecycle checks pass.
 
 | Check | Result |
 | --- | --- |
-| Complete Web/Host suite | 4023 passed, 4 platform skips |
+| Complete Web/Host suite | 4044 passed, 4 platform skips |
 | Type checking and full production application build | Passed |
 | Source provenance, dependency notices and exact runtime assets/memory maximum | Passed: 336 source records, 345 notices, original pinned CAD assets |
 | Product localization ownership | Passed |
-| Fixed Linux browser geometry, real production sidebar and document acceptance | 19 passed |
-| Separate installed Edge 156 functional/resource smoke | 14 passed |
-| Native GPU real App Server/Host sidebar | 2 passed |
-| Production-fixture latency capture | 10 native captures and 2 constrained software captures |
-| Unchanged whole-action/two-model/retirement capture | 2 passed |
-| Explicit 50/200-ms budget gate | Failed for both workloads; acceptance gap retained |
-| Rust formatting and whitespace | Passed |
+| Fixed Linux browser geometry, reviews and real production sidebar | 27 passed |
+| Shared document regression with the complete fixture | 5 passed |
+| Separate installed Edge 156 functional/resource smoke | 21 passed |
+| Two-pane outline off/on captures | 2 workloads in each browser lane |
+| Explicit 50/200-ms budget gate | Prior failed acceptance retained; not relabelled by feature checks |
+| Whitespace | Passed |
 
 The latest pushed PR head requires its own selected CI checks. A prior head's CI
 success is not certification of the current revision. The PR remains draft.
@@ -46,6 +49,12 @@ header, Refresh, original Download and file-location/application actions.
 Coverage includes orbit, pan, fit/standard views, selection/visibility, a
 collapsed in-viewport part tree, Escape/focus return, Markdown/model tab changes,
 short/narrow windows, Chinese/English and dark/light layouts.
+Isolation/restore/show-all, small-part focus, transformed occurrence properties,
+Fit/Reset, signed-axis/menu equivalence and DPR 2 navigation have dedicated
+coverage. Optional outline checks include smooth surfaces, coplanar tessellation,
+tiny boundaries, two panes, oversized/alpha inputs, cancellation, independent
+Worker-result admission and full retirement. Camera-only metadata still causes
+no React part-tree update.
 
 Fixtures and independent analytic/OCCT references cover unit conversion,
 unitless BREP/STL, embedded GLB textures, authored hierarchy/transforms and
@@ -71,14 +80,12 @@ with the existing owners.
 The images below are diagnostic production-sidebar captures from the pinned
 Linux browser; no screenshot-comparator threshold or reference was changed.
 
-![Production document sidebar](cad-preview.png)
+![Production document sidebar and occurrence properties](interaction-structure.png)
 
-[Expanded parts](cad-parts.png) · [GLB in the sidebar](cad-sidebar-glb.png) ·
-[Chinese dark Workbench](cad-workbench-zh-dark.png)
+[Curved mesh silhouettes](interaction-silhouette.png) ·
+[Chinese dark Workbench](interaction-structure-zh-dark.png)
 
-![Narrow Chinese dark view](geometry-narrow-zh-dark.png)
-
-[Expanded narrow parts](cad-parts-narrow-zh-dark.png)
+Earlier captures remain with their historical measurement reports.
 
 ## Reproduction
 
@@ -90,11 +97,13 @@ pnpm test
 pnpm build
 pnpm check:i18n
 pnpm check:provenance
-pnpm test:e2e -- geometry.spec.ts geometry-sidebar.spec.ts geometry-performance.spec.ts geometry-latency.spec.ts workbench-documents.spec.ts
+pnpm test:e2e -- geometry.spec.ts geometry-review.spec.ts geometry-roadmap.spec.ts geometry-sidebar.spec.ts workbench-documents.spec.ts
 ```
 
 The native-filesystem validation copy uses the same source bytes, locked
 libraries and native binary. The [performance report](performance-optimization.md)
-describes separate production-fixture/native-source lanes and their limitations.
+describes the prior production-fixture/native-source lanes and their limitations.
+The [interaction report](interaction-roadmap.md) defines the separate outline
+cost captures and their production/complete-fixture requirements.
 Fixture origins and generators are recorded in the
 [fixture manifest](../../web-console/test/fixtures/geometry/README.md).
