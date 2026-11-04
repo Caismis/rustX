@@ -1,3 +1,4 @@
+import { ClassifierPanel } from './ClassifierPanel';
 import type { ComponentType } from 'react';
 import { nodeAt, blockAt, type NodeKind } from '../../../document/model';
 import { AgentPanel, ModelPanel } from './InferencePanels';
@@ -6,7 +7,7 @@ import { BranchPanel } from './BranchPanel';
 import { ReturnPanel } from './ResultPanels';
 import { ReviewPanel } from './ReviewPanel';
 import { ToolPanel } from './ToolPanel';
-import { AggregatePanel, ClassifierPanel, ListPanel, TemplatePanel } from './DataPanels';
+import { AggregatePanel, ListPanel, TemplatePanel } from './DataPanels';
 import { type PanelProps } from './shared';
 import { NextStep } from '../NextStep';
 import css from '../Editor.module.css';

@@ -1,3 +1,4 @@
+import { promptText } from './summary';
 import { branchGeometry, conditionsOf } from '../../document/branch';
 import { createContext, memo, useContext, useEffect, type CSSProperties } from 'react';
 import { Handle, NodeResizer, Position, useNodeConnections, useUpdateNodeInternals, type NodeProps, type ResizeParams } from '@xyflow/react';
@@ -98,9 +99,9 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
 
       {!!data.fields?.length && <div className={css.nodeFields}>{data.fields.map(field => <div key={field.name}><b aria-hidden>{'{x}'}</b><span>{field.name}</span>{data.view === 'start' && field.required && <small>{tx('workflows:schema.required')}</small>}<code>{field.type}</code></div>)}</div>}
       {/* As Dify's Agent output routes: one row and exit per route. */}
-      {!!routes.length && <div className={css.routeRows}>{routes.map(route => <div key={route.id} className={css.routeRow} title={route.description}>
-        <b>{route.id}</b><span>{route.description}</span>
-        <SourcePort id={id} port={route.id} label={route.id} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === route.id)} title={data.local} className={css.routeHandle} />
+      {!!routes.length && <div className={css.routeRows}>{routes.map(route => <div key={route.id} className={css.routeRow} title={typeof route.description === 'string' ? route.description : promptText(route.description)}>
+        <b>{'label' in route ? route.label : route.id}</b><span>{typeof route.description === 'string' ? route.description : promptText(route.description)}</span>
+        <SourcePort id={id} port={route.id} label={node?.type === 'classifier' && 'label' in route ? route.label : route.id} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === route.id)} title={data.local} className={css.routeHandle} />
       </div>)}</div>}
       {/* As Dify's Human Input card: one row and exit per action, then Timeout. */}
       {!!choices.length && <div className={css.actionRows}>{choices.map(port => <div key={port} className={css.actionRow}>

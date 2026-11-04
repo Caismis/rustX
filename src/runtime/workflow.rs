@@ -445,8 +445,8 @@ pub enum WorkflowNodeDefinition {
         model: WorkflowModelPolicy,
         input: WorkflowValue,
         #[serde(default)]
-        instruction: String,
-        classes: Vec<WorkflowAgentRoute>,
+        instruction: Vec<WorkflowValue>,
+        classes: Vec<WorkflowClassifierClass>,
     },
     /// Converge exactly one available source per named output group.
     Aggregate { groups: Vec<WorkflowAggregateGroup> },
@@ -837,6 +837,15 @@ impl WorkflowAgentOutput {
 pub struct WorkflowAgentRoute {
     pub id: String,
     pub description: String,
+}
+
+/// A classifier's stable exit, display label and variable-aware topic.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowClassifierClass {
+    pub id: String,
+    pub label: String,
+    pub description: Vec<WorkflowValue>,
 }
 
 /// The reserved field through which a routed child picks its exit.
@@ -1343,7 +1352,7 @@ pub enum WorkflowNodeProgram {
 #[derive(Debug, Clone)]
 pub struct WorkflowModelProgram {
     /// Classifier exits; ordinary Model calls have none.
-    pub classes: Vec<WorkflowAgentRoute>,
+    pub classes: Vec<WorkflowClassifierClass>,
     pub model: crate::model::session::AuxiliaryModelPolicy,
     pub messages: Vec<WorkflowModelMessage>,
     pub output: WorkflowModelOutput,
@@ -1888,7 +1897,7 @@ fn compile_block(
             WorkflowNodeDefinition::Classifier { model,input,instruction,classes } => {
                 let model = transform::classifier(model,input,instruction,classes,&available_before,&node_id)?;
                 if container.is_none() && classes.iter().any(|class| !outgoing[&node_id].iter().any(|edge| edge.port == WorkflowPort::case(&class.id))) { return Err(WorkflowCompileError::InvalidBranch("Classifier requires a successor per class".into())); }
-                available_after.insert(node_id.clone(),available_before.with_prefix(&node_id,&model.output.schema()));
+                available_after.insert(node_id.clone(),available_before.with_prefix(&node_id,&transform::classifier_result_schema()));
                 WorkflowNodeProgram::Model(model)
             }
             WorkflowNodeDefinition::Aggregate { groups } => {

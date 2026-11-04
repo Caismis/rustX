@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v63';
+import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v64';
 import { useTranslation } from '../../../../locale/react';
 import type { NodeKind } from '../../document/model';
 import { NodeChooser, type NodeChoice } from './NodeChooser';

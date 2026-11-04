@@ -1,4 +1,4 @@
-import type { MessageBlock, RuntimeClientSnapshot, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v63';
+import type { MessageBlock, RuntimeClientSnapshot, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v64';
 import type { Server } from '../fixture';
 import { workflowRunsFixture } from './workflow-runs';
 

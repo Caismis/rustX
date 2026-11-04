@@ -51,8 +51,21 @@ pub(super) fn node(input: &WorkflowNodeDefinition) -> Vec<&[String]> {
                 value(input, &mut reads);
             }
         }
-        WorkflowNodeDefinition::List { input, .. }
-        | WorkflowNodeDefinition::Classifier { input, .. } => value(input, &mut reads),
+        WorkflowNodeDefinition::List { input, .. } => value(input, &mut reads),
+        WorkflowNodeDefinition::Classifier {
+            input,
+            instruction,
+            classes,
+            ..
+        } => {
+            value(input, &mut reads);
+            for part in instruction
+                .iter()
+                .chain(classes.iter().flat_map(|class| &class.description))
+            {
+                value(part, &mut reads);
+            }
+        }
         WorkflowNodeDefinition::Aggregate { groups } => {
             for group in groups {
                 for path in &group.variables {

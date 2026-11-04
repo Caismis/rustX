@@ -1125,9 +1125,14 @@ impl WorkflowRuntime {
                         },
                     };
                     validate_commit(&schema, &value)?;
+                    let mut value = value;
                     if !model.classes.is_empty() {
-                        let class = value.get("structured_output").and_then(|v| v.get("class_id")).and_then(Value::as_str).ok_or_else(|| WorkflowRunError::InvalidValue("Classifier returned no class ID".into()))?;
-                        selected = WorkflowPort::case(class);
+                        let class_id = value.get("structured_output").and_then(|v| v.get("class_id")).and_then(Value::as_str).ok_or_else(|| WorkflowRunError::InvalidValue("Classifier returned no class ID".into()))?;
+                        let class = model.classes.iter().find(|class| class.id == class_id).ok_or_else(|| WorkflowRunError::InvalidValue("Classifier returned an unknown class ID".into()))?;
+                        selected = WorkflowPort::case(class_id);
+                        let name = super::model::render_parts(&class.description, |part| evaluate_value(part, input, &values))?;
+                        value = serde_json::json!({"class_id":class.id,"class_name":name,"class_label":class.label,"usage":value["usage"]});
+                        validate_commit(&super::transform::classifier_result_schema(), &value)?;
                         for successor in block.outgoing[node_id].iter().filter(|edge| edge.port == selected) {
                             self.emit_observability(run, RuntimeEvent::WorkflowBranchSelected {workflow_id:run.program.id.clone(),run_id:run.run_id.clone(),node_id:node_instance.clone(),port:selected.clone(),successor:successor.to.clone()});
                         }

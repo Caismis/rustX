@@ -1,12 +1,10 @@
-import type { WorkflowVarType } from '../../../../../../../protocol/app-server/v63';
+import type { WorkflowVarType } from '../../../../../../../protocol/app-server/v64';
 import { useTranslation } from '../../../../../locale/react';
 import { IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';
-import { CommandRejected, freshKey, renameAggregateOutput, renameExit, replaceNodeExits } from '../../../document/commands';
+import { CommandRejected, freshKey, renameAggregateOutput } from '../../../document/commands';
 import { fieldValue, setField } from '../../../document/fields';
-import { blockAt, nodeAt } from '../../../document/model';
 import { IconPlus } from '../../icons';
-import { ModelSelection } from '../forms/ModelSelection';
 import { ReferencePicker } from '../forms/ReferencePicker';
 import { PathEditor, ValueEditor } from '../forms/ValueEditor';
 import { DraftTextField, JsonField, NumberField, Section } from '../forms/fields';
@@ -76,32 +74,6 @@ export function ListPanel(props: PanelProps) {
       {node.limit != null && <NumberField label={tx('workflows:data.take')} value={node.limit} address={at('limit')} min={1} max={65536} />}
     </Section>
     <Outputs items={[[/* i18n-raw: native output identifier */ 'result', /* i18n-raw: native schema type */ 'array'],['first_record','item?'],['last_record','item?']]} />
-  </>;
-}
-
-/** As Dify's classifier: one model, an input variable, class descriptions and
- * stable exits. The class ID rename shares the canvas connection transaction. */
-export function ClassifierPanel(props: PanelProps) {
-  const tx = useTranslation(), { node, at, update } = useNode(props, 'classifier');
-  return <>
-    <ModelSelection policy={node.model ?? {mode:'session'}} address={at('model')} port={props.port} onChange={(model,path) => update(current => ({...current,model}),at('model',...path))} />
-    <Section title={tx('workflows:data.classify-input')}><ValueEditor label={tx('workflows:data.input')} value={node.input} address={at('input')} edit={props.edit} /></Section>
-    <Section title={tx('workflows:data.classes')} aside={<button className={css.iconButton} type="button" aria-label={tx('workflows:data.add-class')} disabled={node.classes.length >= 32} onClick={() => {
-      const id = freshKey(node.classes.map(item=>item.id),'class');
-      update(current => ({...current,classes:[...current.classes,{id,description:''}]}),at('classes'),{array:at('classes'),inserted:node.classes.length});
-    }}><IconPlus size={14} /></button>}>
-      {node.classes.map((item,index) => <div className={css.dataRow} key={index}>
-        <div className={css.dataRowHead}><RouteId label={tx('workflows:data.class-id')} value={item.id} address={at('classes',index,'id')} rename={(document,from,to) => renameExit(document,props.block,props.id,from,to)} />
-          <button className={css.iconButton} type="button" aria-label={tx('workflows:data.remove-class',{p0:item.id})} disabled={node.classes.length < 2} onClick={() => props.edit(document => {
-            const owner=blockAt(document,props.block), current=owner && nodeAt(owner,props.id);
-            if (current?.type !== 'classifier') throw new CommandRejected('missing_node');
-            return replaceNodeExits(document,props.block,props.id,{...current,classes:current.classes.filter((_,i) => i!==index)});
-          },undefined,{array:at('classes'),removed:index})}><IconTrashOutline16 /></button></div>
-        <DraftTextField label={tx('workflows:data.class-description')} value={item.description} address={at('classes',index,'description')} multiline />
-      </div>)}
-    </Section>
-    <Section title={tx('workflows:data.instructions')}><DraftTextField label={tx('workflows:data.instructions')} value={node.instruction ?? ''} address={at('instruction')} multiline /></Section>
-    <Outputs items={[[/* i18n-raw: native structured output path */ 'structured_output.class_id', /* i18n-raw: native schema type */ 'string']]} />
   </>;
 }
 

@@ -1,7 +1,7 @@
 import { encodeField, type ArrayEdit, type FieldAddress } from '../../document/fields';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import clsx from 'clsx';
-import type { WorkflowVocabulary } from '../../../../../../protocol/app-server/v63';
+import type { WorkflowVocabulary } from '../../../../../../protocol/app-server/v64';
 import { useTranslation } from '../../../../locale/react';
 import { IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import { nodePresentation } from '../../document/geometry';
@@ -91,7 +91,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
       {description && <div className={css.inspectDescription} key={selection.kind === 'node' ? `node:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>{description}</div>}
     </header>
     {(selection.kind === 'start' || selection.kind === 'node' && node?.type !== 'branch') && <div className={css.inspectTabs}><span>{tx('workflows:branch.settings')}</span></div>}
-    <div className={clsx(css.inspectBody, 'nowheel')} key={selection.kind === 'node' || selection.kind === 'note' ? `${selection.kind}:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>
+    <div data-workflow-inspector-body className={clsx(css.inspectBody, 'nowheel')} key={selection.kind === 'node' || selection.kind === 'note' ? `${selection.kind}:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>
       {rejection && <p role="alert" className={css.hintError}>{rejection}</p>}{body}
     </div>
   </aside>;

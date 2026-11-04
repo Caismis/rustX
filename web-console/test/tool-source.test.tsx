@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { ContentChunk, ContentRef, ForegroundToolExecution } from '../../protocol/app-server/v63';
+import type { ContentChunk, ContentRef, ForegroundToolExecution } from '../../protocol/app-server/v64';
 import { Content } from '../src/app/agent/Message';
 import { Tool } from '../src/app/agent/Tool';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';

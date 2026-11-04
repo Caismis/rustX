@@ -8,8 +8,8 @@ import {
   $createLineBreakNode, $createParagraphNode, $createTextNode, $getNodeByKey, $getRoot, $getSelection, $insertNodes, $isElementNode, $isLineBreakNode,
   $isRangeSelection, COMMAND_PRIORITY_LOW, DecoratorNode, KEY_DOWN_COMMAND, type LexicalNode, type NodeKey, type SerializedLexicalNode, type Spread,
 } from 'lexical';
-import type { WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v63';
-import type { FieldAddress } from '../../../document/fields';
+import type { WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v64';
+import { encodeField, type FieldAddress } from '../../../document/fields';
 import type { Value } from '../../../document/model';
 import type { Edit } from '../panels/shared';
 import { ReferencePicker } from './ReferencePicker';
@@ -42,7 +42,7 @@ const $isVariable = (node: LexicalNode | null | undefined): node is VariableNode
 function VariableToken({ nodeKey, path }: { nodeKey: NodeKey; path: string[] }) {
   const [editor] = useLexicalComposerContext(), scope = useContext(TokenScope)!;
   const choose = (choice: WorkflowReferenceChoice) => editor.update(() => { const node = $getNodeByKey(nodeKey); if ($isVariable(node)) node.setPath(choice.path); });
-  const closed = () => editor.update(() => { const node = $getNodeByKey(nodeKey); if ($isVariable(node) && !node.__path.length) node.remove(); });
+  const closed = (restoreFocus: boolean) => { editor.update(() => { const node = $getNodeByKey(nodeKey); if ($isVariable(node) && !node.__path.length) node.remove(); }); if (restoreFocus) editor.focus(); };
   return <ReferencePicker address={scope.address} path={path} edit={scope.edit} token initiallyOpen={!path.length} onChoose={choose} onClose={closed} placeholder={scope.placeholder} />;
 }
 
@@ -128,7 +128,7 @@ export function PromptEditor({ parts, address, edit, label, placeholder, variabl
     <TokenScope.Provider value={{ address, edit, placeholder: variablePlaceholder }}>
       {children(<div className={css.promptEditor}>
         <PlainTextPlugin ErrorBoundary={LexicalErrorBoundary}
-          contentEditable={<ContentEditable className={`${css.promptInput} ${expanded ? css.promptInputExpanded : compact ? css.promptInputCompact : ''}`} aria-label={label} aria-invalid={invalid || undefined} aria-placeholder={placeholder}
+          contentEditable={<ContentEditable data-workflow-field={encodeField(address)} className={`${css.promptInput} ${expanded ? css.promptInputExpanded : compact ? css.promptInputCompact : ''}`} aria-label={label} aria-invalid={invalid || undefined} aria-placeholder={placeholder}
             placeholder={<span className={css.promptPlaceholder}>{placeholder}</span>} />} />
       </div>)}
       <Sync parts={parts} onChange={onChange} />

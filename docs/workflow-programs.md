@@ -530,28 +530,37 @@ first/last copies, must fit 64 KiB.
 
 ### Question Classifier (`classifier`)
 
-The model policy is the same Session/explicit policy as a Model node. `input`
-must be text; `instruction` is optional. Each class has a stable local ID and a
-nonempty description:
+Select a string or numeric input variable. Each class has a stable `id`, a
+human-readable `label`, and `description` parts (text literals or variable
+references). The optional `instruction` is the same typed parts array. Renaming
+or reordering labels keeps the exit IDs and connections intact. Native scope
+analysis checks references in the input, every topic and the instructions.
 
 ```yaml
 classify:
   type: classifier
-  model: {mode: session}
-  input: {type: reference, path: [args, question]}
-  instruction: Choose the closest topic.
+  input: {type: reference, path: [args, query]}
+  instruction:
+    - {type: literal, value: "Choose the closest topic."}
   classes:
-    - {id: support, description: Product support requests}
-    - {id: other, description: All other questions}
+    - id: support
+      label: Support
+      description:
+        - {type: literal, value: "Support requests concerning "}
+        - {type: reference, path: [args, product]}
+    - id: other
+      label: Other
+      description:
+        - {type: literal, value: "Other questions"}
 ```
 
-There are 1–32 classes, with descriptions at most 4096 bytes each. Each class
-requires an outgoing edge whose `port` equals its ID. Exactly one class port
-activates, with ordinary parallelism allowed on that port. The native Model
-JSON schema restricts `class_id` to those IDs. Invalid output fails the node;
-it never silently selects a class. The result has the usual Model fields and
-`structured_output.class_id`. Existing Model request, schema and response
-budgets also apply to the generated classification prompt.
+The node uses one native Auxiliary model call and admits only the validated
+selected exit. Its result has `class_name` (the rendered topic), `class_label`
+(the authored display label), `usage`, and the routing `class_id`. The panel
+shows the same three user-facing outputs as Dify. Unknown model choices fail;
+they do not select the first class. Vision is disabled because native Workflow
+classification currently accepts text/numeric variables, not image inputs.
+Standalone Workflows have no Dify Chatflow memory setting.
 
 ### Variable Aggregator (`aggregate`)
 

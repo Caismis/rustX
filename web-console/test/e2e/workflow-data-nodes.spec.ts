@@ -1,9 +1,8 @@
+import { dataNodesDocument } from '../workflow-data-document';
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import type { WorkflowDocument } from '../../src/app/workflows/document/model';
-import { setNodePresentation } from '../../src/app/workflows/document/geometry';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
 import { startDogfood } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
@@ -20,23 +19,6 @@ async function drag(page:Page,source:Locator,target:Locator) {
   await expect(target).toHaveClass(/connectingto/);await expect(target).toHaveClass(/\bvalid\b/);await page.mouse.up();
 }
 
-function document():WorkflowDocument {
-  let document:WorkflowDocument={description:'Workflow data nodes',block:{
-    input:{type:'object',properties:{query:{type:'string'},numbers:{type:'array',items:{type:'integer'}}},required:['query','numbers'],additionalProperties:false},
-    nodes:{start:{type:'start'},
-      classify:{type:'classifier',model:{mode:'session'},input:{type:'reference',path:['args','query']},instruction:'Choose the best class.',classes:[{id:'class_1',description:'Support requests'},{id:'class_2',description:'Other questions'}]},
-      left:{type:'template',variables:{arg1:{type:'reference',path:['args','query']}},template:'{{ arg1 | upper }}'},
-      right:{type:'template',variables:{arg1:{type:'reference',path:['args','query']}},template:'{{ arg1 | lower }}'},
-      merge:{type:'aggregate',groups:[{name:'output',output_type:'string',variables:[['left','output'],['right','output']]}]},
-      list:{type:'list',input:{type:'reference',path:['args','numbers']}},
-      repeat:{type:'loop',loop_count:1,loop_variables:[{label:'count',var_type:'number',value:{type:'literal',value:0}}],body:{nodes:{inner_start:{type:'start'}},edges:[]}},
-      done:{type:'return',outputs:[{variable:'answer',value_selector:['merge','output']},{variable:'numbers',value_selector:['list','result']}]},
-    },edges:[{from:'start',to:'classify'},{from:'classify',to:'left',port:'class_1'},{from:'classify',to:'right',port:'class_2'},{from:'left',to:'merge'},{from:'right',to:'merge'},{from:'merge',to:'list'},{from:'list',to:'repeat'},{from:'repeat',to:'done'}],
-  }};
-  for (const [id,x,y] of [['classify',300,100],['left',620,40],['right',620,320],['merge',960,100],['list',1280,100],['repeat',1280,420],['done',1660,100]] as const)
-    document=setNodePresentation(document,[],id,{position:{x,y}});
-  return document;
-}
 
 for (const width of [2000,390]) test(`data nodes edit, connect and persist with workspace Bash at ${width}px`,async({page})=>{
   page.setDefaultTimeout(15_000);await page.setViewportSize({width,height:width===390 ? 844:1100});
@@ -44,7 +26,7 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
   page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error') errors.push(message.text());});
   try {
     const directory=join(fixture.workspaceA,'.agents/workflows');mkdirSync(directory,{recursive:true});
-    const file=join(directory,'data_nodes.yaml');writeFileSync(file,JSON.stringify(document()));
+    const file=join(directory,'data_nodes.yaml');writeFileSync(file,JSON.stringify(dataNodesDocument()));
     await routeWorkspaceHost(page,fixture);await page.goto('/');await connectRemote(page,fixture.endpoint,fixture.token);await openEmptySession(page,fixture,'Workspace A');
     await page.getByRole('navigation',{name:'Global panels'}).getByRole('button',{name:'Workflows',exact:true}).click();
     await page.getByRole('button',{name:'data_nodes',exact:true}).click();await expect(page).toHaveTitle(/rustX$/);
@@ -80,16 +62,14 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     await page.screenshot({path:`/tmp/rustx-data-aggregate-${width}.png`});
 
     await activate(card(page,'classify'));
-    const classId=panel(page).getByRole('textbox',{name:'Class ID',exact:true}).nth(1);
-    if(width===2000) await panel(page).getByRole('button',{name:'Disconnect right',exact:true}).click();
-    await classId.fill('general');await classId.press('Enter');
-    await expect(card(page,'classify').locator('[data-handleid="general"]')).toHaveCount(1);
+    const rename = panel(page).getByRole('button',{name:'Rename CLASS 2',exact:true});
+    await rename.dblclick();
+    const classLabel=panel(page).getByRole('textbox',{name:'Class label',exact:true});
+    await classLabel.fill('General questions');await classLabel.press('Enter');
+    await expect(card(page,'classify').locator('[data-handleid="class_2"]')).toHaveCount(1);
     if(width===2000) {
-      const source=card(page,'classify').locator('[data-handleid="general"]'),target=card(page,'right').locator('[data-handleid="in"]');
-      await drag(page,source,target);
-      await page.getByRole('button',{name:'Undo',exact:true}).click();await page.getByRole('button',{name:'Undo',exact:true}).click();
-      await expect(card(page,'classify').locator('[data-handleid="class_2"]')).toHaveCount(1);
-      await page.getByRole('button',{name:'Redo',exact:true}).click();await drag(page,source,target);
+      await panel(page).getByRole('button',{name:'Disconnect right',exact:true}).click();
+      await drag(page,card(page,'classify').locator('[data-handleid="class_2"]'),card(page,'right').locator('[data-handleid="in"]'));
     }
     await page.screenshot({path:`/tmp/rustx-data-classifier-${width}.png`});
 
@@ -120,7 +100,7 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     expect(saved.block.nodes.left.template).toBe('{{ question | upper }}!');
     expect(saved.block.nodes.list).toMatchObject({filter:{operator:'greater_equal',value:2},sort:{order:'desc'},limit:2});
     expect(saved.block.nodes.done.outputs[0].value_selector).toEqual(['merge','answer']);
-    expect(saved.block.edges).toContainEqual({from:'classify',to:'right',port:'general'});
+    expect(saved.block.edges).toContainEqual({from:'classify',to:'right',port:'class_2'});
     const code=Object.values(saved.block.nodes).find((node:any)=>node.type==='tool' && node.selector.name==='bash') as any;
     expect(code.arguments.fields.command).toEqual({type:'literal',value:script});
     const assigner=Object.values(saved.block.nodes.repeat.body.nodes).find((node:any)=>node.type==='assigner') as any;

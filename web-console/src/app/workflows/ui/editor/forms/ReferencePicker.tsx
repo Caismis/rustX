@@ -2,7 +2,7 @@ import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react
 import { createPortal } from 'react-dom';
 import { useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useSelector } from '@xstate/react';
-import type { WorkflowAnalysisQuery, WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v63';
+import type { WorkflowAnalysisQuery, WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v64';
 import { useTranslation } from '../../../../../locale/react';
 import { consumerAddress } from '../../../document/analysis';
 import { encodeField, setField, type FieldAddress } from '../../../document/fields';
@@ -19,7 +19,7 @@ import css from '../Editor.module.css';
  * choices; a condition's token asks for the condition-variable scope. */
 export function ReferencePicker({ address, path, edit, initiallyOpen = false, onChoose, onClose, placeholder, token = false }: {
   address: FieldAddress; path: readonly string[]; edit: (apply: (document: WorkflowDocument) => WorkflowDocument) => void;
-  token?: boolean; initiallyOpen?: boolean; onChoose?: (choice: WorkflowReferenceChoice) => void; onClose?: () => void; placeholder?: string;
+  token?: boolean; initiallyOpen?: boolean; onChoose?: (choice: WorkflowReferenceChoice) => void; onClose?: (restoreFocus: boolean) => void; placeholder?: string;
 }) {
   const tx = useTranslation(), owner = useContext(DraftOwner)!;
   const document = useSelector(owner.editor, snapshot => snapshot.context.document);
@@ -29,12 +29,12 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const root = useRef<HTMLDivElement>(null), trigger = useRef<HTMLButtonElement>(null), searchInput = useRef<HTMLInputElement>(null), id = useId();
   const field = encodeField(address);
   useEffect(() => { setOpen(initiallyOpen); setSearch(''); }, [field, initiallyOpen]);
-  const wasOpen = useRef(open);
-  useEffect(() => { if (wasOpen.current && !open) onClose?.(); wasOpen.current = open; }, [open]);
+  const wasOpen = useRef(open), returnFocus = useRef(false);
+  useEffect(() => { if (wasOpen.current && !open) onClose?.(returnFocus.current); wasOpen.current = open; }, [open]);
   useEffect(() => {
     if (!open) return;
     searchInput.current?.focus();
-    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node) && !popup.current?.contains(event.target as Node)) setOpen(false); };
+    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node) && !popup.current?.contains(event.target as Node)) { returnFocus.current = false; setOpen(false); } };
     window.document.addEventListener('pointerdown', outside, true);
     return () => window.document.removeEventListener('pointerdown', outside, true);
   }, [open]);
@@ -58,7 +58,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
     const key = choice.path[0], group = groups.get(key) ?? [];
     group.push(choice); groups.set(key, group);
   }
-  const close = () => { setOpen(false); trigger.current?.focus(); };
+  const close = () => { returnFocus.current = true; setOpen(false); trigger.current?.focus(); };
   // The workflow input belongs to the root Start, also inside a body.
   const startTitle = () => { const start = document && startOf(document.block); return (start && document && nodePresentation(document, [], start)?.title) || tx('workflows:canvas.start-title'); };
   // A producer is in this block, a block around it, or the body this
@@ -71,7 +71,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx('workflows:value.whole');
   const present = (content: import('react').ReactNode) => token ? createPortal(content, window.document.body) : content;
   return <div ref={root} className={css.referencePicker}>
-    <button ref={element => { trigger.current = element; refs.setReference(element); }} data-workflow-field={field} type="button" className={token ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
+    <button ref={element => { trigger.current = element; refs.setReference(element); }} data-workflow-field={field} type="button" className={token ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => { returnFocus.current = open; setOpen(value => !value); }}>
       {token && path.length ? <span className={css.branchVariableToken}>
         {producer === 'args' ? <IconEntry size={13} /> : currentNode ? <KindIcon kind={currentNode.type} size={13} /> : null}
         <span className={css.branchVariableSource}>{currentTitle}</span><span className={css.branchVariableSlash}>/</span><b><span aria-hidden>{'{x}'}</span> {currentValue}</b>

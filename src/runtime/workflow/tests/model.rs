@@ -41,15 +41,26 @@ async fn classifier_uses_one_auxiliary_call_and_only_the_validated_class_path() 
                     WorkflowNodeDefinition::Classifier {
                         model: WorkflowModelPolicy::Session,
                         input: reference("args.task"),
-                        instruction: "Route the request.".into(),
+                        instruction: vec![WorkflowValue::Literal {
+                            value: json!("Route the request."),
+                        }],
                         classes: vec![
-                            WorkflowAgentRoute {
+                            WorkflowClassifierClass {
                                 id: "support".into(),
-                                description: "Support requests".into(),
+                                label: "售后支持".into(),
+                                description: vec![
+                                    WorkflowValue::Literal {
+                                        value: json!("Support requests: "),
+                                    },
+                                    reference("args.task"),
+                                ],
                             },
-                            WorkflowAgentRoute {
+                            WorkflowClassifierClass {
                                 id: "other".into(),
-                                description: "Other questions".into(),
+                                label: "Other".into(),
+                                description: vec![WorkflowValue::Literal {
+                                    value: json!("Other questions"),
+                                }],
                             },
                         ],
                     },
@@ -71,10 +82,12 @@ async fn classifier_uses_one_auxiliary_call_and_only_the_validated_class_path() 
                 ),
                 (
                     "done".into(),
-                    return_node(BTreeMap::from([(
-                        "answer".into(),
-                        reference("merge.output"),
-                    )])),
+                    return_node(BTreeMap::from([
+                        ("answer".into(), reference("merge.output")),
+                        ("class_name".into(), reference("classify.class_name")),
+                        ("class_label".into(), reference("classify.class_label")),
+                        ("usage".into(), reference("classify.usage")),
+                    ])),
                 ),
             ]),
             vec![
@@ -102,7 +115,25 @@ async fn classifier_uses_one_auxiliary_call_and_only_the_validated_class_path() 
         request.release.send(()).unwrap();
         let result = run.await.unwrap();
         if let Some(expected) = expected {
-            assert_eq!(result.unwrap(), json!({"answer":expected}));
+            let result = result.unwrap();
+            assert_eq!(result["answer"], expected);
+            assert_eq!(
+                result["class_label"],
+                if class == "support" {
+                    "售后支持"
+                } else {
+                    "Other"
+                }
+            );
+            assert_eq!(
+                result["class_name"],
+                if class == "support" {
+                    "Support requests: the input"
+                } else {
+                    "Other questions"
+                }
+            );
+            assert!(result["usage"]["total_tokens"].is_u64());
         } else {
             assert!(result.is_err());
             assert!(
@@ -115,6 +146,75 @@ async fn classifier_uses_one_auxiliary_call_and_only_the_validated_class_path() 
         assert!(entries.try_recv().is_err());
         executor.drain().await;
     }
+}
+
+#[tokio::test]
+async fn classifier_renders_numeric_input_and_topic_variables_in_one_native_call() {
+    let plane = workflow_test_plane(1);
+    let mut definition = base_definition(
+        "classify",
+        BTreeMap::from([
+            (
+                "classify".into(),
+                WorkflowNodeDefinition::Classifier {
+                    model: WorkflowModelPolicy::Session,
+                    input: reference("args.task"),
+                    instruction: vec![reference("args.task")],
+                    classes: vec![WorkflowClassifierClass {
+                        id: "priority".into(),
+                        label: "优先级".into(),
+                        description: vec![
+                            WorkflowValue::Literal {
+                                value: json!("Priority "),
+                            },
+                            reference("args.task"),
+                        ],
+                    }],
+                },
+            ),
+            (
+                "done".into(),
+                return_node(BTreeMap::from([
+                    ("result".into(), reference("classify.class_name")),
+                    ("label".into(), reference("classify.class_label")),
+                ])),
+            ),
+        ]),
+        vec![branch_edge(
+            "classify",
+            "done",
+            WorkflowPort::case("priority"),
+        )],
+    );
+    definition.block.input = schema(json!({"task":{"type":"number"}}), &["task"]);
+    let program = compile_test(definition).unwrap();
+    let (context, executor, mut entries, _) = setup(
+        &plane,
+        &program,
+        completed(r#"{"class_id":"priority"}"#, ModelFinishReason::Stop),
+        true,
+    );
+    let runtime = workflow_runtime(&plane);
+    let program = Arc::new(program);
+    let operation = tokio::spawn(async move {
+        runtime
+            .run_test_foreground(
+                program,
+                ToolCallId::new("numeric-classification"),
+                context,
+                json!({"task":7}),
+                workflow_cancellation().1,
+            )
+            .await
+    });
+    let request = entry(&mut entries).await;
+    request.release.send(()).unwrap();
+    assert_eq!(
+        operation.await.unwrap().unwrap(),
+        json!({"result":"Priority 7","label":"优先级"})
+    );
+    assert!(entries.try_recv().is_err());
+    executor.drain().await;
 }
 
 struct Entry {

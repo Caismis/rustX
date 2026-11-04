@@ -1,4 +1,4 @@
-import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v63';
+import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v64';
 import { readJson } from '../../../../shared/json-numbers';
 import { boundedDocument, CommandRejected, freshNodeId, validLocalKey, validNodeId } from './commands';
 import { blockAt, deepNodeCount, edgesOf, sameBlockPath, sameDocument, updateBlock, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from './model';
@@ -113,8 +113,8 @@ function node(input: unknown): void {
       if (record.limit != null) unsigned(record.limit); return;
     }
     case 'classifier':
-      keys(record,['type','model','input','instruction','classes']); modelPolicy(record.model); value(record.input); if (record.instruction !== undefined) text(record.instruction);
-      for (const item of array(record.classes)) { const entry=keys(item,['id','description']); text(entry.id); text(entry.description); } return;
+      keys(record,['type','model','input','instruction','classes']); modelPolicy(record.model); value(record.input); if (record.instruction !== undefined) array(record.instruction).forEach(value);
+      for (const item of array(record.classes)) { const entry=keys(item,['id','label','description']); text(entry.id); text(entry.label); array(entry.description).forEach(value); } return;
     case 'aggregate':
       keys(record,['type','groups']); for (const item of array(record.groups)) {
         const group=keys(item,['name','output_type','variables']); text(group.name); if (!VAR_TYPES.includes(group.output_type as string)) fail();

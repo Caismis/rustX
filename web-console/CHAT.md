@@ -483,8 +483,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v63 (`rustx.app-server.v63` and generated
-`protocol/app-server/v63.ts` / `v63.schema.json`). v62 and earlier initialization and
+The mandatory App Server vocabulary is v64 (`rustx.app-server.v64` and generated
+`protocol/app-server/v64.ts` / `v64.schema.json`). v62 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -581,7 +581,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v63, Runtime Client v80, SQLite v82, and Session catalog v18, with no
+App Server v64, Runtime Client v80, SQLite v82, and Session catalog v18, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -642,7 +642,7 @@ the existing transaction coordinator. A confirmation gates elevation. The source
 controls future admission; an already-admitted Attempt remains frozen. Composer
 model intent is different: it never authors the Workspace default model.
 
-App Server v63 / Runtime Client v80 project one `turn_process` owner on exact
+App Server v64 / Runtime Client v80 project one `turn_process` owner on exact
 canonical Assistant and Tool members. Native Journal identities, whole-process
 counts and an immutable control cursor survive unsuccessful settlement and
 bounded paging. Failed/stopped processes stay open; successful final-answer,

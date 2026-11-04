@@ -146,7 +146,7 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | Tool | Exact selector, arguments and text/JSON result projection |
 | Template | Named typed inputs and a multiline Jinja template; native `output` string |
 | List Operator | Array input, optional typed filter, stable sort and limit, with literal field paths |
-| Question Classifier | Session/registered model, text input, optional instructions and stable class IDs with descriptions; one exit per class |
+| Question Classifier | Session/registered model, text/numeric input variable, variable-aware topic cards with separate labels and stable exits, sortable classes and folded instructions; `class_name`, `class_label`, `usage` outputs |
 | Variable Aggregator | Named typed groups with alternative source pickers; renaming a group updates downstream references |
 | Code Execution | Bash Tool preset with a multiline command and Session workspace execution; existing Tool outputs and lifecycle |
 | Branch | Compact IF/ELIF/ELSE card, ordered cases, searchable variable conditions, AND/OR and multiple successors per exit |

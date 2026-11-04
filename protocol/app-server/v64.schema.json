@@ -12014,13 +12014,16 @@
               "$ref": "#/$defs/WorkflowValue"
             },
             "instruction": {
-              "type": "string",
-              "default": ""
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "default": []
             },
             "classes": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/WorkflowAgentRoute"
+                "$ref": "#/$defs/WorkflowClassifierClass"
               }
             },
             "type": {
@@ -12611,20 +12614,27 @@
         }
       ]
     },
-    "WorkflowAgentRoute": {
-      "description": "One exit an Agent may choose, as Dify's Agent output route. The child\nsees every route's ID and description when it picks one.",
+    "WorkflowClassifierClass": {
+      "description": "A classifier's stable exit, display label and variable-aware topic.",
       "type": "object",
       "properties": {
         "id": {
           "type": "string"
         },
-        "description": {
+        "label": {
           "type": "string"
+        },
+        "description": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkflowValue"
+          }
         }
       },
       "additionalProperties": false,
       "required": [
         "id",
+        "label",
         "description"
       ]
     },
@@ -13323,6 +13333,23 @@
         }
       ]
     },
+    "WorkflowAgentRoute": {
+      "description": "One exit an Agent may choose, as Dify's Agent output route. The child\nsees every route's ID and description when it picks one.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "description"
+      ]
+    },
     "WorkflowBranchCase": {
       "description": "A stable exit identity and its condition. The first matching case wins.",
       "type": "object",
@@ -13826,6 +13853,39 @@
             "kind"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "classifier_instruction"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "kind": {
+              "type": "string",
+              "const": "classifier_class"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "index"
+          ]
         },
         {
           "type": "object",

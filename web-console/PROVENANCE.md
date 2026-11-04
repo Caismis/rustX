@@ -1,3 +1,30 @@
+## Classifier panel alignment (2026-11-04)
+
+Read-only study uses the unchanged sibling Dify checkout at
+`ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0`: `question-classifier/panel.tsx`,
+`use-config.ts`, `default.ts`, `components/advanced-setting.tsx`, and the shared
+`branch-list/class-list.tsx`, `class-item.tsx`, prompt Editor, `editor/wrap.tsx`,
+`hooks/use-toggle-expend.ts` and ConfigVision.
+Graphon `4fa22141774dff80e90e4dfa98ea3e6fbf0421bb`'s classifier execution was
+checked for rendered class names, labels, token usage and stable exit IDs.
+
+| Reference behavior | Native implementation |
+| --- | --- |
+| Model and scalar variable picker | Existing model selection and native scope/type analysis; input accepts strings or numbers |
+| Class labels separate from IDs | Inline Unicode labels; pointer/keyboard sorting preserves IDs, references, drafts and edges through Undo/Redo |
+| Topic and instruction editors with variables, count, copy and expand | Existing rustX typed PromptEditor and PromptCard; native compiler validates and runtime renders the same parts |
+| Expanded editor fills the panel below its header | Measure the actual inspector body, retain the inline placeholder and Lexical instance, and close with Escape; variable popups keep their own Escape and restore text focus |
+| Advanced and output disclosures | Folded sections; actual `class_name`, `class_label`, `usage` results with descriptions |
+| Vision disabled without capability; Chatflow-only memory | Honest disabled vision control for native text-only classification; no Chatflow memory surface |
+
+This is original composition with existing components, without Dify source,
+styles, assets, stores or Graphon runtime. The App Server contract is v64;
+Runtime Client remains v80. Classifier descriptions and instructions use typed
+parts, and classes carry authored labels. The old string configuration and
+nested classifier output path are removed, without fallback or migration.
+Browser plugin is not available; the repository's pinned Playwright image
+validates desktop and touch interaction, input filtering and file persistence.
+
 ## Workflow visits inside the Trajectory ledger (2026-11-03)
 
 Read-only comparison uses the unchanged sibling Harness checkout at
@@ -4850,8 +4877,8 @@ coordinates and viewports.
 
 The native `ModelCapabilities` object now serializes `jsonSchemaOutput`, which
 is incompatible with the closed v53 schema. Web and TUI therefore negotiate
-App Server v63 and reject v53 peers before loading Model or configuration data.
-Only the v63 generated schema and TypeScript pair remains. Existing strict
+App Server v64 and reject v53 peers before loading Model or configuration data.
+Only the v64 generated schema and TypeScript pair remains. Existing strict
 validation stays in place. Derived source changes are protocol import paths;
 the source inventory records their current hashes and dependency paths without
 changing the pinned Harness baseline or licenses.
@@ -4859,7 +4886,7 @@ changing the pinned Harness baseline or licenses.
 
 ## Issue #499: live readiness and submission receipt
 
-The current mandatory contracts are App Server v63 and Runtime Client v80.
+The current mandatory contracts are App Server v64 and Runtime Client v80.
 Only the current generated artifacts and strict decoders are retained. Scheduled
 Workflow recovery and execution origins share this generation with live MCP
 readiness. The shared native
@@ -4881,13 +4908,13 @@ Workspace changes keep the existing composer text, ordered Files and model inten
 No sidebar/composer restyle, asset, dependency, localization vocabulary or visible
 prewarm presentation is introduced.
 
-App Server v63 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
+App Server v64 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
 inventory diagnostics and `session/create.submission`. First Send now carries its
 intent with creation, so the native timestamp precedes configuration/capacity/load
 waiting. Durable creation acknowledgement, upload receipts and canonical input
 acceptance remain distinct. The earlier Issue #499 paragraph describes its
 historical boundary; Issue #504 replaces the Web create-then-intent sequence.
-All consumers use the regenerated mandatory v63 vocabulary; earlier generated protocol artifacts are removed.
+All consumers use the regenerated mandatory v64 vocabulary; earlier generated protocol artifacts are removed.
 
 The new `test/e2e/mcp-prewarm.spec.ts` uses the real native stdio peer, supervisor
 and provider emulator, with explicit protocol/process counters. It exercises
@@ -4925,7 +4952,7 @@ The port retains rustX's exact native Session/node task binding, revisioned
 mutation receipts, pause/resume, Workflow arguments/results and physical
 settlement diagnostics. Harness Host/Peer services, Cordis stores and schedule
 execution APIs are excluded. Native `schedule/catalog` and `schedule/changed`
-provide bounded cold reads and invalidation under mandatory App Server v63;
+provide bounded cold reads and invalidation under mandatory App Server v64;
 The current internal versions are Runtime Client v80, SQLite 82 and child IPC 37. Ordinary message
 admission is presented separately from execution success, and the UI explicitly
 states that only the latest trigger is retained.
@@ -4980,7 +5007,7 @@ The exact frontend and Graphon execution source revisions and inspected paths
 are recorded in [the editor reference](../docs/workflow-visual-editor.md). No
 Dify or Graphon source, assets or Python runtime are copied into rustX.
 
-App Server v63 and Runtime Client v80 are mandatory. The sole generated schema
+App Server v64 and Runtime Client v80 are mandatory. The sole generated schema
 and TypeScript pair describe the new definitions and consumer addresses; old
 protocol artifacts are removed. Derived presentation files only change their
 protocol import paths, with current hashes and dependency paths recorded in the

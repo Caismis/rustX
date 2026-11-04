@@ -43,6 +43,10 @@ pub enum WorkflowConsumerField {
         name: String,
     },
     TransformInput,
+    ClassifierInstruction,
+    ClassifierClass {
+        index: u32,
+    },
     AggregateVariable {
         group: u32,
         index: u32,
@@ -194,9 +198,7 @@ pub fn declared_output(
 ) -> Result<Option<Value>, WorkflowCompileError> {
     let schema = match node {
         WorkflowNodeDefinition::Template { .. } => super::transform::text_schema(),
-        WorkflowNodeDefinition::Classifier { classes, .. } => {
-            super::transform::classifier_output(classes).schema()
-        }
+        WorkflowNodeDefinition::Classifier { .. } => super::transform::classifier_result_schema(),
         WorkflowNodeDefinition::Aggregate { groups } => {
             super::transform::validate_groups(groups)?;
             super::transform::aggregate_schema(groups)
@@ -351,6 +353,7 @@ struct ChoiceInference<'a> {
 enum NecessaryCondition {
     None,
     ToolArgumentsObject,
+    ClassifierInput,
     EqualityOperand,
     ForbiddenField,
 }
@@ -360,6 +363,7 @@ enum DestinationContract<'a> {
     Unknown,
     Complete(&'a Value),
     ToolArgumentsObject,
+    ClassifierInput,
     Equality(Option<&'a Value>),
     ForbiddenField,
 }
@@ -387,11 +391,14 @@ fn consumer<'a>(
             Some(Cow::Owned(serde_json::json!({"type":"array"}))),
             false,
         ),
-        (N::Classifier { input, .. }, F::TransformInput) => (
-            Expression::Value(input),
-            Some(Cow::Owned(serde_json::json!({"type":"string"}))),
-            false,
-        ),
+        (N::Classifier { input, .. }, F::TransformInput) => (Expression::Value(input), None, false),
+        (N::Classifier { .. }, F::ClassifierInstruction) => {
+            (Expression::Value(&UNSET_REFERENCE), None, false)
+        }
+        (N::Classifier { classes, .. }, F::ClassifierClass { index }) => {
+            classes.get(*index as usize)?;
+            (Expression::Value(&UNSET_REFERENCE), None, false)
+        }
         (N::Aggregate { groups }, F::AggregateVariable { group, index }) => {
             let group = groups.get(*group as usize)?;
             group.variables.get(*index as usize)?;
@@ -455,6 +462,11 @@ fn consumer<'a>(
         expected: expected.filter(|schema| validate_workflow_schema(schema, "expected").is_ok()),
         necessary: if matches!((node, &address.field), (N::Tool { .. }, F::Arguments)) {
             NecessaryCondition::ToolArgumentsObject
+        } else if matches!(
+            (node, &address.field),
+            (N::Classifier { .. }, F::TransformInput)
+        ) {
+            NecessaryCondition::ClassifierInput
         } else {
             NecessaryCondition::None
         },
@@ -628,6 +640,19 @@ fn destination_compatibility(
     use WorkflowReferenceCompatibility as C;
     match (schema, contract) {
         (_, DestinationContract::ForbiddenField) => C::Incompatible,
+        (Some(actual), DestinationContract::ClassifierInput) => {
+            let string = serde_json::json!({"type":"string"});
+            let number = serde_json::json!({"type":"number"});
+            match inference.compatible(actual, &string) {
+                Ok(true) => C::Compatible,
+                Ok(false) => match inference.compatible(actual, &number) {
+                    Ok(true) => C::Compatible,
+                    Ok(false) => C::Incompatible,
+                    Err(_) => C::Unknown,
+                },
+                Err(_) => C::Unknown,
+            }
+        }
         (actual, DestinationContract::Equality(other)) => {
             let actual = actual.and_then(super::schema_type);
             let other = other.and_then(super::schema_type);
@@ -1166,6 +1191,7 @@ fn analyze_query(
     let destination = match consumer.as_ref().map(|consumer| consumer.necessary) {
         Some(NecessaryCondition::ForbiddenField) => DestinationContract::ForbiddenField,
         Some(NecessaryCondition::ToolArgumentsObject) => DestinationContract::ToolArgumentsObject,
+        Some(NecessaryCondition::ClassifierInput) => DestinationContract::ClassifierInput,
         Some(NecessaryCondition::EqualityOperand) => DestinationContract::Equality(expected),
         _ => expected
             .filter(|schema| validate_workflow_schema(schema, "expected").is_ok())

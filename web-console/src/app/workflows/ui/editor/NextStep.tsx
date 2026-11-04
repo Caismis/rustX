@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
-import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v63';
+import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v64';
 import { IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import { addNode, connect, disconnect, freshNodeId } from '../../document/commands';
 import { nodePresentation, setNodePresentation } from '../../document/geometry';
@@ -87,7 +87,8 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
   const targetsFor = (port: Port) => edgesOf(owner).filter(edge => edge.from === sourceId && edgePort(edge) === port).map(edge => edge.to);
   // An Agent route or a Human Input action is named by its own ID.
   const portLabel = (port: Port) => sourceNode?.type === 'branch' ? branchPortLabel(sourceNode, port)
-    : sourceNode?.type === 'classifier' || sourceNode?.type === 'agent' && sourceNode.routes?.some(route => route.id === port) ? port
+    : sourceNode?.type === 'classifier' ? sourceNode.classes.find(item => item.id === port)?.label || port
+      : sourceNode?.type === 'agent' && sourceNode.routes?.some(route => route.id === port) ? port
       : sourceNode?.type === 'review' && sourceNode.actions.some(action => action.id === port) ? port : tx(`workflows:port.${port as BuiltinPort}`);
   function nodeTitle(id: string) {
     return nodePresentation(document, block, id)?.title || id;

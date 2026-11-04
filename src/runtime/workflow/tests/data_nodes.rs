@@ -167,7 +167,7 @@ fn authoring_offers_exclusive_sources_only_to_aggregator_consumers() {
 
 #[test]
 fn classifier_has_finite_model_demand_and_class_specific_exits() {
-    let value = json!({"description":"Classify once","block":{"input":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false},"nodes":{"start":{"type":"start"},"classify":{"type":"classifier","input":{"type":"reference","path":["args","query"]},"classes":[{"id":"support","description":"Support requests"},{"id":"other","description":"Other questions"}]},"done":{"type":"return","outputs":[{"variable":"category","value_selector":["classify","structured_output","class_id"]}]}},"edges":[{"from":"start","to":"classify"},{"from":"classify","to":"done","port":"support"},{"from":"classify","to":"done","port":"other"}]}});
+    let value = json!({"description":"Classify once","block":{"input":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false},"nodes":{"start":{"type":"start"},"classify":{"type":"classifier","input":{"type":"reference","path":["args","query"]},"classes":[{"id":"support","label":"Support","description":[{"type":"literal","value":"Support requests"}]},{"id":"other","label":"Other","description":[{"type":"literal","value":"Other questions"}]}]},"done":{"type":"return","outputs":[{"variable":"category","value_selector":["classify","class_id"]}]}},"edges":[{"from":"start","to":"classify"},{"from":"classify","to":"done","port":"support"},{"from":"classify","to":"done","port":"other"}]}});
     let program = compile_test(document(value.clone())).unwrap();
     assert_eq!(program.model_call_bound, 1);
     assert_eq!(
@@ -177,6 +177,18 @@ fn classifier_has_finite_model_demand_and_class_specific_exits() {
     let mut missing = value.clone();
     missing["block"]["edges"].as_array_mut().unwrap().pop();
     assert!(compile_test(document(missing)).is_err());
+    for kind in ["number", "integer"] {
+        let mut numeric = value.clone();
+        numeric["block"]["input"]["properties"]["query"] = json!({"type":kind});
+        assert!(
+            compile_test(document(numeric)).is_ok(),
+            "numeric variable input"
+        );
+    }
+    let mut empty = value.clone();
+    empty["block"]["nodes"]["classify"]["classes"][0]["description"] =
+        json!([{ "type":"literal", "value":"   " }]);
+    assert!(compile_test(document(empty)).is_err());
     let mut duplicate = value;
     duplicate["block"]["nodes"]["classify"]["classes"][1]["id"] = json!("support");
     assert!(compile_test(document(duplicate)).is_err());

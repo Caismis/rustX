@@ -1902,8 +1902,8 @@ export type WorkflowNodeDefinition =
   | {
       model?: WorkflowModelPolicy;
       input: WorkflowValue;
-      instruction?: string;
-      classes: WorkflowAgentRoute[];
+      instruction?: WorkflowValue[];
+      classes: WorkflowClassifierClass[];
       type: 'classifier';
     }
   | {
@@ -2385,6 +2385,13 @@ export type WorkflowConsumerField =
     }
   | {
       kind: 'transform_input';
+    }
+  | {
+      kind: 'classifier_instruction';
+    }
+  | {
+      index: number;
+      kind: 'classifier_class';
     }
   | {
       group: number;
@@ -9603,15 +9610,15 @@ export interface WorkflowListSort {
   order: WorkflowSortOrder;
 }
 /**
- * One exit an Agent may choose, as Dify's Agent output route. The child
- * sees every route's ID and description when it picks one.
+ * A classifier's stable exit, display label and variable-aware topic.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowAgentRoute".
+ * via the `definition` "WorkflowClassifierClass".
  */
-export interface WorkflowAgentRoute {
+export interface WorkflowClassifierClass {
   id: string;
-  description: string;
+  label: string;
+  description: WorkflowValue[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9755,6 +9762,17 @@ export interface WorkflowAssignment {
 export interface WorkflowReviewAction {
   id: string;
   title: string;
+}
+/**
+ * One exit an Agent may choose, as Dify's Agent output route. The child
+ * sees every route's ID and description when it picks one.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAgentRoute".
+ */
+export interface WorkflowAgentRoute {
+  id: string;
+  description: string;
 }
 /**
  * A stable exit identity and its condition. The first matching case wins.

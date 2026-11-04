@@ -1,7 +1,7 @@
 import type {
   WorkflowBlock, WorkflowFileDocument, WorkflowEdgeDefinition, WorkflowNodeDefinition,
   WorkflowPredicate, WorkflowValue,
-} from '../../../../../protocol/app-server/v63';
+} from '../../../../../protocol/app-server/v64';
 
 /** The one browser editing document: exactly the native authoring type.
  * Canvas nodes, edges and inspector forms are projections of it. */

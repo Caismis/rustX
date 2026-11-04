@@ -1,7 +1,7 @@
 import { CommandRejected, replaceNode } from './commands';
 import { blockAt, nodeAt, sameBlockPath, updateBlock, type BlockPath, type WorkflowDocument } from './model';
 import { nodePresentation, putNote, setNodePresentation } from './geometry';
-import type { WorkflowNodePresentation, WorkflowNote } from '../../../../../protocol/app-server/v63';
+import type { WorkflowNodePresentation, WorkflowNote } from '../../../../../protocol/app-server/v64';
 
 /** One component of a field path inside a node or block. A string is a
  * structural property of the native authoring type, `{ key }` an authored
@@ -209,11 +209,12 @@ export interface ArrayEdit {
   readonly array: FieldAddress;
   readonly removed?: number;
   readonly inserted?: number;
+  readonly moved?: { readonly from: number; readonly to: number };
 }
 
 /** The edit that undoes `edit`. */
 export function invertArrayEdit(edit: ArrayEdit): ArrayEdit {
-  return { array: edit.array, ...(edit.removed !== undefined ? { inserted: edit.removed } : {}), ...(edit.inserted !== undefined ? { removed: edit.inserted } : {}) };
+  return { array: edit.array, ...(edit.moved ? { moved: {from:edit.moved.to,to:edit.moved.from} } : {}), ...(edit.removed !== undefined ? { inserted: edit.removed } : {}), ...(edit.inserted !== undefined ? { removed: edit.inserted } : {}) };
 }
 
 function sameStep(left: FieldStep, right: FieldStep): boolean {
@@ -231,6 +232,10 @@ export function remapAddress(address: FieldAddress, edit: ArrayEdit): { address:
   const index = inside ? address.path[depth] : undefined;
   if (typeof index !== 'number') return { address, covered: false };
   let moved = index;
+  if (edit.moved) {
+    const {from,to} = edit.moved;
+    moved = index === from ? to : from < to && index > from && index <= to ? index - 1 : to < from && index >= to && index < from ? index + 1 : index;
+  }
   if (edit.removed !== undefined) {
     if (index === edit.removed) return undefined;
     if (index > edit.removed) moved--;

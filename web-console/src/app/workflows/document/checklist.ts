@@ -1,4 +1,4 @@
-import type { WorkflowCheckReport, WorkflowDependencyFailure } from '../../../../../protocol/app-server/v63';
+import type { WorkflowCheckReport, WorkflowDependencyFailure } from '../../../../../protocol/app-server/v64';
 import { locate } from './diagnostics';
 import { nodePresentation } from './geometry';
 import { blockAt, blockKey, childSteps, edgesOf, isContainer, nodeAt, startOf, type Block, type BlockPath, type NodeDefinition, type Value, type WorkflowDocument } from './model';
@@ -32,7 +32,7 @@ function nodeProblems(node: NodeDefinition): ChecklistMessage[] {
   switch (node.type) {
     case 'template': return !node.template ? [required('value','template')] : Object.entries(node.variables).filter(([,value]) => empty(value)).map(([name]) => required('input',`variables.${name}`));
     case 'list': return empty(node.input) ? [required('input','input')] : [];
-    case 'classifier': return empty(node.input) ? [required('input','input')] : node.classes.some(item => !item.description.trim()) ? [required('value','classes')] : [];
+    case 'classifier': return empty(node.input) ? [required('input','input')] : (!node.classes.length || node.classes.some(item => !item.label.trim() || !item.description.length || item.description.every(part => part.type === 'literal' && typeof part.value === 'string' && !part.value.trim()))) ? [required('value','classes')] : [];
     case 'aggregate': return node.groups.some(group => !group.variables.length || group.variables.some(path => !path.length)) ? [required('input','groups')] : [];
     case 'model': {
       if (node.model?.mode === 'explicit' && !node.model.model) return [required('model', 'model.model')];
