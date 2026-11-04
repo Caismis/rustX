@@ -18,9 +18,20 @@ export function planarMesh(mesh: GeometryMesh, deadline: number): GeometryMesh {
     if (flat) { axis = component; break; }
   }
   if (axis < 0) return mesh;
-  for (const stream of [normals, colors]) if (stream) for (let at = 3; at < stream.length; at++) {
-    if ((at & 4095) === 0 && performance.now() > deadline) return mesh;
-    if (stream[at] !== stream[at % 3]) return mesh;
+  for (const stream of [normals, colors]) if (stream) {
+    const first = stream[0], second = stream[1], third = stream[2];
+    let at = 3, nextCheck = 4095;
+    for (; at + 2 < stream.length; at += 3) {
+      if (at === nextCheck) {
+        if (performance.now() > deadline) return mesh;
+        nextCheck += 4095;
+      }
+      if (stream[at] !== first || stream[at + 1] !== second || stream[at + 2] !== third) return mesh;
+    }
+    for (; at < stream.length; at++) {
+      if ((at & 4095) === 0 && performance.now() > deadline) return mesh;
+      if (stream[at] !== stream[at % 3]) return mesh;
+    }
   }
   if (performance.now() > deadline) return mesh;
   const x = (axis + 1) % 3, y = (axis + 2) % 3;
@@ -40,11 +51,13 @@ export function planarMesh(mesh: GeometryMesh, deadline: number): GeometryMesh {
   let orientation = 0, area = 0;
   for (let at = 0; at < indices.length; at += 3) {
     if ((at & 4095) === 0 && performance.now() > deadline) return mesh;
-    const triangle = cross(indices[at], indices[at + 1], indices[at + 2]), sign = Math.sign(triangle);
+    const first = indices[at], second = indices[at + 1], third = indices[at + 2];
+    const triangle = cross(first, second, third), sign = Math.sign(triangle);
     if (!sign || orientation && sign !== orientation) return mesh;
     orientation = sign; area += triangle;
     for (let edge = 0; edge < 3; edge++) {
-      const a = indices[at + edge] + 1, b = indices[at + (edge + 1) % 3] + 1;
+      const a = (edge === 0 ? first : edge === 1 ? second : third) + 1;
+      const b = (edge === 0 ? second : edge === 1 ? third : first) + 1;
       const low = Math.min(a, b), high = Math.max(a, b);
       let slot = (Math.imul(low, 73856093) ^ Math.imul(high, 19349663)) & mask, probes = 0;
       for (;;) {

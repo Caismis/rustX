@@ -7,6 +7,8 @@ performance work. Its final source hashes and results supersede the historical
 validation table below for those changes; the 50/200-ms acceptance gap remains.
 The [takeover validation](takeover-validation.md) records the later WASM-request
 test repair, projection switching, Parts search and current-source checks.
+The [budget follow-up](budget-follow-up.md) fixes off-origin camera reconstruction,
+reduces certified planar preparation and records the still-failing budget gate.
 [Geometry contracts](../geometry-previews.md) define the formats, source authority,
 fixed-copy lifetime, lossless preparation and resource limits.
 [Interaction controls and current validation](interaction-roadmap.md) describe

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { Box3, BoxGeometry, Group, Mesh, MeshBasicMaterial, Vector2 } from 'three';
+import { Box3, BoxGeometry, Group, Mesh, MeshBasicMaterial, Vector2, Vector3 } from 'three';
 import { mountGeometry } from '../src/app/components/documents/geometry/viewport';
 import { en } from '../src/locale/dictionaries/geometry';
 
@@ -88,4 +88,31 @@ it('persists real orthographic wheel zoom with an unchanged position and no idle
   expect(f.changed.mock.lastCall![0].camera.projection).toBe('orthographic'); expect(f.changed.mock.lastCall![0].camera.verticalSpan).toBeLessThan(before);
   draw(); vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
   f.view.setProjection('perspective'); expect(runtime.renderers).toHaveLength(1); expect(Number.isFinite(f.changed.mock.lastCall![0].camera.position[0])).toBe(true);
+});
+
+it.each(['front', 'top'] as const)('preserves an off-origin tiny focused part through a %s projection roundtrip', viewAngle => {
+  const object = new Group(), material = new MeshBasicMaterial();
+  for (const offset of [-1000, 1000, 500]) {
+    const part = new Mesh(new BoxGeometry(), material); part.position[viewAngle === 'top' ? 'z' : 'y'] = offset;
+    if (offset === 500) part.scale.setScalar(1e-6);
+    object.add(part);
+  }
+  const element = document.createElement('div'); document.body.append(element);
+  Object.defineProperties(element, { clientWidth: { value: 640 }, clientHeight: { value: 480 } });
+  const changed = vi.fn(), view = mountGeometry(element, object, new Box3().setFromObject(object), undefined, en, changed, vi.fn()); mounted.push(view);
+  view.fit(viewAngle); view.select('0.2'); view.focus(); draw();
+  const before = changed.mock.lastCall![0].camera;
+  const distance = new Vector3().fromArray(before.position).distanceTo(new Vector3().fromArray(before.target));
+  expect(distance).toBeGreaterThan(2e-6); expect(distance).toBeLessThan(3e-6);
+  changed.mockClear();
+  for (const projection of ['orthographic', 'perspective'] as const) {
+    view.setProjection(projection); draw();
+    const after = changed.mock.lastCall![0].camera;
+    expect(after.projection).toBe(projection); expect(after.target).toEqual(before.target); expect(after.up).toEqual(before.up);
+    expect(new Vector3().fromArray(after.position).distanceTo(new Vector3().fromArray(before.position))).toBeLessThan(distance * 1e-6);
+    expect(new Vector3().fromArray(after.position).distanceTo(new Vector3().fromArray(after.target)) / distance).toBeCloseTo(1, 6);
+    if (projection === 'orthographic') expect(after.verticalSpan / (2 * distance * Math.tan(Math.PI / 8))).toBeCloseTo(1, 6);
+  }
+  expect(changed).toHaveBeenCalledTimes(2); expect(runtime.renderers).toHaveLength(1);
+  vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
 });

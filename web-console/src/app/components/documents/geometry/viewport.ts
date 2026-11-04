@@ -215,7 +215,12 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
       // OrbitControls fixes its orbit-axis quaternion at construction time.
       // Recreate through its public lifecycle instead of mutating internals.
       controls.removeEventListener('change', changed); controls.removeEventListener('start', started); controls.removeEventListener('end', ended); controls.dispose();
-      controls = new OrbitControls(camera, canvas); orbitUp.copy(camera.up); configureControls(); controls.addEventListener('change', changed); controls.addEventListener('start', started); controls.addEventListener('end', ended);
+      // Its constructor updates around the default origin target. Preserve the
+      // intended pose until the retained target and limits can be applied below.
+      const position = camera.position.clone(), rotation = camera.quaternion.clone(), zoom = camera.zoom;
+      controls = new OrbitControls(camera, canvas);
+      camera.position.copy(position); camera.quaternion.copy(rotation); camera.zoom = zoom; camera.updateProjectionMatrix();
+      orbitUp.copy(camera.up); configureControls(); controls.addEventListener('change', changed); controls.addEventListener('start', started); controls.addEventListener('end', ended);
     }
     controls.minDistance = minDistance; controls.maxDistance = maxDistance; configureZoom(); controls.target.copy(target);
     // The caller renders and publishes this owner-driven pose exactly once.

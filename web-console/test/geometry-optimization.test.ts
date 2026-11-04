@@ -53,6 +53,23 @@ it('certifies a convex planar disk and retains its exact surface, hierarchy and 
   try { expect(admitted.bounds.min.toArray()).toEqual([0,0,0]); expect(admitted.bounds.max.toArray()).toEqual([180,180,0]); }
   finally { disposeScene([admitted.scene]); }
 });
+it('certifies constant RGB tuples while retaining authored signed-zero normals at the hull', () => {
+  const model = grid(), mesh = model.meshes[0];
+  mesh.colors = new Float32Array(mesh.positions.length);
+  for (let at = 0; at < mesh.positions.length; at += 3) {
+    mesh.colors.set([0.25, 0.5, 0.75], at);
+    mesh.normals![at] = mesh.positions[at] === 180 ? -0 : 0;
+    mesh.normals![at + 1] = -0;
+  }
+  const output = optimizeModel(model, Infinity).meshes[0];
+  expect(output.indices).toHaveLength(6);
+  for (let at = 0; at < output.positions.length; at += 3) {
+    expect([...output.colors!.subarray(at, at + 3)]).toEqual([0.25, 0.5, 0.75]);
+    expect(Object.is(output.normals![at], output.positions[at] === 180 ? -0 : 0)).toBe(true);
+    expect(Object.is(output.normals![at + 1], -0)).toBe(true);
+    expect(output.normals![at + 2]).toBe(1);
+  }
+});
 it('retains a small hole and hard color seams instead of closing or blending them', async () => {
   const source = grid(180, true, true), result = await optimizeModel(source);
   exactTriangles(source.meshes[0], result.meshes[0]);

@@ -115,6 +115,32 @@ test('projection switches preserve framing and resources, persist orthographic w
   expect((await pose(page)).camera.projection).toBe('perspective'); expect((await pose(page)).camera).not.toHaveProperty('verticalSpan'); expect((await resources(page)).contexts).toBe(1);
 });
 
+test('projection roundtrip preserves a tiny focused part far from the orbit origin', async ({ page }) => {
+  await load(page, 'delivery', assemblyGlb([
+    { name: 'Assembly', children: [1, 2, 3] },
+    { name: 'A', mesh: 0, translation: [-.5, -1000.5, -.5], scale: [.1, .1, .1] },
+    { name: 'B', mesh: 0, translation: [-.5, 999.5, -.5], scale: [.1, .1, .1] },
+    { name: 'Small', mesh: 0, translation: [-5e-7, 500 - 5e-7, -5e-7], scale: [1e-7, 1e-7, 1e-7] },
+  ]));
+  await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: 'Front', exact: true }).click();
+  const tree = await parts(page); await tree.getByRole('button', { name: 'Small', exact: true }).click();
+  await page.getByRole('button', { name: 'Focus selected', exact: true }).click(); await painted(page);
+  await expect.poll(async () => (await resources(page)).workers).toBe(0); await painted(page);
+  const initial = await pose(page), before = await resources(page);
+  const distance = Math.hypot(...initial.camera.position.map((value: number, i: number) => value - initial.camera.target[i]));
+  expect(distance).toBeGreaterThan(1e-6); expect(distance).toBeLessThan(1e-5);
+  for (const projection of ['Orthographic', 'Perspective']) {
+    await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: projection, exact: true }).click(); await painted(page);
+    const after = await pose(page);
+    expect(after.camera.projection).toBe(projection.toLowerCase()); expect(after.camera.target).toEqual(initial.camera.target); expect(after.camera.up).toEqual(initial.camera.up);
+    expect(Math.hypot(...after.camera.position.map((value: number, i: number) => value - initial.camera.position[i]))).toBeLessThan(distance * 1e-6);
+    if (projection === 'Orthographic') expect(after.camera.verticalSpan / (2 * distance * Math.tan(Math.PI / 8))).toBeCloseTo(1, 6);
+    expect(await resources(page)).toEqual(before);
+  }
+  const calls = await page.evaluate(() => (window as any).geometryDrawCalls.calls); await page.waitForTimeout(250);
+  expect(await page.evaluate(() => (window as any).geometryDrawCalls.calls)).toBe(calls);
+});
+
 test('mesh outlines start enabled, can be disabled, restore the option and add no idle loop', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await load(page); const initialReads = await reads(page);

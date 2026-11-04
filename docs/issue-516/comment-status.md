@@ -1,8 +1,8 @@
 # PR 517 comment implementation status
 
-Checked on 2026-11-04, Asia/Shanghai, against all eleven top-level/review timeline
+Checked on 2026-11-04, Asia/Shanghai, against all twelve top-level/review timeline
 entries, their IDs and update times, and the complete review-thread response.
-Comment 6623187578 adds a browser-request classification regression;
+Comment 6625398717 adds an off-origin camera reconstruction regression;
 the inline-thread list was empty. This is an implementation inventory, not a public reply or an
 acceptance of the remaining latency budget. The current implementation and
 verification are recorded in [the interaction report](interaction-roadmap.md).
@@ -32,6 +32,7 @@ These follow-ups are not represented as disabled placeholder controls.
 
 | Comment | Implementation status |
 | --- | --- |
+| [6625398717](https://github.com/Caismis/rustX/pull/517#issuecomment-6625398717) | Preserve intended camera position/quaternion/zoom across real OrbitControls construction before applying the retained target and limits. Front/Top real-controls reproductions and the browser Focus/projection roundtrip cover tiny off-origin occurrences. Current verification and the still-failing performance gate are recorded in [the budget follow-up](budget-follow-up.md). |
 | [6623187578](https://github.com/Caismis/rustX/pull/517#issuecomment-6623187578) | Shared request classifiers distinguish actual WASM bytes and executable CAD glue/Workers from Vite URL-import metadata. Cancellation, two-owner reuse and STL lazy-loading assertions retain their original resource and lifetime requirements. Default Vite and production-fixture validation is recorded in [the takeover report](takeover-validation.md). |
 | [6620597789](https://github.com/Caismis/rustX/pull/517#issuecomment-6620597789) | Outline depth tolerance is derived from perspective projection and one part per million of eye distance, replacing the fixed NDC offset. Numerical thin-overlap coverage spans three scales. Real OrbitControls input coverage verifies tiny pans render and persist, including retirement before queued input observation through the retirement publisher. Browser pixel coverage is included; current-run results are tracked separately from prior-head evidence. |
 | [6600307712](https://github.com/Caismis/rustX/pull/517#issuecomment-6600307712) | Side questions use an inline Workbench tab and existing auxiliary owner, with bounded authority/Session/Conversation drafts, collapsed-sidebar entry and no submission/cancellation on navigation. File-change hover cards opt into a wider viewport-bounded Floating UI surface, full-path/Copy header and scrollable normal-size code. Ordinary hover-card widths remain unchanged. New lifecycle/layout tests and browser cases cover these changes; browser acceptance must use the current source revision. |

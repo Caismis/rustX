@@ -79,10 +79,16 @@ test('production startup defers geometry and the STL envelope remains responsive
       return { userAgent: navigator.userAgent, renderer: context.getParameter(debug?.UNMASKED_RENDERER_WEBGL ?? context.RENDERER), vendor: context.getParameter(debug?.UNMASKED_VENDOR_WEBGL ?? context.VENDOR), version: context.getParameter(context.VERSION), devicePixelRatio };
     }),
     idleDrawCalls: 0 };
+  // Shaded dimensions can appear while default-on outlines are still preparing.
+  // Complete that owned work before settling frames and sampling an idle view.
+  const outlines = page.getByRole('button', { name: 'Model outlines', exact: true });
+  await expect(outlines).toHaveAttribute('aria-pressed', 'true');
+  await expect(outlines).toHaveAttribute('aria-busy', 'false');
+  await expect.poll(async () => (await resources(page)).workers).toBe(0);
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   measurement.idleDrawCalls = await page.evaluate(async () => {
     const counter = (window as any).geometryDrawCalls, start = counter.calls;
-    // A defined one-second sampling window, after first paint, measures demand rendering.
+    // A defined one-second sampling window after preparation measures demand rendering.
     await new Promise(resolve => setTimeout(resolve, 1000)); return counter.calls - start;
   });
   expect(measurement.idleDrawCalls).toBe(0);
