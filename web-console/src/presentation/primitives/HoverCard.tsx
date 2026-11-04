@@ -1,8 +1,9 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react-dom'
 import { writeClipboard } from './clipboard.ts'
 import { usePointerGrace } from './pointer-grace.ts'
 import css from './HoverCard.module.css'
@@ -22,8 +23,9 @@ import css from './HoverCard.module.css'
  */
 export function HoverCard({
   anchor, content, openDelayMs = 500, disabled = false,
-  copyText, copyLabel, copiedLabel,
+  copyText, copyLabel, copiedLabel, variant = 'default',
 }: {
+  variant?: 'default' | 'file-change'
   anchor: ReactNode
   content: ReactNode
   openDelayMs?: number
@@ -33,7 +35,6 @@ export function HoverCard({
   copiedLabel: string
 }) {
   const tx = useTranslation();
-  const rootRef = useRef<HTMLSpanElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -42,7 +43,17 @@ export function HoverCard({
   const copyingRef = useRef(false)
   const mountedRef = useRef(true)
   const [open, setOpen] = useState(false)
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  const { refs, floatingStyles, isPositioned } = useFloating({
+    open, placement: 'right-start', strategy: 'fixed', whileElementsMounted: autoUpdate,
+    middleware: [offset(8), flip({ padding: 8, fallbackAxisSideDirection: 'end' }), shift({ padding: 8, crossAxis: true }), size({
+      padding: 8,
+      apply: ({ availableWidth, availableHeight, elements }) => {
+        elements.floating.style.maxWidth = `${Math.max(0, availableWidth)}px`
+        elements.floating.style.maxHeight = `${Math.max(0, Math.min(variant === 'file-change' ? 640 : Infinity, availableHeight))}px`
+      },
+    })],
+  })
+  const setCard = useCallback((node: HTMLDivElement | null) => { cardRef.current = node; refs.setFloating(node) }, [refs.setFloating])
   const [copied, setCopied] = useState(false)
 
   const clearCopied = useCallback(() => {
@@ -90,40 +101,6 @@ export function HoverCard({
     }
   }, [])
 
-  // Fixed-position from the anchor rect before paint; track the anchor while
-  // open (capture-phase scroll catches nested panes).
-  useLayoutEffect(() => {
-    if (!open) { setPos(null); return }
-    const place = () => {
-      const wrapper = rootRef.current
-      /* v8 ignore next -- the ref is attached before the layout effect runs and the listeners die with it. */
-      if (wrapper === null) return
-      const r = wrapper.getBoundingClientRect()
-      const h = cardRef.current?.offsetHeight ?? 0
-      const top = r.top + h > window.innerHeight - 8 ? window.innerHeight - h - 8 : r.top
-      setPos({ left: r.right + 8, top })
-    }
-    place()
-    window.addEventListener('scroll', place, true)
-    window.addEventListener('resize', place)
-    return () => {
-      window.removeEventListener('scroll', place, true)
-      window.removeEventListener('resize', place)
-    }
-  }, [open])
-
-  // The first placement ran before the card mounted (height read 0): once the
-  // card's real height is measurable, correct the bottom-edge clamp. The
-  // correction converges — a clamped top satisfies the guard, so it runs once.
-  useLayoutEffect(() => {
-    if (!open || pos === null) return
-    /* v8 ignore next -- the card is mounted whenever pos is set, so the ref is attached here. */
-    const h = cardRef.current?.offsetHeight ?? 0
-    if (pos.top + h > window.innerHeight - 8) {
-      setPos({ left: pos.left, top: window.innerHeight - h - 8 })
-    }
-  }, [open, pos])
-
   const copy = async (text: string): Promise<void> => {
     if (copied || copyingRef.current) return
     copyingRef.current = true
@@ -139,11 +116,12 @@ export function HoverCard({
   }
 
   const copyable = copyText !== undefined
-  const card = open && pos !== null && (
+  const card = open && (
     <div
-      ref={cardRef}
-      className={`${css.card}${copyable ? ` ${css.copyable}` : ''}${copied ? ` ${css.feedback}` : ''}`}
-      style={{ ...pos, minHeight: copied && copyHeightRef.current !== null ? copyHeightRef.current : undefined }}
+      ref={setCard}
+      className={`${css.card}${copyable ? ` ${css.copyable}` : ''}${copied ? ` ${css.feedback}` : ''}${variant === 'file-change' ? ` ${css.fileChange}` : ''}`}
+      data-hover-card={variant}
+      style={{ ...floatingStyles, visibility: isPositioned ? undefined : 'hidden', minHeight: copied && copyHeightRef.current !== null ? copyHeightRef.current : undefined }}
       role={copyable ? 'button' : undefined}
       tabIndex={copyable ? 0 : undefined}
       aria-label={copyable ? tx('common:hover-card.value-value', { p0: copyLabel, p1: copyText }) : undefined}
@@ -172,7 +150,7 @@ export function HoverCard({
 
   return (
     <span
-      ref={rootRef}
+      ref={refs.setReference}
       className={css.root}
       onPointerEnter={() => {
         if (disabled) return

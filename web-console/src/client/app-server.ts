@@ -905,6 +905,7 @@ export class AppServerClient {
   }
   /** Intent events are synchronously admitted and projected by the Session actor. */
   async release(id: string): Promise<void> {
+    this.auxiliary.clearDraft(id);
     this.models.release(id);
     await this.lifecycles.command(id, { kind: 'release', current: () => true });
   }

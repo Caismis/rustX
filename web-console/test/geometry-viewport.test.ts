@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { Box3, BoxGeometry, Group, Mesh, MeshBasicMaterial, Vector2, type PerspectiveCamera } from 'three';
+import { Box3, BoxGeometry, Group, LineSegments, Mesh, MeshBasicMaterial, MeshStandardMaterial, ShaderMaterial, Vector2, type BufferGeometry, type PerspectiveCamera } from 'three';
 import { mountGeometry } from '../src/app/components/documents/geometry/viewport';
+import { outlineData } from '../src/app/components/documents/geometry/outline-data';
+import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/limits';
 import { en } from '../src/locale/dictionaries/geometry';
 const runtime = vi.hoisted(() => ({ renderers: [] as any[], controls: [] as any[] }));
 vi.mock('three', async original => {
@@ -37,10 +39,10 @@ beforeEach(() => {
   vi.stubGlobal('matchMedia', () => { const query = { listener: undefined as (() => void) | undefined, addEventListener: (_type: string, listener: () => void) => { query.listener = listener; }, removeEventListener: vi.fn(() => { query.listener = undefined; }) }; queries.push(query); return query; });
 });
 afterEach(() => { mounted.splice(0).forEach(view => view.dispose()); vi.useRealTimers(); vi.unstubAllGlobals(); });
-function mount(object = new Group(), saved?: Parameters<typeof mountGeometry>[3]) {
+function mount(object = new Group(), saved?: Parameters<typeof mountGeometry>[3], options?: Parameters<typeof mountGeometry>[7]) {
   if (!object.children.length) object.add(new Mesh(new BoxGeometry(), new MeshBasicMaterial()));
   const element = document.createElement('div'); Object.defineProperties(element, { clientWidth: { value: 640, configurable: true }, clientHeight: { value: 480, configurable: true } });
-  const changed = vi.fn(), lost = vi.fn(), view = mountGeometry(element, object, new Box3().setFromObject(object), saved, en, changed, lost); mounted.push(view);
+  const changed = vi.fn(), lost = vi.fn(), view = mountGeometry(element, object, new Box3().setFromObject(object), saved, en, changed, lost, options); mounted.push(view);
   return { view, changed, lost, element, renderer: runtime.renderers.at(-1), control: () => runtime.controls.at(-1) };
 }
 function draw() { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); }
@@ -153,4 +155,47 @@ it('focuses a small occurrence and restores its close camera without a whole-mod
   f.view.dispose();
   const next = mount(object, { copyId: 'copy', ...state });
   expect(next.control().object.position.toArray()).toEqual(state.camera.position); expect(next.control().target.toArray()).toEqual(state.camera.target);
+});
+function generatedFixture() {
+  const object = new Group(), material = new MeshStandardMaterial();
+  const sources = [10, 10.5].map(x => {
+    const geometry = new BoxGeometry().translate(x, 0, 0); geometry.clearGroups(); geometry.addGroup(0, geometry.index!.count, 0);
+    const source = new Mesh(geometry, [material]); object.add(source); return source;
+  });
+  return { object, sources };
+}
+function outlineWorker() {
+  vi.stubGlobal('Worker', class {
+    onmessage: any; onerror: any; onmessageerror: any; terminate() {}
+    postMessage({ inputs }: { inputs: Parameters<typeof outlineData>[0][] }) { queueMicrotask(() => this.onmessage?.({ data: { ok: true, data: inputs.map(value => outlineData(value, L.outlineSegments, performance.now() + 2000)) } })); }
+  });
+}
+it('owns generated outline buffers beside centered sources and preserves picking, focus, inspection and visibility', async () => {
+  outlineWorker();
+  const { object, sources } = generatedFixture(), f = mount(object, { copyId: 'copy', hidden: ['0.1'] }, { generated: true }), inspection = f.view.inspect();
+  expect(await f.view.setOutlines(true)).toBe('on'); draw();
+  const scene = f.renderer.render.mock.calls[0][0] as Group, lines: LineSegments<BufferGeometry, ShaderMaterial>[] = [];
+  scene.traverse(item => { if (item instanceof LineSegments && item.material instanceof ShaderMaterial) lines.push(item); });
+  expect(lines).toHaveLength(1); const line = lines[0], visibility = () => line.material.uniforms.occurrenceVisible.value.slice(0, 2); scene.updateMatrixWorld(true);
+  expect(line.matrixWorld.equals(sources[0].matrixWorld)).toBe(true); expect(object.children).toEqual(sources); sources.forEach(source => expect(source.children).toHaveLength(0));
+  expect(visibility()).toEqual(new Float32Array([1, 0])); expect(f.view.inspect()).toEqual(inspection);
+  const sourceRaycast = vi.spyOn(sources[0], 'raycast'); f.view.fit('front');
+  const canvas = f.renderer.domElement as HTMLCanvasElement;
+  vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 480 } as DOMRect);
+  canvas.dispatchEvent(new MouseEvent('pointerdown', { clientX: 320, clientY: 240 })); canvas.dispatchEvent(new MouseEvent('pointerup', { clientX: 320, clientY: 240 }));
+  expect(sourceRaycast).toHaveBeenCalledOnce(); expect(f.changed.mock.lastCall![0].selected).toBe('0.0');
+  f.view.visibility('0.1', true); f.view.select('0.1'); f.view.focus();
+  expect(f.control().target.toArray()).toEqual([.25, 0, 0]);
+  f.view.isolate(); expect(visibility()).toEqual(new Float32Array([0, 1]));
+  f.view.restore(); expect(visibility()).toEqual(new Float32Array([1, 1]));
+  const geometryDispose = vi.spyOn(line.geometry, 'dispose'), materialDispose = vi.spyOn(line.material, 'dispose'); f.view.dispose(); f.view.dispose();
+  expect(geometryDispose).toHaveBeenCalledOnce(); expect(materialDispose).toHaveBeenCalledOnce(); sources.forEach(source => expect(source.layers.mask).toBe(1));
+});
+it('keeps authored outlines attached to the original occurrences with their local normal-matrix shader', async () => {
+  outlineWorker();
+  const { object, sources } = generatedFixture(), f = mount(object, undefined, { generated: false }); expect(await f.view.setOutlines(true)).toBe('on'); draw();
+  for (const source of sources) {
+    expect(source.children).toHaveLength(1); const line = source.children[0] as LineSegments<BufferGeometry, ShaderMaterial>;
+    expect(line.material.vertexShader).not.toContain('occurrenceVisible'); expect(source.layers.mask).toBe(1);
+  }
 });

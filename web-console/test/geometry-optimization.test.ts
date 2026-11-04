@@ -72,6 +72,23 @@ it('preserves dense curved surfaces and thin closed geometry bit for bit, includ
     exactTriangles(mesh, optimizeModel(model).meshes[0]); triangles.dispose();
   }
 });
+it.each([false, true])('indexes exact signed-zero attribute tuples without merging seams (colors: %s)', colored => {
+  const positions = new Float32Array(60_000 * 3), normals = new Float32Array(positions.length);
+  const colors = colored ? new Float32Array(positions.length) : undefined;
+  for (let triangle = 0; triangle < 20_000; triangle++) {
+    const offset = triangle * 9;
+    positions.set([triangle & 1 ? -0 : 0,0,0, 1,0,0, 0,1,1], offset);
+    for (let corner = 0; corner < 3; corner++) {
+      normals.set([triangle & 2 ? -0 : 0,0,1], offset + corner * 3);
+      colors?.set([0.5,triangle & 4 ? -0 : 0,1], offset + corner * 3);
+    }
+  }
+  const mesh: GeometryMesh = { name: 'Exact tuples', positions, normals, colors, groups: [] };
+  const source = { meshes: [mesh], root: { name: '', meshes: [0], children: [] } };
+  const result = optimizeModel(source, Infinity); validateModel(result);
+  expect(result.meshes[0].positions.length / 3).toBe(colored ? 16 : 8);
+  exactTriangles(mesh, result.meshes[0]);
+});
 it('keeps the admitted near-limit six-face STL within the original import deadline without simplification', () => {
   const source = importStl(denseBoxStl()); expect(source.meshes[0].positions.length / 3).toBe(992016);
   const result = optimizeModel(source); validateModel(result); exactTriangles(source.meshes[0], result.meshes[0]);

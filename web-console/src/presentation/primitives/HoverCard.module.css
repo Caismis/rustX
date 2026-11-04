@@ -53,3 +53,15 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* File diffs need a reading surface; session previews keep their compact size. */
+.fileChange {
+  width: 720px;
+  max-width: calc(100vw - 16px);
+  max-height: min(640px, calc(100dvh - 16px));
+  overflow: auto;
+  padding: 0;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  border: 1px solid var(--dsw-alias-border-l3);
+}

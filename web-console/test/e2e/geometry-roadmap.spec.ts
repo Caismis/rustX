@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { SphereGeometry, Triangle, Vector3 } from 'three';
+import { BoxGeometry, SphereGeometry, Triangle, Vector3 } from 'three';
+import { PNG } from 'pngjs';
 import { instrument, resources } from './geometry-observation';
 import { denseBoxStl } from '../geometry-fixtures';
 
@@ -11,10 +12,10 @@ const pose = (page: Page) => page.evaluate(() => (window as any).geometryContrac
 const reads = (page: Page) => page.evaluate(() => (window as any).geometryContract.reads.filter((read: any) => !read.probe).length);
 const painted = (page: Page) => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 
-function assemblyGlb() {
+function assemblyGlb(nodes: object[] = [{ name: 'Assembly', translation: [100,200,300], scale: [2,3,4], children: [1,2] }, { name: 'A', mesh: 0 }, { name: 'B', mesh: 0, translation: [20,0,0] }]) {
   const original = new Uint8Array(readFileSync(new URL('../fixtures/geometry/cube.glb', import.meta.url))), header = new DataView(original.buffer), length = header.getUint32(12, true);
   const json = JSON.parse(new TextDecoder().decode(original.subarray(20, 20 + length)));
-  json.nodes = [{ name: 'Assembly', translation: [100,200,300], scale: [2,3,4], children: [1,2] }, { name: 'A', mesh: 0 }, { name: 'B', mesh: 0, translation: [20,0,0] }];
+  json.nodes = nodes;
   json.scenes = [{ nodes: [0] }]; json.scene = 0;
   const text = new TextEncoder().encode(JSON.stringify(json)), padded = Math.ceil(text.length / 4) * 4, bin = original.subarray(20 + length);
   const bytes = new Uint8Array(20 + padded + bin.length), view = new DataView(bytes.buffer);
@@ -113,6 +114,64 @@ test('mesh outlines start enabled, can be disabled, restore the option and add n
   expect(await reads(page)).toBe(initialReads); expect(errors).toEqual([]);
   await page.getByRole('button', { name: 'Close preview cube.glb', exact: true }).click();
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
+});
+
+for (const scale of [1e-6, 1, 1e6]) test(`thin occluded outlines remain hidden at model scale ${scale}`, async ({ page }) => {
+  // The source cube spans [0, 10]. Keep its opaque authored material and form
+  // a 2x2x.02 occluder at the origin and a 1x1x.02 box at z=-.04.
+  await load(page, 'delivery', assemblyGlb([
+    { name: 'Assembly', scale: [scale, scale, scale], children: [1, 2] },
+    { name: 'A', mesh: 0, translation: [-1, -1, -.01], scale: [.2, .2, .002] },
+    { name: 'B', mesh: 0, translation: [-.5, -.5, -.05], scale: [.1, .1, .002] },
+  ]));
+  await page.getByRole('button', { name: 'View angle', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Front', exact: true }).click();
+  const tree = await parts(page), canvas = page.locator('[data-geometry-format] canvas');
+  const settle = async () => { await canvas.focus(); await page.mouse.move(0, 0); await expect(page.getByRole('tooltip')).toHaveCount(0); await painted(page); };
+  await page.getByRole('button', { name: 'Close parts', exact: true }).click(); await settle();
+  await expect.poll(async () => (await resources(page)).workers).toBe(0); await painted(page);
+  const both = PNG.sync.read(await canvas.screenshot());
+  await page.getByRole('button', { name: 'Parts', exact: true }).click();
+  await tree.getByRole('checkbox', { name: 'Visible: B', exact: true }).uncheck();
+  await page.getByRole('button', { name: 'Close parts', exact: true }).click(); await settle();
+  const occluder = PNG.sync.read(await canvas.screenshot());
+  expect(both.data).toEqual(occluder.data);
+  await page.getByRole('button', { name: 'Model outlines', exact: true }).click(); await settle();
+  const shaded = PNG.sync.read(await canvas.screenshot());
+  // Also establish that the visible outline survives the anti-fighting change.
+  expect(occluder.data.equals(shaded.data)).toBe(false);
+});
+
+function thinAssemblyStl(scale: number) {
+  const text: string[] = [];
+  for (const [name, width, z] of [['A', 2, 0], ['B', 1, -.04]] as const) {
+    const box = new BoxGeometry(width, width, .02), geometry = box.toNonIndexed(); box.dispose(); geometry.translate(0, 0, z).scale(scale, scale, scale);
+    const positions = geometry.getAttribute('position'), normals = geometry.getAttribute('normal'); text.push(`solid ${name}`);
+    for (let vertex = 0; vertex < positions.count; vertex += 3) {
+      text.push(`facet normal ${normals.getX(vertex)} ${normals.getY(vertex)} ${normals.getZ(vertex)}`, 'outer loop');
+      for (let i = 0; i < 3; i++) text.push(`vertex ${positions.getX(vertex + i)} ${positions.getY(vertex + i)} ${positions.getZ(vertex + i)}`);
+      text.push('endloop', 'endfacet');
+    }
+    text.push(`endsolid ${name}`); geometry.dispose();
+  }
+  return [...new TextEncoder().encode(text.join('\n'))];
+}
+for (const scale of [1e-6, 1, 1e6]) test(`generated thin occluded outlines remain hidden at model scale ${scale}`, async ({ page }) => {
+  await instrument(page); await page.goto(`${origin}/test/fixtures/geometry.html`);
+  await page.evaluate(bytes => (window as any).geometryContract.replace('cube.stl', bytes), thinAssemblyStl(scale));
+  await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click(); await ready(page);
+  await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: 'Front', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Model outlines', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const canvas = page.locator('[data-geometry-format] canvas'), tree = page.getByRole('list', { name: 'Parts', exact: true });
+  const settle = async () => { await canvas.focus(); await page.mouse.move(0, 0); await expect(page.getByRole('tooltip')).toHaveCount(0); await painted(page); };
+  await expect.poll(async () => (await resources(page)).workers).toBe(0); await settle();
+  const both = PNG.sync.read(await canvas.screenshot());
+  await page.getByRole('button', { name: 'Parts', exact: true }).click();
+  await tree.getByRole('checkbox', { name: 'Visible: B', exact: true }).uncheck();
+  await page.getByRole('button', { name: 'Close parts', exact: true }).click(); await settle();
+  const occluder = PNG.sync.read(await canvas.screenshot()); expect(both.data).toEqual(occluder.data);
+  await page.getByRole('button', { name: 'Model outlines', exact: true }).click(); await settle();
+  const shaded = PNG.sync.read(await canvas.screenshot()); expect(occluder.data.equals(shaded.data)).toBe(false);
 });
 
 test('outline gate preserves a near-limit shaded STL and keeps original Download', async ({ page }) => {

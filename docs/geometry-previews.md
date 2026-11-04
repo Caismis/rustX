@@ -76,6 +76,8 @@ Hiding a selected part also hides its selection outline.
 Changing or restoring the up axis recreates OrbitControls through its public
 lifecycle so orbit gestures use that axis and old listeners are released.
 Pointer gestures retain the latest pose locally and flush it at interaction end;
+public input completion also observes camera/target changes below OrbitControls'
+absolute event threshold, so tiny focused pans draw and survive retirement.
 camera changes outside a gesture publish at most once per 100 ms. Normal
 body retirement also saves a pending pose through a separate inert-metadata path
 that checks the retained occurrence, source authority and exact content copy.
@@ -120,6 +122,22 @@ participate in picking. There are no outline render targets or per-camera
 adjacency rebuilds. A failed/over-budget request leaves the shaded viewer and
 original source actions usable. Translucent/alpha-tested models currently keep
 their original shaded view because their silhouettes require texture-aware work.
+Generated identity-transform occurrences pack into at most two line draws,
+grouped by sidedness. Occurrence identity shares the existing edge-kind slot;
+64 packed visibility vectors preserve ancestor visibility and isolation without
+rebuilding adjacency on camera motion. The original 5-MiB output cap includes
+repeated occurrences. Original mesh data and the inspection/picking graph remain
+unchanged. Authored or transformed graphs retain per-occurrence line objects
+and local normal transforms.
+Anti-fighting uses a perspective-projected depth pull of one part per million
+of eye distance rather than a fixed NDC offset. Thin overlapping opaque boxes
+at small, ordinary and large scales retain hidden-edge occlusion.
+
+Loading labels report observed reading, CAD-runtime initialization, import and
+display preparation. The synchronous CAD call is one import stage; parsing and
+tessellation are not fabricated as separate milestones. Worker observations do
+not validate a model, extend its deadline or survive body retirement. Main-thread
+preparation timing retains only the latest measurement per supported format.
 
 PBR materials use bounded, fixed studio lighting: a hemisphere light and two
 off-axis directional lights, with neutral tone mapping. No environment-map asset
@@ -155,6 +173,10 @@ the existing preview flow. Other viewers keep their automatic-refresh behavior.
 
 Hidden bodies terminate their import Worker and release every renderer resource.
 Only admitted source bytes remain in the existing 8-entry/64-MiB inactive cache.
+Separately, the page may retain one compiled immutable CAD code module, just as
+it retains loaded JavaScript code. It contains no source, parsed model, WASM
+instance or linear memory. Every admitted CAD import instantiates fresh memory
+inside its own disposable Worker; retirement never retains that Worker.
 Reactivation probes authority before showing those bytes, including when the
 reader has no observation facility. A changed version alone preserves the copy.
 interrupted probes and hidden version hints preserve the same completed saved
@@ -188,6 +210,11 @@ GLTFLoader only for GLB demand and uses it on the main thread after preflight.
 STL and CAD use separate Worker entry bundles; STL cannot load CAD glue/WASM.
 Workers reuse one protocol, admission owner and cancellation/deadline handler.
 All assets are shipped locally, with no runtime CDN use.
+CAD code compilation starts only on admitted body demand. The original parent
+deadline and two-owner reservation include compilation wait. Cancelled waiters
+clear their source and callbacks and cannot create a late Worker. A failed code
+compilation clears the shared promise for an explicit retry; static asset fetch
+has its own bounded timeout. The exact pinned binary/glue remain unchanged.
 
 The following are per visible body unless stated otherwise:
 

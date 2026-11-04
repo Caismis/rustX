@@ -1,7 +1,7 @@
 import createOcct from 'occt-import-js';
-import wasmUrl from 'occt-import-js/dist/occt-import-js.wasm?url';
 import { GEOMETRY_LIMITS as L, requireGeometry as check } from './limits';
 import { validateModel, type GeometryModel, type GeometryNode, type GeometryMesh } from './model';
+import type { GeometryImportStage } from './stages';
 
 export const CAD_TRIANGULATION = Object.freeze({ linearUnit: 'millimeter', linearDeflectionType: 'bounding_box_ratio', linearDeflection: 0.001, angularDeflection: 0.5 });
 function record(value: unknown): Record<string, unknown> { check(value && typeof value === 'object' && !Array.isArray(value)); return value as Record<string, unknown>; }
@@ -50,15 +50,29 @@ export function convertCadResult(value: unknown): GeometryModel {
   const model = { meshes, root: node(result.root, 0) }; validateModel(model); return model;
 }
 
-export async function importCad(bytes: Uint8Array<ArrayBuffer>, format: 'step' | 'iges' | 'brep'): Promise<GeometryModel> {
+export async function importCad(bytes: Uint8Array<ArrayBuffer>, format: 'step' | 'iges' | 'brep', module: WebAssembly.Module, stage?: (stage: GeometryImportStage) => void): Promise<GeometryModel> {
   check(bytes.length <= L.sourceBytes, 'limit');
+  stage?.('initializing');
   performance.mark('geometry:cad-initialize');
-  const occt = await createOcct({ locateFile: path => { check(path.endsWith('.wasm')); return wasmUrl; } });
+  const occt = await new Promise<Awaited<ReturnType<typeof createOcct>>>((resolve, reject) => {
+    void createOcct({ instantiateWasm: (imports, receive) => {
+      try {
+        const instance = new WebAssembly.Instance(module, imports);
+        receive(instance, module); return instance.exports;
+      } catch (error) {
+        // The pinned glue falls through to its own loader if this callback
+        // throws. Fail this instance without starting another initialization.
+        reject(error); return {};
+      }
+    } }).then(resolve, reject);
+  });
   performance.measure('geometry:cad-initialize', 'geometry:cad-initialize');
   const read = format === 'step' ? occt.ReadStepFile : format === 'iges' ? occt.ReadIgesFile : occt.ReadBrepFile;
+  stage?.('importing');
   performance.mark('geometry:cad-read');
   const result = read(bytes, CAD_TRIANGULATION);
   performance.measure('geometry:cad-read', 'geometry:cad-read');
+  stage?.('preparing');
   performance.mark('geometry:cad-convert');
   const model = convertCadResult(result);
   performance.measure('geometry:cad-convert', 'geometry:cad-convert');

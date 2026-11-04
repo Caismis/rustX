@@ -179,3 +179,31 @@ it('coding view and child scopes do not request or show top-level change records
     expect(server.requests.some(row=>row.request.method==='conversation/changes')).toBe(false);
   } finally {server.client.disconnect();}
 });
+
+it('a file preview fetches only while visible and exposes one full path header with the complete diff Copy',async()=>{
+  const {server,source}=await sourceFixture();
+  const path='/workspace/A/'+ 'very-long-directory/'.repeat(12)+'配置.json';
+  const changed={...summary,files:[{...summary.files[0],path,display:'配置.json'}]};
+  const writeText=vi.fn().mockResolvedValue(undefined);
+  const original=Object.getOwnPropertyDescriptor(navigator,'clipboard');
+  Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText}});
+  server.handlers.set('conversation/changeDiff',()=>({type:'workspace_change_diff',comparison:{hunks:[{old_start:1,new_start:1,old_text:'old\n',new_text:Array.from({length:80},(_,i)=>`line ${i}`).join('\n')}],binary:false,oversized:false,truncated:true}}));
+  try {
+    const request={client:server.client,target:source.target,attemptId:'attempt-1',summary:changed,index:0,owned:source.owned};
+    const ui=render(<ChangeComparison request={request} index={0} visible={false} preview/>);
+    expect(server.requests.some(row=>row.request.method==='conversation/changeDiff')).toBe(false);
+    ui.rerender(<ChangeComparison request={request} index={0} preview/>);
+    await ui.findByText('line 0');
+    expect(ui.getAllByText(path)).toHaveLength(1);
+    expect(ui.getByTitle(path)).toBeTruthy();
+    expect(ui.queryByText('配置.json:1')).toBeNull();
+    expect(ui.queryByText('line 40')).toBeNull();
+    fireEvent.click(ui.getByRole('button',{name:'Copy'}));
+    await waitFor(()=>expect(writeText).toHaveBeenCalledOnce());
+    expect(writeText.mock.calls[0][0]).toContain('line 79');
+    expect(ui.getByText('Only the first part of this comparison is shown.')).toBeTruthy();
+  } finally {
+    if(original)Object.defineProperty(navigator,'clipboard',original);else Reflect.deleteProperty(navigator,'clipboard');
+    server.client.disconnect();
+  }
+});

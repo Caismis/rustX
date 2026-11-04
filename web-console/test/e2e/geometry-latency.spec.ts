@@ -44,6 +44,8 @@ for (const workload of ['stl-735000-vertices', 'cad-96-parts']) test(`browser in
   const result = { workload, browser, transport: process.env.RUSTX_GEOMETRY_DIRECT === '1' ? 'native-loopback' : 'Playwright-forwarded-loopback', firstFrameReadyMs: await page.evaluate(() => (window as any).geometryLatency.first), orbit, pan,
     firstGpuReadyMs: await page.evaluate(() => (window as any).geometryLatency.firstGpuReady),
     imports: await page.evaluate(() => ({ models: (window as any).geometryImports, timings: (window as any).geometryImportTimings })),
+    mainPhases: await page.evaluate(() => performance.getEntriesByType('measure').filter(entry => entry.name.startsWith('geometry:')).map(entry => ({ name: entry.name, ms: entry.duration }))),
+    drawCommands: await page.evaluate(() => ({ ...(window as any).geometryDrawCalls })),
     targets: { firstDisplayMs: 200, interactionP95Ms: 50 }, method: 'Proxy: trusted browser pointer timestamp to the actual model-render microtask, GPU fence settlement, and next rAF rendering opportunity. This does not observe compositor/physical display presentation. Source modules cold in each context. Original whole-drag display harness is retained separately.' };
   await page.getByRole('button', { name: `Close preview ${name}`, exact: true }).click();
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });

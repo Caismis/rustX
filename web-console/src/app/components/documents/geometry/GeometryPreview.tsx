@@ -8,6 +8,8 @@ import { importGlb } from './glb';
 import { parseGeometry } from './parse';
 import { disposeScene, modelScene } from './scene-resources';
 import { GeometryError, type GeometryFailure } from './limits';
+import type { GeometryImportStage } from './stages';
+import { GeometryLoading } from '../GeometryLoading';
 import { mountGeometry, type Part, type StandardView } from './viewport';
 import type { Inspection } from './structure';
 import type { OutlineStatus } from './outlines';
@@ -23,7 +25,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
   const locale = useLocale(), t = locale.active === 'zh' ? zh : en;
   const container = useRef<HTMLDivElement>(null), active = useRef<ReturnType<typeof mountGeometry>>(undefined), outlineAction = useRef(0);
   const latest = useRef({ viewState, onViewStateChange, t }); latest.current = { viewState, onViewStateChange, t };
-  const [state, setState] = useState<{ parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; selected?: string; hidden?: string[]; isolation?: string; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
+  const [state, setState] = useState<{ stage?: GeometryImportStage; parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; selected?: string; hidden?: string[]; isolation?: string; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
   const [menu, setMenu] = useState(false);
   const [partsOpen, setPartsOpen] = useState(false), partsId = useId();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -36,6 +38,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
     // permission while an earlier import is still completing.
     const ownsCopy = current;
     const live = () => !controller.signal.aborted && !signal.aborted && ownsCopy();
+    const stage = (stage: GeometryImportStage) => { if (live()) setState(value => value.stage === stage ? value : { ...value, stage }); };
     const retire = () => {
       if (mounted && active.current === mounted) outlineAction.current++;
       // The visible-body signal may already be aborted. Only the owner can
@@ -47,10 +50,11 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
     signal.addEventListener('abort', retire, { once: true }); setState({}); setPartsOpen(false); setExpanded(new Set()); setMenu(false);
     if (!live()) { retire(); return; }
     void (async () => {
-      let object: Object3D, bounds: Box3;
-      if (format === 'glb') { const loaded = await importGlb(bytes, controller.signal); roots = loaded.scenes; release = loaded.dispose; object = loaded.scene; bounds = loaded.bounds; }
-      else { const model = await parseGeometry(bytes, format, controller.signal); if (!live()) return; const admitted = modelScene(model); object = admitted.scene; bounds = admitted.bounds; roots = [object]; }
+      let object: Object3D, bounds: Box3, displayStart: number;
+      if (format === 'glb') { stage('importing'); const loaded = await importGlb(bytes, controller.signal); roots = loaded.scenes; release = loaded.dispose; object = loaded.scene; bounds = loaded.bounds; displayStart = performance.now(); }
+      else { const model = await parseGeometry(bytes, format, controller.signal, stage); if (!live()) return; stage('preparing'); displayStart = performance.now(); const admitted = modelScene(model); object = admitted.scene; bounds = admitted.bounds; roots = [object]; }
       if (!live()) { retire(); return; }
+      stage('preparing');
       const props = latest.current, saved = props.viewState.geometry?.copyId === copyId ? props.viewState.geometry : undefined;
       mounted = mountGeometry(container.current!, object, bounds, saved, props.t, patch => {
         if (!live()) return;
@@ -59,7 +63,11 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
           selection = { selected: patch.selected, hidden: patch.hidden, isolation: patch.isolation?.target };
           setState(value => ({ ...value, ...selection, inspection: mounted?.inspect() }));
         }
-      }, () => { const publish = live(); retire(); if (publish) setState({ error: 'webgl' }); });
+      }, () => { const publish = live(); retire(); if (publish) setState({ error: 'webgl' }); }, { generated: format !== 'glb' });
+      // Keep only the latest measurement per supported format, rather than an
+      // unbounded browser-lifetime history of preview openings.
+      const measure = `geometry:display-prepare:${format}`;
+      performance.clearMeasures(measure); performance.measure(measure, { start: displayStart });
       active.current = mounted;
       setState(value => ({ ...value, parts: mounted!.parts, inspection: mounted!.inspect(), dimensions: [bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z] }));
       if (saved?.outlines !== false) requestOutlines(true);
@@ -102,7 +110,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
   }}>
     <div className={css.viewport} ref={container}>
       {state.error ? <div className={css.message} role="alert"><ModelGlyph/><p>{t[state.error]}</p></div>
-        : !state.parts && <div className={css.loading} role="status"><span className={css.loader} aria-hidden="true"/>{t.loading}</div>}
+        : !state.parts && <div className={css.loading} role="status" aria-live="polite"><span className={css.loader} aria-hidden="true"/><GeometryLoading stage={state.stage ?? 'loading'}/></div>}
       {!state.error && <>
         <div className={css.rail} role="toolbar" aria-label={t.controls} aria-orientation="vertical">
           <Tooltip label={t.fit} side="right" delayMs={500}><button type="button" className={css.control} disabled={!state.parts} aria-label={t.fit} onClick={() => active.current?.fit()}><FitGlyph/></button></Tooltip>

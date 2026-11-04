@@ -4,3 +4,6 @@
 .body { flex: 1; min-height: 0; overflow: auto; padding: 0 12px 12px; }
 .comparison { min-width: 0; color: var(--dsw-alias-label-secondary); font-size: 12px; }
 .path { overflow-wrap: anywhere; }
+
+.preview { font-size: 13px; }
+.preview > p { margin: 12px 14px; }

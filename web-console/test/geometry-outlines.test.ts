@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { BoxGeometry, Group, Mesh, MeshBasicMaterial, SphereGeometry } from 'three';
+import { BoxGeometry, BufferGeometry, DoubleSide, Group, InterleavedBufferAttribute, LineSegments, Mesh, MeshBasicMaterial, PerspectiveCamera, ShaderMaterial, SphereGeometry, Vector3, Vector4 } from 'three';
+import { createStructure } from '../src/app/components/documents/geometry/structure';
 import { outlineData, OUTLINE_STRIDE } from '../src/app/components/documents/geometry/outline-data';
 import { createOutlines } from '../src/app/components/documents/geometry/outlines';
 import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/limits';
@@ -62,6 +63,33 @@ it('owns shared output buffers/materials, follows occurrence transforms and disp
   await owner.set(false); owner.dispose();
   expect(geometryDispose).toHaveBeenCalledOnce(); expect(materialDispose).toHaveBeenCalledOnce(); expect(a.children).toHaveLength(0); expect(b.children).toHaveLength(0);
 });
+it.each([1e-6, 1, 1e6].flatMap(scale => [false, true].map(generated => ({ scale, generated }))))('keeps a thin hidden box behind its occluder at scale $scale (packed: $generated)', async ({ scale, generated }) => {
+  vi.stubGlobal('Worker', class {
+    onmessage: any; onerror: any; onmessageerror: any; terminate() {}
+    postMessage({ inputs }: { inputs: Parameters<typeof outlineData>[0][] }) {
+      queueMicrotask(() => this.onmessage?.({ data: { ok: true, data: inputs.map(value => outlineData(value, L.outlineSegments, performance.now() + 2000)) } }));
+    }
+  });
+  const root = new Group(), front = new Mesh(new BoxGeometry(2, 2, .02), new MeshBasicMaterial()), back = new Mesh(new BoxGeometry(1, 1, .02), new MeshBasicMaterial());
+  if (generated) { front.geometry.scale(scale, scale, scale); back.geometry.translate(0, 0, -.04).scale(scale, scale, scale); }
+  else { back.position.z = -.04; root.scale.setScalar(scale); }
+  root.add(front, back);
+  const sourceMaterial = front.material, positions = front.geometry.getAttribute('position').array.slice(), owner = createOutlines(root, () => '#ffffff', { generated });
+  expect(await owner.set(true)).toBe('on');
+  const shader = (generated ? owner.group.children[0] : front.children[0] as any).material.vertexShader as string;
+  // Evaluate the actual shader's depth adjustment against Three's projection.
+  // A fixed 1e-6 NDC pull crosses the occluder in this exact Fit Front case.
+  const adjustment = shader.match(/gl_Position\.z -= ([^;]+);/)![1]
+    .replaceAll('gl_Position.w', 'w').replaceAll('projectionMatrix[3][2]', 'b').replaceAll('abs(', 'Math.abs(');
+  const bias = new Function('w', 'b', `return ${adjustment}`) as (w: number, b: number) => number;
+  const radius = Math.hypot(2, 2, .06) * scale / 2, distance = radius / Math.sin(Math.PI / 8) * 1.1;
+  const camera = new PerspectiveCamera(45, 4 / 3, radius / 10_000, radius * 1000);
+  const clip = (z: number) => new Vector4(0, 0, z * scale - distance, 1).applyMatrix4(camera.projectionMatrix);
+  const occluder = clip(.01), hidden = clip(-.03), surfaceDepth = occluder.z / occluder.w;
+  expect((hidden.z - bias(hidden.w, camera.projectionMatrix.elements[14])) / hidden.w).toBeGreaterThan(surfaceDepth);
+  expect((occluder.z - bias(occluder.w, camera.projectionMatrix.elements[14])) / occluder.w).toBeLessThanOrEqual(surfaceDepth);
+  expect(front.material).toBe(sourceMaterial); expect(front.geometry.getAttribute('position').array).toEqual(positions); owner.dispose();
+});
 it.each(['invalid normal', 'oversized backing buffer', 'segment limit'])('independently rejects Worker output: %s', async variant => {
   const workers: any[] = [];
   vi.stubGlobal('Worker', class { terminate = vi.fn(); onmessage: any; onerror: any; onmessageerror: any; constructor() { workers.push(this); } postMessage() {} });
@@ -72,4 +100,50 @@ it.each(['invalid normal', 'oversized backing buffer', 'segment limit'])('indepe
   else data = new Float32Array((L.outlineSegments + 1) * 2 * OUTLINE_STRIDE);
   workers[0].onmessage({ data: { ok: true, data: [data] } });
   expect(await pending).not.toBe('on'); expect(root.children).toHaveLength(0); expect(owner.enabled).toBe(false); owner.dispose();
+});
+it('packs generated occurrence lines into two bounded buffers without changing coordinates, normals, picking or inspection', async () => {
+  vi.stubGlobal('Worker', class {
+    onmessage: any; onerror: any; onmessageerror: any; terminate() {}
+    postMessage({ inputs }: { inputs: Parameters<typeof outlineData>[0][] }) { queueMicrotask(() => this.onmessage?.({ data: { ok: true, data: inputs.map(value => outlineData(value, L.outlineSegments, performance.now() + 2000)) } })); }
+  });
+  const root = new Group(), parent = new Group(), geometry = new BoxGeometry(), material = new MeshBasicMaterial();
+  const a = new Mesh(geometry, material), b = a.clone(), c = new Mesh(geometry, new MeshBasicMaterial({ side: DoubleSide })); root.add(a, b, c); parent.position.x = -100; parent.add(root);
+  geometry.computeBoundingBox(); geometry.computeBoundingSphere(); parent.updateMatrixWorld(true);
+  const structure = createStructure(root, new Vector3(), undefined), inspection = structure.inspect(), parts = [...structure.parts], original = extract(geometry);
+  const owner = createOutlines(root, () => '#ffffff', { generated: true }); parent.add(owner.group);
+  expect(await owner.set(true)).toBe('on'); expect(owner.group.children).toHaveLength(2);
+  const lines = owner.group.children as LineSegments<BufferGeometry, ShaderMaterial>[];
+  for (const line of lines) {
+    const doubleSided = line.material.uniforms.doubleSided.value === 1, ids = doubleSided ? [2] : [0, 1], data = (line.geometry.getAttribute('position') as InterleavedBufferAttribute).data.array;
+    expect(data.byteLength).toBe(original.byteLength * ids.length);
+    ids.forEach((id, occurrence) => {
+      for (let i = 0; i < original.length; i++) expect(data[occurrence * original.length + i]).toBe(i % OUTLINE_STRIDE === 9 ? original[i] + id * 3 : original[i]);
+    });
+    parent.updateMatrixWorld(true); expect(line.matrixWorld.equals(a.matrixWorld)).toBe(true);
+    expect(line.material.depthWrite).toBe(false); expect(line.renderOrder).toBe(1);
+  }
+  expect(root.children).toEqual([a, b, c]); expect(a.children).toHaveLength(0); expect(structure.parts).toEqual(parts); expect(structure.inspect()).toEqual(inspection);
+  b.visible = false; owner.sync(); expect(lines[0].material.uniforms.occurrenceVisible.value.slice(0, 3)).toEqual(new Float32Array([1, 0, 1]));
+  root.visible = false; owner.sync(); expect(owner.group.visible).toBe(false); root.visible = true; owner.sync(); expect(owner.group.visible).toBe(true);
+  const geometryDispose = lines.map(line => vi.spyOn(line.geometry, 'dispose')), materialDispose = lines.map(line => vi.spyOn(line.material, 'dispose'));
+  await owner.set(false); owner.dispose(); owner.dispose(); geometryDispose.forEach(spy => expect(spy).toHaveBeenCalledOnce()); materialDispose.forEach(spy => expect(spy).toHaveBeenCalledOnce()); expect(parent.children).toEqual([root]);
+});
+it('keeps generated graphs with local transforms on their original per-occurrence normal-matrix path', async () => {
+  vi.stubGlobal('Worker', class {
+    onmessage: any; onerror: any; onmessageerror: any; terminate() {}
+    postMessage() { queueMicrotask(() => this.onmessage?.({ data: { ok: true, data: [extract(new BoxGeometry())] } })); }
+  });
+  const root = new Group(), mesh = new Mesh(new BoxGeometry(), new MeshBasicMaterial()); mesh.scale.set(2, 3, 4); root.add(mesh);
+  const owner = createOutlines(root, () => '#ffffff', { generated: true }); expect(await owner.set(true)).toBe('on');
+  expect(owner.group.children).toHaveLength(0); expect(mesh.children).toHaveLength(1); const line = mesh.children[0] as LineSegments<BufferGeometry, ShaderMaterial>;
+  expect(line.material.vertexShader).not.toContain('occurrenceVisible'); root.updateMatrixWorld(true); expect(line.matrixWorld.equals(mesh.matrixWorld)).toBe(true); owner.dispose();
+});
+it('admits expanded occurrence bytes before allocating packed output', async () => {
+  vi.stubGlobal('Worker', class {
+    onmessage: any; onerror: any; onmessageerror: any; terminate() {}
+    postMessage() { queueMicrotask(() => this.onmessage?.({ data: { ok: true, data: [new Float32Array(40_000 * 2 * OUTLINE_STRIDE)] } })); }
+  });
+  const root = new Group(), a = new Mesh(new BoxGeometry(), new MeshBasicMaterial()); root.add(a, a.clone());
+  const owner = createOutlines(root, () => '#ffffff', { generated: true }); expect(await owner.set(true)).toBe('limit');
+  expect(owner.group.children).toHaveLength(0); expect(root.children.every(mesh => mesh.children.length === 0)).toBe(true); owner.dispose();
 });

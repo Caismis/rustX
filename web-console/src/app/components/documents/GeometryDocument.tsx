@@ -3,6 +3,7 @@ import { useLocale } from '../../../locale/react';
 import { en, zh } from '../../../locale/dictionaries/geometry';
 import type { GeometryPreviewProps } from './geometry/GeometryPreview';
 import { geometryFormat } from './geometry/format';
+import { GeometryLoading } from './GeometryLoading';
 
 type Viewer = typeof import('./geometry/GeometryPreview').default;
 let loaded: Viewer | undefined;
@@ -24,5 +25,5 @@ export function GeometryDocument(props: GeometryPreviewProps) {
   const t = locale.active === 'zh' ? zh : en;
   // Suspense's fallback throttle delayed resolved code by ~300 ms in production.
   // The explicit module state starts the admitted import as soon as code arrives.
-  return Viewer ? <Viewer {...props}/> : <p role={failed ? 'alert' : 'status'}>{failed ? t.invalid : t.loading}</p>;
+  return Viewer ? <Viewer {...props}/> : <p role={failed ? 'alert' : 'status'}>{failed ? t.invalid : <GeometryLoading stage="loading"/>}</p>;
 }

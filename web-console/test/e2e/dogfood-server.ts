@@ -207,15 +207,20 @@ timezone = "UTC"
       async stop(check = true) {
         try {
           const report = await control('shutdown', 'POST');
+          // Product Host observers and terminals settle through the live native
+          // connection; retire that ownership before terminating its server.
+          await workspaceHost.stop();
           app!.kill('SIGTERM'); provider.stdin.end();
           const [providerCode] = await Promise.all([exited(provider), exited(app!)]);
           await measurement?.afterExit?.();
           if (check && (!report.ok || providerCode !== 0)) throw new Error(`Provider scenario not satisfied (exit ${providerCode}): ${JSON.stringify(report)}`);
           return report;
         } finally {
-          await workspaceHost.stop();
-          app?.kill('SIGTERM'); provider.kill('SIGTERM');
-          rmSync(directory, { recursive: true, force: true });
+          try { await workspaceHost.stop(); }
+          finally {
+            app?.kill('SIGTERM'); provider.kill('SIGTERM');
+            rmSync(directory, { recursive: true, force: true });
+          }
         }
       },
     };

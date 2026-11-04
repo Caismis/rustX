@@ -4,12 +4,15 @@ import { BoxGeometry, Group, Mesh, MeshStandardMaterial } from 'three';
 import { Profiler } from 'react';
 import GeometryPreview from '../src/app/components/documents/geometry/GeometryPreview';
 import { disposeScene, validateScene } from '../src/app/components/documents/geometry/scene-resources';
-const imports = vi.hoisted(() => ({ pending: [] as { resolve: (value: unknown) => void; reject: (reason: unknown) => void }[], mounts: [] as { fit: ReturnType<typeof vi.fn>; setOutlines: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; publish: (patch: unknown) => void; pending?: unknown; saved?: unknown; flush: ReturnType<typeof vi.fn> }[] }));
+import { localeController } from '../src/locale/controller';
+import type { GeometryImportStage } from '../src/app/components/documents/geometry/stages';
+const imports = vi.hoisted(() => ({ pending: [] as { resolve: (value: unknown) => void; reject: (reason: unknown) => void }[], cad: [] as { stage: (stage: GeometryImportStage) => void; resolve: (value: unknown) => void }[], mounts: [] as { fit: ReturnType<typeof vi.fn>; setOutlines: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; publish: (patch: unknown) => void; pending?: unknown; saved?: unknown; flush: ReturnType<typeof vi.fn> }[] }));
 vi.mock('../src/app/components/documents/geometry/glb', () => ({ importGlb: () => new Promise((resolve, reject) => { imports.pending.push({ resolve, reject }); }) }));
+vi.mock('../src/app/components/documents/geometry/parse', () => ({ parseGeometry: (_bytes: unknown, _format: unknown, _signal: unknown, stage: (stage: GeometryImportStage) => void) => new Promise(resolve => { imports.cad.push({ stage, resolve }); }) }));
 vi.mock('../src/app/components/documents/geometry/viewport', () => ({ mountGeometry: (_element: unknown, _object: unknown, _bounds: unknown, saved: unknown, _labels: unknown, publish: (patch: unknown) => void) => {
   const control = { fit: vi.fn(), reset: vi.fn(), focus: vi.fn(), isolate: vi.fn(), restore: vi.fn(), showAll: vi.fn(), setOutlines: vi.fn(async () => 'on'), relabel: vi.fn(), inspect: () => ({ name: 'Body', triangles: 12, visibleTriangles: 12, min: [-5, -5, -5], max: [5, 5, 5], dimensions: [10, 10, 10] }), dispose: vi.fn(), publish, saved, pending: undefined as unknown, flush: vi.fn((save = publish) => { if (control.pending) { const patch = control.pending; control.pending = undefined; save(patch); } }), select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }] }; imports.mounts.push(control); return control;
 } }));
-afterEach(() => { cleanup(); imports.pending = []; imports.mounts = []; });
+afterEach(() => { cleanup(); imports.pending = []; imports.cad = []; imports.mounts = []; });
 function graph() {
   const scene = new Group(), geometry = new BoxGeometry(10, 10, 10); scene.add(new Mesh(geometry, new MeshStandardMaterial()));
   const disposed = vi.spyOn(geometry, 'dispose'); return { value: { scene, scenes: [scene], bounds: validateScene([scene]), dispose: () => disposeScene([scene]) }, disposed };
@@ -55,4 +58,26 @@ it.each(['hide', 'unmount'] as const)('flushes final inert metadata on same-copy
   ui.unmount(); expect(geometry).toEqual({ copyId: 'copy', camera, selected: '0', hidden: [] }); expect(changed).not.toHaveBeenCalled();
   const next = render(<GeometryPreview {...props} signal={new AbortController().signal} current={() => true} viewState={{ geometry }}/>);
   await act(async () => imports.pending[1].resolve(graph().value)); expect(imports.mounts[1].saved).toEqual(geometry); next.unmount();
+});
+it.each(['en', 'zh'] as const)('shows observed localized import stages and removes loading only after display preparation (%s)', async locale => {
+  localeController.setLocale(locale);
+  const ui = render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.step" copyId="copy" signal={new AbortController().signal} current={() => true} viewState={{}} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
+  const labels = locale === 'en' ? ['Loading model…', 'Initializing CAD runtime…', 'Importing model…', 'Preparing display…'] : ['正在加载模型…', '正在初始化 CAD 运行环境…', '正在导入模型…', '正在准备显示…'];
+  expect(ui.getByRole('status').textContent).toBe(labels[0]); expect(imports.mounts).toHaveLength(0);
+  for (const [index, stage] of (['initializing', 'importing', 'preparing'] as const).entries()) {
+    act(() => imports.cad[0].stage(stage)); expect(ui.getByRole('status').textContent).toBe(labels[index + 1]); expect(imports.mounts).toHaveLength(0);
+  }
+  await act(async () => imports.cad[0].resolve({ root: { name: '', meshes: [0], children: [] }, meshes: [{ name: 'Triangle', positions: new Float32Array([0,0,0, 1,0,0, 0,1,0]), groups: [] }] }));
+  expect(imports.mounts).toHaveLength(1); expect(ui.queryByRole('status')).toBeNull();
+  expect(performance.getEntriesByName('geometry:display-prepare:step')).toHaveLength(1);
+});
+it('fences late stage observations from superseded or cancelled imports', () => {
+  const signal = new AbortController(), props = { name: 'cube.step', signal: signal.signal, current: () => true, viewState: {}, onViewStateChange: vi.fn(), onGeometryRetire: vi.fn() };
+  const ui = render(<GeometryPreview {...props} bytes={new Uint8Array([1])} copyId="first"/>);
+  act(() => imports.cad[0].stage('initializing'));
+  ui.rerender(<GeometryPreview {...props} bytes={new Uint8Array([2])} copyId="second"/>);
+  act(() => imports.cad[0].stage('preparing')); expect(ui.getByRole('status').textContent).toBe('Loading model…');
+  act(() => imports.cad[1].stage('initializing')); expect(ui.getByRole('status').textContent).toBe('Initializing CAD runtime…');
+  act(() => signal.abort()); act(() => imports.cad[1].stage('importing'));
+  expect(ui.getByRole('status').textContent).toBe('Initializing CAD runtime…'); expect(imports.mounts).toHaveLength(0);
 });

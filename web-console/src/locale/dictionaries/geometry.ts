@@ -1,5 +1,5 @@
 export const en = {
-  preview: '3D model preview', loading: 'Loading model…', canvas: '3D model. Drag to rotate, right-drag or use arrow keys to pan, scroll to zoom.',
+  preview: '3D model preview', loading: 'Loading model…', reading: 'Reading model…', initializing: 'Initializing CAD runtime…', importing: 'Importing model…', preparing: 'Preparing display…', canvas: '3D model. Drag to rotate, right-drag or use arrow keys to pan, scroll to zoom.',
   controls: 'Model controls', view: 'View angle',
   fit: 'Fit view', isometric: 'Isometric', front: 'Front', back: 'Back', left: 'Left', right: 'Right', top: 'Top', bottom: 'Bottom',
   reset: 'Reset view', isolate: 'Isolate', restore: 'Exit isolation', showAll: 'Show all', focus: 'Focus selected',
@@ -19,7 +19,7 @@ export const en = {
   capacity: 'Preview is busy. Try again in a moment.',
 } as const;
 export const zh = {
-  preview: '三维模型预览', loading: '正在加载模型…', canvas: '三维模型。拖动旋转，右键拖动或使用方向键平移，滚动缩放。',
+  preview: '三维模型预览', loading: '正在加载模型…', reading: '正在读取模型…', initializing: '正在初始化 CAD 运行环境…', importing: '正在导入模型…', preparing: '正在准备显示…', canvas: '三维模型。拖动旋转，右键拖动或使用方向键平移，滚动缩放。',
   controls: '模型控件', view: '视角',
   fit: '适合窗口', isometric: '等轴视图', front: '前视图', back: '后视图', left: '左视图', right: '右视图', top: '俯视图', bottom: '仰视图',
   reset: '重置视角', isolate: '隔离', restore: '退出隔离', showAll: '显示全部', focus: '聚焦选中项',

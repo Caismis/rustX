@@ -19,6 +19,7 @@ function indexMesh(mesh: GeometryMesh, deadline: number): GeometryMesh {
   if (mesh.indices || !mesh.normals || count < MIN_VERTICES || mesh.groups.length) return mesh;
   const streams = [mesh.positions, mesh.normals, mesh.colors].filter((stream): stream is Float32Array => stream !== undefined);
   const bits = streams.map(stream => new Uint32Array(stream.buffer, stream.byteOffset, stream.length));
+  const [positionsBits, normalBits, colorBits] = bits;
   let capacity = 1;
   while (capacity < count * 2) capacity *= 2;
   if (performance.now() > deadline) return mesh;
@@ -29,7 +30,17 @@ function indexMesh(mesh: GeometryMesh, deadline: number): GeometryMesh {
     if ((vertex & 4095) === 0 && performance.now() > deadline) return mesh;
     const offset = vertex * 3;
     let hash = 2166136261;
-    for (const stream of bits) for (let component = 0; component < 3; component++) hash = Math.imul(hash ^ stream[offset + component], 16777619);
+    hash = Math.imul(hash ^ positionsBits[offset], 16777619);
+    hash = Math.imul(hash ^ positionsBits[offset + 1], 16777619);
+    hash = Math.imul(hash ^ positionsBits[offset + 2], 16777619);
+    hash = Math.imul(hash ^ normalBits[offset], 16777619);
+    hash = Math.imul(hash ^ normalBits[offset + 1], 16777619);
+    hash = Math.imul(hash ^ normalBits[offset + 2], 16777619);
+    if (colorBits) {
+      hash = Math.imul(hash ^ colorBits[offset], 16777619);
+      hash = Math.imul(hash ^ colorBits[offset + 1], 16777619);
+      hash = Math.imul(hash ^ colorBits[offset + 2], 16777619);
+    }
     let slot = (hash ^ (hash >>> 16)) & mask;
     let probes = 0;
     for (;;) {
@@ -41,8 +52,15 @@ function indexMesh(mesh: GeometryMesh, deadline: number): GeometryMesh {
         table[slot] = unique; break;
       }
       const canonical = representatives[entry - 1] * 3;
-      let equal = true;
-      for (const stream of bits) for (let component = 0; component < 3; component++) if (stream[offset + component] !== stream[canonical + component]) equal = false;
+      const equal = positionsBits[offset] === positionsBits[canonical]
+        && positionsBits[offset + 1] === positionsBits[canonical + 1]
+        && positionsBits[offset + 2] === positionsBits[canonical + 2]
+        && normalBits[offset] === normalBits[canonical]
+        && normalBits[offset + 1] === normalBits[canonical + 1]
+        && normalBits[offset + 2] === normalBits[canonical + 2]
+        && (!colorBits || colorBits[offset] === colorBits[canonical]
+          && colorBits[offset + 1] === colorBits[canonical + 1]
+          && colorBits[offset + 2] === colorBits[canonical + 2]);
       if (equal) { indices[vertex] = entry - 1; break; }
       slot = (slot + 1) & mask;
     }

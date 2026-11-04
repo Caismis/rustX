@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { readFileSync } from 'node:fs';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, it, vi } from 'vitest';
 import { BufferGeometry, Frustum, Material, Matrix4, Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Vector2, Vector3 } from 'three';
@@ -10,8 +11,30 @@ import { importCad, convertCadResult } from '../src/app/components/documents/geo
 import { modelScene, validateScene, disposeScene } from '../src/app/components/documents/geometry/scene-resources';
 import { viewersForPath, loadsBytes } from '../src/app/components/workbench-documents/definitions';
 
-vi.mock('occt-import-js/dist/occt-import-js.wasm?url', async () => ({ default: (await import('node:url')).fileURLToPath(new URL('../node_modules/occt-import-js/dist/occt-import-js.wasm', import.meta.url)) }));
+const cadModule = await WebAssembly.compile(readFileSync(new URL('../node_modules/occt-import-js/dist/occt-import-js.wasm', import.meta.url)));
 const fixture = (name: string) => new Uint8Array(readFileSync(fileURLToPath(new URL(`./fixtures/geometry/${name}`, import.meta.url))));
+it('rejects instance initialization failure without falling through to the pinned asset loader', async () => {
+  const Native = WebAssembly, read = vi.spyOn(fs, 'readFile');
+  const Instance = new Proxy(Native.Instance, { construct() { throw new WebAssembly.RuntimeError('Instance unavailable'); } });
+  vi.stubGlobal('WebAssembly', new Proxy(Native, { get(target, key) { return key === 'Instance' ? Instance : Reflect.get(target, key); } }));
+  try { await expect(importCad(fixture('cube.step'), 'step', cadModule)).rejects.toThrow('Instance unavailable'); expect(read).not.toHaveBeenCalled(); }
+  finally { vi.unstubAllGlobals(); read.mockRestore(); }
+});
+it('shares compiled CAD code while creating fresh instances, heaps and exact typed results', async () => {
+  const Native = WebAssembly, instances: WebAssembly.Instance[] = [], modules: WebAssembly.Module[] = [];
+  const Instance = new Proxy(Native.Instance, { construct(target, args) {
+    const instance = Reflect.construct(target, args); instances.push(instance); modules.push(args[0]); return instance;
+  } });
+  vi.stubGlobal('WebAssembly', new Proxy(Native, { get(target, key) { return key === 'Instance' ? Instance : Reflect.get(target, key); } }));
+  try {
+    const first = await importCad(fixture('cube.step'), 'step', cadModule), second = await importCad(fixture('cube.step'), 'step', cadModule);
+    expect(modules).toEqual([cadModule, cadModule]); expect(instances).toHaveLength(2); expect(instances[0]).not.toBe(instances[1]);
+    const heap = (instance: WebAssembly.Instance) => Object.values(instance.exports).find(value => value instanceof Native.Memory) as WebAssembly.Memory;
+    expect(heap(instances[0]).buffer).not.toBe(heap(instances[1]).buffer);
+    expect(first).toEqual(second); expect(first.meshes[0].positions).toBeInstanceOf(Float32Array);
+    expect(first.meshes[0].positions.buffer).not.toBe(second.meshes[0].positions.buffer);
+  } finally { vi.unstubAllGlobals(); }
+});
 it('adopts whole STL parser buffers without copying the Worker-owned input or attributes', () => {
   const source = fixture('cube.stl'), geometry = new STLLoader().parse(source.buffer);
   const position = geometry.getAttribute('position').array, normal = geometry.getAttribute('normal').array;
@@ -79,14 +102,14 @@ it.each(['cube.stl', 'cube-ascii.stl'])('imports the analytic cube from %s with 
   } finally { disposeScene([object]); }
 });
 it.each([['cube.step', 'step'], ['cube-inch.step', 'step'], ['cube.iges', 'iges'], ['cube.brep', 'brep']] as const)('imports %s against the independent analytic 10-unit reference', async (name, format) => {
-  const model = await importCad(fixture(name), format), admitted = modelScene(model), object = admitted.scene;
+  const model = await importCad(fixture(name), format, cadModule), admitted = modelScene(model), object = admitted.scene;
   try { const bounds = admitted.bounds; bounds.min.toArray().forEach(value => expect(value).toBeCloseTo(0, 5)); bounds.max.toArray().forEach(value => expect(value).toBeCloseTo(10, 5)); }
   finally { disposeScene([object]); }
 }, 30_000);
 it.each(['step', 'glb'] as const)('imports the named twelve-part product assembly from %s with correct units', async format => {
   const bytes = fixture(`mounting-bracket.${format}`);
   const loaded = format === 'glb' ? await importGlb(bytes, new AbortController().signal) : undefined;
-  const object = loaded?.scene ?? modelScene(await importCad(bytes, 'step')).scene;
+  const object = loaded?.scene ?? modelScene(await importCad(bytes, 'step', cadModule)).scene;
   try {
     const unit = format === 'glb' ? 0.001 : 1, bounds = validateScene([object]), names: string[] = [];
     bounds.min.toArray().forEach((value, index) => expect(value).toBeCloseTo([-60, 0, -40][index] * unit, 5));
@@ -130,7 +153,7 @@ it('preserves CAD hierarchy, base colors and face-color ranges', () => {
   finally { disposeScene([object]); }
 });
 it('admits the 96-part CAD assembly within the existing geometry budgets', async () => {
-  const model = await importCad(fixture('bracket-array.step'), 'step'), admitted = modelScene(model);
+  const model = await importCad(fixture('bracket-array.step'), 'step', cadModule), admitted = modelScene(model);
   try {
     expect(admitted.bounds.getSize(new Vector3()).toArray()).toEqual([570, 72, 190]);
     let meshes = 0; admitted.scene.traverse(part => { if (part instanceof Mesh) meshes++; }); expect(meshes).toBe(96);

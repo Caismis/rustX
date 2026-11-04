@@ -16,6 +16,7 @@ import { splitFrontmatter } from './workbench-documents/frontmatter';
 import { FrontmatterFields } from './workbench-documents/frontmatter-fields';
 import { documentFailure } from './documents/errors';
 import { GeometryDocument, preloadGeometry } from './documents/GeometryDocument';
+import { GeometryLoading } from './documents/GeometryLoading';
 export interface PreviewArtifact { source: PreviewSource; name: string; image: boolean; mimeType?: string }
 export interface PreviewIntents { openPreview: (artifact: PreviewArtifact) => void; download: (artifact: PreviewArtifact) => void }
 export const PreviewContext = createContext<PreviewIntents | undefined>(undefined);
@@ -56,7 +57,7 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
   return <Preview name={artifact.name} path={artifact.source.kind === 'session_file' ? artifact.source.file.path : artifact.name} image={false} markdown={mode === 'markdown'}
     viewers={choices.length > 1 && <Menu open={menu} onClose={() => setMenu(false)} autoFocus selectedId={mode} items={choices.map(id => ({ id, label: tx(`artifacts:workbench.${id}`) }))} onSelect={id => { saveViewState({ viewer: id as typeof mode }); setMenu(false); }} anchor={<button type="button" aria-label={tx('artifacts:workbench.viewer')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>{tx(`artifacts:workbench.${mode}`)}</button>}/>}
     renderText={mode === 'code' ? text => <CodeBlock code={text} lang={typedMarkdown ? 'markdown' : languageForPath(artifact.name)} lineNumbers copyLabel={tx('common:search-block.copy')} copiedLabel={tx('common:search-block.copied')}/> : mode === 'markdown' ? text => { const split = splitFrontmatter(text); return <div>{split && <FrontmatterFields source={split.source} fallback={<pre>{split.source}</pre>}/>}<MarkdownText text={split?.body ?? text} streaming={content.page !== undefined && !content.page.eof}/></div>; } : undefined}
-    text={paged ? content.text : undefined} error={error} retryable={!['source_missing','source_unavailable','authorization_revoked','obsolete'].includes(failure ?? '') && !(failure === 'too_large' && content.text === undefined)} loading={initialLoading}
+    text={paged ? content.text : undefined} error={error} retryable={!['source_missing','source_unavailable','authorization_revoked','obsolete'].includes(failure ?? '') && !(failure === 'too_large' && content.text === undefined)} loading={initialLoading} loadingLabel={mode === 'geometry' ? <GeometryLoading stage="reading"/> : undefined}
     notice={mode !== 'geometry' && !owner.automaticRefresh ? tx('artifacts:document.manual-refresh') : undefined}
     hasMore={paged && content.page !== undefined && !content.page.eof} moreLoading={content.loading} onLoadMore={() => owner.more()}
     viewState={viewState} onViewStateChange={saveViewState} onDownload={() => { if (resources.current()) onDownload(); }}

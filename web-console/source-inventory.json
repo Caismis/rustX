@@ -2129,7 +2129,7 @@
       "destination": "web-console/src/presentation/primitives/HoverCard.module.css",
       "upstream": "packages/client/ui-primitives/src/HoverCard.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation PR #517: opt-in file-change preview uses a themed 720px reading surface bounded to viewport and 640px height; unrelated previews retain compact design width.",
       "upstream_sha256": "4d8fbf2368bd9f232f09422af94bf3527b4c9715445deaae18cf04fc1306475b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2138,7 +2138,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "68c378f240b1fe2253c7aa953f50b337a335babbca68e2fb294e7e93971a06aa",
+      "local_sha256": "a2b9d9f87ec847c4b0b1c15e09e7b894819b6e69f83af40d6e14362157cdf9de",
       "retained_dependencies": [],
       "classification": "A"
     },
@@ -2146,7 +2146,7 @@
       "destination": "web-console/src/presentation/primitives/HoverCard.tsx",
       "upstream": "packages/client/ui-primitives/src/HoverCard.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation #393: a comment no longer cites the removed Menu portal mode. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts.",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation #393: a comment no longer cites the removed Menu portal mode. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. PR #517: existing Floating UI fixed positioning replaces hand-written geometry with side flipping, viewport shifting, bounded sizing and live anchor/content updates; file-change previews opt into a wider surface.",
       "upstream_sha256": "e4fcb43d12de00d011717b033b496f5f57fb00c297f34e0a2f03206befd03e13",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2160,10 +2160,11 @@
         "./HoverCard.module.css",
         "./clipboard.ts",
         "./pointer-grace.ts",
+        "@floating-ui/react-dom",
         "react",
         "react-dom"
       ],
-      "local_sha256": "a03779db26aa4d324ae51be45f439f22e27b266f55f4e4c86826e2e6caf39f89",
+      "local_sha256": "10dee8b93927df50c1b53dd1dcfd0a0091bbac39e5d9a66a2d76df1038d4a93e",
       "classification": "A"
     },
     {
@@ -3631,7 +3632,7 @@
       "destination": "web-console/src/presentation/primitives/DiffBlock.tsx",
       "upstream_sha256": "7c02836d187eb495f49b4c4e1161e096af3336f3316d1926045dc38835eef96f",
       "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. PR #517: opt-in file preview has a single discoverable full-path header with a reserved Copy column and omits repeated path/footer chrome; full diff Copy and folding remain intact.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./DiffBlock.module.css",
@@ -3646,7 +3647,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "591a202b6d756a1ed58cdf982ad7dd374baf9b88c94cad9ac4eedda385612da6"
+      "local_sha256": "b920678deeb96208006f14369e1e0860005e65c8f1cc5932a6c9cc92c50f401a"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3654,7 +3655,7 @@
       "destination": "web-console/src/presentation/primitives/DiffBlock.module.css",
       "upstream_sha256": "a502d46c003c5f5772955b8eac930c36310fe522a690647207e37426b025a37f",
       "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. PR #517: opt-in file preview reserves Copy space, bounds long full paths to a scrollable header, and keeps 13px code lines horizontally scrollable.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -3662,7 +3663,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "3eb0a331c25d462dcfe7a8ee1c477d211e381b2dd3cffb3fe937ec180668ea74"
+      "local_sha256": "9b0f6dd26f5f5a1a17dbf9b21a119624ae77f77d241cc26dac2efa1a42b840e0"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3881,7 +3882,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "9541a38070ff6e351231d0891555dfd7cea1ca1152596682a95097c0a86922b1"
+      "local_sha256": "590101edcb047ebbcd2a9edda86e5fbc6a6a8c03b1c7e717cebdfaa0d6b263bc"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -4439,7 +4440,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "6fb1db6653c1bbb96a53ad4dcc614104bf2569bcdb73221c4570e0cf47359d1b",
+      "local_sha256": "c81bc8bcab2caca4ebeb6d491b5b781b12dd5f2eb10c9495d17910ccbf83a69b",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -4769,6 +4770,7 @@
         "../../workspaces/desktop",
         "../../workspaces/workbench",
         "./documents/GeometryDocument",
+        "./documents/GeometryLoading",
         "./documents/errors",
         "./workbench-documents/DocumentBody",
         "./workbench-documents/definitions",
@@ -4794,7 +4796,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "4c025e0dbcf2b6b379c1532f223a7eadbff6a638fad255ee6670e0ae19f54a36"
+      "local_sha256": "2b9a8cbc9cda6358119c28e5ec4d476e9777097c08a66f3bd0aa4f7324a3cbbe"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5795,7 +5797,7 @@
         "../../presentation/dockkit/engine/operations",
         "../../presentation/dockkit/engine/sequence"
       ],
-      "local_sha256": "59505b1f21f148efe96a20b7943458dcba81d12e0ec618b7b65471cb21588190"
+      "local_sha256": "fc2f094b3ffe3185f56532a5252ae5b66a5d98b6b7d822e5101251d751294f4f"
     },
     {
       "upstream": "packages/client/ui-dockkit/tests/apply.client.spec.ts",
@@ -7440,10 +7442,10 @@
       "destination": "web-console/src/presentation/attachments/ChangedFiles.tsx",
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "563e61f5bc3317c96eda89227ccac506ee8d68795a62f004f896df2416382891",
-      "local_sha256": "acc6891b15b85672d22f6af528de59671b83d81c55ca4cb4437787b83f04226a",
+      "local_sha256": "2e16679717cb94ebaee3d5bae7a3186367aa667fbe775c7d6b08070eabb399f8",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "classification": "A",
-      "treatment": "Adapted completed-turn single/multiple changed-files card, four-row fold, counts and deferred hover preview. RustX native snapshots, immutable comparisons and DockKit review tabs own data and navigation.",
+      "treatment": "Adapted completed-turn single/multiple changed-files card, four-row fold, counts and deferred hover preview. RustX native snapshots, immutable comparisons and DockKit review tabs own data and navigation. PR #517: changed-file row previews opt into file-change HoverCard sizing while preserving native full-review activation and lazy preview mounting.",
       "retained_dependencies": [
         "../../locale/react",
         "../primitives/FileTypeIcon",
