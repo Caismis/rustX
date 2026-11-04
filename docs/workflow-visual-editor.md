@@ -148,7 +148,7 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | Model | Session/registered model, fixed instruction, bindings and text/JSON output |
 | Agent | Profile picked from the scope's profiles, task in the prompt editor with variables, structured output fields |
 | Tool | Exact selector, arguments and text/JSON result projection |
-| Template | Named typed inputs and a multiline Jinja template; native `output` string |
+| Template | Inline reference bindings, numbered Jinja editor with `/` / `{` insertion, binding reuse and generated-token renames, copy/resize/expand, folded `output:string`; native bounded rendering |
 | List Operator | Array input, optional typed filter, stable sort and limit, with literal field paths |
 | Question Classifier | Session/registered model, text/numeric input variable, variable-aware topic cards with separate labels and stable exits, sortable classes and folded instructions; `class_name`, `class_label`, `usage` outputs |
 | Variable Aggregator | Named typed groups with alternative source pickers; renaming a group updates downstream references |

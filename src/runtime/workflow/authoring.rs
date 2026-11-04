@@ -387,8 +387,14 @@ fn consumer<'a>(
     use WorkflowNodeDefinition as N;
     let node = block.nodes.get(&address.address.node)?;
     let (expression, expected, result_scope) = match (node, &address.field) {
-        (N::Template { variables, .. }, F::TemplateVariable { name })
-        | (N::Code { variables, .. }, F::CodeVariable { name }) => {
+        // The template editor queries the input scope before inserting a
+        // binding. It uses the same consumer contract as an existing input.
+        (N::Template { variables, .. }, F::TemplateVariable { name }) => (
+            Expression::Value(variables.get(name).unwrap_or(&UNSET_REFERENCE)),
+            None,
+            false,
+        ),
+        (N::Code { variables, .. }, F::CodeVariable { name }) => {
             (Expression::Value(variables.get(name)?), None, false)
         }
         (N::List { input, .. }, F::TransformInput) => (

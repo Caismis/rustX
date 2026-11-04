@@ -97,12 +97,16 @@ fn runtime(message: impl Into<String>) -> WorkflowRunError {
 
 fn environment() -> minijinja::Environment<'static> {
     let mut env = minijinja::Environment::new();
-    env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+    // Dify's SandboxedEnvironment uses ordinary Jinja Undefined: an absent
+    // name prints empty and can be tested/defaulted, but invalid operations
+    // on it still fail. Keep JSON inputs typed for filters and conditions.
+    env.set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
+    env.set_auto_escape_callback(|_| minijinja::AutoEscape::None);
+    env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
     env.set_recursion_limit(32);
     env.set_fuel(Some(50_000));
-    // Inputs are explicit JSON values. Do not provide a source loader or an
-    // unbounded synthetic range independent of those bounded values.
-    env.remove_global("range");
+    // No source loader or host objects. MiniJinja's built-in range is bounded
+    // to 100,000 entries; iteration also consumes the native fuel budget.
     env
 }
 
@@ -131,12 +135,6 @@ pub(super) fn validate_template(
     let mut env = environment();
     env.add_template("workflow", template)
         .map_err(|e| invalid(e.to_string()).at("template"))?;
-    let compiled = env.get_template("workflow").expect("registered template");
-    for name in compiled.undeclared_variables(false) {
-        if !variables.contains_key(&name) && !env.globals().any(|(global, _)| global == name) {
-            return Err(invalid(format!("unbound template variable {name:?}")).at("template"));
-        }
-    }
     Ok(())
 }
 

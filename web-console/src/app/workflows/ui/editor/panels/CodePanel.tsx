@@ -22,7 +22,7 @@ import { CodeSignatureButton } from '../forms/CodeSignatureButton';
 import { ErrorStrategy, RetrySettings, RouteId } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
-import styles from './CodePanel.module.css';
+import styles from '../forms/WorkflowCode.module.css';
 
 const WorkflowCodeView=lazy(()=>import('../forms/WorkflowCodeView'));
 const TYPES:readonly WorkflowVarType[]=['string','number','boolean','object','array[string]','array[number]','array[boolean]','array[object]'];

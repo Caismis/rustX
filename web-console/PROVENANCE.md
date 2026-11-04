@@ -1,3 +1,40 @@
+## Template Transform alignment (2026-11-04)
+
+Read-only study uses sibling Dify `ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0`:
+`workflow/nodes/template-transform/panel.tsx`, `use-config.ts`, `default.ts`,
+shared `variable/var-list.tsx`, `hooks/use-var-list.ts`,
+`editor/code-editor/editor-support-vars.tsx` and `output-vars.tsx`.
+Execution follows Dify's actual `api/core/workflow/template_rendering.py` and
+`api/core/helper/code_executor/jinja2/jinja2_transformer.py`, which use a
+Jinja2 SandboxedEnvironment with ordinary Undefined, not the separate
+Graphon default/fallback renderer. Graphon
+`4fa22141774dff80e90e4dfa98ea3e6fbf0421bb` supplies the template defaults and
+`output` contract in `nodes/template_transform/template_transform_node.py`.
+
+| Dify behavior | Native treatment |
+| --- | --- |
+| Initial arg1 and {{ arg1 }} | Existing native node default, with an unset reference |
+| Compact named input/reference/delete rows | Native scope analysis and JSON-typed bindings, capped at 32; new rows use valid unique names instead of empty map keys |
+| Variable insertion with / or { | Same variable catalog anchored at the caret; reuse an existing selected path or insert a uniquely named binding and token in one undoable edit |
+| Rename generated template tokens | Dify's exact `{{ old }}` replacement and the input rename in one document transaction; other expressions remain authored source |
+| Code header, Jinja2 documentation, copy/resize/expand | Shared original CodeMirror editor frame and expansion hook; maintained @codemirror/lang-jinja syntax support; drafts and caret survive expansion |
+| Output disclosure and Next step | Fixed output:string with folded description; existing successor chooser |
+| Default Undefined and JSON inputs | MiniJinja Lenient mode, no autoescaping, common Jinja filters/control flow, maintained minijinja-contrib Python-style methods and bounded range |
+| Vision and AI generation | Omitted under the user's alignment scope |
+
+Original composition; no Dify code, styles, assets or stores are copied.
+Bindings remain native maps with deterministic native serialization, without
+Dify's input-list drag ordering. Rendering remains native MiniJinja rather
+than a Python sandbox process: its supported language/filter surface and JSON
+formatting are not byte-for-byte Python Jinja2 compatibility. Native source,
+input and node output budgets remain 64 KiB, with 50,000 fuel and recursion 32,
+rather than adopting Dify's larger 400,000-character output limit. Both sandbox
+implementations bound range to 100,000 entries. No file loader/host objects,
+compatibility reader, migration or new wire format is introduced. App Server
+remains v66 and Runtime Client v80. Browser plugin is unavailable; the pinned
+Playwright container exercises actual desktop/light and touch/mobile/dark
+editing, insertion, focus restoration, expansion, copy and save/reopen.
+
 ## Code panel alignment (2026-11-04)
 
 Read-only study uses sibling Dify `ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0`:

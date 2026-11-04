@@ -495,11 +495,24 @@ format_answer:
 ```
 
 The result is `{output: <string>}`. Up to 32 inputs have unique ASCII identifier
-names. Unbound names, syntax errors and missing fields fail explicitly. There
-is no file loader; the synthetic `range` global is disabled. Template source,
-resolved input context and rendered text each have a 64 KiB budget. Rendering
-also has a 50,000-operation fuel budget and recursion limit 32. The final output
-object must fit the ordinary 64 KiB node-value limit.
+names. As in Dify's Jinja2 sandbox, unbound names and missing object keys print
+empty; `default` and `is defined` can handle them. Invalid syntax, operations
+on an undefined value and unresolved native reference bindings still fail.
+Text is not HTML-escaped. Python-style string/dictionary methods use
+MiniJinja's maintained `pycompat` extension, and `range` allows at most 100,000
+entries. There is no file loader or access to Python/host objects. Template
+source, resolved input context and rendered text each have a 64 KiB budget.
+Rendering also has a 50,000-operation fuel budget and recursion limit 32.
+The final output object must fit the ordinary 64 KiB node-value limit.
+
+The visual editor starts with an unbound `arg1` and `{{ arg1 }}`. Inputs select
+native incoming variables of any JSON type. Typing `/` or `{` in the numbered
+Jinja editor selects an upstream variable, reuses an existing binding or adds
+one, and inserts `{{ name }}`. Generated interpolation tokens are renamed
+with their binding, following Dify's direct-token replacement; arbitrary
+expressions are edited in the source. Copy, vertical resize and expansion
+preserve the editor and draft. The fixed `output:string` description is folded
+by default. No AI authoring controls are included.
 
 ### List Operator (`list`)
 

@@ -111,7 +111,7 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     const assigner=Object.values(saved.block.nodes.repeat.body.nodes).find((node:any)=>node.type==='assigner') as any;
     expect(assigner.items[0]).toMatchObject({variable:['repeat','count'],operation:'increment'});
     await page.getByRole('button',{name:'Back to Workflows',exact:true}).first().click();await page.getByRole('button',{name:'data_nodes',exact:true}).click();
-    await activate(card(page,'left'));await expect(panel(page).getByRole('textbox',{name:'Template code',exact:true})).toHaveValue('{{ question | upper }}!');
+    await activate(card(page,'left'));await expect(panel(page).getByRole('textbox',{name:'Template code',exact:true}).locator('.cm-line')).toHaveText(['{{ question | upper }}!']);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally {await fixture.stop(false);}

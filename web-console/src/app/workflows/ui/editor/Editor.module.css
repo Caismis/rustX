@@ -296,8 +296,7 @@
 .dataRow { display: grid; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--dsw-alias-border-l3); }
 .dataRowHead { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .dataRowHead > :first-child { flex: 1; min-width: 0; }
-.codeEditor textarea, .scriptInput { min-height: 200px; font-family: var(--ds-font-family-code); line-height: 1.6; tab-size: 2; }
-.scriptInput { align-items: stretch; overflow: auto; }
+.scriptInput { min-height: 200px; font-family: var(--ds-font-family-code); line-height: 1.6; tab-size: 2; align-items: stretch; overflow: auto; }
 .nodeText { display: flex; flex-direction: column; min-width: 0; }
 .nodeTitle { font-size: 13px; font-weight: 570; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nodePreview { display: grid; gap: 3px; margin-top: 11px; }

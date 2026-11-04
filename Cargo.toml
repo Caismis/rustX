@@ -134,6 +134,7 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["h
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 biodivine-lib-bdd = "0.6.3"
 minijinja = { version = "2", features = ["fuel", "json"] }
+minijinja-contrib = { version = "2", features = ["pycompat"] }
 
 [lints.rust]
 # The runtime process-supervision capability and the per-invocation Bash

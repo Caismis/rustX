@@ -2,41 +2,14 @@ import type { WorkflowVarType } from '../../../../../../../protocol/app-server/v
 import { useTranslation } from '../../../../../locale/react';
 import { IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';
-import { CommandRejected, freshKey, renameAggregateOutput } from '../../../document/commands';
-import { fieldValue, setField } from '../../../document/fields';
+import { freshKey, renameAggregateOutput } from '../../../document/commands';
 import { IconPlus } from '../../icons';
 import { ReferencePicker } from '../forms/ReferencePicker';
-import { PathEditor, ValueEditor } from '../forms/ValueEditor';
+import { PathEditor } from '../forms/ValueEditor';
 import { DraftTextField, JsonField, NumberField, Section } from '../forms/fields';
 import { RouteId } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
-
-/** Dify's named input bindings and Jinja editor, over native pure rendering. */
-export function TemplatePanel(props: PanelProps) {
-  const tx = useTranslation(), { node, at, update } = useNode(props, 'template');
-  return <>
-    <Section title={tx('workflows:data.inputs')} aside={<button className={css.iconButton} type="button" aria-label={tx('workflows:data.add-input')} disabled={Object.keys(node.variables).length >= 32}
-      onClick={() => { const name = freshKey(Object.keys(node.variables), 'arg'); update(current => ({ ...current, variables: { ...current.variables, [name]: { type: 'reference', path: [] } } }), at('variables')); }}><IconPlus size={14} /></button>}>
-      {Object.entries(node.variables).map(([name,value]) => <div className={css.dataRow} key={name}>
-        <div className={css.dataRowHead}><RouteId label={tx('workflows:data.input-name')} value={name} address={{...at('variables', {key:name}),role:'key'}}
-          rename={(document, from, to) => {
-            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(to) || Object.hasOwn(node.variables,to)) throw new CommandRejected('duplicate_identifier');
-            const variables=fieldValue(document,at('variables'))?.value as typeof node.variables;
-            const { [from]: value, ...rest } = variables;
-            return setField(document,at('variables'),{...rest,[to]:value});
-          }} />
-          <button className={css.iconButton} type="button" aria-label={tx('workflows:data.remove-input', {p0:name})} onClick={() => update(current => { const { [name]: _, ...variables } = current.variables; return {...current,variables}; }, at('variables'))}><IconTrashOutline16 /></button>
-        </div>
-        <ValueEditor label={tx('workflows:data.input-value')} address={at('variables',{key:name})} value={value} edit={props.edit} />
-      </div>)}
-    </Section>
-    <Section title={tx('workflows:data.template')} help={tx('workflows:data.template-help')}>
-      <div className={css.codeEditor}><DraftTextField label={tx('workflows:data.template-code')} value={node.template} address={at('template')} multiline /></div>
-    </Section>
-    <Outputs items={[[/* i18n-raw: native output identifier */ 'output', /* i18n-raw: native schema type */ 'string']]} />
-  </>;
-}
 
 const OPERATORS = ['equal','not_equal','contains','not_contains','starts_with','ends_with','greater','greater_equal','less','less_equal'] as const;
 

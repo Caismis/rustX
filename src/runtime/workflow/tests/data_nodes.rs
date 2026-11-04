@@ -15,13 +15,81 @@ fn template_compilation_checks_bindings_and_rendering_is_bounded() {
     })
     .unwrap();
     assert_eq!(value, json!({"output":"B;"}));
-    assert!(transform::validate_template("{{ missing }}", &variables).is_err());
+    assert!(transform::validate_template("{{ missing }}", &variables).is_ok());
     assert!(transform::validate_template("{% if %}", &variables).is_err());
     assert!(transform::render("{{ items.missing }}", &variables, |_| Ok(json!({}))).is_err());
     assert!(
         transform::render(&"x".repeat(MAX_VALUE_BYTES + 1), &BTreeMap::new(), |_| Ok(
             json!({})
         ))
+        .is_err()
+    );
+}
+
+#[test]
+fn template_matches_dify_undefined_whitespace_and_common_jinja_operations() {
+    // Expectations follow Dify's CodeExecutor Jinja2 SandboxedEnvironment,
+    // rather than Graphon's separate default/fallback renderer.
+    let variables = BTreeMap::from([
+        ("text".into(), reference("args.text")),
+        ("items".into(), reference("args.items")),
+        ("data".into(), reference("args.data")),
+    ]);
+    let context = json!({"text":"  <hello>  ","items":[1,2,3],"data":{"name":"world"}});
+    for (source, expected) in [
+        (
+            "{{ missing }}|{{ missing | default('fallback') }}",
+            "|fallback",
+        ),
+        ("{% if missing %}yes{% else %}no{% endif %}", "no"),
+        (
+            "{{ data.missing }}|{{ data.missing | default('fallback') }}",
+            "|fallback",
+        ),
+        ("{{ text.strip().upper() }}", "<HELLO>"),
+        (
+            "{% for key, value in data.items() %}{{ key }}={{ value }}{% endfor %}",
+            "name=world",
+        ),
+        ("{{ items | sum }}|{{ items | join(',') }}", "6|1,2,3"),
+        ("{{ range(3) | join(',') }}", "0,1,2"),
+        ("a\n{{- text | trim -}}\nb\n", "a<hello>b"),
+        ("{{ true }}|{{ false }}|{{ none }}", "True|False|None"),
+    ] {
+        transform::validate_template(source, &variables).unwrap();
+        let result = transform::render(source, &variables, |_| Ok(context.clone())).unwrap();
+        assert_eq!(result["output"], expected, "{source}");
+    }
+    let json_output =
+        transform::render("{{ items | tojson }}", &variables, |_| Ok(context.clone())).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(json_output["output"].as_str().unwrap()).unwrap(),
+        json!([1, 2, 3])
+    );
+    assert!(transform::render("{{ missing.value }}", &variables, |_| Ok(context.clone())).is_err());
+    assert!(
+        transform::render(
+            "{{ text.__class__() }}",
+            &variables,
+            |_| Ok(context.clone())
+        )
+        .is_err()
+    );
+    assert!(
+        transform::render("{% include 'file' %}", &variables, |_| Ok(context.clone())).is_err()
+    );
+    assert!(
+        transform::render("{{ range(100001) | length }}", &variables, |_| Ok(
+            context.clone()
+        ))
+        .is_err()
+    );
+    assert!(
+        transform::render(
+            "{% for a in range(10000) %}{% for b in range(10000) %}{% endfor %}{% endfor %}",
+            &variables,
+            |_| Ok(context.clone())
+        )
         .is_err()
     );
 }
@@ -163,6 +231,30 @@ fn authoring_offers_exclusive_sources_only_to_aggregator_consumers() {
         analysis.selected.unwrap().availability,
         WorkflowReferenceAvailability::Unavailable
     );
+}
+
+#[test]
+fn template_insertion_queries_the_native_entry_scope_before_binding_exists() {
+    use crate::runtime::workflow::authoring::*;
+    let definition = aggregate_document();
+    for (path, availability) in [
+        (
+            vec!["merge", "output"],
+            WorkflowReferenceAvailability::Available,
+        ),
+        (
+            vec!["left", "output"],
+            WorkflowReferenceAvailability::Unavailable,
+        ),
+        (
+            vec!["format", "output"],
+            WorkflowReferenceAvailability::Unavailable,
+        ),
+    ] {
+        let query:WorkflowAnalysisQuery=serde_json::from_value(json!({"consumer":{"address":{"block":[],"node":"format"},"field":{"kind":"template_variable","name":"new_input"}},"reference":path,"limit":32})).unwrap();
+        let analysis = analyze(&definition, Some(&query), &BTreeSet::new()).unwrap();
+        assert_eq!(analysis.selected.unwrap().availability, availability);
+    }
 }
 
 #[test]
