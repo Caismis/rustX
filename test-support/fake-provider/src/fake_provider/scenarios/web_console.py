@@ -202,6 +202,28 @@ SCENARIOS["web_workflow_observation"] = web_workflow_observation
 SCENARIOS["web_workflow_conformance"] = web_workflow_conformance
 
 
+def web_removed_capability_history() -> Scenario:
+    """Only model responses are scripted; rustX executes and records both tools."""
+    return Scenario(
+        "web_removed_capability_history",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Execute capabilities before removal",), tools_include=("read", "history_flow")),
+             Stream(ToolCall("history-read", "read", '{"path":"history-evidence.txt"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("HISTORY_TOOL_RESULT_v1",), tools_include=("history_flow",)),
+             Stream(ToolCall("history-workflow", "history_flow", '{"message":"HISTORY_WORKFLOW_INPUT_v1"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Saved HISTORY_WORKFLOW_INPUT_v1",)),
+             Stream(Text("Original capabilities executed."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Continue after capability removal",), no_direct_tools=True),
+             Stream(Text("Removed capabilities are absent from this request."), Finish())),
+    )
+
+
+SCENARIOS["web_removed_capability_history"] = web_removed_capability_history
+
+
 def web_session_archive() -> Scenario:
     """One settled native history shared by browser and remote TUI exports."""
     return Scenario("web_session_archive", Step(
