@@ -6,6 +6,30 @@ import { workflowRun } from './workflow-data';
 import { WorkflowRunPanel } from '../src/app/agent/WorkflowRunPanel';
 afterEach(cleanup);
 
+it('keeps the complete Workflow snapshot during a bounded refresh and publishes its replacement atomically', async () => {
+  const server = new Server(); await server.attached('A');
+  try {
+    const original = workflowRun();
+    const s = { ...snapshot(), workflows: { revision: '1', runs: [original], omitted_runs: 0 } };
+    const view = { ...server.client.getSnapshot().views.A, snapshot: s, checkpoint: checkpoint(s) };
+    const ui = renderHook(({ view }) => useWorkflowContent(server.client, view, true), { initialProps: { view } });
+    const replacement = { ...original, instances: [...original.instances, { ...original.instances[1], node: 'new-node' }] };
+    const next = { ...s, workflows: { revision: '2', runs: [{ ...replacement, instances: replacement.instances.slice(0, 1) }], omitted_runs: 0 } };
+    const check = checkpoint(next, '2');
+    check.collections = [{ domain: 'workflows.runs', revision: '2', total: '1', loaded: '1', next_offset: null }, { domain: 'workflows.runs.@0.instances', revision: '2', total: String(replacement.instances.length), loaded: '1', next_offset: '1' }];
+    server.held.add('conversation/checkpointPage');
+    ui.rerender({ view: { ...view, snapshot: next, checkpoint: check } });
+    const request = await server.waitFor('conversation/checkpointPage', 1);
+    expect(ui.result.current.snapshot).toBe(s.workflows);
+    await act(async () => server.socket.success(request, { type: 'checkpoint_page', page: { domain: 'workflows.runs', cursor: check.read_cut.revision, read_cut: check.read_cut, total: '1', items: [{ offset: '0', identity: 'run', value: replacement as never, deferred: false, content: [] }], next_offset: null, collections: [] } }));
+    expect(ui.result.current.snapshot?.revision).toBe('2');
+    expect(ui.result.current.snapshot?.runs[0].instances).toEqual(replacement.instances);
+    const empty = { ...s, workflows: { revision: '3', runs: [], omitted_runs: 0 } };
+    ui.rerender({ view: { ...view, snapshot: empty, checkpoint: checkpoint(empty, '3') } });
+    expect(ui.result.current.snapshot?.runs).toEqual([]);
+  } finally { server.client.disconnect(); }
+});
+
 it('keeps a manually expanded completed Workflow open while deferred nodes hydrate', async () => {
   const server = new Server(); await server.attached('A'); server.held.add('conversation/checkpointPage');
   try {

@@ -3990,7 +3990,7 @@
           "treatment": "Add the English/Chinese pending-message label for the Harness-style sending progress, driven by rustX native admission state."
         }
       ],
-      "local_sha256": "19fc7d2ddceaccbce9512557927238a6891bdb120ad4e67bfc87cd6dffc1eb62"
+      "local_sha256": "fc24fd3a101f7accc533841d100e07e9e782d4fb9ec26c51f134dd87b82710cf"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -6819,7 +6819,7 @@
       "upstream": "packages/client/ui-jobs/src/client/JobListAction.tsx",
       "destination": "web-console/src/app/agent/BackgroundJobItem.tsx",
       "classification": "B",
-      "treatment": "Harness JobItem row layout, exclusive output expansion and two-press stop affordance adapted to native rustX job lifecycle, deferred details and cancellation authority. Native progress stays in the row; only native terminal content is shell output. No Harness job observation transport or model is imported. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v68 generated-protocol imports; retained presentation and upstream baseline unchanged.",
+      "treatment": "Harness JobItem row layout, exclusive output expansion and two-press stop affordance adapted to native rustX job lifecycle, deferred details and cancellation authority. Native progress stays in the row; only native terminal content is shell output. No Harness job observation transport or model is imported. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v68 generated-protocol imports; retained presentation and upstream baseline unchanged. Message-flow refresh audit: retain complete same-owner task output while bounded details refresh; keep native errors visible beside retained content.",
       "upstream_sha256": "ae1b9aac19c1d50cfc915c909edfefd07ff54371a26af43ecc2e323d253914d7",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
@@ -6840,7 +6840,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "703c9041058801b60cfd0c3ee4da26f0b8e4cd85597a2737a39c0784c3daa983"
+      "local_sha256": "a7633193216ccd0b83aefcea5f044b6c56592148e53c4252075cbe8eb5b36f5c"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",

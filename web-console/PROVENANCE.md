@@ -5169,3 +5169,31 @@ borrow the prior list. Existing disclosure state, task identity, Goal hydration,
 native conversation-owned Todo lifetime, and error reporting remain intact.
 This changes the rustX hydration adapter, with no additional upstream component
 code, assets, dependencies, or native/schema changes.
+
+## Message-flow refresh audit
+
+Reviewed the same sibling Harness revision
+`ce7073d51254c26cd63b22a60835b8f948deb447` beyond Todo:
+
+| Surface | Reference under `packages/client/` | Applied behavior |
+| --- | --- | --- |
+| Goal | `ui-goal/src/client/GoalBar.tsx` and the whole-value projection store | Keep the complete Goal and its matching CAS reference until its replacement is complete; a terminal or replaced Goal uses native state immediately. |
+| Workflow | Whole-value projection updates and `ui-chat/src/client/chat/AssistantMarkdown.tsx` stable block identities | Retain complete same-owner runs while a bounded replacement loads; keep node disclosure and DOM identity. Workflow execution remains rustX-native. |
+| Background output | `ui-jobs/src/client/JobListAction.tsx` | Keep observed output mounted while details refresh; show native read errors alongside retained output. |
+| Approval | `ui-approval/src/client/ApprovalCard.tsx` and `ui-chat/src/client/chat/ApprovalCommand.tsx` | Scope command text to its request identity; collection refreshes do not replace it with a loading paragraph. |
+| Compaction | `ui-chat/src/client/chat/CompactionItem.tsx` | A visible summary remains the disclosure body; bounded preview hydration uses `aria-busy` without adding a transient text row. |
+| Streaming Tool proposal | `ui-chat/src/client/chat/AssistantMarkdown.tsx` | Wait for a native Tool header instead of reserving an assembly-text row inside the reply. Existing process progress remains visible. |
+
+Also checked text/reasoning publication, canonical Tool hydration, deferred Tool
+arguments, ask-user/review disclosures, history pagination, delivery batches and
+Trace details. Existing source identity, retained reading and initial-loading
+boundaries stay in place. Real failures, initial missing content, historical
+pagination and pending decision state remain visible. Presentation retention
+never crosses clients, attachments, conversations, child activations or request
+identities, and no read authority or mutation reference is invented.
+
+No upstream store, runtime, assets or additional dependencies are imported.
+Affected adapted source records are rehashed; existing source pins
+and native protocols are unchanged. Regression checks hold the native read
+responses open to prove the intermediate state, and browser checks observe DOM
+mutations, geometry, focus and disclosures in desktop/mobile light/dark views.

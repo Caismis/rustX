@@ -111,20 +111,22 @@ function PendingQuestionnaire({ panelKeys, ...props }: QuestionnaireProps & { pa
 }
 function InteractionField({client,view,index,identity,path}:{client:AppServerClient;view:SessionView;index:number;identity:string;path:string[]}) {
   const tx=useTranslation(),generation=useRef(0);
-  const [state,setState]=useState<{text?:string;loading?:boolean;error?:string}>({});
-  const key=JSON.stringify([view.target,view.checkpoint?.read_cut.domain_revisions.pending_interactions,view.interactionPage?.offset,index,identity,path]);
+  const owner=JSON.stringify([view.target,view.attachmentObservation,identity,path]);
+  const [state,setState]=useState<{owner:string;client:AppServerClient;text?:string;loading?:boolean;error?:string}>();
+  const shown=state?.owner===owner&&state.client===client?state:undefined;
+  const key=JSON.stringify([owner,view.checkpoint?.read_cut.domain_revisions.pending_interactions,view.interactionPage?.offset,index]);
   useEffect(()=>{
     const token=++generation.current,current=()=>generation.current===token;
     const decoder=new TextDecoder('utf-8',{ignoreBOM:true,fatal:true});
-    setState({loading:true});
+    setState(previous=>({owner,client,text:previous?.owner===owner&&previous.client===client?previous.text:undefined,loading:true}));
     void(async()=>{
       const parts:string[]=[];let offset:number|undefined=0;
       do {const chunk=await client.interactionValueChunk(view.id,index,path,offset,current);if(!current())return;parts.push(decoder.decode(chunk.bytes,{stream:chunk.next!==undefined}));offset=chunk.next;}while(offset!==undefined);
-      if(current())setState({text:approvalText(JSON.parse(parts.join('')))});
-    })().catch(error=>{if(current())setState({error:String(error).slice(0,512)});});
+      if(current())setState({owner,client,text:approvalText(JSON.parse(parts.join('')))});
+    })().catch(error=>{if(current())setState(previous=>({owner,client,text:previous?.owner===owner&&previous.client===client?previous.text:undefined,error:String(error).slice(0,512)}));});
     return()=>{generation.current++;};
   },[key,client]);
-  return <>{state.loading&&<p role="status">{tx('common:activity.loading')}</p>}{state.text&&<pre>{state.text}</pre>}{state.error&&<p role="alert">{state.error}</p>}</>;
+  return <>{shown?.loading&&shown.text===undefined&&<p role="status">{tx('common:activity.loading')}</p>}{shown?.text!==undefined&&<pre aria-busy={shown.loading}>{shown.text}</pre>}{shown?.error&&<p role="alert">{shown.error}</p>}</>;
 }
 /** Harness ApprovalCommand: show an authored shell command, otherwise native arguments. */
 function approvalText(value: unknown): string {

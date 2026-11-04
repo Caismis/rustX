@@ -18,6 +18,29 @@ function Goal({ view }: { view: SessionView }) {
  const content = useComposerContent(server.client, view);
  return <GoalDock state={goalDock(content.snapshot)} observation={view.snapshot} disabled={false} mutate={async () => ({ status: 'obsolete' })}/>;
 }
+it('keeps a complete Goal and its matching CAS reference while a newer Goal revision hydrates', async () => {
+ server = new Server();
+ const goal: RuntimeClientGoalSnapshot = { reference: { id: 'goal-1', revision: '3' }, objective: 'Complete Goal objective', objective_deferred: false, phase: 'active', blocked_reason_deferred: false, autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' }, last_round_message_id_deferred: false, fields: [] };
+ server.snapshots.set('A', { ...snapshot(), goal: { current: goal } }); await server.attached('A');
+ const view = server.client.getSnapshot().views.A;
+ const ui = renderHook(({ view }) => useComposerContent(server.client, view), { initialProps: { view } });
+ server.held.add('conversation/checkpointValueRead');
+ const nextGoal = { ...goal, reference: { ...goal.reference, revision: '4' }, objective: 'preview', objective_deferred: true };
+ await act(async () => server.update('A', { ...view.snapshot!, goal: { current: nextGoal } }));
+ const nextView = server.client.getSnapshot().views.A;
+ ui.rerender({ view: nextView });
+ const request = await server.waitFor('conversation/checkpointValueRead', 1);
+ expect(ui.result.current.snapshot?.goal?.current).toEqual(goal);
+ const objective = 'New authoritative Goal objective', cut = nextView.checkpoint!.read_cut;
+ await act(async () => server.socket.success(request, { type: 'checkpoint_value_chunk', chunk: { cut, domain: 'goal', item_offset: 0, path: ['current', 'objective'], offset: 0, readable_end: objective.length, next_offset: null, representation: 'utf8_text', bytes_base64: btoa(objective) } }));
+ expect(ui.result.current.snapshot?.goal?.current).toMatchObject({ reference: nextGoal.reference, objective, objective_deferred: false });
+ const replaced = { ...nextGoal, reference: { id: 'another-goal', revision: '1' } };
+ ui.rerender({ view: { ...nextView, snapshot: { ...nextView.snapshot!, goal: { current: replaced } } } });
+ expect(ui.result.current.snapshot?.goal?.current).toEqual(replaced);
+ const complete = { ...nextGoal, phase: 'complete' as const };
+ ui.rerender({ view: { ...nextView, snapshot: { ...nextView.snapshot!, goal: { current: complete } } } });
+ expect(ui.result.current.snapshot?.goal?.current?.phase).toBe('complete');
+});
 it('keeps an unsaved hydrated Goal objective draft while a Todo-only update waits for its own read', async () => {
  server = new Server();
  const goal: RuntimeClientGoalSnapshot = { reference: { id: 'goal-1', revision: '3' }, objective: 'preview', objective_deferred: true, phase: 'active', blocked_reason_deferred: false, autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' }, last_round_message_id_deferred: false, fields: [] };

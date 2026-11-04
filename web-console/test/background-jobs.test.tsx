@@ -87,7 +87,7 @@ it('subscribes to native job updates and scopes cleared identities to their conv
   } finally { server.client.disconnect(); }
 });
 
-it('loads deferred historical output on demand and rejects a late read after source replacement', async () => {
+it('keeps deferred task output during refresh and rejects a late read after source replacement', async () => {
   const server = new Server();
   try {
     const original = ended(running('large'));
@@ -109,7 +109,8 @@ it('loads deferred historical output on demand and rejects a late read after sou
     expect(screen.queryByRole('button', { name: 'Load task details' })).toBeNull();
     server.held.add('conversation/checkpointValueRead');
     await act(async () => server.update('A', { ...snapshot(), jobs: [structuredClone(header)] }));
-    expect(screen.queryByText(/Retained output Retained output/)).toBeNull();
+    expect(screen.getByText(/Retained output Retained output/)).toBeTruthy();
+    expect(screen.getByRole('dialog').textContent).not.toContain('Loading');
     const pending = await server.waitFor('conversation/checkpointValueRead', 2);
     await act(async () => server.update('A', { ...snapshot(), jobs: [] }));
     await act(async () => server.reply(pending));

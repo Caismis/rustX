@@ -8,6 +8,31 @@ import { Server, checkpoint, interaction } from './fixture';
 let server:Server|undefined;
 afterEach(()=>{cleanup();server?.client.disconnect();});
 
+it('keeps the current approval command visible when the pending collection refreshes', async () => {
+  const current = server = new Server();
+  const header: RuntimeClientInteractionHeader = { ...interaction('approval'), body: null, body_complete: false,
+    approval: { tool_name: 'bash', reason: 'Developer approval required', mode: 'foreground', deferred_fields: [['arguments']] } };
+  current.snapshots.get('A')!.pending_interactions = [header];
+  current.handlers.set('session/checkpoint', () => ({ type: 'checkpoint', checkpoint: { ...checkpoint(current.snapshots.get('A')!), read_cut: { ...checkpoint(current.snapshots.get('A')!).read_cut, domain_revisions: { pending_interactions: '1' } } } }));
+  current.handlers.set('conversation/checkpointValueRead', request => {
+    if (request.method !== 'conversation/checkpointValueRead') throw Error('Expected arguments read');
+    const text = JSON.stringify({ command: 'printf rustX' });
+    return { type: 'checkpoint_value_chunk', chunk: { cut: request.params.cut, domain: 'pending_interactions', item_offset: 0, path: request.params.path, offset: 0, readable_end: text.length, bytes_base64: btoa(text), next_offset: null, representation: 'canonical_json_v1' } };
+  });
+  await current.attached('A');
+  function Pending() { const state = useSyncExternalStore(current.client.subscribe, current.client.getSnapshot); return <Interactions client={current.client} state={state} view={state.views.A}/>; }
+  render(<Pending/>);
+  const command = await screen.findByText('printf rustX');
+  current.held.add('conversation/checkpointValueRead');
+  const next = checkpoint(current.snapshots.get('A')!, '1'); next.read_cut.domain_revisions.pending_interactions = '2';
+  await act(async () => current.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: current.target('A'), cursor: '1', event: { type: 'checkpoint_advanced', transition: 'pending-refresh', checkpoint: next } } }));
+  const request = await current.waitFor('conversation/checkpointValueRead', 2);
+  expect(screen.getByText('printf rustX')).toBe(command);
+  expect(screen.queryByText(/Loading/)).toBeNull();
+  await act(async () => current.reply(request));
+  expect(screen.getByText('printf rustX')).toBe(command);
+});
+
 async function pendingFixture(){
   const current=server=new Server();
   let header:RuntimeClientInteractionHeader=interaction('questionnaire');
