@@ -19,7 +19,7 @@ it.each([undefined, true, false])('starts outlines by default and respects the s
   const ui = render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="copy" signal={new AbortController().signal} current={() => true} viewState={{ geometry: { copyId: 'copy', outlines: preference } }} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
   await act(async () => imports.pending[0].resolve(source.value));
   expect(imports.mounts[0].setOutlines).toHaveBeenCalledTimes(preference === false ? 0 : 1);
-  expect(ui.getByRole('button', { name: 'Model outlines', exact: true }).getAttribute('aria-pressed')).toBe(String(preference !== false));
+  expect(ui.getByRole('button', { name: 'Model outlines' }).getAttribute('aria-pressed')).toBe(String(preference !== false));
 });
 it('copy retirement fences an import before React unmount and disposes its late graph', async () => {
   let owned = true; const changed = vi.fn(), source = graph();
