@@ -107,11 +107,40 @@ fn loader_name<'a>(
     })
 }
 
-/// `path` as the loaders spell it: each fixed component (a resource root, a
-/// source entry, a guidance file, a document) that the volume reports in
-/// another case of the same entry is respelled with the name the loaders
-/// open, so routing and watch invalidation see exactly the sources they read.
-/// Anything else is returned unchanged.
+/// The components of `path` beneath `base`, matching each component of
+/// `base` with the path's own by [`same`](same_entry) entry: a base the volume
+/// reports in another case still contains the path, while `base` keeps its
+/// own canonical spelling.
+fn beneath<'p>(
+    path: &'p Path,
+    base: &Path,
+    same: &impl Fn(&Path, &Path) -> bool,
+) -> Option<std::path::Components<'p>> {
+    let mut components = path.components();
+    let mut bound = PathBuf::new();
+    for expected in base.components() {
+        let actual = components.next()?;
+        if actual != expected {
+            let (Some(actual), Some(name)) =
+                (actual.as_os_str().to_str(), expected.as_os_str().to_str())
+            else {
+                return None;
+            };
+            if !name.eq_ignore_ascii_case(actual) || !same(&bound.join(actual), &bound.join(name)) {
+                return None;
+            }
+        }
+        bound.push(expected);
+    }
+    Some(components)
+}
+
+/// `path` as its owner reads it: the most specific known source — a resource
+/// root, a Workspace document or the User document — that `path` lies in,
+/// matched [`beneath`] its own canonical base and through the fixed names
+/// the loaders open, respelled under that base. Each owner is matched against
+/// the reported path itself, so one candidate's spelling never changes what
+/// another sees. A path no source owns is returned unchanged.
 fn loader_path(
     path: &Path,
     user: &UserSourceRoots,
@@ -119,7 +148,16 @@ fn loader_path(
     same: &impl Fn(&Path, &Path) -> bool,
 ) -> PathBuf {
     let guidance = || crate::runtime::resources::PROJECT_CONTEXT_FILENAMES.into_iter();
-    let mut path = path.to_path_buf();
+    let mut owned: Option<(usize, PathBuf)> = None;
+    let mut own = |base: &Path, respelled: PathBuf| {
+        let specificity = base.components().count();
+        if owned
+            .as_ref()
+            .is_none_or(|(current, _)| specificity > *current)
+        {
+            owned = Some((specificity, respelled));
+        }
+    };
     let resource_roots = std::iter::once((
         user.resources.ancestors().nth(USER_RESOURCES.len()),
         &USER_RESOURCES[..],
@@ -130,13 +168,31 @@ fn loader_path(
             .map(|workspace| (Some(workspace.as_path()), &[".agents"][..])),
     );
     for (base, fixed) in resource_roots {
-        let Some((root, entry, rest)) = base.and_then(|base| loader_root(&path, base, fixed, same))
-        else {
+        let Some(base) = base else {
             continue;
         };
-        let Some(entry) = entry else {
-            return root;
+        let Some(mut components) = beneath(path, base, same) else {
+            continue;
         };
+        let mut root = base.to_path_buf();
+        let mut fixed = fixed.iter();
+        let within = fixed.all(|name| {
+            components
+                .next()
+                .and_then(|actual| {
+                    loader_name(&root, actual.as_os_str(), std::iter::once(*name), same)
+                })
+                .map(|name| root.push(name))
+                .is_some()
+        });
+        if !within {
+            continue;
+        }
+        let Some(entry) = components.next() else {
+            own(base, root);
+            continue;
+        };
+        let rest = components.as_path();
         let names = SOURCE_ENTRIES.into_iter().chain(
             rest.as_os_str()
                 .is_empty()
@@ -144,57 +200,37 @@ fn loader_path(
                 .into_iter()
                 .flatten(),
         );
-        if let Some(name) = loader_name(&root, &entry, names, same) {
-            return root.join(name).join(rest);
+        // An entry that is no source here may still belong to a more
+        // specific Workspace inside this root.
+        if let Some(name) = loader_name(&root, entry.as_os_str(), names, same) {
+            own(base, root.join(name).join(rest));
         }
-        // Not a source of this root: a more specific Workspace inside it may
-        // still own the path, under the root's loader spelling.
-        path = root.join(entry).join(rest);
     }
-    let (Some(parent), Some(actual)) = (path.parent(), path.file_name()) else {
-        return path;
+    let document = |directory: &Path| {
+        let mut components = beneath(path, directory, same)?;
+        let file = components.next()?;
+        components.next().is_none().then_some(file)
     };
-    if Some(parent) == user.document.parent()
-        && let Some(document) = user.document.file_name().and_then(|name| name.to_str())
-        && let Some(name) = loader_name(parent, actual, std::iter::once(document), same)
+    if let Some(directory) = user.document.parent()
+        && let Some(file) = document(directory)
+        && let Some(fixed) = user.document.file_name().and_then(|name| name.to_str())
+        && let Some(name) = loader_name(directory, file.as_os_str(), std::iter::once(fixed), same)
     {
-        return parent.join(name);
+        own(directory, directory.join(name));
     }
-    if workspaces.iter().any(|workspace| workspace == parent)
-        && let Some(name) = loader_name(
-            parent,
-            actual,
-            std::iter::once("rustx.toml").chain(guidance()),
-            same,
-        )
-    {
-        return parent.join(name);
+    for workspace in workspaces {
+        if let Some(file) = document(workspace) {
+            let name = loader_name(
+                workspace,
+                file.as_os_str(),
+                std::iter::once("rustx.toml").chain(guidance()),
+                same,
+            )
+            .map_or_else(|| file.as_os_str().to_owned(), Into::into);
+            own(workspace, workspace.join(name));
+        }
     }
-    path
-}
-
-/// The resource root `base/fixed…` that `path` lies in, spelled as the
-/// loaders open it, with the entry directly beneath it and the rest of the
-/// path; `None` when any fixed component is another entry.
-fn loader_root(
-    path: &Path,
-    base: &Path,
-    fixed: &[&str],
-    same: &impl Fn(&Path, &Path) -> bool,
-) -> Option<(PathBuf, Option<std::ffi::OsString>, PathBuf)> {
-    let mut components = path.strip_prefix(base).ok()?.components();
-    let mut root = base.to_path_buf();
-    for name in fixed {
-        let actual = components.next()?;
-        root.push(loader_name(
-            &root,
-            actual.as_os_str(),
-            std::iter::once(*name),
-            same,
-        )?);
-    }
-    let entry = components.next().map(|entry| entry.as_os_str().to_owned());
-    Some((root, entry, components.as_path().to_path_buf()))
+    owned.map_or_else(|| path.to_path_buf(), |(_, path)| path)
 }
 
 /// The watches of one existing resource root: the root itself, for its
@@ -687,6 +723,59 @@ mod tests {
         assert_eq!(active.keys().collect::<Vec<_>>(), [Path::new("/w")]);
     }
 
+    /// An owner keeps its own canonical spelling: matching another source's
+    /// fixed names — the User root, an outer Workspace's `.agents` — never
+    /// rewrites the path a Workspace whose canonical path keeps `RustX` or
+    /// `.Agents` is matched with.
+    #[test]
+    fn an_owner_keeps_its_canonical_spelling() {
+        let home = Path::new("/home/u");
+        let user = roots(home);
+        let workspaces = vec![
+            PathBuf::from("/w"),
+            PathBuf::from("/home/u/RustX/.agents/project"),
+            PathBuf::from("/w/.Agents/inner"),
+        ];
+        let aliases = |_: &Path, _: &Path| true;
+        let distinct = |_: &Path, _: &Path| false;
+        let spelled = |path: &str, same: &dyn Fn(&Path, &Path) -> bool| {
+            loader_path(Path::new(path), &user, &workspaces, &same)
+        };
+        for (actual, loader, owner, exact) in [
+            (
+                "/home/u/RustX/.agents/project/rustx.toml",
+                "/home/u/RustX/.agents/project/rustx.toml",
+                "/home/u/RustX/.agents/project",
+                true,
+            ),
+            (
+                "/w/.Agents/inner/rustx.toml",
+                "/w/.Agents/inner/rustx.toml",
+                "/w/.Agents/inner",
+                true,
+            ),
+            (
+                "/w/.agents/inner/RustX.toml",
+                "/w/.Agents/inner/rustx.toml",
+                "/w/.Agents/inner",
+                false,
+            ),
+        ] {
+            let owner = Some(SourceTarget::Workspace {
+                directory: owner.into(),
+            });
+            let path = spelled(actual, &aliases);
+            assert_eq!(path, Path::new(loader));
+            assert_eq!(route(&path, &user, &workspaces), owner, "{actual}");
+            let path = spelled(actual, &distinct);
+            assert_eq!(
+                route(&path, &user, &workspaces),
+                if exact { owner } else { None },
+                "{actual}"
+            );
+        }
+    }
+
     /// On a verified case-sensitive volume, a case variant that exists apart
     /// from the loaders' spelling, or without it, is another entry and stays
     /// unrouted; a variant gone together with the loaders' spelling is the
@@ -799,9 +888,10 @@ mod case_insensitive_tests {
     /// their fixed spelling — under `.agents/Skills`, under a `.Agents` root,
     /// a `RustX.toml` in a Workspace whose name has no letters or that lies
     /// inside another Workspace's `.agents`, and a User Skill under `RustX` —
-    /// routes to its owner when notified under its own spelling; a
-    /// renamed-away root invalidates the watches beneath the loaders'
-    /// spelling.
+    /// routes to its owner when notified under its own spelling; Workspaces
+    /// whose canonical paths keep `RustX` or `.Agents` keep owning their
+    /// documents; a renamed-away root invalidates the watches beneath the
+    /// loaders' spelling.
     #[test]
     fn a_case_variant_the_loaders_read_routes_to_its_workspace() {
         let volume = crate::local_runtime::case_insensitive_volume::CaseInsensitiveVolume::new();
@@ -866,6 +956,32 @@ mod case_insensitive_tests {
         let path = loader_path(&skill, &user, &workspaces, &same_entry);
         assert_eq!(path, loader);
         assert_eq!(route(&path, &user, &workspaces), Some(SourceTarget::User));
+        // Workspaces whose canonical paths keep `RustX` and `.Agents` stay
+        // the owners of their own documents, notified under that spelling or
+        // the loaders'.
+        let canonical = |path: &Path| {
+            std::fs::create_dir_all(path).unwrap();
+            crate::local_runtime::configuration::capture::canonical_directory(path).unwrap()
+        };
+        let owners = [
+            canonical(&home.join("RustX/.agents/project")),
+            canonical(&digits.join(".Agents/inner")),
+        ];
+        let workspaces: Vec<_> = workspaces.iter().chain(&owners).cloned().collect();
+        for owner in &owners {
+            std::fs::write(owner.join("rustx.toml"), b"workspace").unwrap();
+            for actual in [owner.join("rustx.toml"), owner.join("RustX.toml")] {
+                let path = loader_path(&actual, &user, &workspaces, &same_entry);
+                assert_eq!(path, owner.join("rustx.toml"));
+                assert_eq!(
+                    route(&path, &user, &workspaces),
+                    Some(SourceTarget::Workspace {
+                        directory: owner.clone()
+                    }),
+                    "{actual:?}"
+                );
+            }
+        }
         std::fs::rename(root.join(".Agents"), root.join("old")).unwrap();
         let mut active = BTreeMap::from([
             (root.join(".agents"), RecursiveMode::NonRecursive),
