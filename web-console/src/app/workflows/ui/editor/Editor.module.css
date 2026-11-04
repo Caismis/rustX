@@ -53,7 +53,7 @@
 
 .moreButton { width: 32px; height: 32px; }
 .iconButton:hover, .moreButton:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.iconButton:focus-visible, .moreButton:focus-visible, .tool:focus-visible, .crumb:focus-visible, .smallButton:focus-visible, .linkButton:focus-visible, .chip:focus-visible, .zoom button:focus-visible {
+.iconButton:focus-visible, .moreButton:focus-visible, .tool:focus-visible, .smallButton:focus-visible, .linkButton:focus-visible, .chip:focus-visible, .zoom button:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 1px;
 }
@@ -87,29 +87,6 @@
 .body { display: flex; flex: 1; min-height: 0; position: relative; }
 .stage { position: relative; flex: 1; min-width: 0; }
 
-.crumbs {
-  position: absolute;
-  z-index: 5;
-  top: 16px;
-  left: 20px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  max-width: calc(100% - 40px);
-  padding: 6px 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 7px;
-  background: var(--dsw-alias-bg-layer-1);
-  font-size: 12px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.crumbStep { display: inline-flex; align-items: center; gap: 6px; }
-.crumb { padding: 0; border: 0; background: none; color: var(--dsw-alias-label-secondary); font: inherit; cursor: pointer; }
-.crumb[aria-current] { color: var(--dsw-alias-label-primary); }
-.crumbFile { color: var(--dsw-alias-label-secondary); }
-
 .canvas { position: absolute; inset: 0; background: var(--dsw-alias-bg-base); }
 .canvas :global(.react-flow__pane) { cursor: default; }
 .canvas :global(.react-flow__node:focus-visible) { outline: none; }
@@ -120,7 +97,7 @@
 .rail {
   position: absolute;
   z-index: 5;
-  top: 74px;
+  top: 16px;
   left: 16px;
   display: flex;
   flex-direction: column;
@@ -537,7 +514,7 @@
 }
 .startIcon { --node-kind-color: #39ad74; }
 @container workflow-editor (max-width: 900px) {
-  .rail { top: 58px; flex-direction: row; max-width: calc(100% - 32px); overflow-x: auto; gap: 3px; }
+  .rail { flex-direction: row; max-width: calc(100% - 32px); overflow-x: auto; gap: 3px; }
   .railSeparator { width: 0.5px; height: 14px; margin: 0 4px; }
   .body:has(.inspector) .zoom, .body:has(.inspector) .canvasStatus { bottom: calc(60% + 12px); }
   .body:has(.inspector) .nodeSearch { max-height: calc(40% - 100px); }

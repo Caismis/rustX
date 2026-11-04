@@ -46,9 +46,9 @@ interface Addition {
 
 /** One React Flow scene, one native editing document. Local nodes retain only
  * transient pointer geometry/selection, never executable definitions. */
-export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch, selection, onSelect, problems, edit, editable, blockLabel, currentState, organizeEpoch = 0, drafts, onDuplicate, tools }: {
+export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch, selection, onSelect, problems, edit, editable, currentState, organizeEpoch = 0, drafts, onDuplicate, tools }: {
   document: WorkflowDocument; path: BlockPath; viewKey: string; viewEpoch: number; selection: Selection; onSelect: (selection: Selection) => void;
-  problems: Problems; edit: Edit; editable: boolean; blockLabel: string; currentState: () => LayoutOwner; organizeEpoch?: number;
+  problems: Problems; edit: Edit; editable: boolean; currentState: () => LayoutOwner; organizeEpoch?: number;
   drafts: Readonly<Record<string, FieldDraft>>; onDuplicate: Duplicate; tools: readonly WorkflowToolChoice[];
 }) {
   const tx = useTranslation(), flow = useReactFlow<SceneNode, SceneEdge>(), initialized = useNodesInitialized(), container = useRef<HTMLDivElement>(null);
@@ -385,7 +385,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         <Tool label={tx('workflows:canvas.organize')} disabled={!editable || organizing} onClick={() => void organize()}><IconOrganize /></Tool>
       </div>
       <Zoom minimap={minimap} toggleMinimap={() => setMinimap(value => !value)} />
-      <p className={css.canvasStatus} aria-live="polite">{message ?? (organizing ? tx('workflows:canvas.organizing') : tx('workflows:canvas.status', { p0: blockLabel, p1: deepNodeCount(document.block) }))}</p>
+      <p className={css.canvasStatus} aria-live="polite">{message ?? (organizing ? tx('workflows:canvas.organizing') : tx('workflows:canvas.status', { p0: deepNodeCount(document.block) }))}</p>
       {palette && <Palette at={palette.at} tools={tools} omit={unavailableKinds(document, palette.path)} insertion={!!palette.insertion} onChoose={add} onClose={() => { setPalette(undefined); container.current?.focus(); }} />}
       {/* As Dify's node menu: change, then copy and duplicate, then delete. */}
       {menu && (() => {
