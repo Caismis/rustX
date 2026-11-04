@@ -545,6 +545,26 @@ fn encoded_event_bytes(event: &RuntimeClientEvent, limit: usize) -> Option<Vec<u
     )
 }
 
+/// Freeze only owned vector storage. Shared row bodies and every encoded
+/// value/cut/budget remain unchanged; no published owner is mutated.
+fn compact_replay_storage(event: &mut RuntimeClientEvent) {
+    match event {
+        RuntimeClientEvent::ProjectionTransition { events, metadata } => {
+            for event in events.iter_mut() {
+                compact_replay_storage(event);
+            }
+            events.shrink_to_fit();
+            metadata.content.shrink_to_fit();
+            metadata.collections.shrink_to_fit();
+        }
+        RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+            checkpoint.content.shrink_to_fit();
+            checkpoint.collections.shrink_to_fit();
+        }
+        _ => {}
+    }
+}
+
 fn stamp_trace_cut(
     trace: &mut super::trace::TracePage,
     cut: &super::checkpoint::CheckpointReadCut,
@@ -6791,7 +6811,8 @@ impl RuntimeClientProjection {
         }
     }
 
-    fn retain_replay(&mut self, event: RuntimeClientEvent, bytes: usize) {
+    fn retain_replay(&mut self, mut event: RuntimeClientEvent, bytes: usize) {
+        compact_replay_storage(&mut event);
         if let Some(cut) = Self::retained_event_cut(&event) {
             self.replay_cut_cursors.insert(cut.revision, self.cursor);
         }

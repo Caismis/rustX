@@ -1,3 +1,4 @@
+use crate::runtime_client::projection::{compact_replay_storage, encoded_event_bytes};
 use crate::durable::ConversationStore;
 use crate::runtime_client::projection::CheckpointSeed;
 use crate::runtime_client::{checkpoint, preflight};
@@ -368,4 +369,23 @@ fn checkpoint_descriptor_and_metadata_rows_keep_the_admitted_owner() {
     if let Some(frontier) = later.collections.first_mut() { frontier.loaded = 0; }
     std::sync::Arc::make_mut(&mut later.snapshot.message_descriptors[0]).role = "changed".into();
     assert_eq!(serde_json::to_vec(&first).unwrap(), frozen);
+}
+
+
+#[test]
+fn retained_vector_compaction_preserves_exact_event_bytes_and_rows() {
+    let (projection, _store) = initialized_source_projection();
+    let mut metadata = projection.checkpoint_seed().capture_checkpoint().unwrap().metadata;
+    metadata.content.reserve(1024);
+    metadata.collections.reserve(1024);
+    let mut events = Vec::with_capacity(128);
+    events.push(RuntimeClientEvent::TraceChanged);
+    let mut event = RuntimeClientEvent::ProjectionTransition { events, metadata };
+    let before = encoded_event_bytes(&event, checkpoint::CHECKPOINT_TARGET_BYTES).unwrap();
+    compact_replay_storage(&mut event);
+    assert_eq!(encoded_event_bytes(&event, checkpoint::CHECKPOINT_TARGET_BYTES).unwrap(), before);
+    let RuntimeClientEvent::ProjectionTransition { events, metadata } = &event else { unreachable!() };
+    assert!(events.capacity() <= events.len()*2);
+    assert!(metadata.content.capacity() <= metadata.content.len().max(1)*2);
+    assert!(metadata.collections.capacity() <= metadata.collections.len()*2);
 }
