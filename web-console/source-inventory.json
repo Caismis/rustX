@@ -969,7 +969,7 @@
           "treatment": "Share semantic between-Turn classification across ledger, Inspector and bilingual search. Preserve compaction/reused-history labels without treating unowned native Agent/Background/Workflow activities as between-Turn material or inventing nearby execution ownership."
         }
       ],
-      "local_sha256": "0b22943497e4426ff7c5e9cfc2cc225049caa7a4ed30c2161683fec521859615"
+      "local_sha256": "2bc117eeb008af197e76286ef0c445e56e88cd82f20b23782e7353b0454a95d6"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -4016,7 +4016,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "d974b6e3550ae0ed6ec729f0ab3437fb750f6a58149fcd3c552b82df0991f37b"
+      "local_sha256": "909d4753f2eb097490bd4cd9dab8ba0f025637ba697da2ae136c24663297de28"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",

@@ -23,7 +23,7 @@ import { recordedToolDetails } from '../../bindings/recorded-tool-details';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { BoundedNames, TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v63';
+import type { BoundedNames, CheckpointReadCut, ContentRef, TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v63';
 import { configurationDomainLabel, configurationNames } from '../../bindings/configuration-change';
 import { SourceContent } from '../agent/SourceContent';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
@@ -572,6 +572,17 @@ export interface TrajectoryInspectorProps {
  * @param props - the selected item, its fetched detail and navigation.
  * @returns the details panel contents.
  */
+/** The read owner changes only with the real reader or read cut, so a
+ * parent rerender keeps the loaded text and its held read. */
+export function ConfigurationContent({ reader, cut, reference, json = false }: { reader: import('../../client/trace').TraceFieldReader; cut: CheckpointReadCut; reference: ContentRef; json?: boolean }) {
+  const tx = useTranslation(), cutKey = JSON.stringify(cut), owned = useRef(cut); if (JSON.stringify(owned.current) !== cutKey) owned.current = cut;
+  const exact = owned.current;
+  const read = useCallback((ref: ContentRef, offset: number, current: () => boolean) => reader.content(exact, ref, offset, current), [reader, exact]);
+  return <SourceContent bindings={[{ path: [], source_path: null, content_ref: reference, deferred: true }]} owned={() => true} read={read}>
+    {text => json ? <Json value={parseJsonContainer(text) ?? text} label={tx('trajectory:configuration.catalog')} /> : <pre className={css.payload}>{text}</pre>}
+  </SourceContent>;
+}
+
 export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen }: TrajectoryInspectorProps) {
   const tx = useTranslation();
   const inspection=detailPage?traceInspectionHead(detailPage,item.record.id):undefined;
@@ -707,10 +718,13 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
         {record.configuration_instructions && <section className={`${css.overviewSection} ${css.summaryScrollRegion}`} data-summary-scroll-region="" data-configuration-instructions="">
           <h3>{tx('trajectory:configuration.instructions')}</h3>
           {detailReader && detailPage
-            ? <SourceContent bindings={[{ path: [], source_path: null, content_ref: record.configuration_instructions, deferred: true }]} owned={() => true}
-              read={(reference, offset, current) => detailReader.content(detailPage.read_cut, reference, offset, current)}>
-              {text => <pre className={css.payload}>{text}</pre>}
-            </SourceContent>
+            ? <ConfigurationContent reader={detailReader} cut={detailPage.read_cut} reference={record.configuration_instructions} />
+            : <DetailPending error={detailError} />}
+        </section>}
+        {record.configuration_catalog && (change.tools.added.total > 0 || change.tools.changed.total > 0 || change.skills.added.total > 0 || change.skills.changed.total > 0) && <section className={`${css.overviewSection} ${css.summaryScrollRegion}`} data-summary-scroll-region="" data-configuration-catalog="">
+          <h3>{tx('trajectory:configuration.catalog')}</h3>
+          {detailReader && detailPage
+            ? <ConfigurationContent reader={detailReader} cut={detailPage.read_cut} reference={record.configuration_catalog} json />
             : <DetailPending error={detailError} />}
         </section>}
       </>;

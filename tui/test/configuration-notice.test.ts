@@ -24,7 +24,10 @@ const item = {
     domains: ["instructions" as const, "tools" as const],
     tools: { added: { names: ["fetch", "search"], total: 18 }, removed: { names: ["read"], total: 1 }, changed: none },
     skills: { added: none, removed: none, changed: none },
+    instructions_bytes: "14", catalog_bytes: "2",
   },
+  instructions: { conversation_id: "conv", source: { type: "configuration_instructions" as const, journal_sequence: 7 }, representation: "utf8_text" as const, version: 1, content_revision: 1, readable_end: 14 },
+  catalog: { conversation_id: "conv", source: { type: "configuration_catalog" as const, journal_sequence: 7 }, representation: "utf8_text" as const, version: 1, content_revision: 1, readable_end: 2 },
 };
 const expected = [
   "• Configuration applied · instructions, tools",

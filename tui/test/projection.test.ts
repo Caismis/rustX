@@ -78,8 +78,11 @@ describe("presentation projection", () => {
       domains: ["tools" as const, "instructions" as const],
       tools: { added: { names: ["fetch"], total: 1 }, removed: { names: [], total: 0 }, changed: { names: [], total: 0 } },
       skills: { added: { names: [], total: 0 }, removed: { names: [], total: 0 }, changed: { names: [], total: 0 } },
+      instructions_bytes: "14", catalog_bytes: "2",
     };
-    const item = { type: "configuration_applied" as const, event_id: "evt_1", timestamp: "2026-01-01T00:00:00Z", change };
+    const instructions = { conversation_id: "conv", source: { type: "configuration_instructions" as const, journal_sequence: 7 }, representation: "utf8_text" as const, version: 1, content_revision: 1, readable_end: 14 };
+    const catalog = { ...instructions, source: { type: "configuration_catalog" as const, journal_sequence: 7 }, readable_end: 2 };
+    const item = { type: "configuration_applied" as const, event_id: "evt_1", timestamp: "2026-01-01T00:00:00Z", change, instructions, catalog };
     const live = reduce(initial(), { cursor: runtimeCursor(1), event: { type: "configuration_applied", item, transcript_cursor: "7" } });
     const entry = live.transcript.at(-1);
     assert.deepEqual(entry, { kind: "configuration_applied", key: "configuration:evt_1", cursor: "7", change });
