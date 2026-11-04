@@ -350,7 +350,7 @@ impl ConfigurationChange {
         if !skills.is_empty() {
             domains.push(ConfigurationDomain::Skills);
         }
-        if old_model.view() != new_model.view() {
+        if old_model.view() != new_model.view() || !same_invocations(before, after) {
             domains.push(ConfigurationDomain::Model);
         }
         if old_configuration.map(|c| c.1) != new_configuration.map(|c| c.1) {
@@ -388,19 +388,152 @@ struct ToolEntry {
     server_binding_digest: Option<String>,
     /// The enabled Workflow program it runs.
     workflow: Option<crate::runtime::workflow::WorkflowToolIdentity>,
+    /// The leaf Tools that Workflow's direct Tool nodes call.
+    runs: Dependencies,
     /// The Named Agents it runs: those a Workflow froze at admission, or
     /// those the `subagent` intrinsic admits.
     agents: BTreeMap<String, AgentEntry>,
 }
 
-/// One Named Agent as a Tool runs it: its definition, and the execution
-/// identity of the composition it resolved to, which also covers the
-/// versions of the Skills and Tools it selected. `None` when the generation
-/// cannot freeze it, so delegating it fails.
+/// The Tools something runs beneath a Tool, as the generation resolves them:
+/// each leaf definition by Tool id, and the binding digest of every Tool
+/// source it selects, prepared yet or not (`None` when the source has no
+/// binding), so a source still waiting to be prepared hides nothing else.
+#[derive(Debug, Default, PartialEq, serde::Serialize)]
+struct Dependencies {
+    tools: BTreeMap<String, crate::tools::types::ToolDefinition>,
+    sources: BTreeMap<String, Option<String>>,
+}
+
+impl Dependencies {
+    fn new<'a>(
+        snapshot: &RuntimeResourceSnapshot,
+        tools: impl IntoIterator<Item = &'a crate::tools::types::ToolDefinition>,
+        sources: impl IntoIterator<Item = crate::capabilities::ToolSourceId>,
+    ) -> Self {
+        use crate::capabilities::ToolSourceId;
+        use crate::tools::types::ToolOrigin;
+        let mut selected = sources
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        let tools = tools
+            .into_iter()
+            .map(|tool| {
+                match &tool.origin {
+                    ToolOrigin::Builtin => {}
+                    ToolOrigin::Mcp { server_id } => {
+                        selected.insert(ToolSourceId::Mcp(server_id.clone()));
+                    }
+                    ToolOrigin::ManagedPython { package } => {
+                        selected.insert(ToolSourceId::ManagedPython(package.clone()));
+                    }
+                }
+                (tool.id.to_string(), tool.clone())
+            })
+            .collect();
+        let servers = snapshot.capability().mcp_servers();
+        let sources = selected
+            .into_iter()
+            .map(|source| {
+                let server = match &source {
+                    ToolSourceId::Mcp(id) => id.clone(),
+                    ToolSourceId::ManagedPython(package) => {
+                        crate::tools::python::python_server_id(package)
+                    }
+                };
+                (source.to_string(), servers.get(&server).map(binding_digest))
+            })
+            .collect();
+        Self { tools, sources }
+    }
+}
+
+/// One Named Agent as a Tool runs it: its definition and what that
+/// definition resolves to in the generation — its Tools and sources, the
+/// content version of each Skill it selects, and its project instructions.
+/// Its explicit model is compared with the Model domain.
 #[derive(Debug, PartialEq, serde::Serialize)]
 struct AgentEntry {
     definition: crate::runtime::subagent::NamedAgentDefinitionDigest,
-    execution: Option<crate::runtime::subagent::resolver::SubagentExecutionProfileDigest>,
+    runs: Dependencies,
+    skills: BTreeMap<String, Option<crate::runtime::identity::SkillVersionId>>,
+    project_instructions: String,
+}
+
+impl AgentEntry {
+    fn new(
+        snapshot: &RuntimeResourceSnapshot,
+        definition: &crate::runtime::subagent::NamedAgentDefinition,
+        runs: Dependencies,
+        skills: BTreeMap<String, Option<crate::runtime::identity::SkillVersionId>>,
+    ) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        for file in
+            crate::runtime::subagent::resolver::resolve_project_instructions(definition, snapshot)
+        {
+            hasher.update(
+                serde_json::to_vec(&(file.path.display().to_string(), &file.content))
+                    .expect("project instructions serialize"),
+            );
+        }
+        Self {
+            definition: definition.digest().clone(),
+            runs,
+            skills,
+            project_instructions: format!("sha256:{:x}", hasher.finalize()),
+        }
+    }
+
+    /// An Agent `subagent` delegates with no override, from the profile the
+    /// generation resolved for it.
+    fn delegated(
+        snapshot: &RuntimeResourceSnapshot,
+        name: &crate::runtime::subagent::SubagentName,
+    ) -> Option<Self> {
+        use crate::capabilities::selection::AgentToolSelection;
+        let profile = snapshot.resolved_agent(name)?;
+        let sources = profile
+            .tool_selection
+            .iter()
+            .filter_map(|selection| match selection {
+                AgentToolSelection::Builtin { .. } => None,
+                AgentToolSelection::Source { source_id, .. }
+                | AgentToolSelection::All { source_id } => Some(source_id.clone()),
+            })
+            .chain(profile.resource_sources.iter().cloned());
+        let versions = skill_versions(snapshot);
+        Some(Self::new(
+            snapshot,
+            snapshot.subagents().get(name)?,
+            Dependencies::new(snapshot, &profile.tools, sources),
+            profile
+                .skills
+                .iter()
+                .map(|skill| (skill.clone(), versions.get(skill.as_str()).cloned()))
+                .collect(),
+        ))
+    }
+
+    /// An Agent a Workflow froze at admission.
+    fn frozen(
+        snapshot: &RuntimeResourceSnapshot,
+        frozen: &crate::runtime::subagent::resolver::FrozenAgentComposition,
+    ) -> Self {
+        Self::new(
+            snapshot,
+            frozen.definition(),
+            Dependencies::new(
+                snapshot,
+                frozen.tool_definitions(),
+                frozen.sources().cloned(),
+            ),
+            frozen
+                .skills()
+                .map(|(name, version)| (name.to_owned(), Some(version.clone())))
+                .collect(),
+        )
+    }
 }
 
 /// One Skill as a commit compares it: its catalog entry and content version.
@@ -410,43 +543,45 @@ struct SkillEntry {
     version_id: Option<crate::runtime::identity::SkillVersionId>,
 }
 
-/// A Tool is its whole definition and its implementation identity: the
-/// executable binding of the server it runs on, or the enabled Workflow
-/// program it runs, and the resolved Named Agents either runs. A same-name
-/// implementation change is `changed` even when the model-visible declaration
-/// is byte-identical; an Agent nothing runs changes no Tool.
-fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntry> {
-    let capability = snapshot.capability();
-    let registry = capability.tool_registry();
-    let programs = snapshot
+fn skill_versions(
+    snapshot: &RuntimeResourceSnapshot,
+) -> BTreeMap<&str, crate::runtime::identity::SkillVersionId> {
+    snapshot
+        .capability()
+        .skills()
+        .bindings()
+        .iter()
+        .map(|binding| (binding.skill_id.as_str(), binding.version_id.clone()))
+        .collect()
+}
+
+/// The enabled Workflow programs by the id of the Tool that runs each.
+fn enabled_programs(
+    snapshot: &RuntimeResourceSnapshot,
+) -> BTreeMap<crate::runtime::identity::ToolId, &crate::runtime::workflow::WorkflowProgram> {
+    snapshot
         .workflows()
         .entries()
         .iter()
         .filter_map(|(id, entry)| match &entry.admission {
             crate::runtime::workflow::WorkflowAdmission::Enabled(program) => {
-                Some((crate::tools::native::workflow_tool_id(id), program))
+                Some((crate::tools::native::workflow_tool_id(id), program.as_ref()))
             }
             crate::runtime::workflow::WorkflowAdmission::Disabled(_) => None,
         })
-        .collect::<BTreeMap<_, _>>();
-    let mut delegated = snapshot
-        .delegatable_agents()
-        .iter()
-        .filter_map(|name| {
-            let definition = snapshot.subagents().get(name)?;
-            let execution = crate::runtime::subagent::resolver::FrozenAgentComposition::delegated(
-                snapshot, name,
-            )
-            .map(|frozen| frozen.execution_digest(snapshot));
-            Some((
-                name.to_string(),
-                AgentEntry {
-                    definition: definition.digest().clone(),
-                    execution,
-                },
-            ))
-        })
-        .collect::<BTreeMap<_, _>>();
+        .collect()
+}
+
+/// A Tool is its whole definition and its implementation identity: the
+/// executable binding of the server it runs on, or the enabled Workflow
+/// program it runs with the leaf Tools and Named Agents beneath it, or the
+/// Named Agents `subagent` delegates. A same-name implementation change is
+/// `changed` even when the model-visible declaration is byte-identical; an
+/// Agent or source nothing runs changes no Tool.
+fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntry> {
+    let capability = snapshot.capability();
+    let registry = capability.tool_registry();
+    let programs = enabled_programs(snapshot);
     registry
         .definitions()
         .into_iter()
@@ -460,28 +595,37 @@ fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntr
                 }
             };
             let binding = server.and_then(|id| capability.mcp_servers().get(&id).cloned());
-            let program = programs.get(&definition.id);
-            let agents = match program {
-                Some(program) => program
-                    .agent_nodes()
-                    .into_iter()
-                    .filter_map(|agent| {
-                        let frozen = agent.resolved.as_ref()?;
-                        Some((
-                            agent.profile.to_string(),
-                            AgentEntry {
-                                definition: frozen.definition_digest().clone(),
-                                execution: Some(frozen.execution_digest(snapshot)),
-                            },
-                        ))
-                    })
-                    .collect(),
+            let program = programs.get(&definition.id).copied();
+            let (runs, agents) = match program {
+                Some(program) => (
+                    Dependencies::new(snapshot, program.frozen_tools(), []),
+                    program
+                        .agent_nodes()
+                        .into_iter()
+                        .filter_map(|agent| {
+                            let frozen = agent.resolved.as_ref()?;
+                            Some((
+                                agent.profile.to_string(),
+                                AgentEntry::frozen(snapshot, frozen),
+                            ))
+                        })
+                        .collect(),
+                ),
                 None if definition.name == crate::tools::native::SUBAGENT_TOOL_NAME
                     && definition.origin == crate::tools::types::ToolOrigin::Builtin =>
                 {
-                    std::mem::take(&mut delegated)
+                    (
+                        Dependencies::default(),
+                        snapshot
+                            .delegatable_agents()
+                            .iter()
+                            .filter_map(|name| {
+                                Some((name.to_string(), AgentEntry::delegated(snapshot, name)?))
+                            })
+                            .collect(),
+                    )
                 }
-                None => BTreeMap::new(),
+                None => (Dependencies::default(), BTreeMap::new()),
             };
             (
                 definition.name.clone(),
@@ -489,7 +633,8 @@ fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntr
                     model_input_schema: model.input_schema,
                     server_binding_digest: binding.as_ref().map(binding_digest),
                     binding,
-                    workflow: program.map(|program| program.tool_identity()),
+                    workflow: program.map(crate::runtime::workflow::WorkflowProgram::tool_identity),
+                    runs,
                     agents,
                     definition,
                 },
@@ -498,17 +643,62 @@ fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntr
         .collect()
 }
 
+/// Whether every model invocation the generation runs resolves to the same
+/// execution — provider binding, wire model, compat and effective parameters
+/// — on both sides: the Session's own selections and the explicit model of
+/// each Named Agent a Tool runs. Catalog entries nothing selects are not
+/// compared; a selection that resolves on neither side is the Session view's
+/// to report.
+fn same_invocations(
+    (old, old_model): (&RuntimeResourceSnapshot, &SessionModelState),
+    (new, new_model): (&RuntimeResourceSnapshot, &SessionModelState),
+) -> bool {
+    use crate::model::session::{analyze_session_model_config, same_session_invocation};
+    let (Some(left), Some(right)) = (old_model.catalog(), new_model.catalog()) else {
+        return true;
+    };
+    let same = |before: &crate::model::session::SessionModelConfig,
+                after: &crate::model::session::SessionModelConfig| {
+        same_session_invocation(left, before, right, after)
+            || (analyze_session_model_config(left, before).is_err()
+                && analyze_session_model_config(right, after).is_err())
+    };
+    let agent_models = |snapshot: &RuntimeResourceSnapshot| {
+        let workflow_agents = enabled_programs(snapshot)
+            .into_values()
+            .flat_map(|program| {
+                program
+                    .agent_nodes()
+                    .into_iter()
+                    .map(|agent| agent.profile.clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        snapshot
+            .delegatable_agents()
+            .iter()
+            .cloned()
+            .chain(workflow_agents)
+            .filter_map(|name| {
+                let model = snapshot.subagents().get(&name)?.model()?.clone();
+                Some((name, model))
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    let before = agent_models(old);
+    same(old_model.config(), new_model.config())
+        && agent_models(new).iter().all(|(name, after)| {
+            // An Agent newly run or newly naming a model changes its Tool.
+            before.get(name).is_none_or(|before| same(before, after))
+        })
+}
+
 /// A Skill is its catalog entry and its content-derived version, so a body or
 /// script edit under unchanged frontmatter is `changed`.
 fn skill_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, SkillEntry> {
-    let capability = snapshot.capability();
-    let versions = capability
-        .skills()
-        .bindings()
-        .iter()
-        .map(|binding| (binding.skill_id.as_str(), &binding.version_id))
-        .collect::<BTreeMap<_, _>>();
-    capability
+    let versions = skill_versions(snapshot);
+    snapshot
+        .capability()
         .model_skill_entries()
         .iter()
         .map(|entry| {
@@ -516,7 +706,7 @@ fn skill_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, SkillEn
                 entry.name.clone(),
                 SkillEntry {
                     entry: entry.clone(),
-                    version_id: versions.get(entry.name.as_str()).copied().cloned(),
+                    version_id: versions.get(entry.name.as_str()).cloned(),
                 },
             )
         })

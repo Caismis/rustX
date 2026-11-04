@@ -899,47 +899,54 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         c1i2.skill_discovery.packages,
         retained(id).skill_discovery.packages
     );
+    // The second Session composes from its retained C1 closure; its deferred
+    // C2 is then prepared again for that allocation and commits as one
+    // recorded reallocation whose `before` is exactly the retained C1 Tools.
+    assert_eq!(
+        retained(&second).config.native_tools,
+        before.configuration().unwrap().config.native_tools
+    );
     fixture.manager.load(&second, None).await.unwrap();
-    let second_resources = fixture
-        .manager
-        .configuration_runtime(&second)
+    session_applied(&fixture, &second).await;
+    let second_runtime = fixture.manager.configuration_runtime(&second).unwrap();
+    let changes = configuration_changes(&second_runtime);
+    let [change] = changes.as_slice() else {
+        panic!("one reallocation fact: {changes:?}");
+    };
+    assert_eq!(
+        change.reason,
+        crate::runtime::configuration_commit::ConfigurationChangeReason::Reallocation
+    );
+    assert!(
+        change.tools.changed.names.contains(&"read".to_owned()),
+        "{change:?}"
+    );
+    let catalog = configuration_catalogs(&second_runtime.tool_runtime().durable_store())
+        .pop()
+        .unwrap();
+    let read = catalog["tools"]
+        .as_array()
         .unwrap()
-        .runtime_resources();
+        .iter()
+        .find(|tool| tool["name"] == "read")
+        .unwrap();
+    let approval = |state: &str| read[state]["definition"]["approval_policy"].clone();
     assert_eq!(
-        second_resources
-            .configuration()
-            .unwrap()
-            .config
-            .native_tools,
-        c1i2.config.native_tools
+        approval("before"),
+        serde_json::to_value(
+            before
+                .capability()
+                .tool_registry()
+                .definitions()
+                .into_iter()
+                .find(|tool| tool.name == "read")
+                .unwrap()
+                .approval_policy
+        )
+        .unwrap(),
+        "{read}"
     );
-    assert_eq!(
-        second_resources
-            .capability()
-            .tool_registry()
-            .model_definitions(),
-        before.capability().tool_registry().model_definitions()
-    );
-    assert_eq!(
-        second_resources.capability().skills().packages(),
-        before.capability().skills().packages()
-    );
-    assert_eq!(
-        second_resources
-            .root_profile()
-            .unwrap()
-            .project_instructions
-            .files,
-        c1i2.root_agent_project_files
-    );
-    assert_eq!(
-        second_resources
-            .configuration()
-            .unwrap()
-            .authored
-            .component_revisions,
-        c1i2.component_revisions
-    );
+    assert_ne!(approval("before"), approval("after"), "{read}");
     // Retry the same authored C2: it prepares and every resident Session
     // commits it automatically, while new Sessions bind C2 as well.
     fixture
@@ -964,14 +971,18 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         c1i2.component_revisions[&ApplyUnit::Capabilities]
     );
     assert_ne!(c2i2.config.native_tools, c1i2.config.native_tools);
-    assert!(!Arc::ptr_eq(
-        &second_resources,
-        &fixture
+    assert_eq!(
+        fixture
             .manager
             .configuration_runtime(&second)
             .unwrap()
             .runtime_resources()
-    ));
+            .configuration()
+            .unwrap()
+            .config
+            .native_tools,
+        c2i2.config.native_tools
+    );
     assert_eq!(
         retained(&second).component_revisions[&ApplyUnit::Capabilities],
         c2i2.component_revisions[&ApplyUnit::Capabilities]

@@ -310,7 +310,6 @@ impl SessionRuntimeManager {
                     .lock()
                     .expect("registry mutex")
                     .check_session(session, runtime.conversation_id())?;
-                self.rebind_configuration_runtime(session);
                 return Ok(runtime);
             }
             startup.get_or_insert(inherited_startup);
@@ -408,7 +407,7 @@ impl SessionRuntimeManager {
         }
     }
 
-    fn rebind_configuration_runtime(&self, session: &SessionId) {
+    pub(super) fn rebind_configuration_runtime(&self, session: &SessionId) {
         if let Some(runtime) = self.configuration_runtime(session)
             && self.applications.rebind_runtime(session.as_ref(), &runtime)
         {
@@ -1110,6 +1109,11 @@ impl TerminalGuard {
             drop(registry);
             if let Some(observer) = catalog_observer {
                 tokio::spawn(observer);
+            }
+            // Every entry that publishes a resident (client load, Scheduler
+            // activation) attaches it to its configuration application here.
+            if let Some((session, _)) = self.flight.target.get() {
+                self.owner.rebind_configuration_runtime(session);
             }
             self.finished = true;
             return;

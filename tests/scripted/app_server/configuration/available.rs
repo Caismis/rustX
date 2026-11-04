@@ -245,16 +245,6 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
     );
     fixture.manager.load(&ids[0], None).await.unwrap();
     let runtime = fixture.manager.configuration_runtime(&ids[0]).unwrap();
-    assert_ne!(
-        runtime
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions,
-        "cold desired context"
-    );
     // The resident Session commits; the cold ones stay unloaded.
     loop {
         if fixture
@@ -282,6 +272,22 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
             .agent
             .instructions,
         "cold desired context"
+    );
+    // It composed from the retained binding and committed the cold desire on
+    // top of it, as one recorded reallocation.
+    let facts = configuration_changes(&runtime);
+    let [change] = facts.as_slice() else {
+        panic!("one reallocation fact: {facts:?}");
+    };
+    assert_eq!(
+        change.reason,
+        crate::runtime::configuration_commit::ConfigurationChangeReason::Reallocation
+    );
+    assert!(
+        change
+            .domains
+            .contains(&crate::runtime::configuration_commit::ConfigurationDomain::Instructions),
+        "{change:?}"
     );
     fixture.close().await;
 }

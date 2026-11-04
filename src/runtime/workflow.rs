@@ -1217,6 +1217,13 @@ impl WorkflowProgram {
         &self.block.nodes
     }
 
+    /// The leaf Tool definitions its direct Tool nodes admitted.
+    pub(crate) fn frozen_tools(
+        &self,
+    ) -> impl Iterator<Item = &crate::tools::types::ToolDefinition> {
+        self.frozen_tools.values()
+    }
+
     pub(crate) fn agent_nodes(&self) -> Vec<&WorkflowAgentProgram> {
         fn walk<'a>(block: &'a WorkflowBlockProgram, found: &mut Vec<&'a WorkflowAgentProgram>) {
             for node in block.nodes.values() {

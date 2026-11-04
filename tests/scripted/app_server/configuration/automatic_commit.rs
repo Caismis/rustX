@@ -1550,7 +1550,103 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
             old["definition"], new["definition"],
             "the definition is unchanged"
         );
-        assert_ne!(old["execution"], new["execution"], "{tool}");
+        assert_ne!(old["skills"]["guide"], new["skills"]["guide"], "{tool}");
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// The Model domain compares the invocations that run, not the Session's
+/// client view: a parameter change of the model only a delegated Agent
+/// selects and a provider endpoint move under unchanged selections are each
+/// one Model fact, while adding a model nothing selects records nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn model_facts_follow_the_invocations_that_run() {
+    bounded(async {
+        use crate::local_runtime::configuration::settings::SourceTarget;
+        use crate::runtime::configuration_commit::ConfigurationDomain;
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let workspace = fixture.workspaces[0].clone();
+        let agents = workspace.join(".agents/agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("reviewer.toml"),
+            "description='Review'\ninstructions='Review'\n[model]\nmodel='local/b'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[agent]\nagents=['reviewer']\n",
+        )
+        .unwrap();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let view = runtime.model_view();
+        let models = fixture
+            .manager
+            .source_settings(&SourceTarget::User)
+            .await
+            .unwrap()
+            .user
+            .authored
+            .unwrap()
+            .models
+            .unwrap();
+        let facts = configuration_changes(&runtime).len();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Model {
+                id: "local/c".into(),
+                authored: Some(models["local/a"].clone()),
+            },
+        )
+        .await;
+        applied(&fixture, 0).await;
+        assert_eq!(
+            configuration_changes(&runtime).len(),
+            facts,
+            "nothing selects local/c"
+        );
+        let mut tuned = models["local/b"].clone();
+        tuned.request_params = Some(crate::toml_authoring::AuthoredRequestParams(
+            serde_json::from_value(serde_json::json!({"temperature": 0.25})).unwrap(),
+        ));
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Model {
+                id: "local/b".into(),
+                authored: Some(tuned),
+            },
+        )
+        .await;
+        applied(&fixture, 0).await;
+        assert_eq!(runtime.model_view(), view, "the Session view is unchanged");
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 1, "{changes:?}");
+        assert_eq!(changes[facts].domains, [ConfigurationDomain::Model]);
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Provider {
+                id: "local".into(),
+                authored: Some(
+                    crate::local_runtime::configuration::settings::ProviderWrite {
+                        base_url: fixture.provider.url("/v2"),
+                        credential:
+                            crate::local_runtime::configuration::settings::CredentialEdit::Retain,
+                    },
+                ),
+            },
+        )
+        .await;
+        applied(&fixture, 0).await;
+        assert_eq!(runtime.model_view(), view, "the Session view is unchanged");
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 2, "{changes:?}");
+        assert_eq!(changes[facts + 1].domains, [ConfigurationDomain::Model]);
         fixture.close().await;
     })
     .await;

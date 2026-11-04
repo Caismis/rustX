@@ -1920,18 +1920,25 @@ changed domains (`instructions`, `context_policy`, `tools`, `skills`, `model`,
 startup policies), bounded Tool and Skill names — at most 16 and 1 KiB of
 encoded names per added/removed/changed list, each with its exact total — and
 `instructions_bytes` and `catalog_bytes`. A same-name Tool whose definition or
-implementation (server binding, enabled Workflow program, or the Named Agent
-definitions it runs) changed, and a
+implementation (server binding; enabled Workflow program with its leaf Tools;
+or the Named Agents it runs, with their Tools, sources, Skill versions and
+project instructions) changed, and a
 same-name Skill whose content version changed, is `changed`. `instructions` is a
 `ContentRef` to the exact effective instructions the commit installed; `catalog`
 is a `ContentRef` to a JSON document of every Tool and Skill the commit added,
 changed or removed: `{ tools: [{ name, change, before, after }], skills: [...] }`
 with `before` for a change or removal and `after` for an addition or change. A
 Tool state is `{ definition, model_input_schema, server_binding_digest,
-workflow, agents }` (`agents`: for each Named Agent a Workflow froze or
-`subagent` admits, `{ definition, execution }`: its definition digest and the
-execution digest of its resolved composition, `null` when it cannot be frozen);
-a Skill state is `{ entry, version_id }`. The server
+workflow, runs, agents }`. `runs` is `{ tools, sources }`: the leaf Tool
+definitions a Workflow's direct Tool nodes call, by Tool id, and the binding
+digest of every Tool source beneath them (`null` without a binding). `agents`
+holds each Named Agent a Workflow froze or `subagent` admits as
+`{ definition, runs, skills, project_instructions }`: its definition digest,
+its Tools and sources (sources it has not prepared yet included), the version
+of each Skill it selects, and a digest of its project instructions. `model`
+changes when an invocation that runs resolves differently — the Session's
+selections or a Named Agent's explicit model, including provider binding,
+wire model, compat and parameters. A Skill state is `{ entry, version_id }`. The server
 binding appears only as a digest of its transport and policy, never its
 credentials. Both are
 retained with the fact and read through `conversation/contentRead` (or the
@@ -1955,7 +1962,8 @@ Invariants:
   no unit reads `applied`, whatever later edit, late settlement or earlier
   durable failure. Units keep their real outcome, so a published unit is
   retained across reload either way; a healthy replacement allocation recovers
-  the view and notifies its observers.
+  the view and notifies its observers, whichever entry (client load or
+  Scheduler) published it.
 - The fact never enters model context. Web Chat shows only Tool additions and
   removals from it; instruction, context, Skill and same-name Tool changes stay
   in Trace and inspection.

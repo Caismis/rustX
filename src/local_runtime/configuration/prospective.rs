@@ -65,10 +65,23 @@ impl ProspectiveSessionConfig {
                 &source.workflows,
                 source.managed_python.clone(),
             );
+            // A source only an admitted Named Agent selects stays lazy, but
+            // its binding is still what that Agent runs on.
+            let lazy = source
+                .admitted_agent_dependencies()
+                .iter()
+                .filter_map(|name| source.subagents.get(name))
+                .flat_map(|profile| {
+                    profile
+                        .tools()
+                        .iter()
+                        .filter_map(|selector| selector.source().cloned())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<std::collections::BTreeSet<_>>();
             config.mcp_servers.retain(|id, _| {
-                demand
-                    .sources
-                    .contains(&crate::capabilities::ToolSourceId::Mcp(id.clone()))
+                let id = crate::capabilities::ToolSourceId::Mcp(id.clone());
+                demand.sources.contains(&id) || lazy.contains(&id)
             });
             (config, demand.sources)
         };
@@ -177,43 +190,7 @@ impl ProspectiveSessionConfig {
         other: &Self,
         right: &crate::model::session::SessionModelConfig,
     ) -> bool {
-        use crate::model::invocation::RequestParamsLayer;
-        self.models.same_invocation(
-            &left.selection(),
-            &other.models,
-            &right.selection(),
-            RequestParamsLayer::SessionOverrides,
-        ) && [
-            (
-                left.summary_selection(),
-                right.summary_selection(),
-                RequestParamsLayer::SummaryOverrides,
-            ),
-            (
-                left.title_selection(),
-                right.title_selection(),
-                RequestParamsLayer::TitleOverrides,
-            ),
-            (
-                left.classification_selection(),
-                right.classification_selection(),
-                RequestParamsLayer::ClassificationOverrides,
-            ),
-            (
-                left.btw_selection(),
-                right.btw_selection(),
-                RequestParamsLayer::BtwOverrides,
-            ),
-        ]
-        .into_iter()
-        .all(|(left, right, layer)| match (left, right) {
-            (None, None) => true,
-            (Some(left), Some(right)) => {
-                self.models
-                    .same_invocation(&left, &other.models, &right, layer)
-            }
-            _ => false,
-        })
+        crate::model::session::same_session_invocation(&self.models, left, &other.models, right)
     }
 
     /// Why this capture's catalog does not admit the Session's own selection,

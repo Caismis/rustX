@@ -57,12 +57,19 @@ Server protocol/connection layer.
   Journal order to the Runtime Client (`configuration_applied`), the transcript
   read domain and Trace (`TraceKind::Configuration`, counted in the Trace
   total by the same `TraceFactKind::is_anchor` the queries use). A Tool
-  compares by definition and implementation (server binding, the enabled
-  Workflow program digest, and each Named Agent a Workflow froze or
-  `subagent` admits: its definition digest and the execution digest of its
-  resolved composition, which covers the versions of the Skills and Tools it
-  selects), a Skill by content version; an Agent nothing runs changes
-  nothing. The independently
+  compares by definition and implementation: its server binding, or the
+  enabled Workflow program digest with the leaf Tools its direct Tool nodes
+  call, or each Named Agent a Workflow froze or `subagent` admits — its
+  definition digest, Tools, Skill versions and project instructions. Every
+  Tool source beneath it contributes its binding digest, prepared yet or not,
+  so a source a child prepares on demand hides neither its own move nor the
+  rest of the Agent. A Skill compares by content version; an Agent or source
+  nothing runs changes nothing. The Model domain compares the invocations that
+  run (the Session's selections and each explicit Named Agent model), over
+  their provider binding, wire model, compat and parameters, never the client
+  view or catalog entries nothing selects. Preparation compares the binding
+  of every source an admitted Agent selects too, so moving one is adopted.
+  The independently
   published execution-policy unit (approval mode, model timeout, Tool
   deadline, MCP startup) records its own `execution_policy` fact (equal
   binding revisions). The same transaction retains the exact effective
@@ -82,7 +89,9 @@ Server protocol/connection layer.
   however late the settlement, whatever no-op edit follows, and whichever
   durable failure came first. Units keep their real outcome, so a published
   unit is still retained for reload; a healthy replacement allocation
-  recovers the view and notifies its observers.
+  recovers the view and notifies its observers. Every entry that publishes a
+  resident (a client load or a Scheduler cold start) attaches it at that one
+  publication.
 - **External edits.** A bounded `notify` watcher routes changed paths to their
   owning source target and feeds `observe_source_change`, the same capture,
   fence and validation path as a native write. Coverage: User document
@@ -127,6 +136,10 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | A commit left unrecorded after an earlier, unrelated durable failure stays `uncertain` across a comment-only edit | `automatic_commit::an_unrecorded_commit_behind_an_earlier_durability_failure_stays_uncertain` |
 | An Agent edit changes exactly the Tools that run it (`review` Workflow, `subagent`); an unadmitted Agent changes nothing; the next call runs the edit | `automatic_commit::named_agent_edits_change_exactly_the_tools_that_run_them` |
 | A new version of a Skill only a delegated child selects changes `subagent` once, with Root prompt and declarations unchanged; a Skill nothing runs changes nothing | `automatic_commit::a_child_only_skill_version_changes_the_tool_that_runs_it` |
+| A child whose MCP source Root never prepares still records its Skill edit and its source move as `subagent` changes, and the move is adopted | `mcp_readiness::a_lazy_child_source_hides_neither_its_skills_nor_its_binding` |
+| Moving the MCP source beneath a Workflow Agent node or direct Tool node changes that Workflow once; moving a source nothing runs changes nothing | `mcp_readiness::a_moved_source_beneath_a_workflow_agent_changes_the_workflow`, `mcp_readiness::a_moved_source_beneath_a_workflow_tool_node_changes_the_workflow` |
+| A child-only model parameter change and a provider endpoint move under an unchanged Session view are each one Model fact; adding an unselected model records nothing | `automatic_commit::model_facts_follow_the_invocations_that_run` |
+| A runtime only the Scheduler starts cold recovers the uncertain view and notifies observers | `schedule::workflow::a_scheduler_cold_start_recovers_the_configuration_application` |
 | A removal of 17 bootstrap Skills (no request, no earlier fact) keeps every removed definition, readable after the runtime and files are gone | `automatic_commit::a_removal_retains_every_removed_definition` |
 | Oversized/escaped names stay within the header; Trace total counts configuration (alone and mixed) | `configuration_commit::tests::name_lists_are_bounded_by_encoded_bytes`, `trace::tests::header_tests::configuration_records_are_counted_and_unbounded_names_stay_readable` |
 | Real background owner defers; its settlement alone commits | `automatic_commit::t11_background_ownership_defers_commit_until_it_settles` |

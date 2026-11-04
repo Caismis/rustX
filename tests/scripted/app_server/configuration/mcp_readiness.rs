@@ -2424,3 +2424,244 @@ async fn implementation_only_tool_change_records_one_changed_fact() {
     })
     .await;
 }
+
+async fn reconcile_workspace(fixture: &Fixture) {
+    fixture
+        .manager
+        .reconcile_configuration(
+            &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                directory: fixture.workspaces[0].clone(),
+            },
+        )
+        .await
+        .unwrap();
+    applied(fixture, 0).await;
+}
+
+fn servers(fixture: &Fixture, sources: &[(&str, &McpFixture)]) {
+    use std::fmt::Write as _;
+    let mut document = String::new();
+    for (id, server) in sources {
+        writeln!(document, "[mcp_servers.{id}]\nurl = {:?}", server.endpoint).unwrap();
+    }
+    let agents = fixture.workspaces[0].join(".agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(agents.join("mcp.toml"), document).unwrap();
+}
+
+fn reviewer(fixture: &Fixture, skills: &str) {
+    let agents = fixture.workspaces[0].join(".agents/agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(
+        agents.join("reviewer.toml"),
+        format!("description='Review'\ninstructions='Review'\nskills={skills}\n[tools.sources]\nmoved='all'\n"),
+    )
+    .unwrap();
+}
+
+/// Readiness is not identity: a Named Agent whose MCP source Root never
+/// prepares still records the Skill versions and the source binding it runs,
+/// so editing its Skill or moving its source changes `subagent`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lazy_child_source_hides_neither_its_skills_nor_its_binding() {
+    bounded(async {
+        let first = McpFixture::start().await;
+        let second = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        let workspace = fixture.workspaces[0].clone();
+        servers(&fixture, &[("moved", &first)]);
+        reviewer(&fixture, "['guide']");
+        let skill = |body: &str| {
+            let guide = workspace.join(".agents/skills/guide");
+            std::fs::create_dir_all(&guide).unwrap();
+            std::fs::write(
+                guide.join("SKILL.md"),
+                format!("---\nname: guide\ndescription: Guide\n---\n{body}\n"),
+            )
+            .unwrap();
+        };
+        skill("body A");
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[agent]\nagents=['reviewer']\nskills=[]\n",
+        )
+        .unwrap();
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        fixture.manager.load(&session.id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let unprepared = |runtime: &crate::runtime::ConversationRuntime| {
+            runtime
+                .runtime_resources()
+                .capability()
+                .tool_registry()
+                .definitions()
+                .iter()
+                .all(|definition| definition.name != TOOL)
+        };
+        assert!(
+            unprepared(&runtime),
+            "Root never prepares the child's source"
+        );
+        let reviewer_states = || {
+            let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
+                .pop()
+                .unwrap();
+            let [tool] = catalog["tools"].as_array().unwrap().as_slice() else {
+                panic!("one affected Tool: {catalog}");
+            };
+            assert_eq!(tool["name"], "subagent", "{tool}");
+            (
+                tool["before"]["agents"]["reviewer"].clone(),
+                tool["after"]["agents"]["reviewer"].clone(),
+            )
+        };
+        let facts = configuration_changes(&runtime).len();
+        skill("body B");
+        reconcile_workspace(&fixture).await;
+        assert!(unprepared(&runtime));
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 1, "{changes:?}");
+        assert_eq!(changes[facts].tools.changed.names, ["subagent"]);
+        let (before, after) = reviewer_states();
+        assert_ne!(before["skills"]["guide"], after["skills"]["guide"]);
+        assert!(
+            after["runs"]["sources"]["moved"].as_str().is_some(),
+            "{after}"
+        );
+        assert_eq!(before["runs"], after["runs"]);
+        let endpoint = |runtime: &crate::runtime::ConversationRuntime| {
+            serde_json::to_value(
+                &runtime
+                    .runtime_resources()
+                    .capability()
+                    .mcp_servers()
+                    .get(&McpServerId::new("moved"))
+                    .unwrap()
+                    .transport,
+            )
+            .unwrap()["endpoint"]
+                .clone()
+        };
+        assert_eq!(endpoint(&runtime), first.endpoint.as_str());
+        servers(&fixture, &[("moved", &second)]);
+        reconcile_workspace(&fixture).await;
+        assert_eq!(
+            endpoint(&runtime),
+            second.endpoint.as_str(),
+            "the child runs on B"
+        );
+        assert!(unprepared(&runtime));
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 2, "{changes:?}");
+        assert_eq!(changes[facts + 1].tools.changed.names, ["subagent"]);
+        let (before, after) = reviewer_states();
+        assert_ne!(
+            before["runs"]["sources"]["moved"],
+            after["runs"]["sources"]["moved"]
+        );
+        assert_eq!(before["skills"], after["skills"]);
+        fixture.close().await;
+        first.close().await;
+        second.close().await;
+    })
+    .await;
+}
+
+/// The implementation of a Workflow Tool includes every source beneath it:
+/// moving the MCP source its node runs on, Root selecting none of it,
+/// changes that Workflow Tool once, while moving a source nothing runs
+/// changes nothing.
+async fn a_moved_source_beneath_a_workflow_changes_it(node: serde_json::Value, agent: bool) {
+    bounded(async {
+        let first = McpFixture::start().await;
+        let second = McpFixture::start().await;
+        let idle = McpFixture::start().await;
+        let elsewhere = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        let workspace = fixture.workspaces[0].clone();
+        servers(&fixture, &[("moved", &first), ("idle", &idle)]);
+        let mut agents = String::new();
+        if agent {
+            reviewer(&fixture, "[]");
+            agents.push_str("agents=['reviewer']\n");
+        }
+        let schema = serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
+        let workflow = workspace.join(".agents/workflows/review.yaml");
+        std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+        std::fs::write(&workflow, serde_json::to_string(&serde_json::json!({
+            "description": "Review",
+            "block": {"input": schema, "nodes": {"workflow_start": {"type": "start"}, "work": node,
+                "done": {"type": "return", "outputs": []}},
+                "edges": [{"from": "workflow_start", "to": "work"}, {"from": "work", "to": "done"}]}
+        })).unwrap()).unwrap();
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            format!("[agent]\nworkflows=['review']\n{agents}"),
+        )
+        .unwrap();
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        fixture.manager.load(&session.id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let resources = runtime.runtime_resources();
+        let registry = resources.capability().tool_registry();
+        assert!(registry.definitions().iter().any(|definition| definition.name == "review"));
+        assert!(
+            registry.definitions().iter().all(|definition| definition.name != TOOL),
+            "Root selects no MCP Tool"
+        );
+        let facts = configuration_changes(&runtime).len();
+        servers(&fixture, &[("moved", &first), ("idle", &elsewhere)]);
+        reconcile_workspace(&fixture).await;
+        assert_eq!(configuration_changes(&runtime).len(), facts, "nothing runs idle");
+        servers(&fixture, &[("moved", &second), ("idle", &elsewhere)]);
+        reconcile_workspace(&fixture).await;
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 1, "{changes:?}");
+        assert!(changes[facts].tools.changed.names.contains(&"review".to_owned()), "{changes:?}");
+        let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
+            .pop()
+            .unwrap();
+        let tool = catalog["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "review")
+            .unwrap();
+        let moved = |state: &str| {
+            if agent {
+                tool[state]["agents"]["reviewer"]["runs"]["sources"]["moved"].clone()
+            } else {
+                tool[state]["runs"]["sources"]["moved"].clone()
+            }
+        };
+        assert!(moved("before").as_str().is_some(), "{tool}");
+        assert_ne!(moved("before"), moved("after"), "{tool}");
+        assert!(!catalog.to_string().contains(&second.endpoint), "{catalog}");
+        fixture.close().await;
+        for server in [first, second, idle, elsewhere] {
+            server.close().await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_moved_source_beneath_a_workflow_agent_changes_the_workflow() {
+    let schema = serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
+    a_moved_source_beneath_a_workflow_changes_it(
+        serde_json::json!({"type": "agent", "profile": "reviewer", "task": [{"type": "literal", "value": "Review"}], "output": {"type": "json_schema", "schema": schema}}),
+        true,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_moved_source_beneath_a_workflow_tool_node_changes_the_workflow() {
+    a_moved_source_beneath_a_workflow_changes_it(
+        serde_json::json!({"type": "tool", "selector": {"origin": "source", "source_id": "moved", "name": TOOL}, "arguments": {"type": "literal", "value": {}}, "result": {"type": "text"}}),
+        false,
+    )
+    .await;
+}

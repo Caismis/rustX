@@ -551,7 +551,7 @@ impl ResolvedSubagentSpec {
             agent,
             execution_deadline: *execution_deadline,
             instructions,
-            model: Some(model),
+            model,
             tools,
             resource_sources,
             skills,
@@ -737,53 +737,33 @@ pub(crate) struct FrozenAgentComposition {
 }
 
 impl FrozenAgentComposition {
-    /// The semantic digest of the Named Agent definition this froze.
-    pub(crate) const fn definition_digest(
-        &self,
-    ) -> &crate::runtime::subagent::NamedAgentDefinitionDigest {
-        self.definition.digest()
+    /// The Named Agent definition this froze.
+    pub(crate) const fn definition(&self) -> &NamedAgentDefinition {
+        &self.definition
     }
 
-    /// The composition a delegation with no override runs in `resources`.
-    pub(crate) fn delegated(
-        resources: &RuntimeResourceSnapshot,
-        agent: &SubagentName,
-    ) -> Option<Self> {
-        let capability = resources.capability();
-        Self::freeze(
-            resources.subagents().get(agent)?,
-            resources.resolved_agent(agent)?,
-            capability.skills(),
-            capability.mcp_servers(),
-        )
-        .ok()
-    }
-
-    /// The execution identity this composition has in `resources` before an
-    /// Attempt binds its model: the [`ResolvedSubagentSpec::profile_digest`]
-    /// framing with the model left unbound. It changes when a resolved
-    /// dependency, such as a selected Skill's version, changes under an
-    /// unchanged definition.
-    pub(crate) fn execution_digest(
-        &self,
-        resources: &RuntimeResourceSnapshot,
-    ) -> SubagentExecutionProfileDigest {
-        let definition = &self.definition;
-        let capability = resources.capability();
-        compute_profile_digest(&ProfileFraming {
-            agent: definition.name(),
-            execution_deadline: definition.execution_deadline(),
-            instructions: definition.instructions(),
-            model: None,
-            tools: &self.tools,
-            resource_sources: &self.resource_sources,
-            skills: &self.skills,
-            skill_roots: capability.skills().roots(),
-            environment: capability.effective_environment().authorized_entries(),
-            project_instructions: &resolve_project_instructions(definition, resources),
-            materialization: &self.materialization,
-            extensions: &self.extensions,
+    /// Every Tool definition this composition froze.
+    pub(crate) fn tool_definitions(&self) -> impl Iterator<Item = &ToolDefinition> {
+        self.tools.iter().map(|tool| match tool {
+            ResolvedSubagentTool::Builtin { definition, .. }
+            | ResolvedSubagentTool::Source { definition, .. } => definition,
         })
+    }
+
+    /// Every Tool source it runs or reads resources from.
+    pub(crate) fn sources(&self) -> impl Iterator<Item = &crate::capabilities::ToolSourceId> {
+        self.resource_sources
+            .iter()
+            .chain(self.materialization.sources.keys())
+    }
+
+    /// Every Skill it froze, with its content version.
+    pub(crate) fn skills(
+        &self,
+    ) -> impl Iterator<Item = (&str, &crate::runtime::identity::SkillVersionId)> {
+        self.skills
+            .iter()
+            .map(|skill| (skill.catalog_entry.name.as_str(), &skill.binding.version_id))
     }
 
     pub(crate) fn freeze(
@@ -1244,7 +1224,7 @@ fn resolve_model(
 /// own deterministic root-to-leaf order, before the definition's explicit
 /// files in configured order. `inherit = false` freezes the explicit files
 /// only. The child performs no ancestor discovery of its own in either case.
-fn resolve_project_instructions(
+pub(crate) fn resolve_project_instructions(
     definition: &NamedAgentDefinition,
     resources: &RuntimeResourceSnapshot,
 ) -> Vec<ProjectContextFile> {
@@ -1267,8 +1247,7 @@ struct ProfileFraming<'a> {
     agent: &'a SubagentName,
     execution_deadline: Option<SubagentExecutionDeadline>,
     instructions: &'a str,
-    /// `None` frames a composition before an Attempt binds its model.
-    model: Option<&'a FrozenModelSpec>,
+    model: &'a FrozenModelSpec,
     tools: &'a [ResolvedSubagentTool],
     resource_sources: &'a BTreeSet<crate::capabilities::ToolSourceId>,
     skills: &'a [ResolvedSubagentSkill],
@@ -1311,29 +1290,24 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
     // The frozen model *decision*, never the provider binding. `configured`
     // is excluded with it: it is the descriptive record of what was asked
     // for, and the resolved invocations below are the authority.
-    match framing.model {
-        None => field(&mut hasher, "model", "\u{0}unbound"),
-        Some(model) => {
-            let crate::model::frozen::FrozenModelSpec {
-                configured: _,
-                primary,
-                summary,
-            } = model;
-            frame_frozen_model_invocation(&mut hasher, "model", primary);
-            // The summary policy is two distinct facts — "summaries follow the
-            // session primary" and "summaries use this separately frozen
-            // invocation" — and the explicit one is framed by the SAME helper as the
-            // primary, so no behavior-affecting summary field can be dropped from
-            // the identity while the equivalent primary field is kept.
-            match summary {
-                crate::model::frozen::FrozenSummaryModel::Session => {
-                    field(&mut hasher, "model_summary", "session");
-                }
-                crate::model::frozen::FrozenSummaryModel::Explicit(invocation) => {
-                    field(&mut hasher, "model_summary", "explicit");
-                    frame_frozen_model_invocation(&mut hasher, "model_summary", invocation);
-                }
-            }
+    let crate::model::frozen::FrozenModelSpec {
+        configured: _,
+        primary,
+        summary,
+    } = framing.model;
+    frame_frozen_model_invocation(&mut hasher, "model", primary);
+    // The summary policy is two distinct facts — "summaries follow the
+    // session primary" and "summaries use this separately frozen
+    // invocation" — and the explicit one is framed by the SAME helper as the
+    // primary, so no behavior-affecting summary field can be dropped from
+    // the identity while the equivalent primary field is kept.
+    match summary {
+        crate::model::frozen::FrozenSummaryModel::Session => {
+            field(&mut hasher, "model_summary", "session");
+        }
+        crate::model::frozen::FrozenSummaryModel::Explicit(invocation) => {
+            field(&mut hasher, "model_summary", "explicit");
+            frame_frozen_model_invocation(&mut hasher, "model_summary", invocation);
         }
     }
     // Tool and Skill selections are semantically unordered and arrive
