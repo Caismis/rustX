@@ -9,6 +9,9 @@ import { parseGeometry } from './parse';
 import { disposeScene, modelScene } from './scene-resources';
 import { GeometryError, type GeometryFailure } from './limits';
 import { mountGeometry, type Part, type StandardView } from './viewport';
+import type { Inspection } from './structure';
+import type { OutlineStatus } from './outlines';
+import { GeometryViewGlyph } from './GeometryViewGlyph';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Menu } from '../../../../presentation/primitives/Menu';
 import { Tooltip } from '../../../../presentation/primitives/Tooltip';
@@ -18,9 +21,9 @@ import css from './GeometryPreview.module.css';
 export interface GeometryPreviewProps extends PreviewViewStateProps { bytes: Uint8Array<ArrayBuffer>; name: string; copyId: string; signal: AbortSignal; current: () => boolean; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
 export default function GeometryPreview({ bytes, name, copyId, signal, current, viewState, onViewStateChange, onGeometryRetire }: GeometryPreviewProps) {
   const locale = useLocale(), t = locale.active === 'zh' ? zh : en;
-  const container = useRef<HTMLDivElement>(null), active = useRef<ReturnType<typeof mountGeometry>>(undefined);
+  const container = useRef<HTMLDivElement>(null), active = useRef<ReturnType<typeof mountGeometry>>(undefined), outlineAction = useRef(0);
   const latest = useRef({ viewState, onViewStateChange, t }); latest.current = { viewState, onViewStateChange, t };
-  const [state, setState] = useState<{ parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; selected?: string; hidden?: string[] }>({});
+  const [state, setState] = useState<{ parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; selected?: string; hidden?: string[]; isolation?: string; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
   const [menu, setMenu] = useState(false);
   const [partsOpen, setPartsOpen] = useState(false), partsId = useId();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -28,12 +31,13 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
   const format = geometryFormat(name);
   useEffect(() => {
     const controller = new AbortController(); let roots: Object3D[] = [], mounted: ReturnType<typeof mountGeometry> | undefined, release: (() => void) | undefined;
-    let selection: { selected?: string; hidden?: string[] } = {};
+    let selection: { selected?: string; hidden?: string[]; isolation?: string } = {};
     // Capture this copy's predicate, rather than adopting a later render's
     // permission while an earlier import is still completing.
     const ownsCopy = current;
     const live = () => !controller.signal.aborted && !signal.aborted && ownsCopy();
     const retire = () => {
+      if (mounted && active.current === mounted) outlineAction.current++;
       // The visible-body signal may already be aborted. Only the owner can
       // authorize saving inert metadata for this exact retained content copy.
       mounted?.flush(patch => onGeometryRetire({ copyId, ...patch }));
@@ -51,13 +55,14 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
       mounted = mountGeometry(container.current!, object, bounds, saved, props.t, patch => {
         if (!live()) return;
         latest.current.onViewStateChange({ geometry: { copyId, ...patch } });
-        if (selection.selected !== patch.selected || !sameHidden(selection.hidden, patch.hidden)) {
-          selection = { selected: patch.selected, hidden: patch.hidden };
-          setState(value => ({ ...value, ...selection }));
+        if (selection.selected !== patch.selected || !sameHidden(selection.hidden, patch.hidden) || selection.isolation !== patch.isolation?.target) {
+          selection = { selected: patch.selected, hidden: patch.hidden, isolation: patch.isolation?.target };
+          setState(value => ({ ...value, ...selection, inspection: mounted?.inspect() }));
         }
       }, () => { const publish = live(); retire(); if (publish) setState({ error: 'webgl' }); });
       active.current = mounted;
-      setState(value => ({ ...value, parts: mounted!.parts, dimensions: [bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z] }));
+      setState(value => ({ ...value, parts: mounted!.parts, inspection: mounted!.inspect(), dimensions: [bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z] }));
+      if (saved?.outlines) requestOutlines(true);
     })().catch(error => {
       const publish = live(); retire();
       if (publish) setState({ error: error instanceof GeometryError ? error.code : 'invalid' });
@@ -65,20 +70,27 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
     return () => { signal.removeEventListener('abort', retire); retire(); };
   }, [bytes, format, copyId, signal]);
   // Names/labels do not own the renderer lifetime.
-  useEffect(() => { const canvas = container.current?.querySelector('canvas'); canvas?.setAttribute('aria-label', t.canvas); canvas?.setAttribute('aria-description', t.axes); }, [t]);
+  useEffect(() => { active.current?.relabel(t); }, [t]);
   const views: StandardView[] = ['isometric', 'front', 'back', 'left', 'right', 'top', 'bottom'];
   const number = useMemo(() => new Intl.NumberFormat(locale.active, { maximumSignificantDigits: 6 }), [locale.active]);
   const dimensions = useMemo(() => state.dimensions?.map(value => number.format(value)).join(' × '), [state.dimensions, number]);
   const units = format === 'glb' ? t.meter : format === 'step' || format === 'iges' ? t.millimeter : t.unknown;
   const partCount = useMemo(() => state.parts?.filter(part => part.kind === 'mesh').length, [state.parts]);
   const closeParts = () => { setPartsOpen(false); container.current?.querySelector<HTMLButtonElement>('[data-geometry-parts-toggle]')?.focus(); };
+  function requestOutlines(enabled: boolean) {
+    const owner = active.current; if (!owner) return;
+    const action = ++outlineAction.current; setState(value => ({ ...value, outlineStatus: enabled ? 'loading' : 'off' }));
+    void owner.setOutlines(enabled).catch((): OutlineStatus => 'failed').then(status => {
+      if (active.current === owner && outlineAction.current === action) setState(value => ({ ...value, outlineStatus: status }));
+    });
+  }
   const renderPart = ({ part, ordinal, children }: PartBranch): ReactNode => {
-    const name = part.name || `${t.part} ${ordinal}`, visible = !state.hidden?.includes(part.id), open = expanded.has(part.id);
+    const name = part.name || `${t.part} ${ordinal}`, visible = !state.hidden?.includes(part.id), inherited = state.hidden?.some(id => part.id.startsWith(`${id}.`)), open = expanded.has(part.id);
     return <li key={part.id}>
-      <div className={css.partRow} data-hidden={!visible || undefined}>
+      <div className={css.partRow} data-hidden={!visible || inherited || undefined}>
         {children.length ? <Button size="sm" className={css.disclosure} aria-label={`${open ? t.collapse : t.expand}: ${name}`} aria-expanded={open} onClick={() => setExpanded(value => { const next = new Set(value); if (open) next.delete(part.id); else next.add(part.id); return next; })}><IconChevronRightOutline14 className={open ? css.expanded : undefined}/></Button> : <span className={css.branchSpace}/>}
         <Button size="sm" className={css.partButton} title={name} icon={part.kind === 'group' ? <IconFolderClose16/> : <ModelGlyph/>} aria-pressed={state.selected === part.id} onClick={() => active.current?.select(state.selected === part.id ? undefined : part.id)}><span>{name}</span></Button>
-        <Tooltip label={`${visible ? t.hide : t.show}: ${name}`} side="top" delayMs={500}><span className={css.visibilityAnchor}><Button size="sm" className={css.visibility} role="checkbox" aria-label={`${t.visible}: ${name}`} aria-checked={visible} onClick={() => active.current?.visibility(part.id, !visible)}><VisibilityGlyph visible={visible}/></Button></span></Tooltip>
+        <Tooltip label={`${inherited ? t.hiddenParent : visible ? t.hide : t.show}: ${name}`} side="top" delayMs={500}><span className={css.visibilityAnchor}><Button size="sm" className={css.visibility} role="checkbox" aria-label={`${t.visible}: ${name}`} aria-description={inherited ? t.hiddenParent : undefined} aria-checked={visible} onClick={() => active.current?.visibility(part.id, !visible)}><VisibilityGlyph visible={visible}/></Button></span></Tooltip>
       </div>
       {children.length > 0 && open && <ul>{children.map(renderPart)}</ul>}
     </li>;
@@ -95,14 +107,32 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
         <div className={css.rail} role="toolbar" aria-label={t.controls} aria-orientation="vertical">
           <Tooltip label={t.fit} side="right" delayMs={500}><button type="button" className={css.control} disabled={!state.parts} aria-label={t.fit} onClick={() => active.current?.fit()}><FitGlyph/></button></Tooltip>
           <Menu open={menu} onClose={() => setMenu(false)} side="right" align="start" dense autoFocus
-            items={views.map(view => ({ id: view, label: t[view] }))} onSelect={view => { active.current?.fit(view as StandardView); setMenu(false); }}
+            items={[{ id: 'reset', label: t.reset, icon: <GeometryViewGlyph view="isometric"/> }, { id: 'directions', type: 'separator' }, ...views.map(view => ({ id: view, label: t[view], icon: <GeometryViewGlyph view={view}/> }))]} onSelect={view => { if (view === 'reset') active.current?.reset(); else active.current?.fit(view as StandardView); setMenu(false); }}
             anchor={<Tooltip label={t.view} side="right" delayMs={500}><button type="button" className={`${css.control} ${menu ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.view} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(value => !value)}><ModelGlyph/></button></Tooltip>}/>
           <span className={css.divider} aria-hidden="true"/>
+          <Tooltip label={t.outlineHelp} side="right" delayMs={500}><button type="button" className={`${css.control} ${state.outlineStatus === 'on' ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.outlines} aria-pressed={state.outlineStatus === 'on'} aria-busy={state.outlineStatus === 'loading'} onClick={() => requestOutlines(state.outlineStatus !== 'on' && state.outlineStatus !== 'loading')}><OutlineGlyph/></button></Tooltip>
           <Tooltip label={t.parts} side="right" delayMs={500}><button type="button" className={`${css.control} ${partsOpen ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.parts} aria-expanded={partsOpen} aria-controls={partsId} data-geometry-parts-toggle onClick={() => setPartsOpen(value => !value)}><IconChecklistOutline14 size={16}/></button></Tooltip>
         </div>
+        {state.outlineStatus === 'loading' || state.outlineStatus === 'limit' || state.outlineStatus === 'failed' ? <p className={css.outlineStatus} role="status">{state.outlineStatus === 'loading' ? t.outlineLoading : state.outlineStatus === 'limit' ? t.outlineLimit : t.outlineFailed}</p> : null}
         {state.parts && partsOpen && <div className={css.partsPanel} id={partsId}>
           <header className={css.partsHeader}><span>{t.parts}<span className={css.count}>{number.format(partCount!)}</span></span><Button size="sm" className={css.panelClose} aria-label={t.closeParts} onClick={closeParts}><IconCloseOutline16/></Button></header>
+          <div className={css.structureActions}>
+            <Button size="sm" disabled={!state.selected} onClick={() => active.current?.isolate()}>{t.isolate}</Button>
+            {state.isolation && <Button size="sm" onClick={() => active.current?.restore()}>{t.restore}</Button>}
+            <Button size="sm" onClick={() => active.current?.showAll()}>{t.showAll}</Button>
+            <Button size="sm" disabled={!state.selected || !state.inspection?.visibleTriangles} onClick={() => active.current?.focus()}>{t.focus}</Button>
+          </div>
           <ul className={css.parts} aria-label={t.parts}>{partRows}</ul>
+          {state.inspection && <section className={css.properties} aria-label={t.properties}>
+            <strong title={state.inspection.name}>{state.selected ? state.inspection.name || `${t.part} ${(state.parts.findIndex(part => part.id === state.selected) + 1)}` : t.model}</strong>
+            <span>{t.mesh} · {units}</span>
+            <dl><dt>{t.triangles}</dt><dd>{number.format(state.inspection.triangles)}</dd><dt>{t.renderedTriangles}</dt><dd>{number.format(state.inspection.visibleTriangles)}</dd></dl>
+            {!!state.inspection.min.length && <><span>{t.worldBounds}</span><dl>
+              <dt>{t.minimum}</dt><dd>{state.inspection.min.map(value => number.format(value)).join(', ')}</dd>
+              <dt>{t.maximum}</dt><dd>{state.inspection.max.map(value => number.format(value)).join(', ')}</dd>
+              <dt>{t.bounds}</dt><dd>{state.inspection.dimensions.map(value => number.format(value)).join(' × ')}</dd>
+            </dl></>}
+          </section>}
         </div>}
       </>}
     </div>
@@ -131,6 +161,9 @@ function ModelGlyph() {
 }
 function FitGlyph() {
   return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2.5 6V2.5H6m4 0h3.5V6M2.5 10v3.5H6m7.5-3.5v3.5H10"/></svg>;
+}
+function OutlineGlyph() {
+  return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true"><path d="m8 1.5 6 3.3v6.4L8 14.5l-6-3.3V4.8L8 1.5Z"/><path d="m4.5 6 3.5 2 3.5-2M8 8v4" strokeWidth=".7"/></svg>;
 }
 function VisibilityGlyph({ visible }: { visible: boolean }) {
   return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M1.5 8S4 3.7 8 3.7 14.5 8 14.5 8s-2.5 4.3-6.5 4.3S1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="1.8"/>{!visible && <path d="m2 2 12 12"/>}</svg>;

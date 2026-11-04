@@ -2,14 +2,17 @@ import { AxesHelper, BoxHelper, Color, Group, Mesh, NeutralToneMapping, Perspect
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { PreviewViewState } from '../../../../presentation/right-panel/preview-view-state';
 import { GEOMETRY_LIMITS as L, GeometryError } from './limits';
+import { createStructure } from './structure';
+import { createAxisNavigation, type AxisLabels } from './axes';
+import type { createOutlines, OutlineStatus } from './outlines';
+export type { Part } from './structure';
 
 type Saved = NonNullable<PreviewViewState['geometry']>;
 export type StandardView = 'isometric' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
-export interface Part { id: string; name: string; depth: number; kind: 'mesh' | 'group' }
 let activeContexts = 0;
 
 /** Mounted view owns every graphics resource. Source bytes belong to the content owner. */
-export function mountGeometry(container: HTMLElement, object: Object3D, bounds: Box3, saved: Saved | undefined, labels: { canvas: string; axes: string }, change: (state: Omit<Saved, 'copyId'>) => void, lost: () => void) {
+export function mountGeometry(container: HTMLElement, object: Object3D, bounds: Box3, saved: Saved | undefined, labels: AxisLabels & { canvas: string }, change: (state: Omit<Saved, 'copyId'>) => void, lost: () => void) {
   if (activeContexts >= L.owners) throw new GeometryError('capacity');
   let renderer: WebGLRenderer;
   try { renderer = new WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' }); }
@@ -21,6 +24,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   activeContexts++;
   const canvas = renderer.domElement; canvas.tabIndex = 0; canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', labels.canvas);
   let pendingDraw: WebGLSync | null = null;
+  let outlines: ReturnType<typeof createOutlines> | undefined, outlineRequest = 0, outlinesWanted = saved?.outlines === true;
   container.append(canvas);
   const scene = new Scene(), centered = new Group(), camera = new PerspectiveCamera(45, 1, 0.001, 1000);
   const center = bounds.getCenter(new Vector3()), size = bounds.getSize(new Vector3()), radius = Math.max(size.length() / 2, 1e-6);
@@ -34,17 +38,15 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const configureControls = () => { controls.enableDamping = false; controls.minDistance = radius / 100; controls.maxDistance = radius * 100; controls.listenToKeyEvents(canvas); };
   configureControls();
   const axes = new AxesHelper(1), axisScene = new Scene(), axisCamera = new PerspectiveCamera(45, 1, 0.01, 10);
+  const axisPositions = axes.geometry.getAttribute('position');
+  axisPositions.setXYZ(0, -1, 0, 0); axisPositions.setXYZ(2, 0, -1, 0); axisPositions.setXYZ(4, 0, 0, -1);
   axisScene.add(axes); canvas.setAttribute('aria-description', labels.axes);
+  const navigation = createAxisNavigation(container, labels, view => fit(view));
   const highlight = new BoxHelper(object, new Color(0xffbd45)); highlight.visible = false; scene.add(highlight);
-  const objects = new Map<string, Object3D>(), occurrenceIds = new Map<Object3D, string>(), parts: Part[] = [], hidden = new Set<string>();
-  let selected: string | undefined, frame = 0, disposed = false, initial = true, restoring = true;
+  const structure = createStructure(object, center, saved);
+  let frame = 0, disposed = false, initial = true, restoring = true;
   let cameraDirty = false, interacting = false, lastPublished = -Infinity, publication: ReturnType<typeof setTimeout> | undefined;
-  function walk(item: Object3D, id: string, depth: number) {
-    if (item instanceof Mesh || item.name) { const name = typeof item.userData.name === 'string' ? item.userData.name : item.name; objects.set(id, item); occurrenceIds.set(item, id); parts.push({ id, name: name.slice(0, 256), depth, kind: item instanceof Mesh ? 'mesh' : 'group' }); }
-    item.children.forEach((child, index) => walk(child, `${id}.${index}`, depth + 1));
-  }
-  walk(object, '0', 0);
-  const snapshot = (): Omit<Saved, 'copyId'> => ({ camera: { position: camera.position.toArray(), target: controls.target.toArray(), up: camera.up.toArray() }, selected, hidden: [...hidden] });
+  const snapshot = (): Omit<Saved, 'copyId'> => ({ camera: { position: camera.position.toArray(), target: controls.target.toArray(), up: camera.up.toArray() }, ...structure.snapshot(), outlines: outlinesWanted });
   const emit = (publish = change) => {
     if (disposed || restoring) return;
     clearTimeout(publication); publication = undefined; cameraDirty = false; lastPublished = performance.now(); publish(snapshot());
@@ -64,36 +66,60 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     renderer.setViewport(0, 0, width, height); renderer.autoClear = true; renderer.render(scene, camera);
     renderer.autoClear = false; renderer.clearDepth();
     axisCamera.position.copy(camera.position).sub(controls.target).normalize().multiplyScalar(3.5); axisCamera.up.copy(camera.up); axisCamera.lookAt(0, 0, 0);
-    const side = Math.min(80, width, height); renderer.setViewport(8, 8, side, side); renderer.render(axisScene, axisCamera);
+    const side = Math.min(112, width, height); renderer.setViewport(8, 8, side, side); renderer.render(axisScene, axisCamera);
+    navigation.update(axisCamera, side);
     pendingDraw = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     if (!pendingDraw) { dispose(); lost(); return; }
     gl.flush();
   };
   const render = () => { if (!disposed && !frame) frame = requestAnimationFrame(draw); };
   const updateHighlight = () => {
-    const item = selected ? objects.get(selected) : undefined;
+    const item = structure.selectedObject;
     highlight.visible = !!item;
     for (let ancestor = item; ancestor; ancestor = ancestor.parent ?? undefined) if (!ancestor.visible) highlight.visible = false;
     if (item && highlight.visible) highlight.setFromObject(item);
   };
   const select = (id?: string) => {
-    const next = id && objects.has(id) ? id : undefined;
-    if (next === selected) return;
-    selected = next;
+    if (!structure.select(id)) return;
     updateHighlight(); render(); emit();
   };
-  const fit = (view?: StandardView) => {
+  const frameBounds = (box: Box3, view?: StandardView) => {
+    if (box.isEmpty()) return;
     const directions: Record<StandardView, [number, number, number]> = { isometric: [1, 1, 1], front: [0, 0, 1], back: [0, 0, -1], left: [-1, 0, 0], right: [1, 0, 0], top: [0, 1, 0], bottom: [0, -1, 0] };
-    const distance = radius / Math.sin(Math.PI / 8) / Math.min(1, camera.aspect) * 1.1;
+    const frameRadius = Math.max(box.getSize(new Vector3()).length() / 2, 1e-9);
+    const distance = frameRadius / Math.sin(Math.PI / 8) / Math.min(1, camera.aspect) * 1.1;
     const direction = view ? new Vector3().fromArray(directions[view]) : camera.position.clone().sub(controls.target);
-    camera.position.copy(direction).normalize().multiplyScalar(distance);
+    const target = box.getCenter(new Vector3());
+    camera.position.copy(direction).normalize().multiplyScalar(distance).add(target);
     if (view) camera.up.set(0, view === 'top' || view === 'bottom' ? 0 : 1, view === 'top' ? -1 : view === 'bottom' ? 1 : 0);
-    camera.near = Math.max(radius / 10_000, 1e-9); camera.far = radius * 1000; camera.updateProjectionMatrix(); synchronizeOrbit(new Vector3()); render(); emit();
+    controls.minDistance = frameRadius / 100;
+    camera.near = Math.max(Math.min(radius, frameRadius) / 10_000, 1e-12); camera.far = radius * 1000; camera.updateProjectionMatrix(); synchronizeOrbit(target); render(); emit();
   };
+  const fit = (view?: StandardView) => frameBounds(structure.bounds(object, true), view);
+  const reset = () => frameBounds(bounds.clone().translate(center.clone().negate()), 'isometric');
+  const focus = () => { if (structure.selectedObject) frameBounds(structure.bounds(structure.selectedObject, true)); };
   const visibility = (id: string, visible: boolean) => {
-    const item = objects.get(id); if (!item || item.visible === visible) return;
-    item.visible = visible; if (visible) hidden.delete(id); else hidden.add(id);
+    if (!structure.visibility(id, visible)) return;
     updateHighlight(); render(); emit();
+  };
+  const structureAction = (action: () => boolean) => { if (action()) { updateHighlight(); render(); emit(); } };
+  const setOutlines = async (enabled: boolean): Promise<OutlineStatus> => {
+    const request = ++outlineRequest;
+    if (disposed) return 'off'; outlinesWanted = enabled; emit();
+    try {
+      if (!outlines && !enabled) return 'off';
+      if (!outlines) {
+        const { createOutlines } = await import('./outlines');
+        if (disposed || request !== outlineRequest) return 'off';
+        outlines ??= createOutlines(object, () => getComputedStyle(container).getPropertyValue('--dsw-alias-label-document-preview').trim() || '#dbe6f3');
+      }
+      const status = await outlines.set(enabled);
+      if (disposed || request !== outlineRequest) return 'off';
+      outlinesWanted = status === 'on'; render(); emit(); return status;
+    } catch {
+      if (disposed || request !== outlineRequest) return 'off';
+      outlinesWanted = false; emit(); return 'failed';
+    }
   };
   const resize = () => {
     if (disposed) return;
@@ -105,11 +131,12 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     renderer.setDrawingBufferSize(width, height, pixelRatio);
     canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
     camera.aspect = width / height; camera.updateProjectionMatrix();
-    if (initial) { initial = false; fit('isometric');
+    if (initial) { initial = false; reset();
       const pose = saved?.camera;
       if (pose && [pose.position, pose.target, pose.up].every(values => values.length === 3 && values.every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate))) {
         const position = new Vector3().fromArray(pose.position), target = new Vector3().fromArray(pose.target), up = new Vector3().fromArray(pose.up);
-        if (position.distanceTo(target) > radius / 1000 && position.distanceTo(target) < radius * 1000 && up.lengthSq() > 0) { camera.position.copy(position); camera.up.copy(up).normalize(); synchronizeOrbit(target); }
+        const distance = position.distanceTo(target);
+        if (distance > 1e-12 && distance < radius * 1000 && up.lengthSq() > 0) { camera.position.copy(position); camera.up.copy(up).normalize(); controls.minDistance = Math.min(radius / 100, distance / 100); camera.near = Math.max(Math.min(radius, distance) / 10_000, 1e-12); camera.updateProjectionMatrix(); synchronizeOrbit(target); }
       }
     }
     render();
@@ -129,13 +156,14 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   controls.addEventListener('start', started);
   controls.addEventListener('end', ended);
   function synchronizeOrbit(target: Vector3) {
+    const minDistance = controls.minDistance;
     if (!orbitUp.equals(camera.up)) {
       // OrbitControls fixes its orbit-axis quaternion at construction time.
       // Recreate through its public lifecycle instead of mutating internals.
       controls.removeEventListener('change', changed); controls.removeEventListener('start', started); controls.removeEventListener('end', ended); controls.dispose();
       controls = new OrbitControls(camera, canvas); orbitUp.copy(camera.up); configureControls(); controls.addEventListener('change', changed); controls.addEventListener('start', started); controls.addEventListener('end', ended);
     }
-    controls.target.copy(target); controls.update();
+    controls.minDistance = minDistance; controls.target.copy(target); controls.update();
   }
   const observer = new ResizeObserver(resize); observer.observe(container);
   // A resolution media query changes when moving between displays or zooming,
@@ -144,6 +172,8 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const resolutionChanged = () => { if (disposed) return; resolution.removeEventListener('change', resolutionChanged); watchResolution(); resize(); };
   const watchResolution = () => { resolution = matchMedia(`(resolution: ${globalThis.devicePixelRatio || 1}dppx)`); resolution.addEventListener('change', resolutionChanged); };
   watchResolution();
+  const themeObserver = new MutationObserver(() => { if (!disposed && outlines?.enabled) { outlines.recolor(); render(); } });
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] });
   const raycaster = new Raycaster(); let down: [number, number] | undefined;
   const pointerDown = (event: PointerEvent) => { down = [event.clientX, event.clientY]; };
   const pointerUp = (event: PointerEvent) => {
@@ -152,25 +182,27 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     const candidates: Mesh[] = [];
     object.traverseVisible(item => { if (item instanceof Mesh) candidates.push(item); });
     const hit = raycaster.intersectObjects(candidates, false)[0];
-    select(hit ? occurrenceIds.get(hit.object) : undefined);
+    select(hit ? structure.occurrenceIds.get(hit.object) : undefined);
   };
   const contextLost = (event: Event) => { event.preventDefault(); dispose(); lost(); };
   canvas.addEventListener('pointerdown', pointerDown); canvas.addEventListener('pointerup', pointerUp); canvas.addEventListener('webglcontextlost', contextLost);
   function dispose() {
     if (disposed) return; flush(); if (disposed) return;
-    disposed = true; activeContexts--; clearTimeout(publication); cancelAnimationFrame(frame); observer.disconnect(); resolution.removeEventListener('change', resolutionChanged);
+    disposed = true; outlineRequest++; outlines?.dispose(); activeContexts--; clearTimeout(publication); cancelAnimationFrame(frame); observer.disconnect(); themeObserver.disconnect(); resolution.removeEventListener('change', resolutionChanged);
     canvas.removeEventListener('pointerdown', pointerDown); canvas.removeEventListener('pointerup', pointerUp); canvas.removeEventListener('webglcontextlost', contextLost);
     controls.removeEventListener('change', changed); controls.removeEventListener('start', started); controls.removeEventListener('end', ended); controls.dispose();
     highlight.geometry.dispose(); highlight.material.dispose(); axes.geometry.dispose();
     for (const material of Array.isArray(axes.material) ? axes.material : [axes.material]) material.dispose();
     if (pendingDraw) { gl.deleteSync(pendingDraw); pendingDraw = null; }
-    renderer.dispose(); renderer.forceContextLoss(); canvas.remove(); centered.remove(object);
+    navigation.dispose(); renderer.dispose(); renderer.forceContextLoss(); canvas.remove(); centered.remove(object);
   }
   try {
     resize();
-    for (const id of (saved?.hidden ?? []).slice(0, L.nodes)) visibility(id, false);
-    select(saved?.selected);
+    updateHighlight();
     restoring = false; emit();
   } catch (error) { dispose(); throw error; }
-  return { parts, fit, select, visibility, flush, dispose };
+  return { parts: structure.parts, fit, reset, focus, select, visibility, inspect: structure.inspect,
+    setOutlines,
+    isolate: () => structureAction(structure.isolate), restore: () => structureAction(structure.restore), showAll: () => structureAction(structure.showAll),
+    relabel: (value: AxisLabels & { canvas: string }) => { canvas.setAttribute('aria-label', value.canvas); canvas.setAttribute('aria-description', value.axes); navigation.relabel(value); }, flush, dispose };
 }

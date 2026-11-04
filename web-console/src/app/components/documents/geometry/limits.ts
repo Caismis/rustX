@@ -9,6 +9,7 @@ export const GEOMETRY_LIMITS = Object.freeze({
   depth: 32, materials: 256, drawCalls: 512, decodedBytes: 64 * 1024 * 1024,
   textures: 8, textureDimension: 2048, texturePixels: 8_388_608,
   coordinate: 1e12, timeoutMs: 15_000, canvasPixels: 4_194_304,
+  outlineTriangles: 100_000, outlineSegments: 65_536, outlineInputBytes: 16 * 1024 * 1024, outlineTimeoutMs: 2_000,
   // The pinned upstream binary/glue allows at most 2 GiB of WASM memory.
   // This excludes JS objects, source/output copies and the browser process.
   wasmBytes: 2 * 1024 * 1024 * 1024,

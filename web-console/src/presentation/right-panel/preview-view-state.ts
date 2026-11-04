@@ -6,6 +6,8 @@ export interface PreviewViewState {
     camera?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] };
     selected?: string;
     hidden?: string[];
+    isolation?: { target: string; hidden: string[] };
+    outlines?: boolean;
   };
   imageZoom?: { readonly kind: 'fit-width' } | { readonly kind: 'fixed'; readonly scale: number };
   wrap?: boolean;

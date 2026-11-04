@@ -45,6 +45,14 @@ mixed Markdown/model tabs.
 analytic bounds `570 × 72 × 190 mm`. It exercises repeated imports, camera input,
 picking and the shared two-body resource budget under the unchanged CAD settings.
 
+The interaction-roadmap tests derive a transformed, repeated two-part GLB from
+the analytic cube without changing its vertex/material data. The curved-outline
+case writes an original unit-sphere STL from Three.js 0.187.0 SphereGeometry
+(48 longitudinal / 32 latitudinal subdivisions), including outward facet normals.
+These procedural derivatives remain MIT test data. They exercise occurrence
+coordinates, curved silhouettes, shared resources and disposal; they are not CAD
+topology or engineering-accuracy references.
+
 ```sh
 uv run --no-project --with cadquery-ocp-novtk==7.9.3.1.1 python web-console/test/fixtures/geometry/generate-showcase.py
 ```

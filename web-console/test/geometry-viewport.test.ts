@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Box3, BoxGeometry, Group, Mesh, MeshBasicMaterial, Vector2, type PerspectiveCamera } from 'three';
 import { mountGeometry } from '../src/app/components/documents/geometry/viewport';
+import { en } from '../src/locale/dictionaries/geometry';
 const runtime = vi.hoisted(() => ({ renderers: [] as any[], controls: [] as any[] }));
 vi.mock('three', async original => {
   const actual = await original<typeof import('three')>();
@@ -39,7 +40,7 @@ afterEach(() => { mounted.splice(0).forEach(view => view.dispose()); vi.useRealT
 function mount(object = new Group(), saved?: Parameters<typeof mountGeometry>[3]) {
   if (!object.children.length) object.add(new Mesh(new BoxGeometry(), new MeshBasicMaterial()));
   const element = document.createElement('div'); Object.defineProperties(element, { clientWidth: { value: 640, configurable: true }, clientHeight: { value: 480, configurable: true } });
-  const changed = vi.fn(), lost = vi.fn(), view = mountGeometry(element, object, new Box3().setFromObject(object), saved, { canvas: 'Model', axes: 'Axes' }, changed, lost); mounted.push(view);
+  const changed = vi.fn(), lost = vi.fn(), view = mountGeometry(element, object, new Box3().setFromObject(object), saved, en, changed, lost); mounted.push(view);
   return { view, changed, lost, element, renderer: runtime.renderers.at(-1), control: () => runtime.controls.at(-1) };
 }
 function draw() { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); }
@@ -122,4 +123,34 @@ it('recreates orbit controls for top and bottom and keeps final-flush listeners 
   const f = mount(), first = f.control(); f.view.fit('top'); expect(first.dispose).toHaveBeenCalledOnce();
   const top = f.control(); expect(top.object.up.toArray()).toEqual([0, 0, -1]); f.view.fit('bottom'); expect(top.dispose).toHaveBeenCalledOnce();
   expect(f.control().object.up.toArray()).toEqual([0, 0, 1]); move(f.control(), 27); f.control().dispatchEvent({ type: 'end' }); expect(f.changed.mock.lastCall![0].camera.position[0]).toBe(27);
+});
+it('focuses transformed visible selection while preserving direction, and resets orientation without showing hidden parts', () => {
+  const object = new Group(), a = new Mesh(new BoxGeometry(), new MeshBasicMaterial()), b = a.clone();
+  a.position.set(100, 200, 300); b.position.set(120, 200, 300); object.add(a, b);
+  const f = mount(object); f.view.fit('front');
+  f.view.select('0.1'); f.view.focus();
+  expect(f.control().target.toArray()).toEqual([10, 0, 0]);
+  const pose = f.changed.mock.lastCall![0].camera;
+  expect(pose.position[0]).toBe(10); expect(pose.position[1]).toBe(0); expect(pose.position[2]).toBeGreaterThan(0);
+  f.view.visibility('0.1', false); f.changed.mockClear(); f.view.focus(); expect(f.changed).not.toHaveBeenCalled();
+  f.view.reset(); expect(f.control().target.toArray()).toEqual([0, 0, 0]);
+  expect(f.changed.mock.lastCall![0].hidden).toEqual(['0.1']);
+  const reset = f.changed.mock.lastCall![0].camera.position; expect(reset[0]).toBeCloseTo(reset[1]); expect(reset[1]).toBeCloseTo(reset[2]);
+});
+it('batches isolation and restoration into one publication/draw and ignores repeated operations', () => {
+  const f = mount(); draw(); f.view.select('0.0'); draw(); f.changed.mockClear();
+  f.view.isolate(); expect(f.changed).toHaveBeenCalledOnce(); expect(frames.size).toBe(1);
+  f.view.isolate(); expect(f.changed).toHaveBeenCalledOnce(); draw();
+  f.view.restore(); expect(f.changed).toHaveBeenCalledTimes(2); draw();
+  f.view.restore(); f.view.showAll(); expect(f.changed).toHaveBeenCalledTimes(2); expect(frames.size).toBe(0);
+});
+it('focuses a small occurrence and restores its close camera without a whole-model distance floor', () => {
+  const object = new Group(), a = new Mesh(new BoxGeometry(), new MeshBasicMaterial()), tiny = a.clone();
+  a.position.x = 1000; tiny.scale.setScalar(.000001); object.add(a, tiny);
+  const f = mount(object); f.view.select('0.1'); f.view.focus();
+  const state = f.changed.mock.lastCall![0], distance = f.control().object.position.distanceTo(f.control().target);
+  expect(distance).toBeLessThan(.00001); expect(f.control().minDistance).toBeLessThan(.000001);
+  f.view.dispose();
+  const next = mount(object, { copyId: 'copy', ...state });
+  expect(next.control().object.position.toArray()).toEqual(state.camera.position); expect(next.control().target.toArray()).toEqual(state.camera.target);
 });

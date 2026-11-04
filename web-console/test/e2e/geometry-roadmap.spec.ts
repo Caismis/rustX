@@ -1,0 +1,201 @@
+import { test, expect, type Page } from '@playwright/test';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { SphereGeometry, Triangle, Vector3 } from 'three';
+import { instrument, resources } from './geometry-observation';
+import { denseBoxStl } from '../geometry-fixtures';
+
+const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
+test.use({ connectOptions: { wsEndpoint: process.env.RUSTX_BROWSER_WS_ENDPOINT ?? '', exposeNetwork: '<loopback>' } });
+const ready = (page: Page) => expect(page.locator('[data-geometry-format] canvas')).toBeVisible();
+const pose = (page: Page) => page.evaluate(() => (window as any).geometryContract.snapshot().find((tab: any) => tab.name === 'cube.glb').state);
+const reads = (page: Page) => page.evaluate(() => (window as any).geometryContract.reads.filter((read: any) => !read.probe).length);
+const painted = (page: Page) => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+
+function assemblyGlb() {
+  const original = new Uint8Array(readFileSync(new URL('../fixtures/geometry/cube.glb', import.meta.url))), header = new DataView(original.buffer), length = header.getUint32(12, true);
+  const json = JSON.parse(new TextDecoder().decode(original.subarray(20, 20 + length)));
+  json.nodes = [{ name: 'Assembly', translation: [100,200,300], scale: [2,3,4], children: [1,2] }, { name: 'A', mesh: 0 }, { name: 'B', mesh: 0, translation: [20,0,0] }];
+  json.scenes = [{ nodes: [0] }]; json.scene = 0;
+  const text = new TextEncoder().encode(JSON.stringify(json)), padded = Math.ceil(text.length / 4) * 4, bin = original.subarray(20 + length);
+  const bytes = new Uint8Array(20 + padded + bin.length), view = new DataView(bytes.buffer);
+  bytes.set(original.subarray(0,12)); view.setUint32(8, bytes.length, true); view.setUint32(12, padded, true); view.setUint32(16, 0x4e4f534a, true);
+  bytes.fill(32,20,20+padded); bytes.set(text,20); bytes.set(bin,20+padded); return bytes;
+}
+async function load(page: Page, entry = 'delivery', bytes = assemblyGlb()) {
+  await instrument(page); await page.goto(`${origin}/test/fixtures/geometry.html`);
+  await page.evaluate(bytes => (window as any).geometryContract.replace('cube.glb', bytes), [...bytes]);
+  await page.getByRole('button', { name: entry === 'delivery' ? 'Preview cube.glb in sidebar' : 'Workspace cube.glb', exact: true }).click(); await ready(page);
+}
+async function parts(page: Page) {
+  await page.getByRole('button', { name: 'Parts', exact: true }).click();
+  await page.getByRole('button', { name: 'Expand: Assembly', exact: true }).click();
+  return page.getByRole('list', { name: 'Parts', exact: true });
+}
+for (const entry of ['delivery', 'workspace']) test(`roadmap structure, focus and source-coordinate properties: ${entry}`, async ({ page }) => {
+  await load(page, entry); const tree = await parts(page), initialReads = await reads(page);
+  const a = tree.getByRole('button', { name: 'A', exact: true }), b = tree.getByRole('button', { name: 'B', exact: true });
+  await tree.getByRole('checkbox', { name: 'Visible: B', exact: true }).uncheck();
+  await a.click(); const properties = page.getByRole('region', { name: 'Properties', exact: true });
+  await expect(properties).toContainText('20 × 30 × 40'); await expect(properties).toContainText('100, 200, 300');
+  await expect(properties).toContainText('120, 230, 340'); await expect(properties).toContainText('Tessellated triangle mesh');
+  await tree.getByRole('checkbox', { name: 'Visible: Assembly', exact: true }).uncheck();
+  await expect(tree.getByRole('checkbox', { name: 'Visible: A', exact: true })).toHaveAttribute('aria-description', 'Hidden by an ancestor');
+  await expect(page.getByRole('button', { name: 'Focus selected', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Isolate', exact: true }).click(); await expect(page.getByRole('button', { name: 'Exit isolation', exact: true })).toBeVisible();
+  await b.click(); await expect(page.getByRole('button', { name: 'Focus selected', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Isolate', exact: true }).click();
+  await expect(tree.getByRole('checkbox', { name: 'Visible: B', exact: true })).toBeChecked();
+  await page.getByRole('button', { name: 'Focus selected', exact: true }).click();
+  await page.getByRole('button', { name: 'Exit isolation', exact: true }).click();
+  await expect(tree.getByRole('checkbox', { name: 'Visible: B', exact: true })).not.toBeChecked();
+  await page.getByRole('button', { name: 'Show all', exact: true }).click(); await expect(tree.getByRole('checkbox', { name: 'Visible: B', exact: true })).toBeChecked();
+  await a.click(); await page.getByRole('button', { name: 'Isolate', exact: true }).click();
+  await page.getByRole('button', { name: entry === 'delivery' ? 'Hide delivery' : 'Toggle workspace body', exact: true }).click();
+  await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
+  await page.getByRole('button', { name: entry === 'delivery' ? 'Show delivery' : 'Toggle workspace body', exact: true }).click(); await ready(page);
+  await page.getByRole('button', { name: 'Parts', exact: true }).click(); await expect(page.getByRole('button', { name: 'Exit isolation', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Show all', exact: true }).click();
+  expect(await reads(page)).toBe(initialReads);
+});
+
+test('all six axis endpoints match menu directions, stay separate and never pick the model', async ({ page }, info) => {
+  await load(page); const tree = await parts(page); await tree.getByRole('button', { name: 'A', exact: true }).click();
+  await page.getByRole('button', { name: 'Close parts', exact: true }).click();
+  for (const [view, label] of [['right','Right'], ['left','Left'], ['top','Top'], ['bottom','Bottom'], ['front','Front'], ['back','Back']]) {
+    await page.getByRole('button', { name: 'View angle', exact: true }).click();
+    await expect(page.getByRole('menuitem', { name: label, exact: true }).locator('[data-view-icon]')).toHaveAttribute('data-view-icon', view);
+    await page.getByRole('menuitem', { name: label, exact: true }).click(); const menuPose = await pose(page); await painted(page);
+    await page.locator(`[data-geometry-axis="${view}"]`).click(); const axisPose = await pose(page);
+    for (const key of ['position', 'target', 'up']) axisPose.camera[key].forEach((value: number, index: number) => expect(value).toBeCloseTo(menuPose.camera[key][index], 8));
+    expect(axisPose.selected).toBe(menuPose.selected);
+    const boxes = await page.locator('[data-geometry-axis]').evaluateAll(buttons => buttons.map(button => { const b = button.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; }));
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i], b = boxes[j]; expect(Math.max(0, Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)) * Math.max(0, Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y))).toBeLessThan(1);
+    }
+    if (view === 'top' || view === 'bottom') {
+      const box = (await page.locator('[data-geometry-format] canvas').boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 8 }); await page.mouse.up();
+      const after = await pose(page); expect(after.camera.position).not.toEqual(axisPose.camera.position); expect(after.camera.up).toEqual(axisPose.camera.up);
+    }
+  }
+  await page.setViewportSize({ width: 700, height: 500 }); await painted(page);
+  await page.locator('[data-geometry-axis="right"]').focus(); await page.keyboard.press('Enter'); expect((await pose(page)).selected).toBeDefined();
+  await page.getByRole('button', { name: 'Chinese', exact: true }).click(); await page.getByRole('button', { name: 'Dark theme', exact: true }).click();
+  await expect(page.getByRole('button', { name: '+X: 右视图', exact: true })).toBeVisible();
+  await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('geometry-axis-narrow-zh-dark.png') });
+});
+
+test('mesh outlines are lazy, retire on hide, restore the option and add no idle loop', async ({ page }, info) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await load(page); const before = await resources(page), initialReads = await reads(page);
+  const button = page.getByRole('button', { name: 'Model outlines', exact: true });
+  for (let i = 0; i < 2; i++) {
+    await button.click(); await expect(button).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(async () => (await resources(page)).workers).toBe(0); await painted(page);
+    expect((await resources(page)).buffers).toBeGreaterThan(before.buffers);
+    const calls = await page.evaluate(() => (window as any).geometryDrawCalls.calls); await page.waitForTimeout(250);
+    expect(await page.evaluate(() => (window as any).geometryDrawCalls.calls)).toBe(calls);
+    await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath(`geometry-outlines-${i}.png`) });
+    await button.click(); await expect(button).toHaveAttribute('aria-pressed', 'false'); await painted(page);
+    expect((await resources(page)).buffers).toBe(before.buffers);
+  }
+  await button.click(); await expect(button).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Hide delivery', exact: true }).click();
+  await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
+  await page.getByRole('button', { name: 'Show delivery', exact: true }).click(); await ready(page); await expect(button).toHaveAttribute('aria-pressed', 'true');
+  expect(await reads(page)).toBe(initialReads); expect(errors).toEqual([]);
+  await page.getByRole('button', { name: 'Close preview cube.glb', exact: true }).click();
+  await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
+});
+
+test('outline gate preserves a near-limit shaded STL and keeps original Download', async ({ page }) => {
+  await instrument(page); await page.route('**/test/fixtures/geometry/cube.stl', route => route.fulfill({ body: Buffer.from(denseBoxStl()), contentType: 'application/octet-stream' }));
+  await page.goto(`${origin}/test/fixtures/geometry.html`); await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click(); await ready(page);
+  await page.getByRole('button', { name: 'Model outlines', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Outlines are unavailable');
+  await expect(page.locator('[data-geometry-format] canvas')).toBeVisible(); await expect(page.getByRole('button', { name: 'Download artifact', exact: true })).toBeEnabled();
+  expect(await reads(page)).toBe(1); expect((await resources(page)).workers).toBe(0);
+  await page.getByRole('button', { name: 'Close preview cube.stl', exact: true }).click();
+  await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
+});
+
+test('curved outline capture contains silhouettes rather than a triangle wireframe', async ({ page }, info) => {
+  const geometry = new SphereGeometry(1, 48, 32).toNonIndexed(), positions = geometry.getAttribute('position');
+  const bytes = new Uint8Array(84 + positions.count / 3 * 50), data = new DataView(bytes.buffer); data.setUint32(80, positions.count / 3, true);
+  for (let i = 0; i < positions.count; i += 3) {
+    const normal = new Triangle(...[0, 1, 2].map(offset => new Vector3().fromBufferAttribute(positions, i + offset)) as [Vector3, Vector3, Vector3]).getNormal(new Vector3());
+    normal.toArray().forEach((value, axis) => data.setFloat32(84 + i / 3 * 50 + axis * 4, value, true));
+    for (let vertex = 0; vertex < 3; vertex++) for (let axis = 0; axis < 3; axis++) data.setFloat32(84 + i / 3 * 50 + 12 + vertex * 12 + axis * 4, positions.getComponent(i + vertex, axis), true);
+  }
+  await instrument(page); await page.route('**/test/fixtures/geometry/cube.stl', route => route.fulfill({ body: Buffer.from(bytes), contentType: 'application/octet-stream' }));
+  await page.goto(`${origin}/test/fixtures/geometry.html`); await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click(); await ready(page);
+  await page.getByRole('button', { name: 'Model outlines', exact: true }).click(); await expect(page.getByRole('button', { name: 'Model outlines', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('geometry-smooth-silhouette.png') });
+  writeFileSync(info.outputPath('outline-workload.json'), JSON.stringify({ triangles: positions.count / 3, resources: await resources(page), reads: await reads(page) }, null, 2));
+});
+
+for (const workload of ['planar-outline-envelope', 'cad-96-parts']) test(`two-pane outline resource and interaction capture: ${workload}`, async ({ page }, info) => {
+  await instrument(page); await page.goto(`${origin}/test/fixtures/geometry.html`);
+  // 96,800 triangles exercise 96.8% of the optional outline input ceiling,
+  // independently of whether the cooperative planar optimizer completes.
+  if (workload === 'planar-outline-envelope') await page.evaluate(() => (window as any).geometryContract.grid(220));
+  else await page.evaluate(async () => (window as any).geometryContract.replace('cube.step', [...new Uint8Array(await (await fetch('/test/fixtures/geometry/bracket-array.step')).arrayBuffer())]));
+  const name = workload === 'planar-outline-envelope' ? 'cube.stl' : 'cube.step';
+  await page.getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).click(); await ready(page);
+  await page.getByRole('button', { name: 'Preview cube.glb in sidebar', exact: true }).click(); await ready(page);
+  await page.getByRole('button', { name: 'Split preview', exact: true }).click();
+  await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(2); await expect.poll(async () => (await resources(page)).workers).toBe(0); await painted(page);
+  await page.evaluate(() => {
+    const before = window.Worker, outputs: { segments: number; bytes: number }[] = [];
+    window.Worker = class extends before {
+      constructor(url: string | URL, options?: WorkerOptions) { super(url, options); if (options?.name === 'rustx-outlines') this.addEventListener('message', event => {
+        if (event.data?.ok && Array.isArray(event.data.data)) outputs.push({ segments: event.data.data.reduce((sum: number, array: Float32Array) => sum + array.length / 20, 0), bytes: event.data.data.reduce((sum: number, array: Float32Array) => sum + array.byteLength, 0) });
+      }); }
+    }; Object.assign(window, { roadmapOutlineOutputs: outputs });
+  });
+  const format = workload === 'planar-outline-envelope' ? 'stl' : 'step', canvas = page.locator(`[data-geometry-format="${format}"] canvas`), box = (await canvas.boundingBox())!;
+  const capture = async () => {
+    await page.locator(`[data-geometry-format="${format}"]`).getByRole('button', { name: 'View angle', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Isometric', exact: true }).click(); await painted(page);
+    const samples: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const start = performance.now(); await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + 32, box.y + box.height / 2 + 12, { steps: 8 }); await page.mouse.up(); await painted(page); samples.push(performance.now() - start);
+    }
+    const sorted = [...samples].sort((a, b) => a - b); return { samples, p50: sorted[2], p95: sorted[4] };
+  };
+  const off = await capture(), beforeResources = await resources(page), preparation: number[] = [];
+  for (const panel of await page.locator('[data-geometry-format]').all()) {
+    const start = performance.now(), button = panel.getByRole('button', { name: 'Model outlines', exact: true });
+    await button.click(); await expect(button).toHaveAttribute('aria-pressed', 'true'); preparation.push(performance.now() - start);
+  }
+  await painted(page); const on = await capture(), withOutlines = await resources(page);
+  const browser = await canvas.evaluate((canvas: HTMLCanvasElement) => {
+    const gl = canvas.getContext('webgl2')!, debug = gl.getExtension('WEBGL_debug_renderer_info');
+    return { userAgent: navigator.userAgent, renderer: gl.getParameter(debug?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER), dpr: devicePixelRatio, viewport: [innerWidth, innerHeight], canvasCss: [canvas.clientWidth, canvas.clientHeight], canvasPixels: [canvas.width, canvas.height], antialias: gl.getContextAttributes()!.antialias };
+  });
+  const outputs = await page.evaluate(() => (window as any).roadmapOutlineOutputs as { segments: number; bytes: number }[]);
+  expect(outputs).toHaveLength(2); for (const output of outputs) { expect(output.segments).toBeLessThanOrEqual(65536); expect(output.bytes).toBeLessThanOrEqual(65536 * 80); }
+  expect(withOutlines.contexts).toBe(2); expect(withOutlines.workers).toBe(0);
+  expect(browser.antialias).toBe(true); expect(await reads(page)).toBe(2);
+  const draws = await page.evaluate(() => (window as any).geometryDrawCalls.calls); await page.waitForTimeout(1000); expect(await page.evaluate(() => (window as any).geometryDrawCalls.calls)).toBe(draws);
+  await page.getByRole('button', { name: `Close preview ${name}`, exact: true }).click(); await page.getByRole('button', { name: 'Close preview cube.glb', exact: true }).click();
+  await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
+  const result = { workload, source: workload === 'planar-outline-envelope' ? { vertices: 290400, triangles: 96800 } : { parts: 96 }, browser, method: 'Five whole eight-step drags plus two rAFs; Playwright forwarding; optional outlines off/on in the same two-pane page, resetting to Isometric before each phase. Preparation ends at the logical ready state, not GPU completion. This is not per-event presentation latency.', off, on, preparation, outputs, beforeResources, withOutlines, afterRetirement: await resources(page) };
+  writeFileSync(info.outputPath(`${workload}-outlines.json`), JSON.stringify(result, null, 2)); await info.attach(workload, { body: JSON.stringify(result, null, 2), contentType: 'application/json' });
+});
+
+test.describe('scaled coordinate navigation', () => {
+  test.use({ deviceScaleFactor: 2 });
+  test('uses CSS hit areas after DPR/resize and preserves selection', async ({ page }) => {
+    await load(page); await page.setViewportSize({ width: 700, height: 500 }); await painted(page);
+    await page.getByRole('button', { name: '+X: Right', exact: true }).click();
+    const state = await pose(page); expect(state.camera.position[0]).toBeGreaterThan(0);
+    expect(Math.abs(state.camera.position[1])).toBeLessThan(1e-6); expect(Math.abs(state.camera.position[2])).toBeLessThan(1e-6);
+    const scale = await page.locator('[data-geometry-format] canvas').evaluate(canvas => (canvas as HTMLCanvasElement).width / canvas.clientWidth); expect(scale).toBeCloseTo(2, 2);
+    await page.getByRole('button', { name: '−Z: Back', exact: true }).focus(); await page.keyboard.press('Enter'); expect((await pose(page)).camera.position[2]).toBeLessThan(0);
+    expect(await reads(page)).toBe(1);
+    await page.getByRole('button', { name: 'Close preview cube.glb', exact: true }).click();
+    await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
+  });
+});

@@ -44,6 +44,11 @@ One scene implementation supplies orbit/pan/zoom, fit, isometric and six standar
 views, an orientation axis indicator, part selection/highlighting and visibility.
 Fit recenters the model without changing the chosen viewing direction; the
 view-angle menu explicitly chooses a standard direction.
+Reset view restores the initial isometric framing without changing visibility.
+The six signed axis endpoints use the same standard-view path as the menu;
++X/-X select Right/Left, +Y/-Y Top/Bottom and +Z/-Z Front/Back. Their labelled
+DOM buttons support keyboard activation and stay separate from canvas picking
+and orbit gestures. Orientation icons supplement the localized menu names.
 Camera fitting centers a presentation-only parent. The admitted mesh surface,
 position-derived bounds and physical scale remain intact; preparation can remove
 redundant tessellation. Bounds are recomputed from admitted coordinates,
@@ -54,6 +59,18 @@ Its already-computed bounds are returned without repeating the attribute scan.
 Rejection disposes every loaded scene and preserves the original-file action.
 Camera, target, up vector, selected part
 and hidden IDs are bounded inert occurrence metadata tied to a content copy.
+Isolation, its one previous visibility snapshot and the outline preference use
+the same copy fence. Isolation shows the selected subtree and its ancestors,
+including a previously hidden selection. Choosing a different isolated part
+retains the original snapshot. Exit isolation restores that snapshot exactly;
+Show all clears both visibility overrides and isolation. Manual visibility edits
+while isolated do not overwrite the snapshot. Each action publishes and draws
+once, without cloning scene resources or rereading/tessellating the source.
+Focus selected frames its currently visible descendants in centered display
+coordinates while preserving direction. A selection behind a hidden ancestor
+cannot be focused. Small occurrences use their own framing distance, including
+after compatible restoration. Fit frames visible model content and preserves
+direction; Reset uses the full model bounds and the initial orientation.
 Hiding a selected part also hides its selection outline.
 Changing or restoring the up axis recreates OrbitControls through its public
 lifecycle so orbit gestures use that axis and old listeners are released.
@@ -82,7 +99,25 @@ It supports selection and visibility through the same scene
 owner. Its bounded list scrolls independently; Escape closes it and returns focus
 to its trigger. Format, dimensions and units occupy a compact footer. There is no
 permanent Refresh explanation; the existing document-header action remains.
+The structure panel also reports the selected occurrence (or whole model), its
+admitted and visible triangle counts, format/output units and a world-axis-aligned
+bounding box. Bounds include occurrence transforms and undo display centering.
+Hidden/occluded geometry is not an exact CAD solid classification or measurement.
+These properties update on selection/structure changes, not camera gestures.
 All product text is localized in the project's concise English/Chinese style.
+
+Optional model outlines are off initially. Exact-position adjacency is prepared
+lazily in a disposable Worker. Boundary/non-manifold edges and 30-degree creases
+are distinct from paired edges that can become view-dependent silhouettes.
+Coplanar tessellation edges are removed; smooth-surface candidates are gated by
+adjacent face orientation in the line shader, rather than drawn as wireframe.
+These are mesh-derived inspection lines, not exact CAD topology. The shaded
+surface, authored normals/materials, MSAA and source geometry remain unchanged.
+Lines inherit occurrence transforms and ancestor visibility; they do not
+participate in picking. There are no outline render targets or per-camera
+adjacency rebuilds. A failed/over-budget request leaves the shaded viewer and
+original source actions usable. Translucent/alpha-tested models currently keep
+their original shaded view because their silhouettes require texture-aware work.
 
 PBR materials use bounded, fixed studio lighting: a hemisphere light and two
 off-axis directional lights, with neutral tone mapping. No environment-map asset
@@ -170,6 +205,10 @@ The following are per visible body unless stated otherwise:
 | CAD WASM linear-memory maximum | 2 GiB, verified in both the shipped binary declaration and glue |
 | Aggregate renderer contexts / import Workers | 2 / 2, additionally restricted by existing visible-body ownership |
 | Submitted GPU frames / owned fences | 1 per visible body, 2 aggregate |
+| Optional outline unique input triangles / copied attributes and indices | 100,000 / 16 MiB per body |
+| Optional outline segments, including repeated occurrences / extra draws | 65,536 / 256 per body; 131,072 / 512 for two bodies |
+| Optional outline output vertex buffers | 5 MiB per body, 10 MiB aggregate (80 bytes per segment); at most two shared line materials per body |
+| Optional outline Worker deadline | 2 seconds, followed by termination; packing and receiver validation are cooperative |
 | Physical GLB imports, including retiring image decodes | 2; capacity remains occupied until all declared texture work settles |
 
 Original bytes stay with the content owner. Worker input is a separately charged
@@ -178,6 +217,15 @@ validated typed result buffers leave the Worker. Three.js adopts those arrays
 without another full attribute copy. Visible bodies do not allocate unused
 original-file Blob URLs. GLB loader-created image URLs/bitmaps are separately
 disposed with the scene.
+An outline Worker starts only after import has settled; a visible body owns at
+most one import or outline-preparation Worker at a time. Input buffers are
+separate copies; output backing buffers, values and segment/draw totals pass
+independent receiver checks. The adjacency job holds at most 300,000 edge records
+and 1,000,000 position-key records, plus typed input, normals, remapping and output
+arrays. Output construction can transiently hold two 5-MiB arrays. These are
+numeric admission bounds, not a JavaScript heap/RSS limit. Disable, hide,
+replacement, close or context loss terminate pending work and dispose all line
+buffers/materials. Default shaded-model limits remain unchanged.
 
 Optional indexing uses at most about 16 MiB of hash/remap/index workspace for
 one million source vertices, plus output arrays whose decoded size must decrease.
