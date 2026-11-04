@@ -825,7 +825,7 @@ fn configuration_bound_scalar_schema_refuses_the_previous_encoding_identity() {
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 93,
-            expected: 95
+            expected: 96
         })
     ));
 }
