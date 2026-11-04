@@ -123,7 +123,7 @@ export function CellContent({ item }: { item: InspectableDisplayItem }) {
     const kind = node.kind ? tx(`common:workflow.kind.${node.kind}`) : cellLabel(tx, 'workflow_node');
     return <span className={css.resultPreview} title={path}>
       <span className={`${css.resultRequest} ${css.workflowNodeRequest}`}>
-        <span className={css.workflowNodeKind} title={kind}>{kind}</span>
+        <span className={css.workflowNodeKind} data-node-kind={node.kind ?? undefined} title={kind}>{kind}</span>
         <span className={css.workflowNodeInput}><span className={css.toolCallNameTypeface}>{node.instance.node}</span>
           {node.instance.block.invocations.length > 0 && <span className={css.workflowPath}>[{node.instance.block.invocations.join('/')}]</span>}
           <span className={css.toolCallPayload}>{node.input_preview ?? tx(node.input_omitted ? 'trajectory:workflow.body-omitted' : 'trajectory:workflow.input-not-recorded')}</span>

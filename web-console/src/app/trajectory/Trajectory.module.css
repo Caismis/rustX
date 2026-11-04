@@ -47,18 +47,38 @@
 .record[data-workflow-node]:not([data-workflow-last]) .content::after { top: 50%; bottom: -1px; }
 .workflowNodeRequest { display: flex; align-items: center; gap: 8px; }
 .workflowNodeKind {
+  --workflow-node-accent: var(--dsw-alias-label-secondary);
   flex: none;
   box-sizing: border-box;
   width: 96px;
   padding: 1px 5px;
   border-radius: 4px;
   overflow: hidden;
-  color: var(--dsw-alias-label-secondary);
-  background: var(--dsw-alias-bg-layer-2);
+  color: color-mix(in srgb, var(--workflow-node-accent) 60%, var(--dsw-alias-label-primary));
+  background: color-mix(in srgb, var(--workflow-node-accent) 14%, var(--dsw-alias-bg-layer-1));
   font: 600 10px/17px var(--dsw-font-family);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Kind colors describe capability, independently of execution outcome. The
+   editor's green/purple/blue/cyan/amber families become quiet ledger tints;
+   mixing with the current foreground/background keeps both themes readable. */
+.workflowNodeKind[data-node-kind='start'],
+.workflowNodeKind[data-node-kind='review'] { --workflow-node-accent: #39ad74; }
+.workflowNodeKind[data-node-kind='agent'],
+.workflowNodeKind[data-node-kind='model'] { --workflow-node-accent: #7964ec; }
+.workflowNodeKind[data-node-kind='tool'] { --workflow-node-accent: var(--dsw-alias-state-warn-label); }
+.workflowNodeKind[data-node-kind='branch'],
+.workflowNodeKind[data-node-kind='classifier'] { --workflow-node-accent: #43a4c8; }
+.workflowNodeKind[data-node-kind='loop'],
+.workflowNodeKind[data-node-kind='iteration'],
+.workflowNodeKind[data-node-kind='loop_end'] { --workflow-node-accent: #159886; }
+.workflowNodeKind[data-node-kind='template'],
+.workflowNodeKind[data-node-kind='list'],
+.workflowNodeKind[data-node-kind='aggregate'],
+.workflowNodeKind[data-node-kind='assigner'] { --workflow-node-accent: var(--dsw-alias-state-business-primary); }
+.workflowNodeKind[data-node-kind='return'] { --workflow-node-accent: #e39625; }
+.workflowNodeKind[data-node-kind='block'] { --workflow-node-accent: #64748b; }
 .workflowNodeKind:where(:lang(zh)) { width: 60px; }
 .workflowNodeInput { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .workflowPath { margin-left: 6px; color: var(--dsw-alias-label-tertiary); }
@@ -520,7 +540,8 @@
   );
 }
 
-.kindTag[data-role-kind='tool'] {
+.kindTag[data-role-kind='tool'],
+.kindTag[data-role-kind='workflow'] {
   color: var(--dsw-alias-state-warn-label);
   background: var(--dsw-alias-state-warn-tertiary);
 }

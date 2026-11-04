@@ -5254,3 +5254,12 @@ Desktop/mobile light/dark browser checks cover English and Chinese, 121 paged
 visits, and real native workflow details. Browser plugin not available; checks
 use the repository's pinned Playwright container. No dependencies or native
 protocols change; affected source hashes are updated.
+
+Workflow Trace badge follow-up: the workflow role tag now shares Harness's
+existing Tool warning-label/tertiary colors. Native node kind tags use muted
+green (entry/review), purple (agent/model), cyan (routing/classification), teal
+(loops), blue (data transforms), orange/amber (tools/returns), and slate (blocks),
+following the rustX editor's kind families. Foreground/background mixes adapt
+to the active theme; unknown historical kinds remain neutral. Kind colors do
+not stand for an execution outcome. Native headers supply the kind directly;
+no current workflow definition or execution data is inferred or changed.

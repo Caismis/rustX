@@ -795,7 +795,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "83a629d2a9d944d87176e36ee31e3bad029aca9e95fd079a383fe8eb41f3873c",
+      "local_sha256": "f4d545b71eba0f6020a86b6a8eaa32dd78b3117088cc57dbe3d64a98f1d03828",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.module.css",
@@ -3450,7 +3450,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "8125249ee938a7ea6a3331dd252155018e94b9503e83022fc6f43a49ec4ae79d"
+      "local_sha256": "2d529959785b945235220888b7c2f86433a520908122c6e6797aa69580a73721"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
