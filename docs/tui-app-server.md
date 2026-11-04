@@ -138,7 +138,9 @@ its own lets nothing stale back in.
 configuration application. Native commits saved configuration at the Session's
 safe boundary; the TUI never confirms it. Following Pi's transient status, the
 footer shows `config preparing`, `config applies after current work`, `config
-failed · previous kept` or `config needs restart` only while that is true, and is
+failed · previous kept`, `config applied, not recorded · new work waits` (an
+uncertain commit: published but not recorded, so it never claims the previous
+configuration was kept) or `config needs restart` only while that is true, and is
 silent once applied. Following Codex's info events, each committed
 `configuration_applied` fact is one dim transcript notice naming the changed
 domains and bounded Tool and Skill names. `/model` uses `session/setModel`;

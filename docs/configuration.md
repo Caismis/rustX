@@ -866,16 +866,31 @@ capacity and the Model Catalog's Provider unit — carry their own component
 revision with their values and provenance, so a source file that also holds
 unrelated, not yet applied changes never makes those changes look committed.
 
-Every commit that changes the Session binding records exactly one typed
+Every commit that changes what future work observes records exactly one typed
 `configuration_applied` fact in the Event Journal: its reason (source, model
 selection or reallocation), the previous and new binding revisions, the changed
-domains, and bounded added/removed/changed Tool and Skill names (16 names each,
-with exact totals). The fact is a transcript row and a Trace anchor, released in
-Journal order; it never enters model context. A commit never cancels work, edits
-history, compacts or invokes a model. A durable append failure is an absorbing
-`record_configuration_change` durability failure and reports the commit as
-uncertain. A `ready` unit is prepared and waiting for that boundary; it is not a
-committed binding.
+domains, and bounded added/removed/changed Tool and Skill names (at most 16 names
+and 1 KiB of encoded names per list, with exact totals). A Tool changes when its
+definition or the executable binding of the server it runs on changes, and a
+Skill when its content version changes, even if the model-visible declaration is
+byte-identical. The independently published execution-policy unit records its own
+fact (an approval-mode change, for example) without rebinding the Session, so both
+of its revisions are the same. The fact retains the exact effective instructions
+the commit installed, readable in bounded ranges through `content_read` with the
+row's `instructions` reference, so a configuration no request ever used stays
+inspectable. The fact is a transcript row and a Trace anchor, counted in the
+Trace total and released in Journal order; it never enters model context. A
+commit never cancels work, edits history, compacts or invokes a model. A durable
+append failure is an absorbing `record_configuration_change` durability failure
+and reports the commit as uncertain: the configuration is published but not
+recorded, and new work waits for recovery. A `ready` unit is prepared and waiting
+for that boundary; it is not a committed binding. While a ready capability
+candidate waits for a concurrent lifecycle commit to release the capability
+boundary, Attempt admission waits with it and resumes on that release, so the
+next Attempt captures the candidate. A runtime that drained itself in place
+prepares nothing: its application defers to the next allocation like a cold
+Session, and attaching a client to the runtime that already holds a ready
+candidate keeps it.
 
 An independent Attempt captures complete execution configuration once. Requests,
 Steps, retries, recovery, Tool batches, Subagents and Workflow children inherit
@@ -948,9 +963,14 @@ path as a native write. Coverage is the User document's directory, for that one
 file; the User resource root `~/rustx/.agents` for `mcp.toml`, with its
 `agents`, `skills`, `tools` and `workflows` directories recursively (its parent
 until it exists); each Workspace that holds source authority or a Session's
-configuration, for `rustx.toml` and root `*.md` guidance; and that Workspace's
-`.agents` in the same way. Anything else under `.agents`, such as Session
-uploads, is neither watched nor routed. A notification is only invalidation: it names the owning source
+configuration, for `rustx.toml`, root `*.md` and the guidance files; and that
+Workspace's `.agents` in the same way. The guidance files are exactly the
+loader's (`AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`,
+`CLAUDE.MD`), at a Workspace root and at the User resource root. Anything else
+under `.agents`, such as Session uploads, is neither watched nor routed. A
+notification for a watched directory or its ancestor may mean it was replaced at
+the same path, so those watches are registered again, and only a watch that
+actually registered counts as active. A notification is only invalidation: it names the owning source
 target, notifications coalesce into one capture per target, and the capture
 rereads, fences and validates the files exactly as after `configuration/sourceWrite`.
 An unchanged healthy source is a no-op. Unrelated directories are never watched,

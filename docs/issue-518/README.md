@@ -37,24 +37,42 @@ Server protocol/connection layer.
   with the staged candidate; a superseded V2 can never commit after V3. A
   candidate whose baseline binding or owner moved is superseded and prepared
   again. Model selection keeps its own fence (`model_selection_conflict`).
-- **Busy capability grant.** Keeps the candidate staged, defers admission and
-  wakes on `commit_available()` outside the lock.
+- **Busy capability grant.** Keeps the candidate staged and holds back the
+  admission (independent or scheduled) that reached it; the worker wakes on
+  `commit_available()` outside the lock, commits, and resumes exactly that
+  admission with no further message.
+- **Closed allocation.** A runtime that drained itself in place (failed
+  physical reclamation) is not offered for preparation: its application defers
+  to the next allocation like a cold Session, finitely. Attaching a client to
+  the allocation that already holds a Ready candidate keeps it; only a
+  different allocation re-prepares (`Reallocation`).
 - **Frozen.** An admitted Attempt and its descendants keep their snapshot,
   fencing and leases; uncommitted capability candidates retire through their
   own owner.
-- **Evidence.** Each binding change appends one `RuntimeEvent::ConfigurationApplied
+- **Evidence.** Each effective change appends one `RuntimeEvent::ConfigurationApplied
   { change }` with its own transcript position (no Attempt/Turn), released in
   Journal order to the Runtime Client (`configuration_applied`), the transcript
-  read domain and Trace (`TraceKind::Configuration`). No effective change, no
-  fact. A failed append is an absorbing `record_configuration_change`
-  durability failure and reports the commit `uncertain`.
+  read domain and Trace (`TraceKind::Configuration`, counted in the Trace
+  total by the same `TraceFactKind::is_anchor` the queries use). A Tool
+  compares by definition and server binding, a Skill by content version. The
+  independently published execution-policy unit records its own fact (equal
+  binding revisions). The same transaction retains the exact effective
+  instructions as `ContentSource::ConfigurationInstructions`, read through
+  `content_read` from the row (`instructions`) or the Trace record
+  (`configuration_instructions`). Name lists are bounded by count (16) and
+  encoded bytes (1 KiB each). No effective change, no fact. A failed append is
+  an absorbing `record_configuration_change` durability failure and reports the
+  commit `uncertain`; Web and TUI say it is published but not recorded.
 - **External edits.** A bounded `notify` watcher routes changed paths to their
   owning source target and feeds `observe_source_change`, the same capture,
   fence and validation path as a native write. Coverage: User document
-  directory (that file); `~/rustx/.agents` for `mcp.toml` with `agents`,
-  `skills`, `tools` and `workflows` recursively; each Workspace with source
-  authority or a Session scope (`rustx.toml`, root `*.md`) and its `.agents`
-  alike. Session uploads under `.agents/uploads` are never watched (the full
+  directory (that file); `~/rustx/.agents` for `mcp.toml` and the loader's
+  guidance files, with `agents`, `skills`, `tools` and `workflows`
+  recursively; each Workspace with source authority or a Session scope
+  (`rustx.toml`, root `*.md`, the guidance files) and its `.agents` alike. A
+  notification at or above a watched directory re-registers its watches (a
+  directory replaced at the same path), and only a watch that registered is
+  active. Session uploads under `.agents/uploads` are never watched (the full
   browser suite caught an early version that did).
 
 ## Removed
@@ -74,6 +92,13 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | No client drives the commit; every resident Session commits | `automatic_commit::t04_every_resident_session_commits_and_t09_policy_and_healthy_rescan_are_noops` |
 | Admitted Attempt keeps its capture; next independent Attempt uses the successor | `automatic_commit::t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture`, `issue383_disabled_extension_keeps_admitted_configuration_until_settlement` |
 | Commit linearizes before a racing (queued) independent admission | `automatic_commit::t11_ready_candidate_commits_before_racing_independent_admission` |
+| Busy capability boundary defers admission; release commits and admits once with the successor, no new message | `automatic_commit::busy_capability_commit_defers_admission_until_the_boundary_releases` |
+| A runtime drained in place defers finitely; other Sessions commit | `automatic_commit::a_runtime_closed_in_place_defers_its_application_and_others_still_commit` |
+| Re-attaching the same allocation keeps its Ready candidate (one preparation, one Source fact) | `automatic_commit::reattaching_the_same_runtime_keeps_its_ready_candidate` |
+| Skill body-only and Tool implementation-only changes record one `changed` fact | `automatic_commit::body_only_skill_edit_records_one_changed_fact`, `mcp_readiness::implementation_only_tool_change_records_one_changed_fact` |
+| Approval-mode unit records its own fact without rebinding | `automatic_commit::t04_every_resident_session_commits_and_t09_policy_and_healthy_rescan_are_noops` |
+| Two unused commits each keep readable instructions; wrong refs refused | `configuration::tests::configuration_change_fact_is_a_complete_transcript_row`; real server `test/e2e/trajectory-integration.spec.ts` (read before first use, Inspector) |
+| Oversized/escaped names stay within the header; Trace total counts configuration (alone and mixed) | `configuration_commit::tests::name_lists_are_bounded_by_encoded_bytes`, `trace::tests::header_tests::configuration_records_are_counted_and_unbounded_names_stay_readable` |
 | Real background owner defers; its settlement alone commits | `automatic_commit::t11_background_ownership_defers_commit_until_it_settles` |
 | Subagent owner defers; settlement commits exactly once; stale baseline superseded; no fact without change | `configuration::tests::subagent_settlement_commits_the_current_staged_configuration` |
 | V2 superseded by V3; failed latest never revives V2 | `automatic_commit::t11_newer_desire_supersedes_a_staged_candidate_and_rescan_does_not_reprepare`, `t06_offside_preparation_allows_admission_and_t07_new_failure_supersedes_old_candidate`, `configuration_commit::tests::a_superseded_desire_is_never_current_again` |
@@ -82,19 +107,23 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | Change fact is a Session-level transcript row; failed append leaves nothing | `configuration::tests::configuration_change_fact_is_a_complete_transcript_row` |
 | Same-name change is `changed`; bounded names with exact totals | `configuration_commit::tests::same_name_definition_change_is_changed_not_removed_and_added`, `name_lists_are_bounded_with_exact_totals` |
 | External edit → same native path, bounded, coalesced; project files ignored | `automatic_commit::external_workspace_edit_commits_through_the_bounded_source_watch`, `source_watch::tests::*` |
+| Every loader guidance file is watched (User `AGENTS.md`, Workspace `AGENTS.MD`) | `automatic_commit::external_guidance_edits_commit_through_the_source_watch` |
+| A replaced Skill directory is re-watched; a later nested edit commits | `automatic_commit::a_replaced_skill_directory_keeps_feeding_the_source_watch`, `source_watch::tests::a_notification_reregisters_the_watches_at_or_below_it` |
 | Web Chat hidden rows; single/multiple Tool rows | `web-console/test/configuration-change-row.test.tsx`; real server `test/e2e/trajectory-integration.spec.ts` |
 | Web banner: preparing/waiting/failed/uncertain/restart; silent success; no rereads on stream | `web-console/test/session-configuration.test.tsx`, `test/e2e/settings-presentation.spec.ts` |
 | Real App Server: busy boundary, automatic commit, frozen historical Trace | `test/e2e/trajectory-integration.spec.ts`, `test/e2e/settings-ownership.spec.ts` |
-| TUI notice from live event and paged row; footer status only while pending | `tui/test/configuration-notice.test.ts`, `tui/test/status.test.ts` |
+| TUI notice from live event and paged row; footer status only while pending; uncertain never claims "previous kept" (wide and compact) | `tui/test/configuration-notice.test.ts`, `tui/test/status.test.ts` |
 
 ## Cost
 
-One Journal row and one transcript reference per actual commit, nothing per
-file notification, preparation tick or stream delta. Encoded change fact:
-330 bytes for the browser scenario (instructions + one removed Tool); at most
-6,862 bytes with every domain and six full 16-name lists of 64-byte names,
-below the 16,384-byte header bound. No prompt or schema is copied; Trace and
-transcript reuse the existing bounded reads. Streaming 300 deltas performs no
+One Journal row, one transcript reference and one retained copy of the
+effective instructions per actual commit, nothing per file notification,
+preparation tick or stream delta. Each name list is capped at 16 names and
+1 KiB of encoded names whatever a source names its Tools, so a change fact
+stays under 8 KiB (asserted), below the 16,384-byte header bound. The
+instructions are stored once per commit in the existing content segments and
+read in bounded 64 KiB ranges; no Tool schema is copied. Trace and transcript
+reuse the existing bounded reads. Streaming 300 deltas performs no
 configuration read (`session-configuration.test.tsx` C18).
 
 ## Evidence
@@ -118,8 +147,8 @@ TUI notice (deterministic render, `tui/test/configuration-notice.test.ts`):
 ## Limitations
 
 - The uncertain path is proven at the store boundary (a failed append records
-  nothing) and by the absorbing durability failure it maps to; no test injects
-  that fault through a live commit.
+  nothing, instructions included) and by the absorbing durability failure it
+  maps to; no test injects that fault through a live commit.
 - Regenerating `incremental-native.json` from current native code exposes a
   pre-existing gap unrelated to this issue: the host-materialized
   `auxiliary.audit` frontier is absent from `projection_transition` metadata.

@@ -1896,22 +1896,32 @@ Attempt, manual compaction or manual tail, no durability failure, and no
 background or Subagent work still holding the old configuration. Pending inbox,
 Goal continuation and recovered continuation do not block it, so the commit
 lands before their next Attempt captures. A Busy capability grant keeps the
-candidate staged and wakes on the commit frontier outside the lock.
+candidate staged, holds back the admission that reached it, and wakes on the
+commit frontier outside the lock to commit and resume exactly that admission.
 
 ```text
 ConfigurationApplication.units.*   preparing → ready → applied | failed | uncertain
                                    (ready = prepared, waiting for the safe boundary)
-RuntimeEvent::ConfigurationApplied one Journal fact per binding change
+RuntimeEvent::ConfigurationApplied one Journal fact per effective change
 RuntimeClientEvent                 configuration_applied { item, transcript_cursor }
-RuntimeClientTranscriptItem        configuration_applied { event_id, timestamp, change }
-TraceRecord.kind = configuration   with TraceRecord.configuration = change
+RuntimeClientTranscriptItem        configuration_applied { event_id, timestamp, change, instructions }
+TraceRecord.kind = configuration   with TraceRecord.configuration = change,
+                                   TraceRecord.configuration_instructions = instructions
+ContentSource                      configuration_instructions { journal_sequence }
 ```
 
 `ConfigurationChange` carries the reason (`source`, `model_selection`,
-`reallocation`), previous and new binding revisions, the changed domains
-(`instructions`, `context_policy`, `tools`, `skills`, `model`, `approval_mode`)
-and bounded Tool and Skill names: at most 16 per added/removed/changed list,
-each with its exact total.
+`reallocation`), previous and new binding revisions (equal for the
+independently published execution-policy unit, which never rebinds), the
+changed domains (`instructions`, `context_policy`, `tools`, `skills`, `model`,
+`approval_mode`), bounded Tool and Skill names — at most 16 and 1 KiB of
+encoded names per added/removed/changed list, each with its exact total — and
+`instructions_bytes`. A same-name Tool whose definition or server binding
+changed, and a same-name Skill whose content version changed, is `changed`.
+`instructions` is a `ContentRef` to the exact effective instructions the commit
+installed, retained with the fact and read through `conversation/contentRead`
+(or the history equivalent) within the reader's cut; a Trace configuration
+record opens it through its detail cut.
 
 Invariants:
 
@@ -1920,10 +1930,11 @@ Invariants:
 - Each scope's desired application identity is an epoch fence: a superseded
   candidate never commits after a newer one, and a candidate whose baseline or
   owner moved is superseded and prepared again.
-- Every committed binding change has exactly one durable `configuration_applied`
-  fact, released to the transcript and Trace in Journal order. A failed append
-  is an absorbing `record_configuration_change` durability failure and leaves
-  the unit `uncertain`.
+- Every committed effective change has exactly one durable
+  `configuration_applied` fact, released to the transcript and Trace in Journal
+  order and counted in the Trace total. A failed append is an absorbing
+  `record_configuration_change` durability failure and leaves the unit
+  `uncertain`: published, not recorded, with new work fenced.
 - The fact never enters model context. Web Chat shows only Tool additions and
   removals from it; instruction, context, Skill and same-name Tool changes stay
   in Trace and inspection.
