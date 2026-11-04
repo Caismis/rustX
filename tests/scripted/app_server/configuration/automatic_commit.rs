@@ -2220,6 +2220,90 @@ async fn a_rescan_recaptures_sources_whose_notifications_were_lost() {
     .await;
 }
 
+/// On a case-folding volume a notification names a source in the case it
+/// was created in, not the fixed name the loaders open: an ordinary edit of
+/// `.agents/Skills/guide/SKILL.md`, the only notification, still commits the
+/// new Skill version with exactly one fact.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_case_variant_notification_commits_the_source_the_loaders_read() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let agents = fixture.workspaces[0].join(".agents");
+        let skill = |description: &str| {
+            let directory = agents.join("skills/guide");
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join("SKILL.md"),
+                format!("---\nname: guide\ndescription: {description}\n---\nbody\n"),
+            )
+            .unwrap();
+        };
+        skill("Version A");
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        select_all_skills(&fixture).await;
+        let description = |runtime: &crate::runtime::ConversationRuntime| {
+            runtime
+                .runtime_resources()
+                .capability()
+                .model_skill_entries()
+                .iter()
+                .map(|entry| entry.description.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(description(&runtime), ["Version A"]);
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        let facts = configuration_changes(&runtime).len();
+        // Edited before the watch starts: the injected event is the only one.
+        skill("Version B");
+        fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_folds_case = true;
+        let captured = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_captured
+            .clone();
+        captured.arm();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let observe = async {
+            let edit =
+                notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
+                    .add_path(agents.join("Skills/guide/SKILL.md"));
+            while !fixture.manager.notify_source_watch(edit.clone()) {
+                tokio::task::yield_now().await;
+            }
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(
+                description(&runtime),
+                ["Version B"],
+                "the edit was not routed"
+            );
+            assert_eq!(configuration_changes(&runtime).len(), facts + 1);
+            captured.release();
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
+        watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
 /// An execution-policy update that really published after an earlier
 /// unrecorded commit is retained: it survives unload/load, and the healthy
 /// replacement allocation recovers the Session's application view.

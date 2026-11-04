@@ -123,7 +123,12 @@ Server protocol/connection layer.
   landing after that capture is always notified. A platform rescan (events
   may have been lost, such as an overflowed inotify queue) names no path: it
   re-registers every watch and recaptures every known source target, and
-  unchanged sources stay no-ops. Session uploads under
+  unchanged sources stay no-ops. A notification path is respelled with the
+  fixed name the loaders open (a source entry, guidance file or document)
+  when the volume folds case, probed on the containing directory so removals
+  route too: an edit under `.agents/Skills` on such a volume is routed and
+  invalidated as `.agents/skills`; on a case-sensitive volume it is not a
+  source. Session uploads under
   `.agents/uploads` are never watched (the full browser suite caught an early
   version that did).
 
@@ -168,6 +173,7 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | A new shared Skill environment root is `execution_policy` with every authorized entry, Tool and Skill unchanged; no path is retained | `automatic_commit::a_new_skill_environment_is_execution_policy` |
 | Session uploads and unread `.agents` entries leave the resource revision unchanged | `resource_directory::tests::only_configuration_entries_change_the_revision` |
 | The revision follows the loaders' fixed paths: `Skills` counts on a case-insensitive volume and not on a case-sensitive one | `resource_directory::case_insensitive_tests::a_case_variant_the_loaders_open_is_configuration` (macOS), `resource_directory::tests::a_case_variant_the_loaders_never_open_is_not_configuration` |
+| On a case-folding volume an ordinary notification for `.agents/Skills/…`, the only one, commits the Skill version the loaders read with exactly one fact; the same spellings route only where the volume folds case | `automatic_commit::a_case_variant_notification_commits_the_source_the_loaders_read`, `source_watch::tests::a_case_variant_routes_only_where_the_volume_folds_case`, `source_watch::tests::a_case_sensitive_volume_does_not_fold_case`, `source_watch::case_insensitive_tests::a_case_variant_the_loaders_read_routes_to_its_workspace` (macOS) |
 | A platform rescan without a path recaptures a Workspace whose notifications were lost; a repeated rescan records nothing | `automatic_commit::a_rescan_recaptures_sources_whose_notifications_were_lost` |
 | A parameter change of a model only a direct Workflow Model node names is one Model fact; an unselected model records nothing | `automatic_commit::a_workflow_model_node_is_a_model_that_runs` |
 | An environment value change changes `subagent` and execution policy; the catalog names the variable, never its value | `automatic_commit::an_environment_value_change_is_recorded_without_its_value` |

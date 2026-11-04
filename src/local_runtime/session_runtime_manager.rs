@@ -475,6 +475,9 @@ struct RegistryState {
     source_watch_captured: Arc<tests::AsyncGate>,
     #[cfg(test)]
     source_watch_signals: Option<tokio::sync::mpsc::UnboundedSender<source_watch::Signal>>,
+    /// Routes the source watch as on a case-folding volume.
+    #[cfg(test)]
+    source_watch_folds_case: bool,
     #[cfg(test)]
     configuration_settlement: Arc<tests::AsyncGate>,
     #[cfg(test)]
@@ -770,6 +773,8 @@ impl SessionRuntimeManager {
                 source_watch_captured: Arc::default(),
                 #[cfg(test)]
                 source_watch_signals: None,
+                #[cfg(test)]
+                source_watch_folds_case: false,
                 #[cfg(test)]
                 configuration_settlement: Arc::default(),
                 #[cfg(test)]

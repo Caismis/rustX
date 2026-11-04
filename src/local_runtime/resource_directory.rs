@@ -279,10 +279,6 @@ mod tests {
 }
 
 #[cfg(all(test, target_os = "macos"))]
-#[path = "../../tests/support/case_insensitive_volume.rs"]
-mod case_insensitive_volume;
-
-#[cfg(all(test, target_os = "macos"))]
 mod case_insensitive_tests {
     use super::*;
 
@@ -291,7 +287,7 @@ mod case_insensitive_tests {
     /// revision exactly as it changes what they load.
     #[test]
     fn a_case_variant_the_loaders_open_is_configuration() {
-        let volume = super::case_insensitive_volume::CaseInsensitiveVolume::new();
+        let volume = crate::local_runtime::case_insensitive_volume::CaseInsensitiveVolume::new();
         let root = volume.path().join(".agents");
         std::fs::create_dir_all(root.join("Skills/guide")).unwrap();
         std::fs::write(root.join("Skills/guide/SKILL.md"), b"A").unwrap();
