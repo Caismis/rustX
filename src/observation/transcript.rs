@@ -144,7 +144,8 @@ pub struct RuntimeClientTranscriptConfigurationApplied {
     /// The exact effective instructions the commit installed, read in
     /// bounded ranges through `content_read`.
     pub instructions: super::content::ContentRef,
-    /// The JSON catalog of the Tools and Skills the commit added or changed,
+    /// The JSON catalog of the Tools and Skills the commit affected (before
+    /// and after),
     /// read in bounded ranges through `content_read`.
     pub catalog: super::content::ContentRef,
 }

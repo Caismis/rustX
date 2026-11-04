@@ -144,6 +144,9 @@ impl ConfigurationApplications {
                 }
                 UnitApplication::Applied
             });
+            if let Some(runtime) = &runtime {
+                state.attach(scope, runtime);
+            }
             state.publish(
                 scope,
                 identity,
@@ -163,7 +166,12 @@ impl ConfigurationApplications {
                 },
             );
             for unit in [ApplyUnit::ExecutionPolicy, ApplyUnit::SharedCapacity] {
-                if state.scopes[scope].units[&unit] != UnitApplication::Applied {
+                // A published unit is retained whether or not its change fact
+                // was recorded: the runtime already runs it.
+                if !matches!(
+                    state.scopes[scope].units[&unit],
+                    UnitApplication::Applied | UnitApplication::Uncertain { .. }
+                ) {
                     continue;
                 }
                 let mut bindings = manager
@@ -585,6 +593,7 @@ impl ConfigurationApplications {
         state
             .staged_in
             .insert(scope.to_owned(), (prepared.owner.clone(), identity.clone()));
+        state.attach(scope, &runtime);
         let bindings_owner = manager.clone();
         let retain_session = session.clone();
         let owner = self.clone();
@@ -610,6 +619,8 @@ impl ConfigurationApplications {
             }),
             settled: Box::new(move |outcome| {
                 Box::pin(async move {
+                    #[cfg(test)]
+                    settled_manager.park_configuration_settlement().await;
                     owner.staged_settled(
                         &settled_manager,
                         &settled_scope,
@@ -643,6 +654,12 @@ impl ConfigurationApplications {
             state.staged_in.remove(scope);
         }
         if !state.current(scope, identity) {
+            // A superseded application's commit may still have been published
+            // unrecorded; views read that from the allocation, so they change.
+            if matches!(outcome, StagedOutcome::Uncertain { .. }) {
+                state.touch(scope);
+                self.notify(&state);
+            }
             return;
         }
         let unit_outcome = match outcome {

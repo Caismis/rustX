@@ -127,10 +127,10 @@ pub(crate) struct ApplicationState {
     // the application that staged it; only that application's settlement
     // clears it.
     pub(crate) staged_in: BTreeMap<String, (Arc<()>, ApplicationIdentity)>,
-    // Scopes whose runtime published a commit it could not record. No later
-    // application of the scope reports success until the resident runtime
-    // itself reports no unrecorded commit.
-    unrecorded: BTreeMap<String, String>,
+    // The native authority of each scope's attached runtime allocation over
+    // unrecorded commits. Views read it directly, so an application never
+    // reports success over a commit that allocation could not record.
+    health: BTreeMap<String, crate::runtime::conversation_runtime::ConfigurationHealth>,
 }
 
 #[cfg(test)]
@@ -195,9 +195,7 @@ impl ConfigurationApplications {
         runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     ) -> bool {
         let mut state = self.lock();
-        if runtime.unrecorded_configuration().is_none() {
-            state.unrecorded.remove(scope);
-        }
+        state.attach(scope, runtime);
         // A candidate staged in a replaced runtime can never commit into its
         // successor; the current input is prepared again for this allocation.
         // Attaching the allocation that already holds it changes nothing.
@@ -244,7 +242,7 @@ impl ConfigurationApplications {
         state.deferred.remove(scope);
         state.reasons.remove(scope);
         state.staged_in.remove(scope);
-        state.unrecorded.remove(scope);
+        state.health.remove(scope);
         if let Some(fence) = state.fences.remove(scope) {
             fence.store(0, Ordering::SeqCst);
         }
@@ -793,7 +791,69 @@ impl ApplicationState {
 
     fn owned(&self, mut view: ConfigurationApplication) -> ConfigurationApplication {
         view.sources = self.source_owners(&view.scope);
+        // The attached allocation's own failure, not an application's
+        // settlement, decides whether its commits are uncertain.
+        if let Some(diagnostic) = self
+            .health
+            .get(&view.scope)
+            .and_then(crate::runtime::conversation_runtime::ConfigurationHealth::unrecorded)
+        {
+            for unit in view.units.values_mut() {
+                if *unit == UnitApplication::Applied {
+                    *unit = UnitApplication::Uncertain {
+                        diagnostic: diagnostic.clone(),
+                    };
+                }
+            }
+        }
         view
+    }
+
+    /// Attach the allocation whose authority decides this scope's
+    /// uncertainty. A replacement that recorded nothing uncertain recovers
+    /// the scope: units its predecessor left uncertain are applied there,
+    /// since it runs the generation they published.
+    pub(crate) fn attach(
+        &mut self,
+        scope: &str,
+        runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+    ) {
+        let health = runtime.configuration_health();
+        if self
+            .health
+            .get(scope)
+            .is_some_and(|attached| attached.same_allocation(&health))
+        {
+            return;
+        }
+        let healthy = health.unrecorded().is_none();
+        self.health.insert(scope.to_owned(), health);
+        self.version = self
+            .version
+            .checked_add(1)
+            .expect("application version exhausted");
+        if let Some(view) = self.scopes.get_mut(scope) {
+            view.version = self.version;
+            if healthy {
+                for unit in view.units.values_mut() {
+                    if matches!(unit, UnitApplication::Uncertain { .. }) {
+                        *unit = UnitApplication::Applied;
+                    }
+                }
+            }
+        }
+    }
+
+    /// A late settlement reported that this scope's allocation could not
+    /// record a commit: views read that failure now, so they change.
+    pub(crate) fn touch(&mut self, scope: &str) {
+        self.version = self
+            .version
+            .checked_add(1)
+            .expect("application version exhausted");
+        if let Some(view) = self.scopes.get_mut(scope) {
+            view.version = self.version;
+        }
     }
 
     pub(crate) fn next_view(
@@ -823,20 +883,7 @@ impl ApplicationState {
         if !self.current(scope, identity) {
             return false;
         }
-        let mut outcome = commit();
-        match &outcome {
-            UnitApplication::Uncertain { diagnostic } => {
-                self.unrecorded.insert(scope.to_owned(), diagnostic.clone());
-            }
-            UnitApplication::Applied => {
-                if let Some(diagnostic) = self.unrecorded.get(scope) {
-                    outcome = UnitApplication::Uncertain {
-                        diagnostic: diagnostic.clone(),
-                    };
-                }
-            }
-            _ => {}
-        }
+        let outcome = commit();
         self.version = self
             .version
             .checked_add(1)

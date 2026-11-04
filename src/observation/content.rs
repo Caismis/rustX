@@ -115,7 +115,8 @@ pub enum ContentSource {
         journal_sequence: u64,
     },
     /// The JSON catalog of the Tools and Skills one Session configuration
-    /// commit added or changed, retained with its Journal change fact.
+    /// commit added, changed or removed, with their before and after states,
+    /// retained with its Journal change fact.
     ConfigurationCatalog {
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         journal_sequence: u64,

@@ -1258,10 +1258,12 @@ async fn body_only_skill_edit_records_one_changed_fact() {
             .map(|catalog| {
                 assert!(catalog["tools"].as_array().unwrap().is_empty(), "{catalog}");
                 let [skill] = catalog["skills"].as_array().unwrap().as_slice() else {
-                    panic!("one installed Skill: {catalog}");
+                    panic!("one affected Skill: {catalog}");
                 };
-                assert_eq!(skill["entry"]["name"], "guide");
-                skill["version_id"].as_str().unwrap().to_owned()
+                assert_eq!(skill["name"], "guide");
+                assert_eq!(skill["change"], "changed");
+                assert_ne!(skill["before"]["version_id"], skill["after"]["version_id"]);
+                skill["after"]["version_id"].as_str().unwrap().to_owned()
             })
             .collect::<Vec<_>>();
         assert_eq!(versions.len(), 2);
@@ -1347,7 +1349,7 @@ async fn workflow_program_only_change_records_one_changed_fact() {
             .pop()
             .unwrap();
         assert_eq!(
-            catalog["tools"][0]["workflow"]["program_digest"],
+            catalog["tools"][0]["after"]["workflow"]["program_digest"],
             identity(&runtime).program_digest.as_str()
         );
         let mut done = SettlementReceiptWait::capture(&runtime);
@@ -1358,6 +1360,176 @@ async fn workflow_program_only_change_records_one_changed_fact() {
         let requests = fixture.provider.request_bodies();
         assert!(requests.iter().any(|body| body.contains("Review task B")), "{requests:?}");
         assert!(!requests.iter().any(|body| body.contains("Review task A")));
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// A Tool runs the Named Agents it admits, so an instructions-only edit of
+/// an Agent the `review` Workflow froze and `subagent` delegates to changes
+/// both Tools, and the next Workflow call runs the edited Agent; an edit of
+/// an Agent nothing admits records nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn named_agent_edits_change_exactly_the_tools_that_run_them() {
+    bounded(async {
+        let fixture = Fixture::with_tool(Some("review")).await;
+        let id = fixture.sessions[0].id.clone();
+        let workspace = fixture.workspaces[0].clone();
+        let agents = workspace.join(".agents/agents");
+        let workflow = workspace.join(".agents/workflows/review.yaml");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+        let profile = |instructions: &str| {
+            format!("description='Review'\ninstructions='{instructions}'\n")
+        };
+        std::fs::write(agents.join("reviewer.toml"), profile("reviewer A")).unwrap();
+        std::fs::write(agents.join("unused.toml"), profile("unused A")).unwrap();
+        let schema = serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
+        std::fs::write(&workflow, serde_json::to_string(&serde_json::json!({
+            "description": "Review",
+            "block": {"input": schema, "nodes": {"workflow_start": {"type": "start"},
+                "agent": {"type": "agent", "profile": "reviewer", "task": [{"type": "literal", "value": "Review"}], "output": {"type": "json_schema", "schema": schema}},
+                "done": {"type": "return", "outputs": []}},
+                "edges": [{"from": "workflow_start", "to": "agent"}, {"from": "agent", "to": "done"}]}
+        })).unwrap()).unwrap();
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[agent]\nworkflows=['review']\nagents=['reviewer']\n",
+        )
+        .unwrap();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let declarations = |runtime: &crate::runtime::ConversationRuntime| {
+            runtime
+                .runtime_resources()
+                .capability()
+                .tool_registry()
+                .model_definitions()
+        };
+        let before = declarations(&runtime);
+        let reconcile = || async {
+            fixture
+                .manager
+                .reconcile_configuration(
+                    &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                        directory: workspace.clone(),
+                    },
+                )
+                .await
+                .unwrap();
+            applied(&fixture, 0).await;
+        };
+        let facts = configuration_changes(&runtime).len();
+        std::fs::write(agents.join("unused.toml"), profile("unused B")).unwrap();
+        reconcile().await;
+        assert_eq!(configuration_changes(&runtime).len(), facts, "nothing runs unused");
+        std::fs::write(agents.join("reviewer.toml"), profile("reviewer B")).unwrap();
+        reconcile().await;
+        assert_eq!(declarations(&runtime), before, "declarations are unchanged");
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 1, "{changes:?}");
+        assert_eq!(changes[facts].tools.changed.names, ["review", "subagent"]);
+        assert!(changes[facts].tools.added.is_empty() && changes[facts].tools.removed.is_empty());
+        let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
+            .pop()
+            .unwrap();
+        for tool in catalog["tools"].as_array().unwrap() {
+            assert_ne!(
+                tool["before"]["agents"]["reviewer"],
+                tool["after"]["agents"]["reviewer"],
+                "{tool}"
+            );
+        }
+        let mut done = SettlementReceiptWait::capture(&runtime);
+        runtime.submit_inbound(input("request-A")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        fixture.gates[0].release();
+        done.wait().await;
+        let requests = fixture.provider.request_bodies();
+        assert!(requests.iter().any(|body| body.contains("reviewer B")), "{requests:?}");
+        assert!(!requests.iter().any(|body| body.contains("reviewer A")));
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// A removal keeps what it removed: 17 Skills present since bootstrap, with
+/// no request and no earlier fact, all removed at once, stay readable in full
+/// from that one fact after the runtime is gone and the files changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_removal_retains_every_removed_definition() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let skills = fixture.workspaces[0].join(".agents/skills");
+        let names = (0..17)
+            .map(|index| format!("skill-{index:02}"))
+            .collect::<Vec<_>>();
+        for name in &names {
+            std::fs::create_dir_all(skills.join(name)).unwrap();
+            std::fs::write(
+                skills.join(name).join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: Guide {name}\n---\nbody\n"),
+            )
+            .unwrap();
+        }
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Skills {
+                authored: Some(crate::runtime::agent_profile::AgentSkillSelection::All),
+            },
+        )
+        .await;
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .capability()
+                .model_skill_entries()
+                .len(),
+            17
+        );
+        assert!(
+            configuration_changes(&runtime).is_empty(),
+            "no earlier fact"
+        );
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Skills {
+                authored: Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(
+                    Vec::new(),
+                )),
+            },
+        )
+        .await;
+        applied(&fixture, 0).await;
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert_eq!(changes[0].skills.removed.total, 17);
+        assert_eq!(changes[0].skills.removed.names.len(), 16);
+        assert!(fixture.provider.request_bodies().is_empty());
+        let store = runtime.tool_runtime().durable_store();
+        drop(runtime);
+        let _ = fixture.manager.drain_all_runtimes().await;
+        std::fs::remove_dir_all(&skills).unwrap();
+        let [catalog] = configuration_catalogs(&store).try_into().unwrap();
+        let removed = catalog["skills"].as_array().unwrap();
+        assert_eq!(
+            removed
+                .iter()
+                .map(|skill| skill["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            names
+        );
+        for skill in removed {
+            assert_eq!(skill["change"], "removed");
+            assert!(skill["after"].is_null());
+            assert_eq!(skill["before"]["entry"]["name"], skill["name"]);
+            assert!(skill["before"]["version_id"].as_str().is_some(), "{skill}");
+        }
         fixture.close().await;
     })
     .await;
@@ -1465,6 +1637,141 @@ async fn a_replaced_skill_directory_keeps_feeding_the_source_watch() {
         let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), edit);
         watched.unwrap();
         fixture.close().await;
+    })
+    .await;
+}
+
+/// An execution-policy update that really published after an earlier
+/// unrecorded commit is retained: it survives unload/load, and the healthy
+/// replacement allocation recovers the Session's application view.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_published_policy_after_an_unrecorded_commit_survives_reload() {
+    bounded(async {
+        use crate::local_runtime::configuration::settings::EffectiveConfiguration;
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let loaded = fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        runtime.fail_next_configuration_record();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("published, not recorded".into()),
+            },
+        )
+        .await;
+        let view = applied(&fixture, 0).await;
+        assert!(matches!(
+            view.units[&ApplyUnit::Instructions],
+            UnitApplication::Uncertain { .. }
+        ));
+        write(
+            &fixture,
+            0,
+            ConfigMutation::ModelTimeout {
+                authored: Some(crate::local_runtime::authoring::TimeoutLayer {
+                    response_start_timeout_ms: Some(41_000),
+                    stream_idle_timeout_ms: Some(42_000),
+                }),
+            },
+        )
+        .await;
+        applied(&fixture, 0).await;
+        let timeout = EffectiveConfiguration::adopted(&runtime)
+            .unwrap()
+            .model_timeout;
+        assert_eq!(timeout.response_start_timeout_ms, 41_000);
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        drop(runtime);
+        let _ = fixture.manager.unload(&loaded.conversation).await;
+        fixture.manager.load(&id, None).await.unwrap();
+        let reloaded = fixture.manager.configuration_runtime(&id).unwrap();
+        let effective = EffectiveConfiguration::adopted(&reloaded).unwrap();
+        assert_eq!(effective.model_timeout, timeout);
+        assert_eq!(instructions(&reloaded), "published, not recorded");
+        let view = applied(&fixture, 0).await;
+        assert!(
+            view.units
+                .values()
+                .all(|unit| !matches!(unit, UnitApplication::Uncertain { .. })),
+            "a healthy replacement recovers the view: {view:?}"
+        );
+        fixture.manager.drain_all_runtimes().await;
+    })
+    .await;
+}
+
+/// The allocation's own failure decides uncertainty, not the order its
+/// settlement arrives in: a comment-only edit captured after the runtime
+/// failed to record a commit, but before that settlement reached the
+/// application owner, still reports the commit uncertain.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_unrecorded_settlement_is_never_reported_applied() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let settlement = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .configuration_settlement
+            .clone();
+        settlement.arm();
+        runtime.fail_next_configuration_record();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("published, not recorded".into()),
+            },
+        )
+        .await;
+        // Native published B and failed to record it; its report is parked.
+        settlement.entered().await;
+        assert_eq!(instructions(&runtime), "published, not recorded");
+        assert!(runtime.durability_failure().is_some());
+        let first = fixture.manager.configuration_application(&id).unwrap();
+        let document = fixture.workspaces[0].join("rustx.toml");
+        let mut text = std::fs::read_to_string(&document).unwrap_or_default();
+        text.push_str("\n# comment only\n");
+        std::fs::write(&document, text).unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: fixture.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
+        let uncertain = |view: &crate::local_runtime::configuration::application::ConfigurationApplication| {
+            matches!(
+                &view.units[&ApplyUnit::Instructions],
+                UnitApplication::Uncertain { diagnostic } if diagnostic.contains("fault injected")
+            )
+        };
+        let view = applied(&fixture, 0).await;
+        assert_ne!(view.desired, first.desired, "the edit is a new application");
+        assert!(uncertain(&view), "{view:?}");
+        assert!(
+            view.units.values().all(|unit| *unit != UnitApplication::Applied),
+            "{view:?}"
+        );
+        // The superseded report arrives late and changes nothing reported.
+        let mut changed = fixture.manager.configuration_changes();
+        changed.mark_unchanged();
+        settlement.release();
+        changed.changed().await.unwrap();
+        assert!(uncertain(&fixture.manager.configuration_application(&id).unwrap()));
+        assert!(configuration_changes(&runtime).is_empty());
+        let _ = fixture.manager.drain_all_runtimes().await;
     })
     .await;
 }

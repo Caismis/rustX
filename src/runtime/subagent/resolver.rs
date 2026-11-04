@@ -737,6 +737,13 @@ pub(crate) struct FrozenAgentComposition {
 }
 
 impl FrozenAgentComposition {
+    /// The semantic digest of the Named Agent definition this froze.
+    pub(crate) const fn definition_digest(
+        &self,
+    ) -> &crate::runtime::subagent::NamedAgentDefinitionDigest {
+        self.definition.digest()
+    }
+
     pub(crate) fn freeze(
         definition: &NamedAgentDefinition,
         profile: &crate::runtime::agent_profile::ResolvedAgentProfile,

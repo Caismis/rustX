@@ -821,15 +821,10 @@ impl ConversationRuntime {
         &self.inner.configuration_owner
     }
 
-    /// The diagnostic of a published commit whose change fact this runtime
-    /// could not record. The failure is absorbing, so only a replacement
-    /// allocation recovers from it.
-    pub(crate) fn unrecorded_configuration(&self) -> Option<String> {
-        self.inner
-            .durability_gate
-            .failure()
-            .filter(|failure| failure.operation == DurableOperation::RecordConfigurationChange)
-            .map(|failure| failure.diagnostic)
+    /// This allocation's native authority over unrecorded configuration
+    /// commits: the same absorbing durability gate admission reads.
+    pub(crate) fn configuration_health(&self) -> ConfigurationHealth {
+        ConfigurationHealth(self.inner.durability_gate.clone())
     }
 
     /// Whether a candidate is staged and waiting for the safe boundary.
@@ -998,3 +993,32 @@ impl ConversationRuntime {
 
 #[cfg(test)]
 mod tests;
+
+/// One runtime allocation's answer to whether it published a configuration
+/// commit whose change fact it could not record. The failure is absorbing, so
+/// only a replacement allocation recovers from it.
+#[derive(Clone)]
+pub(crate) struct ConfigurationHealth(Arc<super::DurabilityGate>);
+
+impl ConfigurationHealth {
+    /// The diagnostic of that unrecorded commit, if any.
+    pub(crate) fn unrecorded(&self) -> Option<String> {
+        self.0
+            .failure()
+            .filter(|failure| failure.operation == DurableOperation::RecordConfigurationChange)
+            .map(|failure| failure.diagnostic)
+    }
+
+    pub(crate) fn same_allocation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for ConfigurationHealth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("ConfigurationHealth")
+            .field(&self.unrecorded())
+            .finish()
+    }
+}

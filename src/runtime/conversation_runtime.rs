@@ -367,6 +367,7 @@ mod title;
 use admission::{SemanticInboundClass, WakeGate};
 pub(crate) use compaction::ManualCompactionHandle;
 use compaction::{CurrentManualCompaction, ManualTail};
+pub(crate) use configuration::ConfigurationHealth;
 use drain::{DrainCompletion, DrainTrigger};
 use durability::{
     AdmissionDurabilityCycle, AdmissionRetryBudget, BackgroundFailureSink, SubagentFailureSink,

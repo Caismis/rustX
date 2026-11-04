@@ -11273,7 +11273,8 @@ export interface TraceRecord {
    */
   configuration_instructions?: ContentRef | null;
   /**
-   * The JSON catalog of the Tools and Skills that commit added or changed.
+   * The JSON catalog of the Tools and Skills that commit affected, before
+   * and after.
    */
   configuration_catalog?: ContentRef | null;
   /**
@@ -11488,7 +11489,8 @@ export interface ConfigurationChange {
   instructions_bytes: string;
   /**
    * The byte length of the retained JSON catalog of every Tool and Skill
-   * this commit added or changed, as future work observes it.
+   * this commit added, changed or removed, with their before and after
+   * states.
    */
   catalog_bytes: string;
 }
@@ -13027,7 +13029,8 @@ export interface ConfigurationChange1 {
   instructions_bytes: string;
   /**
    * The byte length of the retained JSON catalog of every Tool and Skill
-   * this commit added or changed, as future work observes it.
+   * this commit added, changed or removed, with their before and after
+   * states.
    */
   catalog_bytes: string;
 }
@@ -16747,7 +16750,8 @@ export interface ConfigurationChange2 {
   instructions_bytes: string;
   /**
    * The byte length of the retained JSON catalog of every Tool and Skill
-   * this commit added or changed, as future work observes it.
+   * this commit added, changed or removed, with their before and after
+   * states.
    */
   catalog_bytes: string;
 }
@@ -16769,7 +16773,8 @@ export interface ContentRef1 {
   readable_end: number;
 }
 /**
- * The JSON catalog of the Tools and Skills the commit added or changed,
+ * The JSON catalog of the Tools and Skills the commit affected (before
+ * and after),
  * read in bounded ranges through `content_read`.
  */
 export interface ContentRef2 {

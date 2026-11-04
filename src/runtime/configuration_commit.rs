@@ -273,7 +273,8 @@ pub struct ConfigurationChange {
     /// even when no request ever used them.
     pub instructions_bytes: u64,
     /// The byte length of the retained JSON catalog of every Tool and Skill
-    /// this commit added or changed, as future work observes it.
+    /// this commit added, changed or removed, with their before and after
+    /// states.
     pub catalog_bytes: u64,
 }
 
@@ -282,10 +283,11 @@ pub struct ConfigurationChange {
 pub(crate) struct ConfigurationContent {
     /// The effective system instructions.
     pub(crate) instructions: String,
-    /// The JSON catalog of the added and changed Tools and Skills: each
-    /// Tool's definition with its implementation identity (a digest of the
-    /// server's transport and policy, never its credentials, or the enabled
-    /// Workflow program), and each Skill's entry with its content version.
+    /// The JSON catalog of the affected Tools and Skills, each with its
+    /// `before` and `after` state: a Tool's definition with its implementation
+    /// identity (a digest of the server's transport and policy, never its
+    /// credentials, the enabled Workflow program and the Named Agents it
+    /// runs), a Skill's entry with its content version.
     pub(crate) catalog: String,
 }
 
@@ -327,24 +329,8 @@ impl ConfigurationChange {
         let (old_tools, new_tools) = (tool_entries(old), tool_entries(new));
         let (old_skills, new_skills) = (skill_entries(old), skill_entries(new));
         let catalog = serde_json::json!({
-            "tools": installed(&old_tools, &new_tools)
-                .into_iter()
-                .map(|(model, definition, binding, program)| serde_json::json!({
-                    "definition": definition,
-                    "model_input_schema": model.input_schema,
-                    "server_binding_digest": binding.as_ref().map(binding_digest),
-                    "workflow": program,
-                }))
-                .collect::<Vec<_>>(),
-            "skills": installed(&old_skills, &new_skills)
-                .into_iter()
-                .map(|(entry, version)| serde_json::json!({
-                    "entry": entry,
-                    "version_id": version
-                        .as_ref()
-                        .map(crate::runtime::identity::SkillVersionId::as_str),
-                }))
-                .collect::<Vec<_>>(),
+            "tools": affected(&old_tools, &new_tools),
+            "skills": affected(&old_skills, &new_skills),
         })
         .to_string();
         let tools = NamedChanges::between(&old_tools, &new_tools);
@@ -390,26 +376,35 @@ impl ConfigurationChange {
     }
 }
 
-/// One Tool as a commit compares it: the model declaration, the whole
-/// definition, the binding of the server it runs on and the enabled Workflow
-/// program it runs.
-type ToolEntry = (
-    crate::tools::types::ModelToolDefinition,
-    crate::tools::types::ToolDefinition,
-    Option<crate::tools::mcp::McpServerBinding>,
-    Option<crate::runtime::workflow::WorkflowToolIdentity>,
-);
+/// One Tool as a commit compares it and its catalog retains it: the model
+/// declaration, the whole definition and its implementation identity.
+#[derive(Debug, PartialEq, serde::Serialize)]
+struct ToolEntry {
+    definition: crate::tools::types::ToolDefinition,
+    model_input_schema: serde_json::Value,
+    /// Compared whole, retained only as `server_binding_digest`.
+    #[serde(skip)]
+    binding: Option<crate::tools::mcp::McpServerBinding>,
+    server_binding_digest: Option<String>,
+    /// The enabled Workflow program it runs.
+    workflow: Option<crate::runtime::workflow::WorkflowToolIdentity>,
+    /// The Named Agent definitions it runs: those a Workflow froze at
+    /// admission, or those the `subagent` intrinsic admits.
+    agents: BTreeMap<String, crate::runtime::subagent::NamedAgentDefinitionDigest>,
+}
 
 /// One Skill as a commit compares it: its catalog entry and content version.
-type SkillEntry = (
-    crate::skills::SkillCatalogEntry,
-    Option<crate::runtime::identity::SkillVersionId>,
-);
+#[derive(Debug, PartialEq, serde::Serialize)]
+struct SkillEntry {
+    entry: crate::skills::SkillCatalogEntry,
+    version_id: Option<crate::runtime::identity::SkillVersionId>,
+}
 
 /// A Tool is its whole definition and its implementation identity: the
 /// executable binding of the server it runs on, or the enabled Workflow
-/// program it runs. A same-name implementation change is `changed` even when
-/// the model-visible declaration is byte-identical.
+/// program it runs, and the Named Agents either runs. A same-name
+/// implementation change is `changed` even when the model-visible declaration
+/// is byte-identical; an Agent nothing runs changes no Tool.
 fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntry> {
     let capability = snapshot.capability();
     let registry = capability.tool_registry();
@@ -418,11 +413,18 @@ fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntr
         .entries()
         .iter()
         .filter_map(|(id, entry)| match &entry.admission {
-            crate::runtime::workflow::WorkflowAdmission::Enabled(program) => Some((
-                crate::tools::native::workflow_tool_id(id),
-                program.tool_identity(),
-            )),
+            crate::runtime::workflow::WorkflowAdmission::Enabled(program) => {
+                Some((crate::tools::native::workflow_tool_id(id), program))
+            }
             crate::runtime::workflow::WorkflowAdmission::Disabled(_) => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    let delegated = snapshot
+        .delegatable_agents()
+        .iter()
+        .filter_map(|name| {
+            let definition = snapshot.subagents().get(name)?;
+            Some((name.to_string(), definition.digest().clone()))
         })
         .collect::<BTreeMap<_, _>>();
     registry
@@ -438,10 +440,36 @@ fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntr
                 }
             };
             let binding = server.and_then(|id| capability.mcp_servers().get(&id).cloned());
-            let program = programs.get(&definition.id).cloned();
+            let program = programs.get(&definition.id);
+            let agents = match program {
+                Some(program) => program
+                    .agent_nodes()
+                    .into_iter()
+                    .filter_map(|agent| {
+                        let frozen = agent.resolved.as_ref()?;
+                        Some((
+                            agent.profile.to_string(),
+                            frozen.definition_digest().clone(),
+                        ))
+                    })
+                    .collect(),
+                None if definition.name == crate::tools::native::SUBAGENT_TOOL_NAME
+                    && definition.origin == crate::tools::types::ToolOrigin::Builtin =>
+                {
+                    delegated.clone()
+                }
+                None => BTreeMap::new(),
+            };
             (
                 definition.name.clone(),
-                (model, definition, binding, program),
+                ToolEntry {
+                    model_input_schema: model.input_schema,
+                    server_binding_digest: binding.as_ref().map(binding_digest),
+                    binding,
+                    workflow: program.map(|program| program.tool_identity()),
+                    agents,
+                    definition,
+                },
             )
         })
         .collect()
@@ -461,21 +489,44 @@ fn skill_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, SkillEn
         .model_skill_entries()
         .iter()
         .map(|entry| {
-            let version = versions.get(entry.name.as_str()).copied().cloned();
-            (entry.name.clone(), (entry.clone(), version))
+            (
+                entry.name.clone(),
+                SkillEntry {
+                    entry: entry.clone(),
+                    version_id: versions.get(entry.name.as_str()).copied().cloned(),
+                },
+            )
         })
         .collect()
 }
 
-/// The successor value of every added or changed item, in name order.
-fn installed<'a, T: PartialEq>(
+/// Every item a commit affected, in name order, with the state it left
+/// (`before`, for a change or removal) and the state it installed (`after`,
+/// for an addition or change).
+fn affected<T: PartialEq + serde::Serialize>(
     before: &BTreeMap<String, T>,
-    after: &'a BTreeMap<String, T>,
-) -> Vec<&'a T> {
-    after
-        .iter()
-        .filter(|(name, value)| before.get(*name) != Some(*value))
-        .map(|(_, value)| value)
+    after: &BTreeMap<String, T>,
+) -> Vec<serde_json::Value> {
+    before
+        .keys()
+        .chain(after.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|name| {
+            let (old, new) = (before.get(name), after.get(name));
+            let change = match (old, new) {
+                (None, Some(_)) => "added",
+                (Some(_), None) => "removed",
+                (Some(old), Some(new)) if old != new => "changed",
+                _ => return None,
+            };
+            Some(serde_json::json!({
+                "name": name,
+                "change": change,
+                "before": old,
+                "after": new,
+            }))
+        })
         .collect()
 }
 

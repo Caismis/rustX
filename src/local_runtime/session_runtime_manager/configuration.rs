@@ -253,6 +253,20 @@ impl SessionRuntimeManager {
             .map(|composition| composition.host().clone())
     }
 
+    /// Parks a staged candidate's settlement report after the runtime
+    /// committed it, before the application owner hears of it.
+    #[cfg(test)]
+    pub(crate) async fn park_configuration_settlement(&self) {
+        let gate = self
+            .registry
+            .0
+            .lock()
+            .expect("registry mutex")
+            .configuration_settlement
+            .clone();
+        gate.park().await;
+    }
+
     pub(crate) fn configuration_application(
         &self,
         id: &SessionId,

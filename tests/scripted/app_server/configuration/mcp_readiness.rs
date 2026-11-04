@@ -2398,14 +2398,24 @@ async fn implementation_only_tool_change_records_one_changed_fact() {
             .pop()
             .unwrap();
         let [tool] = catalog["tools"].as_array().unwrap().as_slice() else {
-            panic!("one installed Tool: {catalog}");
+            panic!("one affected Tool: {catalog}");
         };
-        assert!(tool["definition"]["input_schema"].is_object(), "{tool}");
+        assert_eq!(tool["change"], "changed");
         assert!(
-            tool["server_binding_digest"]
-                .as_str()
-                .is_some_and(|digest| digest.starts_with("sha256:")),
+            tool["after"]["definition"]["input_schema"].is_object(),
             "{tool}"
+        );
+        for state in ["before", "after"] {
+            assert!(
+                tool[state]["server_binding_digest"]
+                    .as_str()
+                    .is_some_and(|digest| digest.starts_with("sha256:")),
+                "{tool}"
+            );
+        }
+        assert_ne!(
+            tool["before"]["server_binding_digest"],
+            tool["after"]["server_binding_digest"]
         );
         assert!(!catalog.to_string().contains("credentials"), "{catalog}");
         fixture.close().await;
