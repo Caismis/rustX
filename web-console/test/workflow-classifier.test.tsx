@@ -38,7 +38,7 @@ it('renames display labels with Unicode without changing exit identity, and expo
   expect(node().classes[0]).toMatchObject({id:'class_1',label:'售后支持'});
   expect(editor.getSnapshot().context.document!.block.edges).toEqual(edges);
   expect(panel.queryByRole('textbox',{name:'Class ID'})).toBeNull();
-  expect(panel.getByRole('switch',{name:'Vision'}).hasAttribute('disabled')).toBe(true);
+  expect(panel.queryByRole('switch',{name:'Vision'})).toBeNull();
   for(const name of ['class_name','class_label','usage'])expect(panel.getByText(name,{exact:true})).toBeTruthy();
   fireEvent.click(panel.getByRole('button',{name:'Advanced settings'}));
   expect(panel.queryByRole('textbox',{name:'Instruction'})).toBeNull();

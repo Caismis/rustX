@@ -15,7 +15,11 @@ checked for rendered class names, labels, token usage and stable exit IDs.
 | Topic and instruction editors with variables, count, copy and expand | Existing rustX typed PromptEditor and PromptCard; native compiler validates and runtime renders the same parts |
 | Expanded editor fills the panel below its header | Measure the actual inspector body, retain the inline placeholder and Lexical instance, and close with Escape; variable popups keep their own Escape and restore text focus |
 | Advanced and output disclosures | Folded sections; actual `class_name`, `class_label`, `usage` results with descriptions |
-| Vision disabled without capability; Chatflow-only memory | Honest disabled vision control for native text-only classification; no Chatflow memory surface |
+| Vision and Chatflow-only memory | Vision is omitted under the product's Dify alignment scope; no Chatflow memory surface |
+
+By default, Dify alignment excludes vision, AI prompt generation and similar
+auxiliary AI authoring features, including disabled placeholder controls. Such
+features require an explicit product request.
 
 This is original composition with existing components, without Dify source,
 styles, assets, stores or Graphon runtime. The App Server contract is v64;

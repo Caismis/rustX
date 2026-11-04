@@ -2,10 +2,6 @@
 .panel h3 { font-size: 13px; font-weight: 600; justify-content: flex-start; gap: 4px; }
 .panel > section { margin-bottom: 18px; }
 .panel > section:nth-child(n+3) { padding-top: 16px; border-top: 1px solid var(--dsw-alias-border-l3); }
-.panel > section:nth-child(4) { border-top: 0; padding-top: 0; }
-.vision h3 { margin-bottom: 0; justify-content: space-between; }
-.vision h3 > span { display: inline-flex; align-items: center; gap: 4px; }
-.vision h3 > span > span { display: inline-flex; }
 .renameHint { margin: 0 0 8px; padding: 8px 12px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 16px; }
 .classes { display: grid; gap: 10px; margin-bottom: 8px; }
 .item { position: relative; min-width: 0; border-radius: 10px; }

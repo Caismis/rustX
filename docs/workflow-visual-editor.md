@@ -4,6 +4,10 @@ The editor authors the same native Workflow file used by the CLI and runtime.
 It uses App Server's file revision, validation, analysis and CAS boundaries.
 See [the file contract](workflow-authoring.md) and [execution semantics](workflow-programs.md).
 
+When aligning Workflow features with Dify, vision, AI prompt generation and
+similar auxiliary AI authoring features are omitted by default, including
+disabled placeholder controls. They are added only when explicitly requested.
+
 ## Reference and graph model
 
 The read-only Dify checkout was inspected outside rustX at

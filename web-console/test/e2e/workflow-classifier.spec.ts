@@ -31,7 +31,7 @@ for (const width of [1440,390]) test.describe(`classifier panel ${width}`,()=>{
       await choose(page.getByRole('dialog',{name:'Settings',exact:true}),'Language','中文');
       await page.getByRole('button',{name:'关闭设置',exact:true}).click();
       const panel=page.getByRole('complementary',{name:'检查器',exact:true});
-      await expect(panel.getByRole('switch',{name:'视觉',exact:true})).toBeDisabled();
+      await expect(panel.getByText('视觉',{exact:true})).toHaveCount(0);
       await expect(panel.getByRole('textbox',{name:'Class ID',exact:true})).toHaveCount(0);
       await panel.getByRole('button',{name:'清除输入变量',exact:true}).click();
       await expect(panel.getByText('设置变量值',{exact:true})).toBeVisible();

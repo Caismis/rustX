@@ -1,9 +1,7 @@
 import clsx from 'clsx';
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from '../../../../../locale/react';
-import { IconChevronDownOutline14, IconCloseOutline16, IconQuestionOutline14 } from '../../../../../presentation/primitives/icons';
-import { Switch } from '../../../../../presentation/primitives/Switch';
-import { Tooltip } from '../../../../../presentation/primitives/Tooltip';
+import { IconChevronDownOutline14, IconCloseOutline16 } from '../../../../../presentation/primitives/icons';
 import { CommandRejected, freshKey, replaceNodeExits } from '../../../document/commands';
 import { encodeField, setField, type FieldAddress } from '../../../document/fields';
 import { blockAt, nodeAt, type Value, type WorkflowDocument } from '../../../document/model';
@@ -47,11 +45,6 @@ export function ClassifierPanel(props: PanelProps) {
       <div ref={input} className={styles.inputVariable} data-empty={node.input.type !== 'reference' || !node.input.path.length || undefined}><ReferencePicker address={at('input')} path={node.input.type === 'reference' ? node.input.path : []} edit={props.edit} token placeholder={tx('workflows:classifier.select-input')}/>
         {node.input.type === 'reference' && node.input.path.length > 0 && <button type="button" className={styles.clearInput} aria-label={tx('workflows:classifier.clear-input')} title={tx('workflows:classifier.clear-input')} onClick={() => {update(current => ({...current,input:{type:'reference',path:[]}}),at('input'));input.current?.querySelector<HTMLButtonElement>('button[aria-haspopup]')?.focus();}}><IconCloseOutline16/></button>}
       </div>
-    </section>
-    <section className={clsx(css.group, styles.vision)}>
-      <h3 className={css.groupHeading}><span>{tx('workflows:classifier.vision')} <Tooltip label={tx('workflows:classifier.vision-unavailable')}><span className={css.promptHint} tabIndex={0}><IconQuestionOutline14/></span></Tooltip></span>
-        <Switch label={tx('workflows:classifier.vision')} checked={false} disabled title={tx('workflows:classifier.vision-unavailable')} onChange={() => {}}/>
-      </h3>
     </section>
     <section className={css.group} aria-label={tx('workflows:data.classes')}>
       <h3 className={css.groupHeading}><button type="button" className={css.outputToggle} aria-expanded={classesOpen} onClick={() => setClassesOpen(value => !value)}>
