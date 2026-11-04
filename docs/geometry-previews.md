@@ -72,6 +72,12 @@ coordinates while preserving direction. A selection behind a hidden ancestor
 cannot be focused. Small occurrences use their own framing distance, including
 after compatible restoration. Fit frames visible model content and preserves
 direction; Reset uses the full model bounds and the initial orientation.
+The View menu switches perspective and orthographic projection on the same
+renderer/context. Switching preserves the target, up axis, direction and apparent
+vertical size at the target plane. Orthographic zoom saves its effective vertical
+span with the copy-bound pose; compatible remounts restore it. Fit, Focus and
+Reset retain the chosen projection. Resize preserves effective vertical span,
+and picking uses the active camera's projection.
 Hiding a selected part also hides its selection outline.
 Changing or restoring the up axis recreates OrbitControls through its public
 lifecycle so orbit gestures use that axis and old listeners are released.
@@ -102,6 +108,12 @@ It supports selection and visibility through the same scene
 owner. Its bounded list scrolls independently; Escape closes it and returns focus
 to its trigger. Format, dimensions and units occupy a compact footer. There is no
 permanent Refresh explanation; the existing document-header action remains.
+Name search filters the admitted hierarchy and shows whole-path ancestors of
+matches, including collapsed branches. It matches localized fallback names for
+unnamed parts. Search does not change selection, visibility, camera state or the
+manual expansion set; clearing it restores the prior expansion. Its query is
+limited to 256 characters, stays local to the open panel and resets on close or
+copy replacement. The search field stays above the independently scrolling list.
 The structure panel also reports the selected occurrence (or whole model), its
 admitted and visible triangle counts, format/output units and a world-axis-aligned
 bounding box. Bounds include occurrence transforms and undo display centering.
@@ -129,9 +141,10 @@ rebuilding adjacency on camera motion. The original 5-MiB output cap includes
 repeated occurrences. Original mesh data and the inspection/picking graph remain
 unchanged. Authored or transformed graphs retain per-occurrence line objects
 and local normal transforms.
-Anti-fighting uses a perspective-projected depth pull of one part per million
-of eye distance rather than a fixed NDC offset. Thin overlapping opaque boxes
-at small, ordinary and large scales retain hidden-edge occlusion.
+Anti-fighting converts a depth pull of one part per million of eye distance
+through the active perspective or orthographic projection. Orthographic
+silhouettes use parallel eye rays. Thin overlapping opaque boxes at small,
+ordinary and large scales retain hidden-edge occlusion in both projections.
 
 Loading labels report observed reading, CAD-runtime initialization, import and
 display preparation. The synchronous CAD call is one import stage; parsing and

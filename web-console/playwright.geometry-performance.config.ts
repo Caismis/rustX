@@ -6,7 +6,7 @@ const wsEndpoint = process.env.RUSTX_BROWSER_WS_ENDPOINT;
 if (!wsEndpoint && !process.argv.includes('--list')) throw new Error('Set RUSTX_BROWSER_WS_ENDPOINT to the pinned Playwright browser server.');
 
 export default defineConfig({
-  testDir: './test/e2e', testMatch: ['geometry-latency.spec.ts', 'geometry-performance.spec.ts', 'geometry-code.spec.ts'],
+  testDir: './test/e2e', testMatch: ['geometry-latency.spec.ts', 'geometry-performance.spec.ts', 'geometry-code.spec.ts', 'geometry.spec.ts'],
   workers: 1, timeout: 120_000, repeatEach: 3,
   outputDir: 'test-results/geometry-performance',
   reporter: [['list'], ['json', { outputFile: 'test-results/geometry-performance-report.json' }]],

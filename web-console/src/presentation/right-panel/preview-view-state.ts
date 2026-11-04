@@ -3,7 +3,8 @@ export interface PreviewViewState {
   viewer?: 'markdown' | 'html' | 'image' | 'pdf' | 'excel' | 'office' | 'geometry' | 'code' | 'text';
   geometry?: {
     copyId: string;
-    camera?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] };
+    camera?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] }
+      & ({ projection: 'perspective' } | { projection: 'orthographic'; verticalSpan: number });
     selected?: string;
     hidden?: string[];
     isolation?: { target: string; hidden: string[] };

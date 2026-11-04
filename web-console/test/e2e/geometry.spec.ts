@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { writeFileSync } from 'node:fs';
 import { instrument, resources } from './geometry-observation';
 import { denseBoxStl, planeAndTinySolidStl } from '../geometry-fixtures';
+import { isCadRuntimeRequest, isGeometryRuntimeRequest } from './geometry-requests';
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 const names = ['cube.glb', 'cube.stl', 'cube-ascii.stl', 'cube.step', 'cube-inch.step', 'cube.iges', 'cube.brep', 'cube-textured.glb'];
 // Playwright's native forwarding keeps fixture URLs on the test runner even
@@ -59,7 +60,7 @@ test('all geometry formats render through actual delivery and Workspace entry po
 
 test('production startup defers geometry and the STL envelope remains responsive', async ({ page }, info) => {
   await instrument(page); const runtime: string[] = [];
-  page.on('request', request => { if (/GeometryPreview-|(?:cad|stl)-worker|occt-import-js.*\.wasm/.test(request.url())) runtime.push(request.url()); });
+  page.on('request', request => { if (isGeometryRuntimeRequest(new URL(request.url()))) runtime.push(request.url()); });
   await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_PREVIEW_PORT ?? 5173}/`);
   await expect(page.locator('#root')).not.toBeEmpty(); await page.waitForLoadState('networkidle'); expect(runtime).toEqual([]);
   await page.goto(`${origin}/test/fixtures/geometry.html`);
@@ -85,7 +86,7 @@ test('production startup defers geometry and the STL envelope remains responsive
     await new Promise(resolve => setTimeout(resolve, 1000)); return counter.calls - start;
   });
   expect(measurement.idleDrawCalls).toBe(0);
-  expect(runtime.filter(url => /cad-worker|occt-import-js/.test(url))).toEqual([]);
+  expect(runtime.filter(url => isCadRuntimeRequest(new URL(url)))).toEqual([]);
   await page.getByRole('button', { name: 'Fit view', exact: true }).click();
   await page.getByRole('button', { name: 'Close preview cube.stl', exact: true }).click();
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });

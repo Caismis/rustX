@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { BoxGeometry, BufferGeometry, DoubleSide, Group, InterleavedBufferAttribute, LineSegments, Mesh, MeshBasicMaterial, PerspectiveCamera, ShaderMaterial, SphereGeometry, Vector3, Vector4 } from 'three';
+import { BoxGeometry, BufferGeometry, DoubleSide, Group, InterleavedBufferAttribute, LineSegments, Mesh, MeshBasicMaterial, OrthographicCamera, PerspectiveCamera, ShaderMaterial, SphereGeometry, Vector3, Vector4 } from 'three';
 import { createStructure } from '../src/app/components/documents/geometry/structure';
 import { outlineData, OUTLINE_STRIDE } from '../src/app/components/documents/geometry/outline-data';
 import { createOutlines } from '../src/app/components/documents/geometry/outlines';
@@ -63,7 +63,7 @@ it('owns shared output buffers/materials, follows occurrence transforms and disp
   await owner.set(false); owner.dispose();
   expect(geometryDispose).toHaveBeenCalledOnce(); expect(materialDispose).toHaveBeenCalledOnce(); expect(a.children).toHaveLength(0); expect(b.children).toHaveLength(0);
 });
-it.each([1e-6, 1, 1e6].flatMap(scale => [false, true].map(generated => ({ scale, generated }))))('keeps a thin hidden box behind its occluder at scale $scale (packed: $generated)', async ({ scale, generated }) => {
+for (const scale of [1e-6, 1, 1e6]) for (const generated of [false, true]) it.each(['perspective', 'orthographic'])(`keeps a thin hidden box behind its occluder at scale ${scale} (%s, packed: ${generated})`, async projection => {
   vi.stubGlobal('Worker', class {
     onmessage: any; onerror: any; onmessageerror: any; terminate() {}
     postMessage({ inputs }: { inputs: Parameters<typeof outlineData>[0][] }) {
@@ -80,15 +80,31 @@ it.each([1e-6, 1, 1e6].flatMap(scale => [false, true].map(generated => ({ scale,
   // Evaluate the actual shader's depth adjustment against Three's projection.
   // A fixed 1e-6 NDC pull crosses the occluder in this exact Fit Front case.
   const adjustment = shader.match(/gl_Position\.z -= ([^;]+);/)![1]
-    .replaceAll('gl_Position.w', 'w').replaceAll('projectionMatrix[3][2]', 'b').replaceAll('abs(', 'Math.abs(');
-  const bias = new Function('w', 'b', `return ${adjustment}`) as (w: number, b: number) => number;
+    .replaceAll('projectionMatrix[3][3]', 'kind').replaceAll('projectionMatrix[3][2]', 'b').replaceAll('projectionMatrix[2][2]', 'a').replaceAll('view.z', 'z').replaceAll('abs(', 'Math.abs(');
+  const bias = new Function('kind', 'b', 'a', 'z', `return ${adjustment}`) as (kind: number, b: number, a: number, z: number) => number;
   const radius = Math.hypot(2, 2, .06) * scale / 2, distance = radius / Math.sin(Math.PI / 8) * 1.1;
-  const camera = new PerspectiveCamera(45, 4 / 3, radius / 10_000, radius * 1000);
+  const camera = projection === 'perspective' ? new PerspectiveCamera(45, 4 / 3, radius / 10_000, radius * 1000) : new OrthographicCamera(-radius * 1.1 * 4 / 3, radius * 1.1 * 4 / 3, radius * 1.1, -radius * 1.1, radius / 10_000, radius * 1000);
   const clip = (z: number) => new Vector4(0, 0, z * scale - distance, 1).applyMatrix4(camera.projectionMatrix);
   const occluder = clip(.01), hidden = clip(-.03), surfaceDepth = occluder.z / occluder.w;
-  expect((hidden.z - bias(hidden.w, camera.projectionMatrix.elements[14])) / hidden.w).toBeGreaterThan(surfaceDepth);
-  expect((occluder.z - bias(occluder.w, camera.projectionMatrix.elements[14])) / occluder.w).toBeLessThanOrEqual(surfaceDepth);
+  const depthBias = (z: number) => bias(camera.projectionMatrix.elements[15], camera.projectionMatrix.elements[14], camera.projectionMatrix.elements[10], z * scale - distance);
+  expect((hidden.z - depthBias(-.03)) / hidden.w).toBeGreaterThan(surfaceDepth);
+  expect((occluder.z - depthBias(.01)) / occluder.w).toBeLessThanOrEqual(surfaceDepth);
   expect(front.material).toBe(sourceMaterial); expect(front.geometry.getAttribute('position').array).toEqual(positions); owner.dispose();
+});
+it.each([false, true])('uses parallel orthographic eye rays for front and side faces (packed: %s)', async generated => {
+  vi.stubGlobal('Worker', class {
+    onmessage: any; onerror: any; onmessageerror: any; terminate() {}
+    postMessage() { queueMicrotask(() => this.onmessage?.({ data: { ok: true, data: [extract(new BoxGeometry())] } })); }
+  });
+  const root = new Group(), mesh = new Mesh(new BoxGeometry(), new MeshBasicMaterial()); root.add(mesh);
+  const owner = createOutlines(root, () => '#ffffff', { generated }); expect(await owner.set(true)).toBe('on');
+  const shader = ((generated ? owner.group.children[0] : mesh.children[0]) as LineSegments<BufferGeometry, ShaderMaterial>).material.vertexShader;
+  const expression = shader.match(/vec3 eyeDirection = ([^;]+);/)![1].replaceAll('projectionMatrix[3][3]', 'projection').replace('-view.xyz', 'perspective').replace('vec3(0.0, 0.0, 1.0)', 'parallel');
+  const eye = new Function('projection', 'perspective', 'parallel', `return ${expression}`) as (projection: number, perspective: Vector3, parallel: Vector3) => Vector3;
+  const front = new Vector3(0, 0, 1), side = new Vector3(1, 0, 0), parallel = new Vector3(0, 0, 1);
+  for (const x of [-10, 10]) { const direction = eye(1, new Vector3(-x, 0, 4), parallel); expect(front.dot(direction)).toBe(1); expect(side.dot(direction)).toBe(0); }
+  expect(side.dot(eye(0, new Vector3(10, 0, 4), parallel))).toBeGreaterThan(0); expect(side.dot(eye(0, new Vector3(-10, 0, 4), parallel))).toBeLessThan(0);
+  expect(shader).toContain('dot(normalMatrix * faceA, eyeDirection)'); expect(shader).toContain('dot(normalMatrix * faceB, eyeDirection)'); owner.dispose();
 });
 it.each(['invalid normal', 'oversized backing buffer', 'segment limit'])('independently rejects Worker output: %s', async variant => {
   const workers: any[] = [];

@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { instrument, resources } from './geometry-observation';
+import { isCadWasmRequest } from './geometry-requests';
 
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 test.use({ connectOptions: { wsEndpoint: process.env.RUSTX_BROWSER_WS_ENDPOINT ?? '', exposeNetwork: '<loopback>' } });
@@ -26,7 +27,7 @@ test('cancelled CAD code wait retires its idle Worker and the retained copy reus
   await observeCode(page);
   let release!: () => void, requested!: () => void, fetches = 0;
   const held = new Promise<void>(resolve => { release = resolve; }), started = new Promise<void>(resolve => { requested = resolve; });
-  await page.route(/occt-import-js.*\.wasm(?:\?|$)/, async route => { fetches++; requested(); await held; await route.continue(); });
+  await page.route(isCadWasmRequest, async route => { fetches++; requested(); await held; await route.continue(); });
   await page.goto(`${origin}/test/fixtures/geometry.html`);
   expect(fetches).toBe(0);
   try {
@@ -54,7 +55,7 @@ test('cancelled CAD code wait retires its idle Worker and the retained copy reus
 
 test('two actual split CAD owners share code and allocate fresh import Workers after retirement', async ({ page }, info) => {
   await observeCode(page); let fetches = 0;
-  page.on('request', request => { if (/occt-import-js.*\.wasm(?:\?|$)/.test(request.url())) fetches++; });
+  page.on('request', request => { if (isCadWasmRequest(new URL(request.url()))) fetches++; });
   await page.goto(`${origin}/test/fixtures/geometry.html`);
   await page.getByRole('button', { name: 'Show all 8 delivered files', exact: true }).click();
   await page.evaluate(async () => {

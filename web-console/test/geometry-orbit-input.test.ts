@@ -80,3 +80,12 @@ it('captures tiny keyboard pans and wheel zooms, and fences queued observations 
   await Promise.resolve(); vi.advanceTimersByTime(1000);
   expect(f.changed).toHaveBeenCalledTimes(publications); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(f.renderer.dispose).toHaveBeenCalledOnce();
 });
+it('persists real orthographic wheel zoom with an unchanged position and no idle work', () => {
+  const f = mount(); f.view.setProjection('orthographic'); draw(); f.changed.mockClear();
+  const camera = f.renderer.render.mock.calls.at(-2)![1], position = camera.position.clone(), before = (camera.top - camera.bottom) / camera.zoom;
+  f.canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 300, clientY: 200, bubbles: true, cancelable: true }));
+  expect(f.changed).toHaveBeenCalledOnce(); expect(camera.position.distanceTo(position)).toBeLessThan(1e-12);
+  expect(f.changed.mock.lastCall![0].camera.projection).toBe('orthographic'); expect(f.changed.mock.lastCall![0].camera.verticalSpan).toBeLessThan(before);
+  draw(); vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+  f.view.setProjection('perspective'); expect(runtime.renderers).toHaveLength(1); expect(Number.isFinite(f.changed.mock.lastCall![0].camera.position[0])).toBe(true);
+});

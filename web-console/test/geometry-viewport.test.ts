@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { Box3, BoxGeometry, Group, LineSegments, Mesh, MeshBasicMaterial, MeshStandardMaterial, ShaderMaterial, Vector2, type BufferGeometry, type PerspectiveCamera } from 'three';
+import { Box3, BoxGeometry, Group, LineSegments, Mesh, MeshBasicMaterial, MeshStandardMaterial, OrthographicCamera, ShaderMaterial, Vector2, Vector3, type BufferGeometry, type PerspectiveCamera } from 'three';
 import { mountGeometry } from '../src/app/components/documents/geometry/viewport';
 import { outlineData } from '../src/app/components/documents/geometry/outline-data';
 import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/limits';
+import { validateScene } from '../src/app/components/documents/geometry/scene-resources';
 import { en } from '../src/locale/dictionaries/geometry';
 const runtime = vi.hoisted(() => ({ renderers: [] as any[], controls: [] as any[] }));
 vi.mock('three', async original => {
@@ -22,7 +23,7 @@ vi.mock('three/addons/controls/OrbitControls.js', async () => {
   const { EventDispatcher, Vector3 } = await import('three');
   return { OrbitControls: class extends EventDispatcher<any> {
     target = new Vector3(); dispose = vi.fn(); listenToKeyEvents = vi.fn();
-    constructor(readonly object: PerspectiveCamera) { super(); runtime.controls.push(this); }
+    constructor(readonly object: PerspectiveCamera | OrthographicCamera) { super(); runtime.controls.push(this); }
     update() { this.object.lookAt(this.target); this.object.updateMatrixWorld(true); this.dispatchEvent({ type: 'change' }); }
   } };
 });
@@ -198,4 +199,64 @@ it('keeps authored outlines attached to the original occurrences with their loca
     expect(source.children).toHaveLength(1); const line = source.children[0] as LineSegments<BufferGeometry, ShaderMaterial>;
     expect(line.material.vertexShader).not.toContain('occurrenceVisible'); expect(source.layers.mask).toBe(1);
   }
+});
+it('switches projection with one renderer and preserves target-plane scale, target, up and orientation', () => {
+  const f = mount(); f.view.fit('top'); draw();
+  const perspective = f.control().object as PerspectiveCamera, target = f.control().target.clone(), up = perspective.up.clone(), position = perspective.position.clone(), rotation = perspective.quaternion.clone();
+  const span = 2 * perspective.position.distanceTo(target) * Math.tan(perspective.fov * Math.PI / 360) / perspective.zoom;
+  const old = f.control(); f.changed.mockClear(); f.view.setProjection('orthographic');
+  expect(old.dispose).toHaveBeenCalledOnce(); expect(f.control().object).toBeInstanceOf(OrthographicCamera); expect(runtime.renderers).toHaveLength(1);
+  const ortho = f.control().object as OrthographicCamera; expect((ortho.top - ortho.bottom) / ortho.zoom).toBeCloseTo(span, 12);
+  expect(f.control().target.equals(target)).toBe(true); expect(ortho.up.equals(up)).toBe(true); expect(ortho.position.equals(position)).toBe(true); expect(ortho.quaternion.angleTo(rotation)).toBeLessThan(1e-7);
+  expect(f.changed).toHaveBeenCalledOnce(); expect(f.changed.mock.lastCall![0].camera).toMatchObject({ projection: 'orthographic', verticalSpan: span });
+  f.view.setProjection('orthographic'); expect(f.changed).toHaveBeenCalledOnce();
+  f.view.setProjection('perspective'); expect(f.view.projection).toBe('perspective'); expect(f.control().object.position.distanceTo(position)).toBeLessThan(1e-12);
+  expect(f.control().object.up.equals(up)).toBe(true); expect(f.control().target.equals(target)).toBe(true); expect(f.changed.mock.lastCall![0].camera).not.toHaveProperty('verticalSpan');
+});
+it('keeps orthographic effective height on resize and resets/focuses without changing projection', () => {
+  const f = mount(); f.view.setProjection('orthographic'); const camera = f.control().object as OrthographicCamera;
+  camera.zoom = 2; f.control().update(); const span = (camera.top - camera.bottom) / camera.zoom;
+  Object.defineProperty(f.element, 'clientWidth', { value: 320 }); resize();
+  expect((camera.top - camera.bottom) / camera.zoom).toBe(span); expect((camera.right - camera.left) / (camera.top - camera.bottom)).toBeCloseTo(320 / 480);
+  f.view.select('0.0'); f.view.focus(); expect(f.view.projection).toBe('orthographic'); expect(Number.isFinite(f.control().minZoom) && f.control().minZoom > 0).toBe(true); expect(Number.isFinite(f.control().maxZoom)).toBe(true);
+  f.view.fit('front'); f.view.visibility('0.0', false); f.view.reset(); expect(f.view.projection).toBe('orthographic');
+  expect(f.changed.mock.lastCall![0].hidden).toEqual(['0.0']); const position = camera.position; expect(position.x).toBeCloseTo(position.y); expect(position.y).toBeCloseTo(position.z);
+});
+it('restores effective orthographic zoom and flushes a final zoom-only pose through retirement', () => {
+  const f = mount(); f.view.setProjection('orthographic'); const camera = f.control().object as OrthographicCamera, target = f.control().target.clone();
+  camera.zoom = 3; camera.updateProjectionMatrix(); const retired = vi.fn(); f.changed.mockClear(); f.view.flush(retired);
+  expect(retired).toHaveBeenCalledOnce(); expect(f.changed).not.toHaveBeenCalled(); const state = retired.mock.lastCall![0]; f.view.dispose();
+  const restored = mount(undefined, { copyId: 'copy', ...state }); expect(restored.view.projection).toBe('orthographic');
+  const next = restored.control().object as OrthographicCamera; expect((next.top - next.bottom) / next.zoom).toBeCloseTo(state.camera.verticalSpan, 12); expect(restored.control().target.equals(target)).toBe(true);
+  restored.view.setProjection('perspective'); expect(restored.control().object.position.distanceTo(restored.control().target)).toBeCloseTo(state.camera.verticalSpan / (2 * Math.tan(Math.PI / 8)), 12);
+});
+it.each([NaN, Infinity, -1, 0, 1e20, '12', true, false])('rejects the entire saved orthographic pose with invalid span %s', verticalSpan => {
+  const f = mount(undefined, { copyId: 'copy', camera: { projection: 'orthographic', verticalSpan: verticalSpan as number, position: [9, 8, 7], target: [1, 2, 3], up: [0, 0, 1] } });
+  expect(f.view.projection).toBe('perspective'); expect(f.control().target.toArray()).toEqual([0, 0, 0]); expect(f.control().object.up.toArray()).toEqual([0, 1, 0]);
+});
+it('uses orthographic rays for picking and admits a restored distance above the old default controls maximum', () => {
+  const object = new Group(), far = new Mesh(new BoxGeometry(), new MeshBasicMaterial()), near = far.clone(); far.position.z = -2; near.position.z = 2; object.add(far, near);
+  const f = mount(object, { copyId: 'copy', camera: { projection: 'orthographic', verticalSpan: 8, position: [0, 0, 500], target: [0, 0, 0], up: [0, 1, 0] } }); draw();
+  expect(f.view.projection).toBe('orthographic'); expect(f.control().object.position.z).toBe(500); expect(f.control().maxDistance).toBeGreaterThanOrEqual(500);
+  expect(f.control().object.far).toBeGreaterThan(500 + new Vector3().setFromMatrixPosition(near.matrixWorld).length());
+  const canvas = f.renderer.domElement as HTMLCanvasElement; vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 480 } as DOMRect);
+  canvas.dispatchEvent(new MouseEvent('pointerdown', { clientX: 320, clientY: 240 })); canvas.dispatchEvent(new MouseEvent('pointerup', { clientX: 320, clientY: 240 }));
+  expect(f.changed.mock.lastCall![0].selected).toBe('0.1');
+});
+it.each(['projection', 'fit', 'reset'] as const)('publishes one metadata update for an owner-driven %s after idle', action => {
+  const f = mount(); f.view.fit('back'); draw(); vi.advanceTimersByTime(150); f.changed.mockClear();
+  if (action === 'projection') f.view.setProjection('orthographic');
+  else if (action === 'fit') f.view.fit('front');
+  else f.view.reset();
+  expect(f.changed).toHaveBeenCalledOnce(); expect(frames.size).toBe(1);
+  vi.advanceTimersByTime(1000); expect(f.changed).toHaveBeenCalledOnce(); draw(); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+});
+it('restores its own orthographic fit for a large admitted model beyond the source-coordinate camera cap', () => {
+  const object = new Group(); object.add(new Mesh(new BoxGeometry(1e12, 1e12, 1e12), new MeshBasicMaterial()));
+  expect(() => validateScene([object])).not.toThrow();
+  const f = mount(object); f.view.setProjection('orthographic'); const saved = { copyId: 'copy', ...f.changed.mock.lastCall![0] };
+  expect(saved.camera.position.some((value: number) => Math.abs(value) > L.coordinate)).toBe(true); f.view.dispose();
+  const next = mount(object, saved); expect(next.view.projection).toBe('orthographic');
+  expect(next.changed.mock.lastCall![0].camera.verticalSpan).toBe(saved.camera.verticalSpan);
+  next.control().object.position.toArray().forEach((value: number, index: number) => expect(value).toBeCloseTo(saved.camera.position[index], -2));
 });

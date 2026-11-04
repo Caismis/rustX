@@ -9,7 +9,7 @@ const previews = vi.hoisted(() => [] as import('../src/app/components/documents/
 vi.mock('../src/app/components/documents/GeometryDocument', () => ({ preloadGeometry: vi.fn(), GeometryDocument: (props: import('../src/app/components/documents/geometry/GeometryPreview').GeometryPreviewProps) => { previews.push(props); return <div/>; } }));
 const owners: PreviewContentOwner[] = [];
 afterEach(() => { cleanup(); owners.splice(0).forEach(owner => owner.dispose()); previews.length = 0; });
-const camera = { position: [9, 8, 7] as [number, number, number], target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number] };
+const camera = { projection: 'perspective' as const, position: [9, 8, 7] as [number, number, number], target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number] };
 async function loaded() {
   const data = new Uint8Array([1, 2, 3]), signal = new AbortController(); let authorized = true, retained = true;
   const unused = async (): Promise<never> => { throw new Error('unexpected read'); };

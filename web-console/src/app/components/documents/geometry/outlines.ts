@@ -114,14 +114,14 @@ export function createOutlines(root: Object3D, color: () => string, options?: { 
                 if (occurrenceVisible[occurrence / 4][occurrence - (occurrence / 4) * 4] < 0.5) { visibleEdge = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
                 float kind = mod(edgeKind, 3.0);` : ''}
                 vec4 view = modelViewMatrix * vec4(position, 1.0);
-                float a = dot(normalMatrix * faceA, -view.xyz); float b = dot(normalMatrix * faceB, -view.xyz);
+                vec3 eyeDirection = projectionMatrix[3][3] == 0.0 ? -view.xyz : vec3(0.0, 0.0, 1.0);
+                float a = dot(normalMatrix * faceA, eyeDirection); float b = dot(normalMatrix * faceB, eyeDirection);
                 float front = max(step(0.0, a), step(0.0, b));
                 visibleEdge = ${packed ? 'kind' : 'edgeKind'} > 0.5 ? max(front, doubleSided) : step(a * b, 0.0);
                 gl_Position = projectionMatrix * view;
-                // Pull depth toward the eye by one part per million of eye distance.
-                // The perspective projection's translation term converts that
-                // relative tolerance to clip depth without a fixed NDC offset.
-                gl_Position.z -= abs(projectionMatrix[3][2]) * (0.000001 / 0.999999); }`,
+                // Move depth toward the eye by one part per million of eye
+                // distance, using each projection's corresponding clip depth.
+                gl_Position.z -= projectionMatrix[3][3] == 0.0 ? abs(projectionMatrix[3][2]) * (0.000001 / 0.999999) : abs(projectionMatrix[2][2] * view.z) * 0.000001; }`,
             fragmentShader: `uniform vec3 lineColor; varying float visibleEdge;
               void main() { if (visibleEdge < 0.5) discard; gl_FragColor = vec4(lineColor, 1.0);
                 #include <colorspace_fragment>

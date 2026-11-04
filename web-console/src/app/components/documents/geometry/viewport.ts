@@ -1,4 +1,4 @@
-import { AxesHelper, BoxHelper, Color, Group, Mesh, NeutralToneMapping, PerspectiveCamera, Raycaster, Scene, Vector2, Vector3, WebGLRenderer, HemisphereLight, DirectionalLight, type Object3D, type Box3 } from 'three';
+import { AxesHelper, BoxHelper, Color, Group, Mesh, NeutralToneMapping, OrthographicCamera, PerspectiveCamera, Raycaster, Scene, Vector2, Vector3, WebGLRenderer, HemisphereLight, DirectionalLight, type Object3D, type Box3 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { PreviewViewState } from '../../../../presentation/right-panel/preview-view-state';
 import { GEOMETRY_LIMITS as L, GeometryError } from './limits';
@@ -8,6 +8,7 @@ import type { createOutlines, OutlineStatus } from './outlines';
 export type { Part } from './structure';
 
 type Saved = NonNullable<PreviewViewState['geometry']>;
+export type Projection = NonNullable<Saved['camera']>['projection'];
 export type StandardView = 'isometric' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
 let activeContexts = 0;
 
@@ -26,16 +27,23 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   let pendingDraw: WebGLSync | null = null;
   let outlines: ReturnType<typeof createOutlines> | undefined, outlineRequest = 0, outlinesWanted = saved?.outlines !== false;
   container.append(canvas);
-  const scene = new Scene(), centered = new Group(), camera = new PerspectiveCamera(45, 1, 0.001, 1000);
+  const scene = new Scene(), centered = new Group();
+  let camera: PerspectiveCamera | OrthographicCamera = new PerspectiveCamera(45, 1, 0.001, 1000);
   const center = bounds.getCenter(new Vector3()), size = bounds.getSize(new Vector3()), radius = Math.max(size.length() / 2, 1e-6);
   centered.position.copy(center).negate(); centered.add(object); scene.add(centered);
   centered.updateMatrixWorld(true);
   scene.add(new HemisphereLight(0xffffff, 0x667080, 0.6));
   const light = new DirectionalLight(0xffffff, 3); light.position.set(-3, 6, 4); scene.add(light);
   const fill = new DirectionalLight(0xdce9ff, 1.5); fill.position.set(4, 2, -3); scene.add(fill);
-  let controls = new OrbitControls(camera, canvas);
+  let controls: OrbitControls<PerspectiveCamera | OrthographicCamera> = new OrbitControls(camera, canvas);
   const orbitUp = camera.up.clone();
   const configureControls = () => { controls.enableDamping = false; controls.minDistance = radius / 100; controls.maxDistance = radius * 100; controls.listenToKeyEvents(canvas); };
+  const configureZoom = () => {
+    if (!(camera instanceof OrthographicCamera)) return;
+    const height = camera.top - camera.bottom;
+    controls.minZoom = height / (2 * Math.tan(Math.PI / 8) * controls.maxDistance);
+    controls.maxZoom = height / (2 * Math.tan(Math.PI / 8) * Math.max(controls.minDistance, 1e-12));
+  };
   configureControls();
   const axes = new AxesHelper(1), axisScene = new Scene(), axisCamera = new PerspectiveCamera(45, 1, 0.01, 10);
   const axisPositions = axes.geometry.getAttribute('position');
@@ -46,7 +54,9 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const structure = createStructure(object, center, saved);
   let frame = 0, disposed = false, initial = true, restoring = true;
   let cameraDirty = false, interacting = false, lastPublished = -Infinity, publication: ReturnType<typeof setTimeout> | undefined;
-  const snapshot = (): Omit<Saved, 'copyId'> => ({ camera: { position: camera.position.toArray(), target: controls.target.toArray(), up: camera.up.toArray() }, ...structure.snapshot(), outlines: outlinesWanted });
+  const projection = (): Projection => camera instanceof OrthographicCamera ? 'orthographic' : 'perspective';
+  const verticalSpan = () => camera instanceof OrthographicCamera ? (camera.top - camera.bottom) / camera.zoom : 2 * camera.position.distanceTo(controls.target) * Math.tan(camera.fov * Math.PI / 360) / camera.zoom;
+  const snapshot = (): Omit<Saved, 'copyId'> => ({ camera: { position: camera.position.toArray(), target: controls.target.toArray(), up: camera.up.toArray(), ...(camera instanceof OrthographicCamera ? { projection: 'orthographic', verticalSpan: verticalSpan() } : { projection: 'perspective' }) }, ...structure.snapshot(), outlines: outlinesWanted });
   const emit = (publish = change) => {
     if (disposed || restoring) return;
     clearTimeout(publication); publication = undefined; cameraDirty = false; lastPublished = performance.now(); rememberPose(); publish(snapshot());
@@ -83,17 +93,37 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     if (!structure.select(id)) return;
     updateHighlight(); render(); emit();
   };
+  const updateClipping = () => {
+    const far = Math.max(radius * 1000, camera.position.length() + radius * 2, camera.position.distanceTo(controls.target) + radius * 2);
+    if (camera.far !== far) { camera.far = far; camera.updateProjectionMatrix(); }
+  };
+  const setOrthographicSpan = (span: number) => {
+    if (!(camera instanceof OrthographicCamera)) return;
+    const aspect = viewportWidth / viewportHeight || 1;
+    camera.top = span / 2; camera.bottom = -span / 2; camera.left = -span * aspect / 2; camera.right = span * aspect / 2; camera.zoom = 1;
+  };
+  const setProjection = (value: Projection) => {
+    if (disposed || value === projection()) return;
+    const target = controls.target.clone(), direction = camera.position.clone().sub(target), up = camera.up.clone(), span = verticalSpan();
+    const position = camera.position.clone(), near = camera.near, far = camera.far;
+    if (value === 'orthographic') { camera = new OrthographicCamera(); setOrthographicSpan(span); }
+    else { camera = new PerspectiveCamera(45, viewportWidth / viewportHeight || 1); position.copy(direction).normalize().multiplyScalar(span / (2 * Math.tan(Math.PI / 8))).add(target); }
+    camera.position.copy(position); camera.up.copy(up); camera.near = near; camera.far = far; camera.updateProjectionMatrix();
+    controls.maxDistance = Math.max(controls.maxDistance, camera.position.distanceTo(target));
+    interacting = false; synchronizeOrbit(target); updateClipping(); render(); emit();
+  };
   const frameBounds = (box: Box3, view?: StandardView) => {
     if (box.isEmpty()) return;
     const directions: Record<StandardView, [number, number, number]> = { isometric: [1, 1, 1], front: [0, 0, 1], back: [0, 0, -1], left: [-1, 0, 0], right: [1, 0, 0], top: [0, 1, 0], bottom: [0, -1, 0] };
     const frameRadius = Math.max(box.getSize(new Vector3()).length() / 2, 1e-9);
-    const distance = frameRadius / Math.sin(Math.PI / 8) / Math.min(1, camera.aspect) * 1.1;
+    const aspect = viewportWidth / viewportHeight || 1, distance = frameRadius / Math.sin(Math.PI / 8) / Math.min(1, aspect) * 1.1;
     const direction = view ? new Vector3().fromArray(directions[view]) : camera.position.clone().sub(controls.target);
     const target = box.getCenter(new Vector3());
     camera.position.copy(direction).normalize().multiplyScalar(distance).add(target);
     if (view) camera.up.set(0, view === 'top' || view === 'bottom' ? 0 : 1, view === 'top' ? -1 : view === 'bottom' ? 1 : 0);
-    controls.minDistance = frameRadius / 100;
-    camera.near = Math.max(Math.min(radius, frameRadius) / 10_000, 1e-12); camera.far = radius * 1000; camera.updateProjectionMatrix(); synchronizeOrbit(target); render(); emit();
+    if (camera instanceof OrthographicCamera) setOrthographicSpan(frameRadius * 2 / Math.min(1, aspect) * 1.1);
+    controls.minDistance = frameRadius / 100; controls.maxDistance = Math.max(radius * 100, distance);
+    camera.near = Math.max(Math.min(radius, frameRadius) / 10_000, 1e-12); camera.updateProjectionMatrix(); synchronizeOrbit(target); updateClipping(); render(); emit();
   };
   const fit = (view?: StandardView) => frameBounds(structure.bounds(object, true), view);
   const reset = () => frameBounds(bounds.clone().translate(center.clone().negate()), 'isometric');
@@ -131,24 +161,33 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     // Set size and DPR together: setPixelRatio() itself resizes the buffer.
     renderer.setDrawingBufferSize(width, height, pixelRatio);
     canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
-    camera.aspect = width / height; camera.updateProjectionMatrix();
+    if (camera instanceof PerspectiveCamera) camera.aspect = width / height;
+    else { const span = camera.top - camera.bottom; camera.left = -span * width / height / 2; camera.right = span * width / height / 2; }
+    camera.updateProjectionMatrix();
     if (initial) { initial = false; reset();
-      const pose = saved?.camera;
-      if (pose && [pose.position, pose.target, pose.up].every(values => values.length === 3 && values.every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate))) {
+      const pose = saved?.camera, cameraLimit = Math.max(L.coordinate, radius * 2000);
+      const vector = (values: unknown, limit: number): values is [number, number, number] => Array.isArray(values) && values.length === 3 && values.every(value => Number.isFinite(value) && Math.abs(value) <= limit);
+      if (pose && (pose.projection === 'perspective' || pose.projection === 'orthographic') && Number.isFinite(cameraLimit) && vector(pose.position, cameraLimit) && vector(pose.target, cameraLimit) && vector(pose.up, L.coordinate)) {
         const position = new Vector3().fromArray(pose.position), target = new Vector3().fromArray(pose.target), up = new Vector3().fromArray(pose.up);
         const distance = position.distanceTo(target);
-        if (distance > 1e-12 && distance < radius * 1000 && up.lengthSq() > 0) { camera.position.copy(position); camera.up.copy(up).normalize(); controls.minDistance = Math.min(radius / 100, distance / 100); camera.near = Math.max(Math.min(radius, distance) / 10_000, 1e-12); camera.updateProjectionMatrix(); synchronizeOrbit(target); }
+        const spanDistance = pose.projection === 'orthographic' ? (typeof pose.verticalSpan === 'number' && Number.isFinite(pose.verticalSpan) ? pose.verticalSpan / (2 * Math.tan(Math.PI / 8)) : NaN) : distance;
+        if (distance > 1e-12 && distance < radius * 1000 && up.lengthSq() > 0 && Number.isFinite(spanDistance) && spanDistance >= 1e-12 && spanDistance < radius * 1000) {
+          if (pose.projection === 'orthographic') { camera = new OrthographicCamera(); setOrthographicSpan(pose.verticalSpan); }
+          camera.position.copy(position); camera.up.copy(up).normalize(); controls.minDistance = Math.min(radius / 100, distance / 100, spanDistance / 100); controls.maxDistance = Math.max(radius * 100, distance, spanDistance);
+          camera.near = Math.max(Math.min(radius, distance, spanDistance) / 10_000, 1e-12); camera.updateProjectionMatrix(); synchronizeOrbit(target); updateClipping();
+        }
       }
     }
     render();
   };
   let viewportWidth = 0, viewportHeight = 0, viewportRatio = 0;
   const observedPosition = camera.position.clone(), observedTarget = controls.target.clone(), observedRotation = camera.quaternion.clone();
-  const rememberPose = () => { observedPosition.copy(camera.position); observedTarget.copy(controls.target); observedRotation.copy(camera.quaternion); };
-  const poseChanged = () => !observedPosition.equals(camera.position) || !observedTarget.equals(controls.target) || !observedRotation.equals(camera.quaternion);
+  let observedZoom = camera.zoom, observedProjection = projection();
+  const rememberPose = () => { observedPosition.copy(camera.position); observedTarget.copy(controls.target); observedRotation.copy(camera.quaternion); observedZoom = camera.zoom; observedProjection = projection(); };
+  const poseChanged = () => !observedPosition.equals(camera.position) || !observedTarget.equals(controls.target) || !observedRotation.equals(camera.quaternion) || observedZoom !== camera.zoom || observedProjection !== projection();
   const changed = () => {
     rememberPose();
-    render(); if (restoring || disposed) return;
+    updateClipping(); render(); if (restoring || disposed) return;
     cameraDirty = true;
     if (interacting) return;
     const remaining = 100 - (performance.now() - lastPublished);
@@ -171,14 +210,19 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   controls.addEventListener('start', started);
   controls.addEventListener('end', ended);
   function synchronizeOrbit(target: Vector3) {
-    const minDistance = controls.minDistance;
-    if (!orbitUp.equals(camera.up)) {
+    const minDistance = controls.minDistance, maxDistance = controls.maxDistance;
+    if (controls.object !== camera || !orbitUp.equals(camera.up)) {
       // OrbitControls fixes its orbit-axis quaternion at construction time.
       // Recreate through its public lifecycle instead of mutating internals.
       controls.removeEventListener('change', changed); controls.removeEventListener('start', started); controls.removeEventListener('end', ended); controls.dispose();
       controls = new OrbitControls(camera, canvas); orbitUp.copy(camera.up); configureControls(); controls.addEventListener('change', changed); controls.addEventListener('start', started); controls.addEventListener('end', ended);
     }
-    controls.minDistance = minDistance; controls.target.copy(target); controls.update(); rememberPose();
+    controls.minDistance = minDistance; controls.maxDistance = maxDistance; configureZoom(); controls.target.copy(target);
+    // The caller renders and publishes this owner-driven pose exactly once.
+    // Keep OrbitControls' change listener for subsequent user input only.
+    controls.removeEventListener('change', changed);
+    try { controls.update(); } finally { controls.addEventListener('change', changed); }
+    rememberPose();
   }
   const observer = new ResizeObserver(resize); observer.observe(container);
   // A resolution media query changes when moving between displays or zooming,
@@ -218,7 +262,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     restoring = false; emit();
   } catch (error) { dispose(); throw error; }
   return { parts: structure.parts, fit, reset, focus, select, visibility, inspect: structure.inspect,
-    setOutlines,
+    setOutlines, setProjection, get projection() { return projection(); },
     isolate: () => structureAction(structure.isolate), restore: () => structureAction(structure.restore), showAll: () => structureAction(structure.showAll),
     relabel: (value: AxisLabels & { canvas: string }) => { canvas.setAttribute('aria-label', value.canvas); canvas.setAttribute('aria-description', value.axes); navigation.relabel(value); }, flush, dispose };
 }

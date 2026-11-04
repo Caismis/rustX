@@ -37,3 +37,18 @@ RUSTX_BROWSER_WS_ENDPOINT=ws://127.0.0.1:5277/ \
 ```
 
 Their attachments include observed compile/reuse wait times and complete resource retirement. These lifecycle observations include outline completion and any retained shader state; they are separate from cold acceptance.
+
+To include the STL lazy-loading regression, first serve the ordinary production
+application with `pnpm preview --port 5173 --strictPort` in another terminal,
+then run all three request-boundary cases through the production fixtures:
+
+```sh
+RUSTX_BROWSER_WS_ENDPOINT=ws://127.0.0.1:5277/ \
+  bash web-console/scripts/geometry-performance.sh geometry-code.spec.ts geometry.spec.ts \
+  --repeat-each 1 \
+  --grep 'cancelled CAD code wait|two actual split CAD owners|production startup defers geometry'
+```
+
+Set `RUSTX_E2E_PREVIEW_PORT` when the application uses another port. Vite's
+development URL-import modules are metadata; request accounting distinguishes
+them from actual WASM bytes and executable CAD glue/Worker code in both lanes.

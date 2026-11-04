@@ -307,7 +307,7 @@ it('preserves a retirement camera flush through pane split and move without chan
   const first = owner.openPreview(artifact('first'))!, second = owner.openPreview(artifact('second'))!;
   owner.measure(1000, owner.getSnapshot().geometryEpoch);
   const before = workspace();
-  const pose = (x: number) => ({ copyId: 'copy', camera: { position: [x, 2, 3] as [number, number, number], target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number] } });
+  const pose = (x: number) => ({ copyId: 'copy', camera: { projection: 'perspective' as const, position: [x, 2, 3] as [number, number, number], target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number] } });
   owner.getSnapshot().leases.get(second)!.signal.addEventListener('abort', () => owner.updateView(second, { geometry: pose(9) }), { once: true });
   owner.split();
   expect(workspace().tabs.find(tab => tab.id === second)!.view.geometry).toEqual(pose(9)); expect(before.tabs.find(tab => tab.id === second)!.view.geometry).toBeUndefined();

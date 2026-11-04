@@ -90,6 +90,31 @@ test('all six axis endpoints match menu directions, stay separate and never pick
   await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('geometry-axis-narrow-zh-dark.png') });
 });
 
+test('projection switches preserve framing and resources, persist orthographic wheel zoom, and reset in the chosen projection', async ({ page }, info) => {
+  await load(page); const tree = await parts(page);
+  await tree.getByRole('checkbox', { name: 'Visible: B', exact: true }).uncheck(); await tree.getByRole('button', { name: 'A', exact: true }).click();
+  await page.getByRole('button', { name: 'Focus selected', exact: true }).click(); await page.getByRole('button', { name: 'Close parts', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Model outlines', exact: true })).toHaveAttribute('aria-pressed', 'true'); await painted(page);
+  const initial = await pose(page), initialReads = await reads(page), before = await resources(page);
+  await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: 'Orthographic', exact: true }).click(); await painted(page);
+  const orthographic = await pose(page); expect(orthographic.camera.projection).toBe('orthographic');
+  for (const key of ['position', 'target', 'up']) orthographic.camera[key].forEach((value: number, i: number) => expect(value).toBeCloseTo(initial.camera[key][i], 8));
+  const distance = Math.hypot(...initial.camera.position.map((value: number, i: number) => value - initial.camera.target[i]));
+  expect(orthographic.camera.verticalSpan).toBeCloseTo(2 * distance * Math.tan(Math.PI / 8), 8); expect(await resources(page)).toEqual(before);
+  const canvas = page.locator('[data-geometry-format] canvas'), box = (await canvas.boundingBox())!; await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.wheel(0, -100);
+  await expect.poll(async () => (await pose(page)).camera.verticalSpan).toBeLessThan(orthographic.camera.verticalSpan); const zoomed = await pose(page);
+  zoomed.camera.position.forEach((value: number, i: number) => expect(value).toBeCloseTo(orthographic.camera.position[i], 8));
+  await page.getByRole('button', { name: 'Hide delivery', exact: true }).click(); await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
+  await page.getByRole('button', { name: 'Show delivery', exact: true }).click(); await ready(page);
+  const restored = await pose(page); expect(restored.camera.projection).toBe('orthographic'); expect(restored.camera.verticalSpan).toBeCloseTo(zoomed.camera.verticalSpan, 8); expect(restored.hidden).toEqual(initial.hidden); expect(restored.selected).toBe(initial.selected); expect(await reads(page)).toBe(initialReads);
+  await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: 'Reset view', exact: true }).click();
+  const reset = await pose(page); expect(reset.camera.projection).toBe('orthographic'); expect(reset.hidden).toEqual(initial.hidden); expect(reset.camera.position[0]).toBeCloseTo(reset.camera.position[1], 8); expect(reset.camera.position[1]).toBeCloseTo(reset.camera.position[2], 8);
+  await page.getByRole('button', { name: 'View angle', exact: true }).click(); await expect(page.getByRole('menuitem', { name: 'Orthographic', exact: true })).toHaveAttribute('aria-current', 'true');
+  await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('projection-orthographic-menu.png') });
+  await page.getByRole('menuitem', { name: 'Perspective', exact: true }).click();
+  expect((await pose(page)).camera.projection).toBe('perspective'); expect((await pose(page)).camera).not.toHaveProperty('verticalSpan'); expect((await resources(page)).contexts).toBe(1);
+});
+
 test('mesh outlines start enabled, can be disabled, restore the option and add no idle loop', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await load(page); const initialReads = await reads(page);
@@ -116,7 +141,7 @@ test('mesh outlines start enabled, can be disabled, restore the option and add n
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
 });
 
-for (const scale of [1e-6, 1, 1e6]) test(`thin occluded outlines remain hidden at model scale ${scale}`, async ({ page }) => {
+for (const projection of ['Perspective', 'Orthographic']) for (const scale of [1e-6, 1, 1e6]) test(`${projection} thin occluded outlines remain hidden at model scale ${scale}`, async ({ page }) => {
   // The source cube spans [0, 10]. Keep its opaque authored material and form
   // a 2x2x.02 occluder at the origin and a 1x1x.02 box at z=-.04.
   await load(page, 'delivery', assemblyGlb([
@@ -124,6 +149,7 @@ for (const scale of [1e-6, 1, 1e6]) test(`thin occluded outlines remain hidden a
     { name: 'A', mesh: 0, translation: [-1, -1, -.01], scale: [.2, .2, .002] },
     { name: 'B', mesh: 0, translation: [-.5, -.5, -.05], scale: [.1, .1, .002] },
   ]));
+  await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: projection, exact: true }).click();
   await page.getByRole('button', { name: 'View angle', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Front', exact: true }).click();
   const tree = await parts(page), canvas = page.locator('[data-geometry-format] canvas');
@@ -156,10 +182,11 @@ function thinAssemblyStl(scale: number) {
   }
   return [...new TextEncoder().encode(text.join('\n'))];
 }
-for (const scale of [1e-6, 1, 1e6]) test(`generated thin occluded outlines remain hidden at model scale ${scale}`, async ({ page }) => {
+for (const projection of ['Perspective', 'Orthographic']) for (const scale of [1e-6, 1, 1e6]) test(`${projection} generated thin occluded outlines remain hidden at model scale ${scale}`, async ({ page }) => {
   await instrument(page); await page.goto(`${origin}/test/fixtures/geometry.html`);
   await page.evaluate(bytes => (window as any).geometryContract.replace('cube.stl', bytes), thinAssemblyStl(scale));
   await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click(); await ready(page);
+  await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: projection, exact: true }).click();
   await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: 'Front', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Model outlines', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const canvas = page.locator('[data-geometry-format] canvas'), tree = page.getByRole('list', { name: 'Parts', exact: true });

@@ -71,7 +71,7 @@ it('saves a retiring camera at full real body capacity before replacing its pane
     const c = open('c'); owner.selectTab(b);
     const old = owner.getSnapshot().leases.get(b)!; expect(owner.getSnapshot().leases.size).toBe(2);
     let retired = false;
-    const geometry: NonNullable<import('../src/presentation/right-panel/preview-view-state').PreviewViewState['geometry']> = { copyId: 'copy', camera: { position: [9,8,7], target: [0,0,0], up: [0,1,0] } };
+    const geometry: NonNullable<import('../src/presentation/right-panel/preview-view-state').PreviewViewState['geometry']> = { copyId: 'copy', camera: { projection: 'perspective', position: [9,8,7], target: [0,0,0], up: [0,1,0] } };
     old.signal.addEventListener('abort', () => { owner.updateView(b, { geometry }); retired = true; }, { once: true });
     owner.selectTab(c);
     expect(errors).toEqual([]); expect(retired).toBe(true); expect(old.signal.aborted).toBe(true);

@@ -23,31 +23,16 @@
 .partsPanel { composes: rail from '../../../../presentation/primitives/CanvasTools.module.css'; inset-inline-start: 60px; top: 16px; align-items: stretch; gap: 0; padding: 0; width: min(280px, calc(100% - 76px)); max-height: calc(100% - 32px); overflow: hidden; }
 .partsHeader { display: flex; flex: none; align-items: center; justify-content: space-between; padding: 6px 8px 6px 12px; border-bottom: .5px solid var(--dsw-alias-border-l3); font-size: 13px; font-weight: 500; }
 .partsHeader .panelClose { width: 24px; height: 24px; padding: 0; color: var(--dsw-alias-label-secondary); }
-.parts { flex: 1; min-height: 0; list-style: none; padding: 6px; margin: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-.parts ul { list-style: none; padding-inline-start: 12px; margin: 0; }
-.partRow { display: flex; align-items: center; gap: 2px; min-width: 0; border-radius: var(--dsw-radius-sm); }
-.partRow:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.parts .disclosure { width: 20px; flex: none; padding: 0; color: var(--dsw-alias-label-tertiary); }
-.disclosure svg { transition: transform 140ms ease; }
-.expanded { transform: rotate(90deg); }
-.branchSpace { width: 20px; flex: none; }
-.parts .partButton { justify-content: flex-start; min-width: 0; flex: 1; padding-inline: 6px; border-radius: var(--dsw-radius-sm); text-align: start; font-size: 12px; }
-.partButton > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.partButton > span:first-child { flex: none; color: var(--dsw-alias-label-tertiary); }
-.parts .partButton[aria-pressed="true"] { background: var(--dsw-alias-interactive-bg-active); }
-.parts .visibility { flex: none; width: 28px; padding: 0; color: var(--dsw-alias-label-secondary); }
-.visibilityAnchor { display: flex; flex: none; }
 .structureActions { display: flex; flex: none; flex-wrap: wrap; gap: 4px; padding: 6px; border-bottom: .5px solid var(--dsw-alias-border-l3); }
 .properties { display: flex; flex: none; flex-direction: column; gap: 4px; min-height: 0; max-height: 42%; padding: 8px 12px; overflow: auto; border-top: .5px solid var(--dsw-alias-border-l3); color: var(--dsw-alias-label-secondary); font-size: 11px; }
 .properties strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-primary); }
 .properties dl { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; row-gap: 2px; margin: 0; font-variant-numeric: tabular-nums; }
 .properties dt { color: var(--dsw-alias-label-tertiary); }
 .properties dd { margin: 0; text-align: end; overflow-wrap: anywhere; }
-.parts [data-hidden] .partButton { opacity: .5; }
 .message, .loading { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; box-sizing: border-box; gap: 12px; margin: 0; padding: 24px; color: var(--dsw-alias-label-document-preview); font-size: 13px; line-height: 20px; text-align: center; }
 .message p { max-width: 320px; margin: 0; }
 .message > svg { width: 32px; height: 32px; opacity: .6; }
 .loading { pointer-events: none; }
 .loader { width: 20px; height: 20px; box-sizing: border-box; border: 1.5px solid currentColor; border-inline-end-color: transparent; border-radius: 50%; animation: spin 800ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .loader { animation: none; } .disclosure svg { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .loader { animation: none; } }
