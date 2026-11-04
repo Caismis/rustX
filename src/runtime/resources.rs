@@ -287,6 +287,17 @@ impl RuntimeResourceSnapshot {
         snapshot
     }
 
+    /// This generation with another effective Tool environment.
+    #[cfg(test)]
+    pub(crate) fn with_effective_environment(
+        &self,
+        environment: crate::tools::environment::ToolEnvironment,
+    ) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.capability = Arc::new(self.capability.with_effective_environment(environment));
+        snapshot
+    }
+
     pub(crate) fn with_revision(mut self, revision: RuntimeResourceRevision) -> Self {
         self.revision = revision;
         self

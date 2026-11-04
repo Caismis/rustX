@@ -90,10 +90,25 @@ pub(crate) fn read_resource(
         .map_err(|e| RuntimeResourceLoadError::new(e).at(path, "resources"))
 }
 
+/// The entries of a resource root (`.agents`) that configuration reads.
+pub(crate) const SOURCE_ENTRIES: [&str; 5] = ["agents", "mcp.toml", "skills", "tools", "workflows"];
+
+/// Whether `name`, directly under a resource root, is configuration input:
+/// a source entry or a guidance file the loader reads. Anything else there —
+/// Session uploads in particular — is not.
+pub(crate) fn is_source_entry(name: &std::ffi::OsStr) -> bool {
+    SOURCE_ENTRIES.iter().any(|entry| name == *entry)
+        || crate::runtime::resources::PROJECT_CONTEXT_FILENAMES
+            .iter()
+            .any(|guidance| name == *guidance)
+}
+
 /// Revision of authored resource bytes, including malformed and shadowed entries.
 /// This is change detection, not discovery or configuration authority. Symlinks
 /// are hashed as links and never followed. Traversal is bounded even for invalid
 /// unused trees, and writer locks/staging files do not count as authored input.
+/// Only [`is_source_entry`] entries of the root count, so Session uploads
+/// written beside them never change it.
 pub(crate) fn revision(root: &Path) -> String {
     use sha2::{Digest, Sha256};
     fn walk(
@@ -134,9 +149,10 @@ pub(crate) fn revision(root: &Path) -> String {
             entries.sort_by_key(std::fs::DirEntry::file_name);
             for entry in entries {
                 let name = entry.file_name();
-                if depth <= 1
-                    && (name.as_encoded_bytes().starts_with(b".tmp")
-                        || super::settings::is_writer_artifact(&name))
+                if (depth == 0 && !is_source_entry(&name))
+                    || (depth <= 1
+                        && (name.as_encoded_bytes().starts_with(b".tmp")
+                            || super::settings::is_writer_artifact(&name)))
                 {
                     continue;
                 }
@@ -176,6 +192,27 @@ pub(crate) fn revision(root: &Path) -> String {
 mod tests {
     use super::*;
     use std::os::unix::fs::MetadataExt;
+
+    /// Session uploads and other entries configuration never reads leave the
+    /// revision alone; a source entry or a guidance file changes it.
+    #[test]
+    fn only_configuration_entries_change_the_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join(".agents");
+        std::fs::create_dir_all(root.join("skills/guide")).unwrap();
+        std::fs::write(root.join("skills/guide/SKILL.md"), b"A").unwrap();
+        let initial = revision(&root);
+        let uploads = root.join("uploads/ses_1/batch");
+        std::fs::create_dir_all(&uploads).unwrap();
+        std::fs::write(uploads.join("report.txt"), b"upload").unwrap();
+        std::fs::write(root.join("notes.txt"), b"not read").unwrap();
+        assert_eq!(revision(&root), initial, "uploads are not configuration");
+        std::fs::write(root.join("AGENTS.md"), b"guidance").unwrap();
+        let guided = revision(&root);
+        assert_ne!(guided, initial, "a guidance file is configuration");
+        std::fs::write(root.join("skills/guide/SKILL.md"), b"B").unwrap();
+        assert_ne!(revision(&root), guided, "a source entry is configuration");
+    }
 
     #[test]
     fn case_sensitive_discovery_counts_lock_directory_case_variants() {

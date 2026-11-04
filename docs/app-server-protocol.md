@@ -1942,7 +1942,8 @@ inherits (compared by value, never retained). `model` changes when an
 invocation that runs resolves differently — the Session's selections, a Named
 Agent's explicit model or a direct Workflow Model node's, including provider
 binding, wire model, compat and parameters. `execution_policy` also changes
-with an authorized environment value. A Skill state is `{ entry, version_id }`. The server
+with the effective Tool environment: an authorized value or a shared Skill
+Python/Node environment. A Skill state is `{ entry, version_id }`. The server
 binding appears only as a digest of its transport and policy, never its
 credentials. Both are
 retained with the fact and read through `conversation/contentRead` (or the
@@ -1967,7 +1968,8 @@ Invariants:
   durable failure. Units keep their real outcome, so a published unit is
   retained across reload either way; a healthy replacement allocation recovers
   the view and notifies its observers, whichever entry (client load,
-  Scheduler or recovery) published it, before that entry reports it loaded.
+  Scheduler or recovery) published it, before that entry reports it loaded
+  and only while it is still the Session's resident incarnation.
 - The fact never enters model context. Web Chat shows only Tool additions and
   removals from it; instruction, context, Skill and same-name Tool changes stay
   in Trace and inspection.

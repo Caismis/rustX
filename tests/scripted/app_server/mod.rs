@@ -73,10 +73,10 @@ impl AsyncGate {
         self.entered.send_replace(true);
         self.release.subscribe().wait_for(|v| *v).await.unwrap();
     }
-    /// Parks a synchronous caller on a multi-threaded runtime; an unarmed
-    /// gate returns at once.
-    pub(super) fn park_blocking(&self) {
-        if *self.release.borrow() {
+    /// Parks the first synchronous caller after arming on a multi-threaded
+    /// runtime; later callers, and every caller of an unarmed gate, pass.
+    pub(super) fn park_first_blocking(&self) {
+        if *self.release.borrow() || *self.entered.borrow() {
             return;
         }
         tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(self.park()));

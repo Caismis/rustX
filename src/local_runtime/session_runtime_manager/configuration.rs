@@ -75,6 +75,25 @@ impl SessionRuntimeManager {
         })
     }
 
+    /// Whether `incarnation` is the Session's resident now. Callers hold the
+    /// application lock, so the answer stands until they release it: the
+    /// registry lock is taken after it, never before.
+    pub(super) fn is_current_resident(
+        &self,
+        session: &SessionId,
+        incarnation: super::RuntimeIncarnationId,
+    ) -> bool {
+        let registry = self.registry.0.lock().expect("registry mutex");
+        registry
+            .by_session
+            .get(session)
+            .and_then(|id| registry.entries.get(id))
+            .is_some_and(|entry| {
+                matches!(entry, super::Entry::Loaded(current)
+                if current.identity.incarnation == incarnation)
+            })
+    }
+
     fn rebase_runtime_catalog(
         &self,
         session: &SessionId,
@@ -82,18 +101,7 @@ impl SessionRuntimeManager {
         runtime: &ConversationRuntime,
     ) {
         let mut application = self.applications.lock();
-        let current = {
-            let registry = self.registry.0.lock().expect("registry mutex");
-            registry
-                .by_session
-                .get(session)
-                .and_then(|id| registry.entries.get(id))
-                .is_some_and(|entry| {
-                    matches!(entry, super::Entry::Loaded(current)
-                    if current.identity.incarnation == incarnation)
-                })
-        };
-        if !current {
+        if !self.is_current_resident(session, incarnation) {
             return;
         }
         let revision = runtime.configuration_cut().binding_revision;

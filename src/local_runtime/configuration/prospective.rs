@@ -129,15 +129,38 @@ impl ProspectiveSessionConfig {
     }
 
     /// Whether every invocation an Attempt of this Session would freeze is
-    /// effectively unchanged: the primary and explicit Summary selection, and
-    /// those of every admitted named Agent. Compared as resolved invocations
+    /// effectively unchanged: the primary and explicit Summary selection,
+    /// those of every admitted named Agent and of every direct Model node of
+    /// an enabled Workflow. Compared as resolved invocations
     /// ([`ModelCatalog::same_invocation`]), so authored spelling and
     /// unselected catalog entries never force a preparation, while any
     /// provider binding, wire model, limit, Profile, reasoning or parameter
     /// change does. Catalog edits reach future selections separately, through
     /// catalog publication ([`Self::same_catalog`]).
     pub(crate) fn same_provider(&self, other: &Self) -> bool {
-        self.same_session_model(other) && self.same_agent_models(other)
+        self.same_session_model(other)
+            && self.same_agent_models(other)
+            && self.same_workflow_models(other)
+    }
+
+    /// Whether two complete closures enable the same direct Workflow Model
+    /// nodes with effectively the same explicit invocations.
+    fn same_workflow_models(&self, other: &Self) -> bool {
+        let (left, right) = (
+            self.workflow_model_selections(),
+            other.workflow_model_selections(),
+        );
+        left.len() == right.len()
+            && left.iter().all(|(node, selection)| {
+                right.get(node).is_some_and(|other_selection| {
+                    self.models.same_invocation(
+                        selection,
+                        &other.models,
+                        other_selection,
+                        crate::model::invocation::RequestParamsLayer::SessionOverrides,
+                    )
+                })
+            })
     }
 
     /// Whether the Session's own primary and explicit Summary selections
@@ -184,30 +207,38 @@ impl ProspectiveSessionConfig {
                 .get(name)
                 .and_then(|definition| definition.profile().model.clone())
                 .is_none_or(|model| adopted.same_model(&model, self, &model))
-        }) && adopted.workflow_model_selections().iter().all(|selection| {
-            adopted.models.same_invocation(
-                selection,
-                &self.models,
-                selection,
-                crate::model::invocation::RequestParamsLayer::SessionOverrides,
-            )
-        })
+        }) && adopted
+            .workflow_model_selections()
+            .values()
+            .all(|selection| {
+                adopted.models.same_invocation(
+                    selection,
+                    &self.models,
+                    selection,
+                    crate::model::invocation::RequestParamsLayer::SessionOverrides,
+                )
+            })
     }
 
     /// The explicit selection of every direct Model node in the Workflows
-    /// this capture enables.
-    fn workflow_model_selections(&self) -> Vec<crate::model::ModelSelection> {
+    /// this capture enables, by Workflow and authored path.
+    fn workflow_model_selections(
+        &self,
+    ) -> std::collections::BTreeMap<
+        (crate::runtime::workflow::WorkflowId, String),
+        crate::model::ModelSelection,
+    > {
         self.config
             .agent
             .workflows
             .iter()
-            .filter_map(|id| self.workflows.entries().get(id))
-            .flat_map(|entry| {
+            .filter_map(|id| Some((id, self.workflows.entries().get(id)?)))
+            .flat_map(|(id, entry)| {
                 entry
                     .source
                     .model_policy_nodes()
                     .into_iter()
-                    .filter_map(|node| node.policy.selection())
+                    .filter_map(|node| Some(((id.clone(), node.path), node.policy.selection()?)))
                     .collect::<Vec<_>>()
             })
             .collect()

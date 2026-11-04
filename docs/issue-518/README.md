@@ -71,9 +71,11 @@ Server protocol/connection layer.
   direct Workflow Model node at any depth), over
   their provider binding, wire model, compat and parameters, never the client
   view or catalog entries nothing selects; preparation uses the same set, so
-  such a change is never published as catalog-only. An authorized
-  environment value change is also `execution_policy`, since every Tool runs
-  in it. Preparation compares the binding of every source an admitted Agent
+  such a change is never published as catalog-only, and a failed preparation
+  never reports Provider `applied` for one it did not install. The whole
+  effective Tool environment — authorized entries and the shared Skill
+  Python/Node environments — is `execution_policy`, since every Root Tool
+  runs in it. Preparation compares the binding of every source an admitted Agent
   selects too, so moving one is adopted.
   The independently
   published execution-policy unit (approval mode, model timeout, Tool
@@ -97,7 +99,11 @@ Server protocol/connection layer.
   unit is still retained for reload; a healthy replacement allocation
   recovers the view and notifies its observers. Every entry that publishes a
   resident (a client load, a Scheduler cold start, recovery) attaches it at
-  that one publication, before reporting it loaded.
+  that one publication, before reporting it loaded, and only while it is
+  still the Session's resident incarnation: a replaced allocation's late
+  attach never takes the application back. The `.agents` resource revision
+  counts only configuration entries, so Session uploads written beside them
+  never conflict with a configuration read or capture.
 - **External edits.** A bounded `notify` watcher routes changed paths to their
   owning source target and feeds `observe_source_change`, the same capture,
   fence and validation path as a native write. Coverage: User document
@@ -147,6 +153,10 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | A child-only model parameter change and a provider endpoint move under an unchanged Session view are each one Model fact; adding an unselected model records nothing | `automatic_commit::model_facts_follow_the_invocations_that_run` |
 | A runtime only the Scheduler starts cold recovers the uncertain view and notifies observers | `schedule::workflow::a_scheduler_cold_start_recovers_the_configuration_application` |
 | `load()` returns only after its runtime owns the application; parked before the attach, it has not returned | `automatic_commit::a_load_returns_only_after_its_runtime_owns_the_application` |
+| A replaced allocation parked before the application lock never reattaches over its successor's unrecorded commit | `automatic_commit::a_replaced_allocation_never_reattaches_late` |
+| A failed preparation of a Workflow-model and Workflow-prompt capture reports Provider failed and installs nothing | `automatic_commit::a_failed_preparation_never_reports_an_uninstalled_workflow_model` |
+| A new shared Skill environment root is `execution_policy` with every authorized entry, Tool and Skill unchanged; no path is retained | `automatic_commit::a_new_skill_environment_is_execution_policy` |
+| Session uploads and unread `.agents` entries leave the resource revision unchanged | `resource_directory::tests::only_configuration_entries_change_the_revision` |
 | A parameter change of a model only a direct Workflow Model node names is one Model fact; an unselected model records nothing | `automatic_commit::a_workflow_model_node_is_a_model_that_runs` |
 | An environment value change changes `subagent` and execution policy; the catalog names the variable, never its value | `automatic_commit::an_environment_value_change_is_recorded_without_its_value` |
 | A credential reference switch on a source only a lazy child runs on changes `subagent`; no credential reaches the catalog | `mcp_readiness::a_hidden_source_credential_switch_changes_the_tool_that_runs_it` |

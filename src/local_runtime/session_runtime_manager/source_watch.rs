@@ -36,8 +36,7 @@ use notify::{RecursiveMode, Watcher};
 use super::SessionRuntimeManager;
 use crate::local_runtime::configuration::settings::SourceTarget;
 
-/// The entries of a resource root (`.agents`) that configuration reads.
-const RESOURCE_ENTRIES: [&str; 5] = ["agents", "mcp.toml", "skills", "tools", "workflows"];
+use crate::local_runtime::resource_directory::SOURCE_ENTRIES;
 
 /// Whether `path` is `root` itself, one of its guidance files, or lies under
 /// one of its source entries.
@@ -45,9 +44,7 @@ fn is_resource(path: &Path, root: &Path) -> bool {
     path.strip_prefix(root).is_ok_and(|relative| {
         let mut components = relative.components();
         components.next().is_none_or(|entry| {
-            RESOURCE_ENTRIES
-                .iter()
-                .any(|name| entry.as_os_str() == *name)
+            SOURCE_ENTRIES.iter().any(|name| entry.as_os_str() == *name)
                 || (components.next().is_none() && is_guidance(entry.as_os_str()))
         })
     })
@@ -64,7 +61,7 @@ fn is_guidance(name: &std::ffi::OsStr) -> bool {
 /// direct entries, and each source directory recursively.
 fn resource_watches(root: &Path, watches: &mut BTreeMap<PathBuf, RecursiveMode>) {
     watches.insert(root.to_path_buf(), RecursiveMode::NonRecursive);
-    for name in RESOURCE_ENTRIES {
+    for name in SOURCE_ENTRIES {
         let entry = root.join(name);
         if entry.is_dir() {
             watches.insert(entry, RecursiveMode::Recursive);

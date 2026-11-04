@@ -1734,6 +1734,81 @@ async fn a_workflow_model_node_is_a_model_that_runs() {
     .await;
 }
 
+/// Provider reports `applied` only for invocations actually installed: a
+/// capture that tunes the model only a Workflow Model node names and edits
+/// that Workflow's prompt fails capability preparation, so Provider fails
+/// too, nothing is recorded, and the runtime keeps the old Workflow.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_preparation_never_reports_an_uninstalled_workflow_model() {
+    bounded(async {
+        use crate::local_runtime::configuration::settings::SourceTarget;
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let workspace = fixture.workspaces[0].clone();
+        let workflow = workspace.join(".agents/workflows/generate.yaml");
+        std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+        let program = |prompt: &str| {
+            let schema = serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
+            std::fs::write(&workflow, serde_json::to_string(&serde_json::json!({
+                "description": "Generate",
+                "block": {"input": schema, "nodes": {"workflow_start": {"type": "start"},
+                    "generate": {"type": "model", "model": {"mode": "explicit", "model": "local/b"},
+                        "messages": [{"role": "system", "content": [{"type": "literal", "value": prompt}]}, {"role": "user", "content": [{"type": "literal", "value": "Go."}]}],
+                        "output": {"type": "text"}},
+                    "done": {"type": "return", "outputs": []}},
+                    "edges": [{"from": "workflow_start", "to": "generate"}, {"from": "generate", "to": "done"}]}
+            })).unwrap()).unwrap();
+        };
+        program("Prompt A");
+        std::fs::write(workspace.join("rustx.toml"), "[agent]\nworkflows=['generate']\n").unwrap();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let resources = runtime.runtime_resources();
+        let facts = configuration_changes(&runtime).len();
+        // One capture: the model only the Workflow names, and its prompt.
+        let user = fixture
+            .manager
+            .source_settings(&SourceTarget::User)
+            .await
+            .unwrap()
+            .user
+            .path;
+        let mut document: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&user).unwrap()).unwrap();
+        document["models"]["local/b"]
+            .as_table_mut()
+            .unwrap()
+            .insert("request_params".into(), r#"{"temperature":0.25}"#.into());
+        std::fs::write(&user, toml::to_string(&document).unwrap()).unwrap();
+        program("Prompt B");
+        fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id)
+            .fail_configuration_once
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        fixture
+            .manager
+            .reconcile_configuration(&SourceTarget::Workspace {
+                directory: workspace.clone(),
+            })
+            .await
+            .unwrap();
+        let view = applied(&fixture, 0).await;
+        assert!(
+            matches!(view.units[&ApplyUnit::Capabilities], UnitApplication::Failed { .. }),
+            "{view:?}"
+        );
+        assert!(
+            matches!(view.units[&ApplyUnit::Provider], UnitApplication::Failed { .. }),
+            "Provider was reported for a model that was not installed: {view:?}"
+        );
+        assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()), "nothing installed");
+        assert_eq!(configuration_changes(&runtime).len(), facts, "nothing recorded");
+        fixture.close().await;
+    })
+    .await;
+}
+
 /// The authorized Tool environment is part of what runs: changing one value
 /// changes the `subagent` Tool whose child inherits it and the Session's
 /// execution policy, and the retained catalog names the variable, never its
@@ -1814,6 +1889,64 @@ async fn an_environment_value_change_is_recorded_without_its_value() {
         assert!(
             !text.contains("value-alpha") && !text.contains("value-bravo"),
             "{text}"
+        );
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// Root Tools run in the whole effective environment, so a new shared Skill
+/// Python environment — a new content-addressed root, as a dependency change
+/// prepares — is execution policy even with every authorized entry, Tool and
+/// selected Skill unchanged, and the fact carries no path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_skill_environment_is_execution_policy() {
+    bounded(async {
+        use crate::runtime::configuration_commit::{
+            ConfigurationChange, ConfigurationChangeReason, ConfigurationDomain,
+        };
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let before = runtime.runtime_resources();
+        let model = runtime.model_state_for_test();
+        let environment = before.capability().effective_environment();
+        let prepared = |root: &str| {
+            before.with_effective_environment(environment.with_overlay(
+                &crate::tools::environment::ToolEnvironmentOverlay::python(std::path::Path::new(
+                    root,
+                )),
+            ))
+        };
+        let (first, second) = (prepared("/env/python-sha-a"), prepared("/env/python-sha-b"));
+        assert_eq!(
+            first
+                .capability()
+                .effective_environment()
+                .authorized_entries(),
+            environment.authorized_entries()
+        );
+        let change = |old: &crate::runtime::RuntimeResourceSnapshot,
+                      new: &crate::runtime::RuntimeResourceSnapshot| {
+            ConfigurationChange::between(
+                ConfigurationChangeReason::Source,
+                (1, 2),
+                (old, &model),
+                (new, &model),
+            )
+        };
+        assert!(
+            change(&first, &first).is_none(),
+            "the same environment is no change"
+        );
+        let (fact, content) = change(&first, &second).expect("a new environment root changes");
+        assert_eq!(fact.domains, [ConfigurationDomain::ExecutionPolicy]);
+        assert!(fact.tools.is_empty() && fact.skills.is_empty(), "{fact:?}");
+        assert!(
+            !content.catalog.contains("python-sha"),
+            "{}",
+            content.catalog
         );
         fixture.close().await;
     })
@@ -2156,6 +2289,86 @@ async fn a_load_returns_only_after_its_runtime_owns_the_application() {
         assert!(changed.has_changed().unwrap());
         let view = fixture.manager.configuration_application(&id).unwrap();
         assert!(*changed.borrow_and_update() >= view.version, "{view:?}");
+        let _ = fixture.manager.drain_all_runtimes().await;
+    })
+    .await;
+}
+
+/// A replaced allocation's late attach never takes the application back:
+/// A's publication parks after taking its runtime handle and before the
+/// application lock; meanwhile A is unloaded, B loads, and B publishes a
+/// commit it cannot record. When A resumes, the application stays B's and
+/// stays uncertain.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replaced_allocation_never_reattaches_late() {
+    // A parked publication blocks a worker thread: release it however this
+    // test ends.
+    struct Release(std::sync::Arc<AsyncGate>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let gate = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .resident_attach
+            .clone();
+        gate.arm();
+        let _release = Release(gate.clone());
+        let first = {
+            let (manager, id) = (fixture.manager.clone(), id.clone());
+            tokio::spawn(async move { manager.load(&id, None).await.map(|_| ()) })
+        };
+        gate.entered().await;
+        // A is resident but parked before it attaches.
+        let a = fixture.manager.configuration_runtime(&id).unwrap();
+        let conversation = a.conversation_id().clone();
+        drop(a);
+        let _ = fixture.manager.unload(&conversation).await;
+        // B passes the gate, which parks only the first publication.
+        fixture.manager.load(&id, None).await.unwrap();
+        let b = fixture.manager.configuration_runtime(&id).unwrap();
+        b.fail_next_configuration_record();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("published by B, not recorded".into()),
+            },
+        )
+        .await;
+        let uncertain = |fixture: &Fixture| {
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .units
+                .values()
+                .any(|unit| matches!(unit, UnitApplication::Uncertain { .. }))
+        };
+        applied(&fixture, 0).await;
+        assert!(uncertain(&fixture));
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        gate.release();
+        let _ = first.await.unwrap();
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            uncertain(&fixture),
+            "the replaced A took the application back: {:?}",
+            fixture.manager.configuration_application(&id)
+        );
+        assert_eq!(instructions(&b), "published by B, not recorded");
         let _ = fixture.manager.drain_all_runtimes().await;
     })
     .await;

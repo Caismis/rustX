@@ -828,6 +828,12 @@ impl ConversationRuntime {
         ConfigurationHealth(self.inner.unrecorded_configuration.clone())
     }
 
+    /// The Session model state configuration changes are compared against.
+    #[cfg(test)]
+    pub(crate) fn model_state_for_test(&self) -> crate::model::session::SessionModelState {
+        self.inner.lock_state().model.clone()
+    }
+
     /// Whether a candidate is staged and waiting for the safe boundary.
     #[cfg(test)]
     pub(crate) fn has_staged_configuration(&self) -> bool {

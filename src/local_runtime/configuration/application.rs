@@ -189,12 +189,19 @@ impl ConfigurationApplications {
         self.inner.lock().expect("configuration application owner")
     }
 
+    /// Attach `runtime` to its scope's application when `current` confirms,
+    /// under this lock, that it is still the scope's resident: a replaced
+    /// allocation's late rebind never takes the application back.
     pub(crate) fn rebind_runtime(
         &self,
         scope: &str,
         runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+        current: impl FnOnce() -> bool,
     ) -> bool {
         let mut state = self.lock();
+        if !current() {
+            return false;
+        }
         let attached = state.attach(scope, runtime);
         // A candidate staged in a replaced runtime can never commit into its
         // successor; the current input is prepared again for this allocation.

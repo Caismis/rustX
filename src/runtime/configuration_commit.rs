@@ -353,10 +353,12 @@ impl ConfigurationChange {
         if old_model.view() != new_model.view() || !same_invocations(before, after) {
             domains.push(ConfigurationDomain::Model);
         }
-        // Every Tool runs in the authorized environment, so its values are
-        // execution policy; the fact never carries them.
+        // Every Root Tool runs in the whole effective environment: the
+        // authorized entries and the shared Skill Python/Node environments,
+        // whose content-addressed roots change with their dependencies. It is
+        // execution policy; the fact never carries it.
         if old_configuration.map(|c| c.1) != new_configuration.map(|c| c.1)
-            || Environment::of(old) != Environment::of(new)
+            || old.capability().effective_environment() != new.capability().effective_environment()
         {
             domains.push(ConfigurationDomain::ExecutionPolicy);
         }
