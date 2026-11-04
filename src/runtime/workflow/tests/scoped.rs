@@ -68,10 +68,6 @@ fn typed_constructions_predicates_and_malformed_syntax_are_closed() {
             left: literal(json!(1)),
             right: literal(json!("1")),
         },
-        WorkflowPredicate::Equal {
-            left: literal(json!(1)),
-            right: literal(json!(1.0)),
-        },
         WorkflowPredicate::And { predicates: vec![] },
     ] {
         assert!(validate_predicate(&invalid, &available, "choose", 0).is_err());
@@ -146,9 +142,6 @@ fn string_branch_operators_validate_and_execute_without_coercion() {
         WorkflowPredicate::Contains {
             left: reference("args.flag"),
             right: text("true"),
-        },
-        WorkflowPredicate::Empty {
-            value: reference("args.flag"),
         },
     ] {
         assert!(validate_predicate(&predicate, &available, "choose", 0).is_err());

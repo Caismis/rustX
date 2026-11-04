@@ -1586,3 +1586,31 @@ async fn oversized_loop_initializers_fail_before_the_body_starts() {
             .any(|event| matches!(event, RuntimeEvent::WorkflowLoopIterationAdmitted { .. }))
     );
 }
+
+/// A numeric break condition sees each committed write and ends before the
+/// maximum count, including an operand read from the enclosing input.
+#[tokio::test]
+async fn numeric_loop_break_reads_updated_variables() {
+    let plane = workflow_test_plane(1);
+    let definition = around(
+        "count",
+        &schema(json!({"limit":{"type":"integer"}}), &["limit"]),
+        &schema(json!({"n":{"type":"number"}}), &["n"]),
+        &json!({
+            "type":"loop","loop_count":10,
+            "loop_variables":[{"label":"n","var_type":"number","value":{"type":"literal","value":0}}],
+            "break_condition":{"type":"greater_equal","left":path(&["count","n"]),"right":path(&["args","limit"])},
+            "body":{"nodes":{"start":{"type":"start"},"increment":{"type":"assigner","items":[{"variable":["count","n"],"operation":"increment","value":{"type":"literal","value":1}}]}},"edges":[{"from":"start","to":"increment"}]}
+        }),
+    );
+    let result = run(
+        &plane,
+        workflow_runtime(&plane),
+        checker(99),
+        definition,
+        json!({"limit":3}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, json!({"n":3}));
+}

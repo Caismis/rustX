@@ -16,10 +16,6 @@
 .announcement { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (hover: none) { .dragHandle { opacity: 1; } .item:has(.dragHandle:enabled) header { padding-left: 22px; } }
 
-.expanded { position: fixed; z-index: 80; box-sizing: border-box; padding: 12px; border-radius: 10px; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 0 12px -4px rgb(16 24 40 / 12%); overscroll-behavior: contain; }
-.expanded > section { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.expanded > section > div:last-child { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
-
 .inputVariable { position: relative; }
 .inputVariable > div > button { width: 100%; min-height: 32px; padding: 4px 32px 4px 10px; border: 0; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); }
 .inputVariable > div > button:hover { background: var(--dsw-alias-interactive-bg-hover); }

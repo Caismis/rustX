@@ -26,6 +26,10 @@ fn predicate<'a>(input: &'a WorkflowPredicate, reads: &mut Vec<&'a [String]>) {
         | WorkflowPredicate::NotEmpty { value: input } => value(input, reads),
         WorkflowPredicate::Equal { left, right }
         | WorkflowPredicate::NotEqual { left, right }
+        | WorkflowPredicate::Greater { left, right }
+        | WorkflowPredicate::GreaterEqual { left, right }
+        | WorkflowPredicate::Less { left, right }
+        | WorkflowPredicate::LessEqual { left, right }
         | WorkflowPredicate::Contains { left, right }
         | WorkflowPredicate::NotContains { left, right }
         | WorkflowPredicate::StartsWith { left, right }

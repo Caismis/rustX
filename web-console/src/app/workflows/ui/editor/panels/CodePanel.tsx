@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import clsx from 'clsx';
-import type { WorkflowVarType } from '../../../../../../../protocol/app-server/v67';
+import type { WorkflowVarType } from '../../../../../../../protocol/app-server/v68';
 import { useTranslation } from '../../../../../locale/react';
 import { IconCheckOutline16, IconCopyOutline16, IconFullscreenOutline16, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { Modal } from '../../../../../presentation/primitives/Modal';
@@ -94,7 +94,7 @@ function CodeEditor(props:PanelProps) {
         <button type="button" className={css.promptTool} aria-label={tx(copy.copied?'workflows:prompt.copied':'workflows:prompt.copy')} title={tx('workflows:prompt.copy')} onClick={copy.onCopy} disabled={!field.text}>{copy.copied?<IconCheckOutline16/>:<IconCopyOutline16/>}</button>
         <button type="button" className={css.promptTool} aria-label={tx(expand.expanded?'workflows:prompt.collapse':'workflows:prompt.expand')} aria-pressed={expand.expanded} title={tx('workflows:prompt.expand')} onClick={expand.toggle}><IconFullscreenOutline16/></button>
       </div></header>
-      <div className={styles.codeArea} data-code-language={node.code_language}><Suspense fallback={<p role="status">{tx('settings:json-editor.loading')}</p>}><WorkflowCodeView language={node.code_language} label={tx('workflows:code.editor')} value={field.text} field={encodeField(address)} onChange={field.change} onBlur={field.apply}/></Suspense></div>
+      <div className={styles.codeArea} data-code-language={node.code_language}><Suspense fallback={<p role="status">{tx('workflows:editor.loading')}</p>}><WorkflowCodeView language={node.code_language} label={tx('workflows:code.editor')} value={field.text} field={encodeField(address)} onChange={field.change} onBlur={field.apply}/></Suspense></div>
       {field.error&&<small role="alert" className={css.hintError}>{describe(field.error)}</small>}<ConflictActions field={field}/>
     </section>
     <p className={styles.help}>{tx('workflows:code.input-help')}</p>

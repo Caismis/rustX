@@ -3,6 +3,7 @@ import { useTranslation } from '../../../../../locale/react';
 import { IconPlus } from '../../icons';
 import { ReferencePicker } from '../forms/ReferencePicker';
 import { RouteId } from './InferencePanels';
+import { freshKey } from '../../../document/commands';
 import { setField, type ArrayEdit } from '../../../document/fields';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
@@ -25,7 +26,7 @@ export function ReturnPanel(props: PanelProps) {
         <ReferencePicker address={at('outputs', index, 'value_selector')} path={output.value_selector} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')}
           // As Dify: a nameless output takes the variable's own name.
           onChoose={choice => update(current => ({ ...current, outputs: current.outputs.map((item, i) => i === index
-            ? { variable: item.variable || choice.path[choice.path.length - 1], value_selector: choice.path } : item) }), at('outputs', index, 'value_selector'))} />
+            ? { variable: item.variable || freshKey(current.outputs.filter((_,position)=>position!==index).map(output=>output.variable),choice.path[choice.path.length - 1]), value_selector: choice.path } : item) }), at('outputs', index, 'value_selector'))} />
         <button type="button" className={css.iconButton} aria-label={tx('workflows:end.remove', { p0: output.variable || String(index + 1) })}
           onClick={() => outputs(items => items.filter((_, i) => i !== index), { array: at('outputs'), removed: index })}><IconTrashOutline16 /></button>
       </div>)}

@@ -335,7 +335,7 @@ fn field<'a>(mut value: &'a Value, path: &[String]) -> Option<&'a Value> {
     }
     Some(value)
 }
-fn compare(left: &Value, right: &Value) -> Option<Ordering> {
+pub(super) fn compare(left: &Value, right: &Value) -> Option<Ordering> {
     match (left, right) {
         (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
         (Value::Bool(a), Value::Bool(b)) => Some(a.cmp(b)),

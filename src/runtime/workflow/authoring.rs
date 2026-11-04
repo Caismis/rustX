@@ -544,69 +544,137 @@ fn position<'a>(
                 current.expected = None;
                 Expression::Value(parts.get(*index as usize)?)
             }
-            (Expression::Predicate(WorkflowPredicate::Boolean { value }), S::Value) => {
-                current.expected = Some(Cow::Owned(serde_json::json!({"type":"boolean"})));
-                Expression::Value(value)
+            (Expression::Predicate(predicate), step) => {
+                position_predicate(predicate, step, &mut current, inference)?
             }
-            (
-                Expression::Predicate(
-                    WorkflowPredicate::Equal { left, right }
-                    | WorkflowPredicate::NotEqual { left, right },
-                ),
-                S::Left | S::Right,
-            ) => {
-                let (selected, other) = if matches!(step, S::Left) {
-                    (left, right)
-                } else {
-                    (right, left)
-                };
-                let kind = super::expressions::intrinsic_value_type(other)
-                    .map(str::to_owned)
-                    .or_else(|| match other {
-                        WorkflowValue::Reference { path } => inference
-                            .resolve(path)
-                            .ok()
-                            .and_then(|schema| super::schema_type(schema).map(str::to_owned)),
-                        _ => None,
-                    });
-                current.expected = kind.map(|kind| Cow::Owned(serde_json::json!({"type":kind})));
-                current.necessary = NecessaryCondition::EqualityOperand;
-                Expression::Value(selected)
-            }
-            (
-                Expression::Predicate(
-                    WorkflowPredicate::Contains { left, right }
-                    | WorkflowPredicate::NotContains { left, right }
-                    | WorkflowPredicate::StartsWith { left, right }
-                    | WorkflowPredicate::EndsWith { left, right },
-                ),
-                S::Left | S::Right,
-            ) => {
-                current.expected = Some(Cow::Owned(serde_json::json!({"type":"string"})));
-                Expression::Value(if matches!(step, S::Left) { left } else { right })
-            }
-            (
-                Expression::Predicate(
-                    WorkflowPredicate::Empty { value } | WorkflowPredicate::NotEmpty { value },
-                ),
-                S::Value,
-            ) => {
-                current.expected = Some(Cow::Owned(serde_json::json!({"type":"string"})));
-                Expression::Value(value)
-            }
-            (Expression::Predicate(WorkflowPredicate::Not { predicate }), S::Predicate) => {
-                Expression::Predicate(predicate)
-            }
-            (
-                Expression::Predicate(
-                    WorkflowPredicate::And { predicates } | WorkflowPredicate::Or { predicates },
-                ),
-                S::PredicateAt { index },
-            ) => Expression::Predicate(predicates.get(*index as usize)?),
             _ => return None,
         };
     }
     matches!(current.expression, Expression::Value(_)).then_some(current)
+}
+
+/// Predicate operand expectations are independent of structural value traversal.
+fn position_predicate<'a>(
+    predicate: &'a WorkflowPredicate,
+    step: &WorkflowExpressionStep,
+    current: &mut Consumer<'a>,
+    inference: &mut SchemaInference<'a>,
+) -> Option<Expression<'a>> {
+    use WorkflowExpressionStep as S;
+    Some(match (Expression::Predicate(predicate), step) {
+        (Expression::Predicate(WorkflowPredicate::Boolean { value }), S::Value) => {
+            current.expected = Some(Cow::Owned(serde_json::json!({"type":"boolean"})));
+            Expression::Value(value)
+        }
+        (
+            Expression::Predicate(
+                WorkflowPredicate::Equal { left, right }
+                | WorkflowPredicate::NotEqual { left, right },
+            ),
+            S::Left | S::Right,
+        ) => {
+            let (selected, other) = if matches!(step, S::Left) {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            let kind = super::expressions::intrinsic_value_type(other)
+                .map(str::to_owned)
+                .or_else(|| match other {
+                    WorkflowValue::Reference { path } => inference
+                        .resolve(path)
+                        .ok()
+                        .and_then(|schema| super::schema_type(schema).map(str::to_owned)),
+                    _ => None,
+                });
+            current.expected = kind.map(|kind| {
+                Cow::Owned(serde_json::json!({"type":if kind=="integer" {"number"}else{&kind}}))
+            });
+            current.necessary = NecessaryCondition::EqualityOperand;
+            Expression::Value(selected)
+        }
+        (
+            Expression::Predicate(
+                WorkflowPredicate::Greater { left, right }
+                | WorkflowPredicate::GreaterEqual { left, right }
+                | WorkflowPredicate::Less { left, right }
+                | WorkflowPredicate::LessEqual { left, right },
+            ),
+            S::Left | S::Right,
+        ) => {
+            current.expected = Some(Cow::Owned(serde_json::json!({"type":"number"})));
+            current.necessary = NecessaryCondition::None;
+            Expression::Value(if matches!(step, S::Left) { left } else { right })
+        }
+        (
+            Expression::Predicate(
+                WorkflowPredicate::Contains { left, right }
+                | WorkflowPredicate::NotContains { left, right },
+            ),
+            S::Left | S::Right,
+        ) => {
+            current.expected = if matches!(step, S::Left) {
+                None
+            } else {
+                containment_item_schema(left, inference)
+            };
+            Expression::Value(if matches!(step, S::Left) { left } else { right })
+        }
+        (
+            Expression::Predicate(
+                WorkflowPredicate::StartsWith { left, right }
+                | WorkflowPredicate::EndsWith { left, right },
+            ),
+            S::Left | S::Right,
+        ) => {
+            current.expected = Some(Cow::Owned(serde_json::json!({"type":"string"})));
+            Expression::Value(if matches!(step, S::Left) { left } else { right })
+        }
+        (
+            Expression::Predicate(
+                WorkflowPredicate::Empty { value } | WorkflowPredicate::NotEmpty { value },
+            ),
+            S::Value,
+        ) => {
+            current.expected = None;
+            Expression::Value(value)
+        }
+        (Expression::Predicate(WorkflowPredicate::Not { predicate }), S::Predicate) => {
+            Expression::Predicate(predicate)
+        }
+        (
+            Expression::Predicate(
+                WorkflowPredicate::And { predicates } | WorkflowPredicate::Or { predicates },
+            ),
+            S::PredicateAt { index },
+        ) => Expression::Predicate(predicates.get(*index as usize)?),
+        _ => return None,
+    })
+}
+
+fn containment_item_schema<'a>(
+    left: &WorkflowValue,
+    inference: &mut SchemaInference<'a>,
+) -> Option<Cow<'a, Value>> {
+    match left {
+        WorkflowValue::Reference { path } => inference
+            .resolve(path)
+            .ok()
+            .map(|schema| {
+                if super::schema_type(schema) == Some("array") {
+                    let item = schema.get("items").cloned().unwrap_or(Value::Null);
+                    if super::schema_type(&item) == Some("integer") {
+                        serde_json::json!({"type":"number"})
+                    } else {
+                        item
+                    }
+                } else {
+                    serde_json::json!({"type":"string"})
+                }
+            })
+            .map(Cow::Owned),
+        _ => None,
+    }
 }
 
 /// Shared native lexical proof, independent of unfinished bindings/instructions.
@@ -1206,10 +1274,11 @@ fn analyze_query(
         && matches!(
             query.consumer.field,
             WorkflowConsumerField::ConditionVariable { .. }
+                | WorkflowConsumerField::BreakConditionVariable
         )
     {
         consumer.expected = None;
-        consumer.necessary = NecessaryCondition::EqualityOperand;
+        consumer.necessary = NecessaryCondition::None;
     }
     if let Some(consumer) = &mut consumer
         && matches!(query.consumer.field, WorkflowConsumerField::ListFilterValue)

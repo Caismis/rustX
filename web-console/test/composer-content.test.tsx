@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { CheckpointPage, RuntimeClientGoalSnapshot } from '../../protocol/app-server/v67';
+import type { CheckpointPage, RuntimeClientGoalSnapshot } from '../../protocol/app-server/v68';
 import { useComposerContent } from '../src/app/agent/useComposerContent';
 import { TodoDock } from '../src/app/composer/TodoDock';
 import { GoalDock } from '../src/app/composer/GoalDock';

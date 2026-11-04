@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v67';
+import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v68';
 import type { AppServerClient } from '../../client/app-server';
 import type { WorkflowChild } from '../../bindings/workflow-children';
 import type { useWorkflowContent } from './useWorkflowContent';

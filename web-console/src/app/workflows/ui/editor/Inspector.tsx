@@ -1,7 +1,7 @@
 import { encodeField, type ArrayEdit, type FieldAddress } from '../../document/fields';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import clsx from 'clsx';
-import type { WorkflowVocabulary } from '../../../../../../protocol/app-server/v67';
+import type { WorkflowVocabulary } from '../../../../../../protocol/app-server/v68';
 import { useTranslation } from '../../../../locale/react';
 import { IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import { nodePresentation } from '../../document/geometry';
@@ -81,7 +81,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
       : <BlockForm document={document} block={path} edit={edit} onSelect={onSelect} tools={vocabulary?.builtin_tools ?? []} start={selection.kind === 'start'} />);
   }
   return <aside ref={root} className={css.inspector} style={{ '--inspector-width': `${width}px` } as CSSProperties} aria-label={tx('workflows:inspector.label')} onWheel={event => event.stopPropagation()}
-    onKeyDown={event => { if (event.key === 'Escape' && !event.isDefaultPrevented() && !(event.target as Element).closest('textarea, input, select, [role="dialog"], [role="listbox"]')) { event.stopPropagation(); onSelect(undefined); } }}>
+    onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing && !event.isDefaultPrevented() && !(event.target as Element).closest('textarea, input, select, [contenteditable="true"], [role="dialog"], [role="listbox"]')) { event.stopPropagation(); onSelect(undefined); } }}>
     <div className={css.inspectorResize} role="separator" aria-label={tx('workflows:panel.resize')} aria-orientation="vertical" aria-valuemin={320} aria-valuemax={640} aria-valuenow={width} tabIndex={0}
       onPointerDown={event => { event.preventDefault(); resize.current = { x: event.clientX, width }; setResizing(true); }}
       onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); changeWidth(width + (event.key === 'ArrowLeft' ? 20 : -20)); } }} />

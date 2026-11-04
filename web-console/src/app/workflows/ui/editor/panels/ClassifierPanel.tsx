@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useTranslation } from '../../../../../locale/react';
 import { IconChevronDownOutline14, IconCloseOutline16 } from '../../../../../presentation/primitives/icons';
 import { CommandRejected, freshKey, replaceNodeExits } from '../../../document/commands';
@@ -91,30 +91,10 @@ function ClassCard(props: PanelProps & {item:Topic; index:number; onRemove:()=>v
 
 function ClassifierPrompt(props: PanelProps & {parts:readonly Value[]; address:FieldAddress; label:string; role?:import('react').ReactNode; hint?:string; placeholder?:string; onRemove?:()=>void; removeLabel?:string; onChange:(parts:Value[],session:number)=>void}) {
   const tx = useTranslation(), [expanded,setExpanded] = useState(false), [session,setSession] = useState(0);
-  const anchor=useRef<HTMLDivElement>(null), [collapsedHeight,setCollapsedHeight]=useState(0), [bounds,setBounds]=useState<CSSProperties>();
-  useLayoutEffect(()=>{
-    if(!expanded)return;
-    const body=anchor.current?.closest<HTMLElement>('[data-workflow-inspector-body]');
-    if(!body)return;
-    const measure=()=>{
-      const box=body.getBoundingClientRect(), viewport=window.visualViewport;
-      const bottom=viewport ? viewport.offsetTop+viewport.height : window.innerHeight;
-      setBounds({top:box.top,left:box.left,width:box.width,height:Math.max(64,Math.min(box.bottom,bottom)-box.top)});
-    };
-    measure();const observer=new ResizeObserver(measure);observer.observe(body);
-    window.addEventListener('resize',measure);window.visualViewport?.addEventListener('resize',measure);
-    return()=>{observer.disconnect();window.removeEventListener('resize',measure);window.visualViewport?.removeEventListener('resize',measure);};
-  },[expanded]);
-  const toggle=()=>{if(!expanded)setCollapsedHeight(anchor.current?.getBoundingClientRect().height ?? 0);setExpanded(value=>!value);};
   return <PromptEditor parts={props.parts} address={props.address} edit={props.edit} label={props.label} expanded={expanded} placeholder={props.placeholder ?? tx('workflows:classifier.instruction-placeholder')} variablePlaceholder={tx('workflows:branch.select-variable')} onChange={parts => props.onChange(parts,session)}>
-    {editable => <div ref={anchor} style={expanded ? {height:collapsedHeight} : undefined}>
-      <div data-classifier-expanded={expanded || undefined} className={expanded ? styles.expanded : undefined} style={expanded ? bounds : undefined}
-        onKeyDown={event=>{if(expanded && event.key==='Escape' && !event.defaultPrevented){event.preventDefault();event.stopPropagation();setExpanded(false);}}}>
-        <PromptCard label={props.label} role={props.role ?? <b className={css.promptRoleFixed}>{props.label}</b>} hint={props.hint} text={promptText(props.parts)} tools={<InsertVariable/>} expanded={expanded} onExpand={toggle} onRemove={props.onRemove} removeLabel={props.removeLabel}>
-          <div onFocus={() => setSession(value => value+1)}>{editable}</div>
-        </PromptCard>
-      </div>
-    </div>}
+    {editable => <PromptCard label={props.label} role={props.role ?? <b className={css.promptRoleFixed}>{props.label}</b>} hint={props.hint} text={promptText(props.parts)} tools={<InsertVariable/>} expanded={expanded} onExpand={()=>setExpanded(value=>!value)} onRemove={props.onRemove} removeLabel={props.removeLabel}>
+      <div onFocus={() => setSession(value => value+1)}>{editable}</div>
+    </PromptCard>}
   </PromptEditor>;
 }
 

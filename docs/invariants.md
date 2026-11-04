@@ -6317,7 +6317,7 @@ semantic normalization boundary. The frozen invariants:
   projection carrying the source repository root, repository-relative
   workspace, physical worktree root, base commit, branch, and parent dirty
   fact, and a retained handoff carries `logical_workspace` and
-  `physical_worktree_root` alongside its branch/base/head/dirty facts. v67
+  `physical_worktree_root` alongside its branch/base/head/dirty facts. v68
   retired this representation.
 - **Runtime Client protocol v12 adds the routed interaction projection.** The
   root-facing pending-interaction set carries Approval and Questionnaire

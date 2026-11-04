@@ -1,4 +1,4 @@
-import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v67';
+import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v68';
 import { readJson } from '../../../../shared/json-numbers';
 import { boundedDocument, CommandRejected, freshNodeId, validLocalKey, validNodeId } from './commands';
 import { blockAt, deepNodeCount, edgesOf, sameBlockPath, sameDocument, updateBlock, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from './model';
@@ -92,7 +92,7 @@ function predicate(input: unknown): void {
   const record = object(input);
   switch (record.type) {
     case 'boolean': keys(record, ['type', 'value']); value(record.value); return;
-    case 'equal': case 'not_equal': case 'contains': case 'not_contains': case 'starts_with': case 'ends_with': keys(record, ['type', 'left', 'right']); value(record.left); value(record.right); return;
+    case 'greater': case 'greater_equal': case 'less': case 'less_equal': case 'equal': case 'not_equal': case 'contains': case 'not_contains': case 'starts_with': case 'ends_with': keys(record, ['type', 'left', 'right']); value(record.left); value(record.right); return;
     case 'empty': case 'not_empty': keys(record, ['type', 'value']); value(record.value); return;
     case 'not': keys(record, ['type', 'predicate']); predicate(record.predicate); return;
     case 'and': case 'or': keys(record, ['type', 'predicates']); array(record.predicates).forEach(predicate); return;

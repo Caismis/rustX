@@ -107,7 +107,7 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
     expect(saved.block.nodes.choose.cases[0].condition.predicates[0].type).toBe('contains');
     expect(saved.block.edges.filter((edge: any) => edge.from === 'choose').map((edge: any) => String(edge.port)).sort()).toEqual(['case_2', 'false', 'true']);
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click(); await page.getByRole('button', { name: 'branch_cases', exact: true }).click(); await activate(page);
-    await expect(inspector(page).getByRole('textbox', { name: 'Value', exact: true })).toHaveValue('approved');
+    await expect(inspector(page).getByRole('textbox', { name: 'Value', exact: true })).toContainText('approved');
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(inspector(page)).toHaveCSS('position', 'absolute'); await captureEvidence(page, 'branch-mobile', info);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

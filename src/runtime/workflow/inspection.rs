@@ -269,6 +269,18 @@ fn predicate(value: &WorkflowPredicate) -> Value {
         WorkflowPredicate::NotEqual { left, right } => {
             json!({"type":"not_equal", "left":binding(left), "right":binding(right)})
         }
+        WorkflowPredicate::Greater { left, right } => {
+            json!({"type":"greater", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::GreaterEqual { left, right } => {
+            json!({"type":"greater_equal", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::Less { left, right } => {
+            json!({"type":"less", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::LessEqual { left, right } => {
+            json!({"type":"less_equal", "left":binding(left), "right":binding(right)})
+        }
         WorkflowPredicate::Contains { left, right } => {
             json!({"type":"contains", "left":binding(left), "right":binding(right)})
         }
@@ -558,4 +570,19 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             nodes,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn numeric_inspection_keeps_the_operator_and_redacts_literal_operands() {
+        for kind in ["greater", "greater_equal", "less", "less_equal"] {
+            let condition:WorkflowPredicate=serde_json::from_value(json!({"type":kind,"left":{"type":"reference","path":["args","amount"]},"right":{"type":"literal","value":938_471}})).unwrap();
+            let view = predicate(&condition);
+            assert_eq!(view["type"], kind);
+            assert_eq!(view["left"]["path"], json!(["args", "amount"]));
+            assert!(!view.to_string().contains("938471"));
+        }
+    }
 }

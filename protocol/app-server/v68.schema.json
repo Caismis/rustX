@@ -13039,7 +13039,91 @@
           ]
         },
         {
-          "description": "String containment, without coercion.",
+          "type": "object",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "greater"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "greater_equal"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "less"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "less_equal"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "description": "String or typed-array containment, without coercion.",
           "type": "object",
           "properties": {
             "left": {
@@ -13124,7 +13208,7 @@
           ]
         },
         {
-          "description": "Whether a string is empty.",
+          "description": "Explicit emptiness of a JSON value, as Dify tests it.",
           "type": "object",
           "properties": {
             "value": {

@@ -1,4 +1,4 @@
-import type { ArchiveDownloadDescriptor } from './v67.ts';
+import type { ArchiveDownloadDescriptor } from './v68.ts';
 
 /** Resolve only against the selected native authority. A remote descriptor
  * cannot redirect the client or assign a local filesystem destination. */

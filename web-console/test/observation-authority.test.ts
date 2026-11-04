@@ -1,7 +1,7 @@
 import{traceReceipt}from'./fixture';
 import { checkpoint } from "./fixture";
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Request, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v67';
+import type { Request, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v68';
 import { Server, snapshot } from './fixture';
 import { tracePage, traceRecord, requestDetail } from './trace-fixture';
 const servers: Server[] = [];

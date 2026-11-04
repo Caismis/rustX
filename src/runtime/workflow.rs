@@ -1057,7 +1057,23 @@ pub enum WorkflowPredicate {
         left: WorkflowValue,
         right: WorkflowValue,
     },
-    /// String containment, without coercion.
+    Greater {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    GreaterEqual {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    Less {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    LessEqual {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    /// String or typed-array containment, without coercion.
     Contains {
         left: WorkflowValue,
         right: WorkflowValue,
@@ -1074,7 +1090,7 @@ pub enum WorkflowPredicate {
         left: WorkflowValue,
         right: WorkflowValue,
     },
-    /// Whether a string is empty.
+    /// Explicit emptiness of a JSON value, as Dify tests it.
     Empty {
         value: WorkflowValue,
     },

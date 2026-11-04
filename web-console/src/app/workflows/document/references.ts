@@ -19,7 +19,7 @@ function value(input: Value, rewrite: PathRewrite): Value {
 function predicate(input: Predicate, rewrite: PathRewrite): Predicate {
   switch (input.type) {
     case 'boolean': return { ...input, value: value(input.value, rewrite) };
-    case 'equal':
+    case 'greater': case 'greater_equal': case 'less': case 'less_equal': case 'equal':
     case 'not_equal':
     case 'contains':
     case 'not_contains':

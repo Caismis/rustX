@@ -2284,6 +2284,26 @@ export type WorkflowPredicate =
   | {
       left: WorkflowValue;
       right: WorkflowValue;
+      type: 'greater';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'greater_equal';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'less';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'less_equal';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
       type: 'contains';
     }
   | {

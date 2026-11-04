@@ -768,13 +768,15 @@ fn equality_candidate(
 }
 
 #[test]
-fn branch_variable_choices_ignore_the_old_counterpart_but_keep_scalar_necessities() {
+fn branch_variable_choices_ignore_old_counterparts_to_choose_type_appropriate_operators() {
     for (kind, expected) in [
         ("string", Unknown),
         ("boolean", Unknown),
         ("null", Unknown),
-        ("number", Incompatible),
-        ("integer", Incompatible),
+        ("number", Unknown),
+        ("integer", Unknown),
+        ("array", Unknown),
+        ("object", Unknown),
     ] {
         let (candidate, mut query) = equality_candidate(
             &json!({"type":kind}),
@@ -803,10 +805,38 @@ fn branch_variable_choices_ignore_the_old_counterpart_but_keep_scalar_necessitie
 }
 
 #[test]
+fn numeric_condition_operands_filter_reference_choices_by_type() {
+    for operator in ["greater", "greater_equal", "less", "less_equal"] {
+        for loop_until in [false, true] {
+            for kind in ["integer", "number", "string", "boolean"] {
+                let (candidate, query) = equality_candidate(
+                    &json!({"type":kind}),
+                    json!({"type":"literal","value":0}),
+                    operator,
+                    loop_until,
+                    true,
+                );
+                for choice in selected_and_catalog(&analyze(&candidate, Some(&query)).unwrap()) {
+                    assert_eq!(
+                        choice.compatibility,
+                        if matches!(kind, "integer" | "number") {
+                            Compatible
+                        } else {
+                            Incompatible
+                        },
+                        "{operator} {kind}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn equality_preserves_supported_types_and_known_illegal_types_with_unknown_counterparts() {
     let samples = [
-        (json!({"type":"integer"}), json!(1), false),
-        (json!({"type":"number"}), json!(1.5), false),
+        (json!({"type":"integer"}), json!(1), true),
+        (json!({"type":"number"}), json!(1.5), true),
         (
             json!({"type":"string","enum":["a","b"]}),
             json!("different"),
@@ -858,9 +888,10 @@ fn equality_preserves_supported_types_and_known_illegal_types_with_unknown_count
                         assert_eq!(compiled.is_ok(), *supported && known_other);
                         if !supported && known_other {
                             assert!(
-                                compiled.unwrap_err().to_string().contains(
-                                    "equality requires matching boolean/string/null types"
-                                )
+                                compiled
+                                    .unwrap_err()
+                                    .to_string()
+                                    .contains("equality requires matching scalar types")
                             );
                         }
                     }
@@ -882,7 +913,7 @@ fn equality_retains_invalid_counterpart_facts_and_does_not_invent_unknown_operan
                 ] {
                     let (candidate, query) = equality_candidate(
                         &json!({"type":"string"}),
-                        other,
+                        other.clone(),
                         operator,
                         loop_until,
                         right,
@@ -899,14 +930,25 @@ fn equality_retains_invalid_counterpart_facts_and_does_not_invent_unknown_operan
                             selected_and_catalog(&report)
                         };
                         for choice in choices {
-                            assert_eq!(choice.compatibility, Incompatible);
-                            assert!(
-                                choice
-                                    .diagnostic
-                                    .as_ref()
-                                    .unwrap()
-                                    .contains("native type constraints")
+                            let numeric_unknown = unknown_selected
+                                && other.get("value").is_some_and(Value::is_number);
+                            assert_eq!(
+                                choice.compatibility,
+                                if numeric_unknown {
+                                    Unknown
+                                } else {
+                                    Incompatible
+                                }
                             );
+                            if !numeric_unknown {
+                                assert!(
+                                    choice
+                                        .diagnostic
+                                        .as_ref()
+                                        .unwrap()
+                                        .contains("native type constraints")
+                                );
+                            }
                         }
                     }
                 }

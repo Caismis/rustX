@@ -21,12 +21,15 @@ export function valueText(value: Value): string {
   }
 }
 
+// i18n-raw: mathematical notation shared by the typed condition editors.
+export const comparisonSymbols: Record<string,string> = {equal:'=',not_equal:'≠',greater:'>',greater_equal:'≥',less:'<',less_equal:'≤'};
+
 export function predicateText(tx: Translate, predicate: Predicate): string {
   switch (predicate.type) {
     case 'boolean': return valueText(predicate.value);
-    case 'equal': case 'not_equal': case 'contains': case 'not_contains': case 'starts_with': case 'ends_with': {
+    case 'greater': case 'greater_equal': case 'less': case 'less_equal': case 'equal': case 'not_equal': case 'contains': case 'not_contains': case 'starts_with': case 'ends_with': {
       const left = valueText(predicate.left), right = valueText(predicate.right);
-      return left && right ? `${left} ${tx(`workflows:branch.${predicate.type}`)} ${right}` : tx('workflows:branch.unset');
+      return left && right ? `${left} ${['greater','greater_equal','less','less_equal'].includes(predicate.type)?comparisonSymbols[predicate.type]:tx(`workflows:branch.${predicate.type}`)} ${right}` : tx('workflows:branch.unset');
     }
     case 'empty': case 'not_empty': return `${valueText(predicate.value)} ${tx(`workflows:branch.${predicate.type}`)}`;
     case 'not': return `${tx('workflows:summary.not')} (${predicateText(tx, predicate.predicate)})`;

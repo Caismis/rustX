@@ -5112,9 +5112,29 @@ The exact frontend and Graphon execution source revisions and inspected paths
 are recorded in [the editor reference](../docs/workflow-visual-editor.md). No
 Dify or Graphon source, assets or Python runtime are copied into rustX.
 
-App Server v66 and Runtime Client v80 are mandatory. The sole generated schema
+App Server v68 and Runtime Client v80 are mandatory. The sole generated schema
 and TypeScript pair describe the new definitions and consumer addresses; old
 protocol artifacts are removed. Derived presentation files only change their
 protocol import paths, with current hashes and dependency paths recorded in the
 source inventory. Node glyphs extend the existing pinned offline Iconify/Lucide
 subset. Native Jinja rendering uses MiniJinja; no frontend dependency is added.
+
+
+## Full workflow node audit
+
+All native node panels, defaults, variable/exit lifecycles and execution rules were
+compared with sibling Dify `ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0` and its
+pinned Graphon condition processor at
+`4fa22141774dff80e90e4dfa98ea3e6fbf0421bb`. The per-node source and scope ledger is
+in [the visual editor reference](../docs/workflow-visual-editor.md#complete-node-audit-2026-11-04).
+The fixes extend native predicates with numeric comparisons and array/empty
+conditions, reuse exact numeric comparison, preserve prompt editor DOM during
+bounded expansion, correct inline variable spacing and narrow Loop/Assigner
+rows, and avoid automatic Output-name collisions. Dify's stores, component
+source and assets are not copied. No dependencies are added. Vision and AI
+generation controls are omitted. App Server v68 is the sole wire contract;
+v67 artifacts are removed. Runtime Client v80 is unchanged.
+
+Actual desktop and touch browser checks use the repository's exact pinned
+Playwright container: no Browser plugin is available in this session. Screenshots
+are task evidence outside the repository, not replacement pixel baselines.

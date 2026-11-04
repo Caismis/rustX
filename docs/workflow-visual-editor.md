@@ -140,6 +140,48 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | File `editor` | Node geometry, titles/descriptions, notes and field order |
 | Personal view state | Exact-file viewport and inspector width |
 
+## Complete node audit (2026-11-04)
+
+All 16 native node types were checked against the local Dify revision
+`ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0`, including defaults, input and output
+selection, configuration actions, execution rules and context-specific exits.
+The reference directories below are under `web/app/components/workflow/nodes/`;
+execution conditions were also checked in the pinned Graphon revision's
+`src/graphon/utils/condition/processor.py`.
+
+| rustX node | Dify source inspected | Result and intentional native scope |
+| --- | --- | --- |
+| Start (root and body) | `start/`, `loop-start/`, `iteration-start/` | Root input fields, requiredness, typed schema, body-only entry and next-step ownership checked. Native JSON inputs; no Chatflow/File service controls. |
+| Model | `llm/`, `_base/components/prompt/` | Model choice, roles, variable insertion, structured output, retry and fail branch checked. Prompt expansion now fills the inspector and retains its editor; Escape does not close the inspector while editing. Session model authority retained. |
+| Agent | `agent/` | Profile/task, outputs, route rename and connection lifecycle checked. Shares corrected prompt expansion. Uses native Agent profiles and execution budgets rather than Dify plugin strategies. |
+| Tool | `tool/` | Discovered selector, typed argument widgets, output schema, retry and failure ports checked. Inline variable tokens use the corrected common spacing. Native capability admission retained. |
+| Branch | `if-else/` | Ordered IF/ELIF/ELSE and AND/OR checked. Added type-directed numeric ordering/equality and array/empty operators end to end. Numeric right-side pickers now filter incompatible sources. |
+| Human Input | `human-input/` | Variable-aware content, actions, timeout, outputs and renamed exits checked. Shares corrected prompt expansion. Native in-chat interaction and 24-hour timeout limit retained; no Dify email services. |
+| Loop | `loop/` | Defaults, scoped variables, after-round break conditions, count bound and nested execution checked. Numeric termination works with committed writes. Name/type/delete and value mode now remain readable at narrow widths. |
+| Iteration | `iteration/` | Array input, body output, sequential/parallel defaults, concurrency bound, error modes and flattening checked. Native lexical scope and committed-round execution retained. |
+| Exit Loop | `loop-end/` | No configuration or outgoing connector; only offered directly inside Loop bodies. |
+| Variable Assigner | `assigner/` | Type-specific write menus, reference vs constant operands, missing variables and direct Loop scope checked. Assignment rows now fit narrow inspectors; add disables at the native 32-write bound. |
+| Output | `end/` | Named selectors, add/remove and no next-step checked. Auto-generated names now avoid collisions when different sources both expose `text`; user-written names remain explicit. Native empty-object return remains valid. |
+| Template | `template-transform/` | Named bindings, Jinja editing/insertion, output, expansion and bounded rendering checked. Uses native MiniJinja and resource bounds. |
+| Code Execution | `code/` | Python/JavaScript defaults, main signature sync, input/output typing, editor, retry and error handling checked. Executes through native Bash in the Session workspace. |
+| Question Classifier | `question-classifier/` | Input/model, topic order, labels/stable exits, instructions and outputs checked. Uses shared prompt expansion instead of a second geometry implementation. |
+| List Operator | `list-operator/` | Typed operands, filter/sort/extract/limit order, one-based extraction, stable numeric ordering and endpoint outputs checked. Native typed JSON arrays; no File service fields. |
+| Variable Aggregator | `variable-assigner/` | Empty ungrouped defaults, optional retained groups, type filtering, ordered first-available source and output renames checked. Native branch coverage proof retained. |
+
+Shared variable tokens no longer inherit the standalone picker's bottom margin;
+compact mixed text/variable fields retain the same line height. Numeric operator
+buttons use mathematical symbols so the selected variable stays readable. All prompt
+editors expand within the inspector's visible bounds without remounting Lexical.
+Code and Template retain their language-aware editors and use the same bounds
+hook. Vision and AI generation controls remain absent.
+
+`workflow-node-audit.spec.ts` opens every node surface, including both nested
+Starts, at 1440 px and at 390 px with touch and dark mode. It checks horizontal
+geometry, prompt DOM/focus ownership, typed right operands and unique Output
+names. Existing per-node interaction suites cover rename/drag, Undo/Redo,
+Save/reopen, schema editing and execution paths. Browser QA uses the pinned
+Playwright Docker runner because no Browser plugin is available in this session.
+
 ## Node panels and scopes
 
 | View | Authoring behavior |

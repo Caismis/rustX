@@ -1,12 +1,11 @@
-import { useEffect, useState } from 'react';
-import type { WorkflowListFilter, WorkflowListSort } from '../../../../../../../protocol/app-server/v67';
+import type { WorkflowListFilter, WorkflowListSort } from '../../../../../../../protocol/app-server/v68';
 import { useTranslation } from '../../../../../locale/react';
 import { IconCloseOutline16 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';
-import { consumerAddress } from '../../../document/analysis';
 import { encodeField } from '../../../document/fields';
 import { itemKind, listFields, listOperators, scalarValue } from '../../../document/data-nodes';
-import { useCandidateAnalysis } from '../forms/analysis';
+import { comparisonSymbols } from '../summary';
+import { useReferenceSchema } from '../forms/useReferenceSchema';
 import { ReferencePicker } from '../forms/ReferencePicker';
 import { NumberField } from '../forms/fields';
 import { DataOutputs, DataSection, ScalarInput } from './DataFields';
@@ -14,32 +13,11 @@ import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 import styles from './DataPanels.module.css';
 
-// i18n-raw: mathematical comparison symbols, independent of locale.
-const comparisonSymbols: Record<string, string> = {
-  equal: '=',
-  not_equal: '≠',
-  greater: '>',
-  greater_equal: '≥',
-  less: '<',
-  less_equal: '≤',
-};
-
 export function ListPanel(props: PanelProps) {
   const tx = useTranslation(),
     { node, at, update } = useNode(props, 'list'),
     path = node.input.type === 'reference' ? node.input.path : [];
-  const query = { consumer: consumerAddress(props.document, at('input'))!, reference: path, limit: 1 };
-  const analysis = useCandidateAnalysis(query),
-    fresh = analysis?.report?.analysis?.selected?.schema as Record<string, unknown> | undefined;
-  const identity = JSON.stringify([props.port.endpoint, props.port.scope, encodeField(at('input')), node.input]);
-  const [confirmed, setConfirmed] = useState<{ identity: string; schema: Record<string, unknown> }>();
-  // Retain the confirmed type label while an unchanged binding is reanalyzed.
-  // Reference choices themselves always come from the current native query.
-  useEffect(() => {
-    if (fresh) setConfirmed({ identity, schema: fresh });
-  }, [fresh, identity]);
-  const schema = fresh ?? (confirmed?.identity === identity ? confirmed.schema : undefined),
-    item = schema?.items as Record<string, unknown> | undefined;
+  const schema=useReferenceSchema(at('input'),path),item=schema?.items as Record<string,unknown>|undefined;
   const fields = listFields(item),
     hasFields = itemKind(item) === 'object';
   const selected = fields.find((field) => JSON.stringify(field.path) === JSON.stringify(node.filter?.path ?? [])),

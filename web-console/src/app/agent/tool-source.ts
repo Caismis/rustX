@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CanonicalContentLocator, ContentBinding, ForegroundToolExecution } from '../../../../protocol/app-server/v67';
+import type { CanonicalContentLocator, ContentBinding, ForegroundToolExecution } from '../../../../protocol/app-server/v68';
 import { ContentCache } from '../../../../protocol/app-server/content-cache';
 import { canonicalLocatorKey, checkpointReadCutKey, observationReadCutKey } from '../../../../protocol/app-server/content-identity';
 import { readContentText } from '../../client/content-text';

@@ -625,7 +625,7 @@ completed. Native analysis exposes possible ancestors for these selectors.
 The compiler still requires matching types and proves at least one source on
 every activation, preserving rustX's definite-reference contract; ordinary
 nodes do not gain access to optional branch producers. The old flat named
-group output format is removed; App Server v67 requires the grouping flag.
+group output format is removed; App Server v68 requires the grouping flag.
 
 ### Code Execution and Variable Assigner
 
@@ -736,16 +736,20 @@ cases:
 Connect this node with `port: 'true'`, `port: needs_revision`, and
 `port: 'false'`. The obsolete single `condition` field is rejected.
 
-`boolean` requires a boolean. `equal` and `not_equal` require matching
-string, boolean, or null types and compare their exact JSON values.
-`contains`, `not_contains`, `starts_with`, and `ends_with` compare two strings;
-their right operand must be nonempty when written as a literal. `empty` and
-`not_empty` test one string without a right operand.
+`boolean` requires a boolean, with no implicit truthiness. `equal` and
+`not_equal` compare matching string, boolean or null operands, or two numeric
+operands. `greater`, `greater_equal`, `less` and `less_equal` require numbers;
+integer and number operands interoperate without rounding integers through f64.
+`contains` and `not_contains` accept two strings or an array and a matching item.
+`starts_with` and `ends_with` compare strings. String search operands written as
+literals must be nonempty. `empty` and `not_empty` take one value: as Dify's
+explicit empty operator, null, false, zero, empty strings, arrays and objects are
+empty; whitespace and nonempty containers are not. These operators do not
+introduce truthiness into the boolean predicate.
 `not` takes one predicate; `and` and `or` take nonempty predicate lists and
 short-circuit in definition order. All operands are statically checked,
-including short-circuited ones. Numeric predicates, ordering comparisons,
-object/array equality, and all implicit coercions are unsupported. Integer
-and number data can still be bound, constructed and returned.
+including short-circuited ones. Object/array equality and implicit string/number
+coercions are unsupported.
 
 ## Conservative schema proof
 

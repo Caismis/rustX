@@ -629,7 +629,7 @@
 .branchVariableToken { display: inline-flex; align-items: center; max-width: 100%; gap: 4px; padding: 4px 6px; border-radius: 6px; background: var(--dsw-alias-bg-layer-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .branchVariableSource { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .branchVariableSlash { color: var(--dsw-alias-label-tertiary); }
-.branchVariableToken b { display: inline-flex; align-items: center; gap: 3px; min-width: 0; color: var(--dsw-alias-state-business-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.branchVariableToken b { flex-shrink: 0; max-width: 65%; display: inline-flex; align-items: center; gap: 3px; min-width: 0; color: var(--dsw-alias-state-business-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .branchOperatorDivider { width: 1px; height: 16px; margin: 0 5px; background: var(--dsw-alias-border-l2); }
 .branchOperator { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 66px; min-height: 27px; padding: 3px 6px; border: 0; border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
 .branchOperator:disabled { opacity: .55; cursor: default; }
@@ -668,6 +668,8 @@
 
 .promptMessages { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .promptCard { border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
+.promptCardExpanded { position: fixed; z-index: 80; display: flex; flex-direction: column; box-sizing: border-box; padding: 12px; border-radius: 10px; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 0 12px -4px rgb(16 24 40 / 12%); overscroll-behavior: contain; }
+.promptCardExpanded .promptBody { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .promptCard:focus-within { box-shadow: inset 0 0 0 1px var(--dsw-alias-state-business-primary); }
 .promptHead { display: flex; align-items: center; gap: 4px; min-height: 30px; padding: 4px 6px 0 12px; }
 .promptHint { display: inline-flex; color: var(--dsw-alias-label-tertiary); cursor: help; }
@@ -688,6 +690,7 @@
 .promptPlaceholder { position: absolute; top: 2px; left: 0; color: var(--dsw-alias-label-tertiary); font-size: 13px; line-height: 1.7; pointer-events: none; user-select: none; }
 /* A variable token sits in the text like Dify's variable block. */
 .promptVariable { display: inline-block; margin: 0 1px; vertical-align: middle; }
+.promptVariable .referencePicker { margin: 0; }
 .promptVariable .referenceTrigger { width: auto; min-height: 22px; padding: 0 2px; border: 0; background: transparent; }
 .promptVariable .branchVariableToken { padding: 1px 5px; font-size: 12px; line-height: 18px; }
 .promptVariableIcon { font-family: var(--ds-font-family-code); font-size: 11px; font-weight: 600; }
@@ -814,6 +817,7 @@
 .templateInput:hover { border-color: var(--dsw-alias-border-l3); }
 .templateInput:focus-within { border-color: var(--dsw-alias-state-business-primary); }
 .templateInput[aria-invalid='true'] { border-color: var(--dsw-alias-state-warn-primary); }
+.templateInput .promptInputCompact { min-height: 22px; line-height: 22px; padding: 0; }
 .templateInput .promptEditor { flex: 1; min-width: 0; }
 .typeBadge { flex: none; margin-top: 2px; padding: 0 5px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 5px; color: var(--dsw-alias-label-tertiary); font-size: 10.5px; font-weight: 500; line-height: 18px; }
 .typeSwitch { display: inline-flex; flex: none; gap: 2px; padding: 2px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
@@ -833,13 +837,15 @@
 .chooserNested { padding-left: 22px; }
 .chooserNote { display: flex; align-items: center; gap: 8px; margin: 8px; color: var(--dsw-alias-label-tertiary); font-size: 11.5px; line-height: 17px; }
 .chooserRetry { margin-left: auto; padding: 2px 8px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 6px; background: none; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; cursor: pointer; }
-/* As Dify's loop variable and assigner rows: name or variable, then type,
-   mode or operation and remove on one line, the value below. */
+/* Keep names and types readable even in the mobile inspector. */
 .loopVariable { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; padding: 8px; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); }
-.loopVariableHead { display: flex; align-items: center; gap: 6px; }
-.loopVariableHead > :first-child { flex: 1 1 auto; min-width: 0; }
-.loopVariableHead > select { flex: 0 0 96px; }
-.loopVariableHead > button { flex: none; }
+.loopVariableHead, .assignmentHead { display: grid; grid-template-columns: minmax(0,1fr) minmax(80px,96px) 28px; align-items: center; gap: 6px; }
+.loopVariableHead > *, .assignmentHead > * { min-width: 0; }
+.loopVariableHead .titleInput { width: 100%; box-sizing: border-box; }
+.assignmentHead .input { min-width: 0; }
+.operandMode { display: flex; align-self: flex-start; gap: 2px; padding: 2px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
+.operandMode button { min-height: 28px; padding: 2px 10px; border: 0; border-radius: 6px; background: none; color: var(--dsw-alias-label-tertiary); font: inherit; font-size: 12px; cursor: pointer; }
+.operandMode button[aria-checked='true'] { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); box-shadow: 0 1px 2px rgb(0 0 0 / 10%); }
 /* A variable value fills the line a constant's input does. */
 .loopVariable > .referencePicker { margin: 0; }
 .loopVariable .branchVariableTrigger { min-height: 32px; padding: 0 8px; border: 1px solid var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-layer-2); }

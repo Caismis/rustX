@@ -2,7 +2,7 @@ import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react
 import { createPortal } from 'react-dom';
 import { useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useSelector } from '@xstate/react';
-import type { WorkflowAnalysisQuery, WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v67';
+import type { WorkflowAnalysisQuery, WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v68';
 import { useTranslation } from '../../../../../locale/react';
 import { consumerAddress } from '../../../document/analysis';
 import { encodeField, setField, type FieldAddress } from '../../../document/fields';
@@ -45,8 +45,9 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
     const original = document && consumerAddress(document, address);
     // A condition's token lists every comparable variable, whatever the
     // other side holds now.
-    const consumer = original && token && original.field.kind === 'condition' ? { ...original, field: { ...original.field, kind: 'condition_variable' as const } }
-      : original && token && original.field.kind === 'break_condition' ? { ...original, field: { kind: 'break_condition_variable' as const } } : original;
+    const variableSide = original?.path?.at(-1)?.kind==='left'||original?.path?.at(-1)?.kind==='value';
+    const consumer = original && token && variableSide && original.field.kind === 'condition' ? { ...original, field: { ...original.field, kind: 'condition_variable' as const } }
+      : original && token && variableSide && original.field.kind === 'break_condition' ? { ...original, field: { kind: 'break_condition_variable' as const } } : original;
     return consumer ? { consumer, reference: path.length ? [...path] : undefined, search, limit: 128 } : undefined;
   }, [document, field, path, search, token]);
   const result = useCandidateAnalysis(query, open && !!query), report = result?.report?.analysis;
@@ -72,7 +73,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx('workflows:value.whole');
   const present = (content: import('react').ReactNode) => token ? createPortal(content, window.document.body) : content;
   return <div ref={root} className={css.referencePicker}>
-    <button style={anchor?{display:'none'}:undefined} hidden={!!anchor} ref={element => { trigger.current = element; if(!anchor)refs.setReference(element); }} data-workflow-field={field} type="button" disabled={disabled} className={addLabel ? css.iconButton : token ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={addLabel??tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => { returnFocus.current = open; setOpen(value => !value); }}>
+    <button style={anchor?{display:'none'}:undefined} hidden={!!anchor} ref={element => { trigger.current = element; if(!anchor)refs.setReference(element); }} data-workflow-field={field} type="button" disabled={disabled} title={path.length?`${currentTitle} / ${currentValue}`:undefined} className={addLabel ? css.iconButton : token ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={addLabel??tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => { returnFocus.current = open; setOpen(value => !value); }}>
       {addLabel?<IconPlus size={14}/>:token && path.length ? <span className={css.branchVariableToken}>
         {producer === 'args' ? <IconEntry size={13} /> : currentNode ? <KindIcon kind={currentNode.type} size={13} /> : null}
         <span className={css.branchVariableSource}>{currentTitle}</span><span className={css.branchVariableSlash}>/</span><b><span aria-hidden>{'{x}'}</span> {currentValue}</b>

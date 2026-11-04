@@ -4,6 +4,7 @@ import { useTranslation } from '../../../../../locale/react';
 import { IconCheckOutline16, IconCopyOutline16, IconFullscreenOutline16, IconQuestionOutline14, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { Tooltip } from '../../../../../presentation/primitives/Tooltip';
 import { useCopyFeedback } from '../../../../../presentation/primitives/use-copy-feedback';
+import { useInspectorExpansion } from './useInspectorExpansion';
 import css from '../Editor.module.css';
 
 /** As Dify's prompt editor: a role header with its help, the text's length,
@@ -12,7 +13,10 @@ export function PromptCard({ label, role, hint, text, tools, expanded, onExpand,
   label: string; role: ReactNode; hint?: string; text: string; tools?: ReactNode; expanded?: boolean; onExpand: () => void; onRemove?: () => void; removeLabel?: string; children: ReactNode;
 }) {
   const tx = useTranslation(), copy = useCopyFeedback(text);
-  return <section className={clsx(css.promptCard, expanded && css.promptCardExpanded)} aria-label={label}>
+  const expand = useInspectorExpansion({expanded:!!expanded,onChange:onExpand});
+  return <div ref={expand.anchor} style={expanded?{height:expand.collapsedHeight}:undefined}>
+  <section className={clsx(css.promptCard, expanded && css.promptCardExpanded)} style={expanded?expand.bounds:undefined} data-prompt-expanded={expanded||undefined} aria-label={label}
+    onKeyDown={event=>{if(expanded&&event.key==='Escape'&&!event.defaultPrevented&&!event.nativeEvent.isComposing){event.preventDefault();event.stopPropagation();onExpand();}}}>
     <header className={css.promptHead}>
       {role}
       {hint && <Tooltip label={hint} side="bottom" maxWidth={260}><span className={css.promptHint} tabIndex={0} aria-label={hint}><IconQuestionOutline14 /></span></Tooltip>}
@@ -24,9 +28,9 @@ export function PromptCard({ label, role, hint, text, tools, expanded, onExpand,
         <button type="button" className={css.promptTool} aria-label={tx(copy.copied ? 'workflows:prompt.copied' : 'workflows:prompt.copy')} title={tx(copy.copied ? 'workflows:prompt.copied' : 'workflows:prompt.copy')} disabled={!text} onClick={copy.onCopy}>
           {copy.copied ? <IconCheckOutline16 /> : <IconCopyOutline16 />}
         </button>
-        <button type="button" className={css.promptTool} aria-pressed={!!expanded} aria-label={tx(expanded ? 'workflows:prompt.collapse' : 'workflows:prompt.expand')} title={tx(expanded ? 'workflows:prompt.collapse' : 'workflows:prompt.expand')} onClick={onExpand}><IconFullscreenOutline16 /></button>
+        <button type="button" className={css.promptTool} aria-pressed={!!expanded} aria-label={tx(expanded ? 'workflows:prompt.collapse' : 'workflows:prompt.expand')} title={tx(expanded ? 'workflows:prompt.collapse' : 'workflows:prompt.expand')} onClick={expand.toggle}><IconFullscreenOutline16 /></button>
       </span>
     </header>
     <div className={css.promptBody}>{children}</div>
-  </section>;
+  </section></div>;
 }
