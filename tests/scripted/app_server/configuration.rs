@@ -136,6 +136,47 @@ pub(super) fn configuration_changes(
         .collect()
 }
 
+/// The installed catalog each change fact retains, read back in bounded
+/// ranges from `store` (which outlives the runtime that recorded it).
+pub(super) fn configuration_catalogs(
+    store: &Arc<dyn crate::durable::ConversationStore>,
+) -> Vec<serde_json::Value> {
+    store
+        .read_events(None, 256)
+        .unwrap()
+        .events
+        .into_iter()
+        .filter_map(|event| match &event.event {
+            crate::events::types::RuntimeEvent::ConfigurationApplied { change } => Some(
+                crate::observation::content::ContentRef::configuration_catalog(
+                    event.conversation_id.clone(),
+                    event.sequence,
+                    change.catalog_bytes,
+                ),
+            ),
+            _ => None,
+        })
+        .map(|reference| {
+            let (mut bytes, mut offset) = (Vec::new(), 0);
+            loop {
+                let chunk = store.content_read(&reference, offset, 64).unwrap();
+                bytes.extend(
+                    base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &chunk.data_base64,
+                    )
+                    .unwrap(),
+                );
+                match chunk.next_offset {
+                    Some(next) => offset = next,
+                    None => break,
+                }
+            }
+            serde_json::from_slice(&bytes).unwrap()
+        })
+        .collect()
+}
+
 async fn write(fixture: &Fixture, _index: usize, mutation: ConfigMutation) {
     let source = fixture
         .manager

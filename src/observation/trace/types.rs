@@ -460,6 +460,8 @@ pub struct TraceRecord {
     /// installed, read through `content_read` whether or not a request used
     /// them.
     pub configuration_instructions: Option<crate::observation::content::ContentRef>,
+    /// The JSON catalog of the Tools and Skills that commit added or changed.
+    pub configuration_catalog: Option<crate::observation::content::ContentRef>,
     /// Whether this record has heavy detail available for inspection.
     pub has_detail: bool,
     pub truncated: bool,

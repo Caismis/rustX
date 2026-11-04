@@ -2392,6 +2392,22 @@ async fn implementation_only_tool_change_records_one_changed_fact() {
         assert_eq!(changes.len(), 1, "{changes:?}");
         assert!(changes[0].tools.added.is_empty() && changes[0].tools.removed.is_empty());
         assert_eq!(changes[0].tools.changed.total, 1, "{changes:?}");
+        // The fact retains the successor's definition and a digest of what
+        // its server executes, never the binding or its credentials.
+        let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
+            .pop()
+            .unwrap();
+        let [tool] = catalog["tools"].as_array().unwrap().as_slice() else {
+            panic!("one installed Tool: {catalog}");
+        };
+        assert!(tool["definition"]["input_schema"].is_object(), "{tool}");
+        assert!(
+            tool["server_binding_digest"]
+                .as_str()
+                .is_some_and(|digest| digest.starts_with("sha256:")),
+            "{tool}"
+        );
+        assert!(!catalog.to_string().contains("credentials"), "{catalog}");
         fixture.close().await;
         first.close().await;
         second.close().await;

@@ -11,7 +11,7 @@ use super::{
     SessionModelState, validate_model_context,
 };
 use crate::runtime::configuration_commit::{
-    ConfigurationChange, StagedConfiguration, StagedOutcome,
+    ConfigurationChange, ConfigurationContent, StagedConfiguration, StagedOutcome,
 };
 
 impl RuntimeInner {
@@ -458,12 +458,12 @@ impl RuntimeInner {
     fn record_effective_change(
         &self,
         state: &mut CoordinatorState,
-        change: Option<(ConfigurationChange, String)>,
+        change: Option<(ConfigurationChange, ConfigurationContent)>,
     ) -> StagedOutcome {
-        let Some((change, instructions)) = change else {
+        let Some((change, content)) = change else {
             return StagedOutcome::Committed;
         };
-        match self.record_configuration_change(change, &instructions) {
+        match self.record_configuration_change(change, &content) {
             Ok(()) => StagedOutcome::Committed,
             Err(diagnostic) => {
                 self.record_durability_failure(
@@ -481,7 +481,7 @@ impl RuntimeInner {
     fn record_configuration_change(
         &self,
         change: ConfigurationChange,
-        instructions: &str,
+        content: &ConfigurationContent,
     ) -> Result<(), String> {
         #[cfg(test)]
         if self
@@ -507,7 +507,7 @@ impl RuntimeInner {
         };
         let (event, cursor) = self
             .store
-            .append_configuration_change(event, instructions)
+            .append_configuration_change(event, &content.instructions, &content.catalog)
             .map_err(|error| error.to_string())?;
         // The wrapper releases the fact's transcript position and Journal
         // sequence in order; the inner fact becomes the clients' live row.
@@ -819,6 +819,17 @@ impl ConversationRuntime {
     /// it prepares.
     pub(crate) fn configuration_owner(&self) -> &Arc<()> {
         &self.inner.configuration_owner
+    }
+
+    /// The diagnostic of a published commit whose change fact this runtime
+    /// could not record. The failure is absorbing, so only a replacement
+    /// allocation recovers from it.
+    pub(crate) fn unrecorded_configuration(&self) -> Option<String> {
+        self.inner
+            .durability_gate
+            .failure()
+            .filter(|failure| failure.operation == DurableOperation::RecordConfigurationChange)
+            .map(|failure| failure.diagnostic)
     }
 
     /// Whether a candidate is staged and waiting for the safe boundary.

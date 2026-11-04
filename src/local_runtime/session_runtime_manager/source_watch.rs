@@ -141,6 +141,31 @@ pub(super) fn desired(
     watches
 }
 
+/// Converge the registered watches on `desired`; only a watch that
+/// registered is active.
+fn rearm(
+    watcher: &mut impl Watcher,
+    active: &mut BTreeMap<PathBuf, RecursiveMode>,
+    desired: &BTreeMap<PathBuf, RecursiveMode>,
+) {
+    active.retain(|path, _| {
+        let retained = desired.contains_key(path);
+        if !retained {
+            let _ = watcher.unwatch(path);
+        }
+        retained
+    });
+    for (path, mode) in desired {
+        if active.get(path) != Some(mode) {
+            let _ = watcher.unwatch(path);
+            active.remove(path);
+            if watcher.watch(path, *mode).is_ok() {
+                active.insert(path.clone(), *mode);
+            }
+        }
+    }
+}
+
 impl SessionRuntimeManager {
     fn user_source_roots(&self) -> UserSourceRoots {
         UserSourceRoots {
@@ -164,6 +189,10 @@ impl SessionRuntimeManager {
     /// # Errors
     ///
     /// Returns the platform watcher's construction failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the test-only registry mutex is poisoned.
     pub async fn run_source_watch(
         &self,
         stop: tokio_util::sync::CancellationToken,
@@ -185,23 +214,7 @@ impl SessionRuntimeManager {
         loop {
             let user = self.user_source_roots();
             let workspaces = self.known_workspaces();
-            let desired = desired(&user, &workspaces);
-            active.retain(|path, _| {
-                let retained = desired.contains_key(path);
-                if !retained {
-                    let _ = watcher.unwatch(path);
-                }
-                retained
-            });
-            for (path, mode) in &desired {
-                if active.get(path) != Some(mode) {
-                    let _ = watcher.unwatch(path);
-                    active.remove(path);
-                    if watcher.watch(path, *mode).is_ok() {
-                        active.insert(path.clone(), *mode);
-                    }
-                }
-            }
+            rearm(&mut watcher, &mut active, &desired(&user, &workspaces));
             tokio::select! {
                 () = stop.cancelled() => return Ok(()),
                 result = changes.changed() => if result.is_err() { return Ok(()) },
@@ -219,9 +232,23 @@ impl SessionRuntimeManager {
                         }
                         next = paths.try_recv().ok();
                     }
+                    // Watch the replacements before capturing them, so an
+                    // edit after the capture reads is always notified.
+                    rearm(&mut watcher, &mut active, &desired(&user, &workspaces));
                     targets.sort_by_key(|target| target.workspace().is_some());
                     for target in targets {
                         self.observe_source_change(&target).await;
+                    }
+                    #[cfg(test)]
+                    {
+                        let gate = self
+                            .registry
+                            .0
+                            .lock()
+                            .expect("registry mutex")
+                            .source_watch_captured
+                            .clone();
+                        gate.park().await;
                     }
                 }
             }

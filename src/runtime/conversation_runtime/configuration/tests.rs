@@ -237,6 +237,7 @@ fn configuration_change_fact_is_a_complete_transcript_row() {
         tools: crate::runtime::configuration_commit::NamedChanges::default(),
         skills: crate::runtime::configuration_commit::NamedChanges::default(),
         instructions_bytes: 14,
+        catalog_bytes: 14,
     };
     let envelope = |attempt: Option<crate::runtime::identity::AttemptId>| {
         crate::events::types::RuntimeEventEnvelope {
@@ -258,7 +259,8 @@ fn configuration_change_fact_is_a_complete_transcript_row() {
         store
             .append_configuration_change(
                 envelope(Some(AttemptId::new("attempt"))),
-                "Instructions B"
+                "Instructions B",
+                "{\"tools\":[\"B\"]}"
             )
             .is_err(),
         "a configuration change belongs to no Attempt"
@@ -272,7 +274,7 @@ fn configuration_change_fact_is_a_complete_transcript_row() {
     store.arm_fail_event_times(1);
     assert!(
         store
-            .append_configuration_change(envelope(None), "Instructions B")
+            .append_configuration_change(envelope(None), "Instructions B", "{\"tools\":[\"B\"]}")
             .is_err()
     );
     assert!(
@@ -283,21 +285,29 @@ fn configuration_change_fact_is_a_complete_transcript_row() {
             .is_empty()
     );
     let (event, cursor) = store
-        .append_configuration_change(envelope(None), "Instructions B")
+        .append_configuration_change(envelope(None), "Instructions B", "{\"tools\":[\"B\"]}")
         .unwrap();
-    // A second commit before any request: each fact keeps its own text.
+    // A second commit before any request: each fact keeps its own
+    // instructions and installed catalog.
     let (later, _) = store
-        .append_configuration_change(envelope(None), "Instructions C")
+        .append_configuration_change(envelope(None), "Instructions C", "{\"tools\":[\"C\"]}")
         .unwrap();
-    for (sequence, text) in [
-        (event.sequence, "Instructions B"),
-        (later.sequence, "Instructions C"),
-    ] {
-        let reference = crate::observation::content::ContentRef::configuration_instructions(
-            conversation.clone(),
-            sequence,
-            text.len() as u64,
-        );
+    let instructions: fn(ConversationId, u64, u64) -> crate::observation::content::ContentRef =
+        crate::observation::content::ContentRef::configuration_instructions;
+    let catalog =
+        crate::observation::content::ContentRef::configuration_catalog as fn(_, _, _) -> _;
+    for (reference, text) in [
+        (instructions, event.sequence, "Instructions B"),
+        (instructions, later.sequence, "Instructions C"),
+        (catalog, event.sequence, "{\"tools\":[\"B\"]}"),
+        (catalog, later.sequence, "{\"tools\":[\"C\"]}"),
+    ]
+    .map(|(reference, sequence, text)| {
+        (
+            reference(conversation.clone(), sequence, text.len() as u64),
+            text,
+        )
+    }) {
         let mut read = Vec::new();
         let mut offset = 0;
         loop {

@@ -1619,6 +1619,10 @@ export type ContentSource =
   | {
       journal_sequence: number;
       type: 'configuration_instructions';
+    }
+  | {
+      journal_sequence: number;
+      type: 'configuration_catalog';
     };
 /**
  * Exact deterministic component of one immutable canonical message.
@@ -3912,7 +3916,7 @@ export type ConfigurationChangeReason = 'source' | 'model_selection' | 'realloca
  * via the `definition` "ConfigurationDomain".
  */
 export type ConfigurationDomain =
-  'instructions' | 'context_policy' | 'tools' | 'skills' | 'model' | 'approval_mode';
+  'instructions' | 'context_policy' | 'tools' | 'skills' | 'model' | 'execution_policy';
 /**
  * The cursor domain of durable transcript paging.
  *
@@ -11269,6 +11273,10 @@ export interface TraceRecord {
    */
   configuration_instructions?: ContentRef | null;
   /**
+   * The JSON catalog of the Tools and Skills that commit added or changed.
+   */
+  configuration_catalog?: ContentRef | null;
+  /**
    * Whether this record has heavy detail available for inspection.
    */
   has_detail: boolean;
@@ -11478,6 +11486,11 @@ export interface ConfigurationChange {
    * even when no request ever used them.
    */
   instructions_bytes: string;
+  /**
+   * The byte length of the retained JSON catalog of every Tool and Skill
+   * this commit added or changed, as future work observes it.
+   */
+  catalog_bytes: string;
 }
 /**
  * Named-item differences of one catalog. A same-name item whose definition
@@ -13012,6 +13025,11 @@ export interface ConfigurationChange1 {
    * even when no request ever used them.
    */
   instructions_bytes: string;
+  /**
+   * The byte length of the retained JSON catalog of every Tool and Skill
+   * this commit added or changed, as future work observes it.
+   */
+  catalog_bytes: string;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -16695,6 +16713,7 @@ export interface RuntimeClientTranscriptConfigurationApplied {
   timestamp: string;
   change: ConfigurationChange2;
   instructions: ContentRef1;
+  catalog: ContentRef2;
 }
 /**
  * The typed semantic summary of one actual configuration commit.
@@ -16726,12 +16745,34 @@ export interface ConfigurationChange2 {
    * even when no request ever used them.
    */
   instructions_bytes: string;
+  /**
+   * The byte length of the retained JSON catalog of every Tool and Skill
+   * this commit added or changed, as future work observes it.
+   */
+  catalog_bytes: string;
 }
 /**
  * The exact effective instructions the commit installed, read in
  * bounded ranges through `content_read`.
  */
 export interface ContentRef1 {
+  conversation_id: ConversationId;
+  source: ContentSource;
+  representation: ContentRepresentation;
+  version: number;
+  /**
+   * Immutable sources use revision 1. For `LivePublicationPrefix` this is
+   * the committed frame sequence plus one, with exact H verified against
+   * the retained staging frontier index and projection release cut.
+   */
+  content_revision: number;
+  readable_end: number;
+}
+/**
+ * The JSON catalog of the Tools and Skills the commit added or changed,
+ * read in bounded ranges through `content_read`.
+ */
+export interface ContentRef2 {
   conversation_id: ConversationId;
   source: ContentSource;
   representation: ContentRepresentation;
@@ -20195,6 +20236,7 @@ export interface RuntimeClientTranscriptConfigurationApplied1 {
   timestamp: string;
   change: ConfigurationChange2;
   instructions: ContentRef1;
+  catalog: ContentRef2;
 }
 /**
  * Finite proposal metadata; exact provider identifiers and arguments can be deferred.

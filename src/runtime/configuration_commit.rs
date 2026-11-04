@@ -154,8 +154,9 @@ pub enum ConfigurationDomain {
     Skills,
     /// The effective model of future work.
     Model,
-    /// The approval mode future Attempts freeze.
-    ApprovalMode,
+    /// The execution policy future Attempts freeze: approval mode, model
+    /// timeout, Tool deadline and MCP startup policies.
+    ExecutionPolicy,
 }
 
 /// Most names one change category records; the total stays exact.
@@ -271,6 +272,21 @@ pub struct ConfigurationChange {
     /// installed. The fact retains them exactly, readable in bounded ranges
     /// even when no request ever used them.
     pub instructions_bytes: u64,
+    /// The byte length of the retained JSON catalog of every Tool and Skill
+    /// this commit added or changed, as future work observes it.
+    pub catalog_bytes: u64,
+}
+
+/// The exact content one configuration change fact retains beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConfigurationContent {
+    /// The effective system instructions.
+    pub(crate) instructions: String,
+    /// The JSON catalog of the added and changed Tools and Skills: each
+    /// Tool's definition with its implementation identity (a digest of the
+    /// server's transport and policy, never its credentials, or the enabled
+    /// Workflow program), and each Skill's entry with its content version.
+    pub(crate) catalog: String,
 }
 
 impl ConfigurationChange {
@@ -284,53 +300,9 @@ impl ConfigurationChange {
         (previous_binding_revision, binding_revision): (u64, u64),
         before: (&RuntimeResourceSnapshot, &SessionModelState),
         after: (&RuntimeResourceSnapshot, &SessionModelState),
-    ) -> Option<(Self, String)> {
+    ) -> Option<(Self, ConfigurationContent)> {
         let (old, old_model) = before;
         let (new, new_model) = after;
-        // A Tool is its whole definition and the executable binding of the
-        // server it runs on; a same-name implementation change is `changed`
-        // even when the model-visible declaration is byte-identical.
-        let tools = |snapshot: &RuntimeResourceSnapshot| {
-            let capability = snapshot.capability();
-            let registry = capability.tool_registry();
-            registry
-                .definitions()
-                .into_iter()
-                .zip(registry.model_definitions())
-                .map(|(definition, model)| {
-                    let server = match &definition.origin {
-                        crate::tools::types::ToolOrigin::Builtin => None,
-                        crate::tools::types::ToolOrigin::Mcp { server_id } => {
-                            Some(server_id.clone())
-                        }
-                        crate::tools::types::ToolOrigin::ManagedPython { package } => {
-                            Some(crate::tools::python::python_server_id(package))
-                        }
-                    };
-                    let binding = server.and_then(|id| capability.mcp_servers().get(&id).cloned());
-                    (definition.name.clone(), (model, definition, binding))
-                })
-                .collect::<BTreeMap<_, _>>()
-        };
-        // A Skill is its catalog entry and its content-derived version, so a
-        // body or script edit under unchanged frontmatter is `changed`.
-        let skills = |snapshot: &RuntimeResourceSnapshot| {
-            let capability = snapshot.capability();
-            let versions = capability
-                .skills()
-                .bindings()
-                .iter()
-                .map(|binding| (binding.skill_id.as_str(), &binding.version_id))
-                .collect::<BTreeMap<_, _>>();
-            capability
-                .model_skill_entries()
-                .iter()
-                .map(|entry| {
-                    let version = versions.get(entry.name.as_str()).copied().cloned();
-                    (entry.name.clone(), (entry.clone(), version))
-                })
-                .collect::<BTreeMap<_, _>>()
-        };
         let prompt = |snapshot: &RuntimeResourceSnapshot| {
             snapshot
                 .context_assembly()
@@ -340,14 +312,43 @@ impl ConfigurationChange {
         };
         let configuration = |snapshot: &RuntimeResourceSnapshot| {
             snapshot.configuration().map(|configuration| {
+                let config = &configuration.config;
                 (
-                    configuration.config.context,
-                    configuration.config.approval_mode,
+                    config.context,
+                    (
+                        config.approval_mode,
+                        config.model_timeout_policy,
+                        config.tool_deadline_policy,
+                        config.mcp_startup_policy,
+                    ),
                 )
             })
         };
-        let tools = NamedChanges::between(&tools(old), &tools(new));
-        let skills = NamedChanges::between(&skills(old), &skills(new));
+        let (old_tools, new_tools) = (tool_entries(old), tool_entries(new));
+        let (old_skills, new_skills) = (skill_entries(old), skill_entries(new));
+        let catalog = serde_json::json!({
+            "tools": installed(&old_tools, &new_tools)
+                .into_iter()
+                .map(|(model, definition, binding, program)| serde_json::json!({
+                    "definition": definition,
+                    "model_input_schema": model.input_schema,
+                    "server_binding_digest": binding.as_ref().map(binding_digest),
+                    "workflow": program,
+                }))
+                .collect::<Vec<_>>(),
+            "skills": installed(&old_skills, &new_skills)
+                .into_iter()
+                .map(|(entry, version)| serde_json::json!({
+                    "entry": entry,
+                    "version_id": version
+                        .as_ref()
+                        .map(crate::runtime::identity::SkillVersionId::as_str),
+                }))
+                .collect::<Vec<_>>(),
+        })
+        .to_string();
+        let tools = NamedChanges::between(&old_tools, &new_tools);
+        let skills = NamedChanges::between(&old_skills, &new_skills);
         let mut domains = Vec::new();
         let instructions = prompt(new);
         if prompt(old) != instructions {
@@ -367,7 +368,7 @@ impl ConfigurationChange {
             domains.push(ConfigurationDomain::Model);
         }
         if old_configuration.map(|c| c.1) != new_configuration.map(|c| c.1) {
-            domains.push(ConfigurationDomain::ApprovalMode);
+            domains.push(ConfigurationDomain::ExecutionPolicy);
         }
         let instructions = instructions.unwrap_or_default();
         (!domains.is_empty()).then_some((
@@ -379,10 +380,121 @@ impl ConfigurationChange {
                 tools,
                 skills,
                 instructions_bytes: instructions.len() as u64,
+                catalog_bytes: catalog.len() as u64,
             },
-            instructions,
+            ConfigurationContent {
+                instructions,
+                catalog,
+            },
         ))
     }
+}
+
+/// One Tool as a commit compares it: the model declaration, the whole
+/// definition, the binding of the server it runs on and the enabled Workflow
+/// program it runs.
+type ToolEntry = (
+    crate::tools::types::ModelToolDefinition,
+    crate::tools::types::ToolDefinition,
+    Option<crate::tools::mcp::McpServerBinding>,
+    Option<crate::runtime::workflow::WorkflowToolIdentity>,
+);
+
+/// One Skill as a commit compares it: its catalog entry and content version.
+type SkillEntry = (
+    crate::skills::SkillCatalogEntry,
+    Option<crate::runtime::identity::SkillVersionId>,
+);
+
+/// A Tool is its whole definition and its implementation identity: the
+/// executable binding of the server it runs on, or the enabled Workflow
+/// program it runs. A same-name implementation change is `changed` even when
+/// the model-visible declaration is byte-identical.
+fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntry> {
+    let capability = snapshot.capability();
+    let registry = capability.tool_registry();
+    let programs = snapshot
+        .workflows()
+        .entries()
+        .iter()
+        .filter_map(|(id, entry)| match &entry.admission {
+            crate::runtime::workflow::WorkflowAdmission::Enabled(program) => Some((
+                crate::tools::native::workflow_tool_id(id),
+                program.tool_identity(),
+            )),
+            crate::runtime::workflow::WorkflowAdmission::Disabled(_) => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    registry
+        .definitions()
+        .into_iter()
+        .zip(registry.model_definitions())
+        .map(|(definition, model)| {
+            let server = match &definition.origin {
+                crate::tools::types::ToolOrigin::Builtin => None,
+                crate::tools::types::ToolOrigin::Mcp { server_id } => Some(server_id.clone()),
+                crate::tools::types::ToolOrigin::ManagedPython { package } => {
+                    Some(crate::tools::python::python_server_id(package))
+                }
+            };
+            let binding = server.and_then(|id| capability.mcp_servers().get(&id).cloned());
+            let program = programs.get(&definition.id).cloned();
+            (
+                definition.name.clone(),
+                (model, definition, binding, program),
+            )
+        })
+        .collect()
+}
+
+/// A Skill is its catalog entry and its content-derived version, so a body or
+/// script edit under unchanged frontmatter is `changed`.
+fn skill_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, SkillEntry> {
+    let capability = snapshot.capability();
+    let versions = capability
+        .skills()
+        .bindings()
+        .iter()
+        .map(|binding| (binding.skill_id.as_str(), &binding.version_id))
+        .collect::<BTreeMap<_, _>>();
+    capability
+        .model_skill_entries()
+        .iter()
+        .map(|entry| {
+            let version = versions.get(entry.name.as_str()).copied().cloned();
+            (entry.name.clone(), (entry.clone(), version))
+        })
+        .collect()
+}
+
+/// The successor value of every added or changed item, in name order.
+fn installed<'a, T: PartialEq>(
+    before: &BTreeMap<String, T>,
+    after: &'a BTreeMap<String, T>,
+) -> Vec<&'a T> {
+    after
+        .iter()
+        .filter(|(name, value)| before.get(*name) != Some(*value))
+        .map(|(_, value)| value)
+        .collect()
+}
+
+/// A stable identity of what a server binding executes: its transport and
+/// invocation policy. Credentials never enter it.
+fn binding_digest(binding: &crate::tools::mcp::McpServerBinding) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let mut hasher = Sha256::new();
+    hasher.update(b"rustx/configuration/server-binding/v1\0");
+    hasher.update(
+        serde_json::to_vec(&(&binding.transport, &binding.policy))
+            .expect("server binding serializes"),
+    );
+    let mut digest = String::from("sha256:");
+    for byte in hasher.finalize() {
+        let _ = write!(digest, "{byte:02x}");
+    }
+    digest
 }
 
 /// One coherent cut of a runtime's committed configuration: the generation
@@ -452,6 +564,7 @@ mod tests {
                 changed: changes.added,
             },
             instructions_bytes: 0,
+            catalog_bytes: 0,
         };
         let worst = (0..CONFIGURATION_CHANGE_NAME_LIMIT)
             .map(|index| (format!("{index:02}{}", "\"".repeat(200)), 0_u8))

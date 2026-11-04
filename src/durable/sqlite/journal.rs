@@ -267,6 +267,7 @@ impl JournalStore for SqliteConversationStore {
         &self,
         event: RuntimeEventEnvelope,
         instructions: &str,
+        catalog: &str,
     ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
         if !matches!(event.event, RuntimeEvent::ConfigurationApplied { .. })
             || event.attempt_id.is_some()
@@ -291,13 +292,24 @@ impl JournalStore for SqliteConversationStore {
                 "configuration change did not receive a transcript cursor".to_owned(),
             )
         })?;
-        super::content::index_utf8_field(
-            &transaction,
-            crate::observation::content::ContentSource::CONFIGURATION_INSTRUCTIONS,
-            &persisted.event.sequence.to_string(),
-            0,
-            instructions,
-        )?;
+        for (kind, text) in [
+            (
+                crate::observation::content::ContentSource::CONFIGURATION_INSTRUCTIONS,
+                instructions,
+            ),
+            (
+                crate::observation::content::ContentSource::CONFIGURATION_CATALOG,
+                catalog,
+            ),
+        ] {
+            super::content::index_utf8_field(
+                &transaction,
+                kind,
+                &persisted.event.sequence.to_string(),
+                0,
+                text,
+            )?;
+        }
         transaction
             .commit()
             .map_err(|error| storage(format!("configuration change commit: {error}")))?;

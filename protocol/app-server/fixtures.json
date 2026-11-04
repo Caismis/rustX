@@ -451,6 +451,7 @@
             "attachments": [],
             "configuration": null,
             "configuration_instructions": null,
+            "configuration_catalog": null,
             "has_detail": true,
             "truncated": false
           }

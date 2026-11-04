@@ -205,11 +205,14 @@ fn configuration_records_are_counted_and_unbounded_names_stay_readable() {
             tools: NamedChanges::between(&std::collections::BTreeMap::new(), &names),
             skills: NamedChanges::default(),
             instructions_bytes: 1,
+            catalog_bytes: 2,
         };
         let mut envelope = event(store.as_ref(), E::ConfigurationApplied { change }, seconds);
         envelope.attempt_id = None;
         envelope.turn_id = None;
-        store.append_configuration_change(envelope, "I").unwrap();
+        store
+            .append_configuration_change(envelope, "I", "{}")
+            .unwrap();
     };
     let total = || {
         let host = RuntimeClientHost::new_durable(store.clone(), None).unwrap();
@@ -241,5 +244,6 @@ fn configuration_records_are_counted_and_unbounded_names_stay_readable() {
         assert_eq!(change.tools.added.total, 3);
         assert_eq!(change.tools.added.names, ["read"]);
         assert!(record.configuration_instructions.is_some());
+        assert!(record.configuration_catalog.is_some());
     }
 }

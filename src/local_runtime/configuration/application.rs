@@ -123,8 +123,14 @@ pub(crate) struct ApplicationState {
     // runtime holds staged so a superseded candidate can never commit.
     fences: BTreeMap<String, Arc<AtomicU64>>,
     reasons: BTreeMap<String, ConfigurationChangeReason>,
-    // The runtime allocation each scope's Ready candidate is staged in.
-    pub(crate) staged_in: BTreeMap<String, Arc<()>>,
+    // The runtime allocation each scope's Ready candidate is staged in, with
+    // the application that staged it; only that application's settlement
+    // clears it.
+    pub(crate) staged_in: BTreeMap<String, (Arc<()>, ApplicationIdentity)>,
+    // Scopes whose runtime published a commit it could not record. No later
+    // application of the scope reports success until the resident runtime
+    // itself reports no unrecorded commit.
+    unrecorded: BTreeMap<String, String>,
 }
 
 #[cfg(test)]
@@ -167,6 +173,18 @@ impl ConfigurationApplications {
         self.lock().deferred.contains(scope)
     }
 
+    /// The state a superseded candidate leaves when its allocation unloads
+    /// before the successor desire reaches a runtime: its marker names a
+    /// replaced allocation and the successor deferred cold.
+    #[cfg(test)]
+    pub(crate) fn strand_in_replaced_allocation(&self, scope: &str) {
+        let mut state = self.lock();
+        if let Some((owner, _)) = state.staged_in.get_mut(scope) {
+            *owner = Arc::new(());
+        }
+        state.deferred.insert(scope.to_owned());
+    }
+
     pub(crate) fn lock(&self) -> MutexGuard<'_, ApplicationState> {
         self.inner.lock().expect("configuration application owner")
     }
@@ -177,17 +195,24 @@ impl ConfigurationApplications {
         runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     ) -> bool {
         let mut state = self.lock();
+        if runtime.unrecorded_configuration().is_none() {
+            state.unrecorded.remove(scope);
+        }
         // A candidate staged in a replaced runtime can never commit into its
         // successor; the current input is prepared again for this allocation.
         // Attaching the allocation that already holds it changes nothing.
         let obsolete = state
             .staged_in
             .get(scope)
-            .is_some_and(|owner| !Arc::ptr_eq(owner, runtime.configuration_owner()));
+            .is_some_and(|(owner, _)| !Arc::ptr_eq(owner, runtime.configuration_owner()));
         if obsolete {
             state.staged_in.remove(scope);
         }
-        if !obsolete && !state.deferred.remove(scope) {
+        // This rebind consumes a cold deferral whether or not the staged
+        // candidate is obsolete, so a later attach to the same allocation
+        // finds nothing to prepare again.
+        let deferred = state.deferred.remove(scope);
+        if !obsolete && !deferred {
             return false;
         }
         state
@@ -219,6 +244,7 @@ impl ConfigurationApplications {
         state.deferred.remove(scope);
         state.reasons.remove(scope);
         state.staged_in.remove(scope);
+        state.unrecorded.remove(scope);
         if let Some(fence) = state.fences.remove(scope) {
             fence.store(0, Ordering::SeqCst);
         }
@@ -705,6 +731,12 @@ impl ApplicationState {
             .unwrap_or_else(|| Err("missing captured inputs".into()))
     }
 
+    /// Whether the worker has exited with nothing left to prepare.
+    #[cfg(test)]
+    pub(crate) fn worker_idle(&self) -> bool {
+        !self.worker_running && self.pending.is_empty()
+    }
+
     pub(crate) fn start_worker(&mut self) -> bool {
         if self.worker_running {
             return false;
@@ -791,7 +823,20 @@ impl ApplicationState {
         if !self.current(scope, identity) {
             return false;
         }
-        let outcome = commit();
+        let mut outcome = commit();
+        match &outcome {
+            UnitApplication::Uncertain { diagnostic } => {
+                self.unrecorded.insert(scope.to_owned(), diagnostic.clone());
+            }
+            UnitApplication::Applied => {
+                if let Some(diagnostic) = self.unrecorded.get(scope) {
+                    outcome = UnitApplication::Uncertain {
+                        diagnostic: diagnostic.clone(),
+                    };
+                }
+            }
+            _ => {}
+        }
         self.version = self
             .version
             .checked_add(1)

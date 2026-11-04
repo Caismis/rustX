@@ -84,6 +84,13 @@ impl TraceProjection<'_> {
                     change.instructions_bytes,
                 )
             }),
+            configuration_catalog: configuration.as_ref().map(|change| {
+                crate::observation::content::ContentRef::configuration_catalog(
+                    self.store.conversation_id().clone(),
+                    anchor.sequence,
+                    change.catalog_bytes,
+                )
+            }),
             configuration,
             request: summary,
         })

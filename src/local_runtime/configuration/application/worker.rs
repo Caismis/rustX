@@ -584,7 +584,7 @@ impl ConfigurationApplications {
         let desired = state.desired(scope, identity);
         state
             .staged_in
-            .insert(scope.to_owned(), prepared.owner.clone());
+            .insert(scope.to_owned(), (prepared.owner.clone(), identity.clone()));
         let bindings_owner = manager.clone();
         let retain_session = session.clone();
         let owner = self.clone();
@@ -635,10 +635,16 @@ impl ConfigurationApplications {
     ) {
         use crate::runtime::configuration_commit::StagedOutcome;
         let mut state = self.lock();
+        if state
+            .staged_in
+            .get(scope)
+            .is_some_and(|(_, staged)| staged == identity)
+        {
+            state.staged_in.remove(scope);
+        }
         if !state.current(scope, identity) {
             return;
         }
-        state.staged_in.remove(scope);
         let unit_outcome = match outcome {
             StagedOutcome::Committed => UnitApplication::Applied,
             StagedOutcome::Failed { diagnostic } => UnitApplication::Failed { diagnostic },

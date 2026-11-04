@@ -214,7 +214,8 @@ fn validate_source(connection: &Connection, source: &Source) -> Result<(), Conve
         }
         // Retained only by the change fact's own transition; the frontier
         // check of every read proves it exists.
-        Source::ConfigurationInstructions { journal_sequence } => {
+        Source::ConfigurationInstructions { journal_sequence }
+        | Source::ConfigurationCatalog { journal_sequence } => {
             if *journal_sequence > CONTENT_SAFE_INTEGER_MAX {
                 return Err(invalid());
             }
@@ -1723,7 +1724,8 @@ pub(super) fn validate_source_cut(
         },
         Source::DurableTranscriptAudit {stream_id,..}=>connection.query_row("SELECT transcript_position<=?2 AND journal_position<=?3 FROM observation_headers WHERE reference_kind='publication_audit' AND reference_id=?1",params![stream_id.as_str(),cut.read.transcript,cut.read.journal],|row|row.get::<_,bool>(0)).optional().map_err(|error|storage(error.to_string()))?.unwrap_or(false),
         Source::LivePublicationPrefix {..}=>true,
-        Source::ConfigurationInstructions { journal_sequence } => *journal_sequence <= cut.read.journal,
+        Source::ConfigurationInstructions { journal_sequence }
+        | Source::ConfigurationCatalog { journal_sequence } => *journal_sequence <= cut.read.journal,
     };
     if !allowed {
         return Err(invalid());

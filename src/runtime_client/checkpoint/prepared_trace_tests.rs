@@ -41,6 +41,7 @@ fn record() -> TraceRecord {
         calls: Vec::new(),
         configuration: None,
         configuration_instructions: None,
+        configuration_catalog: None,
         native_id: None,
         agent_id: None,
         activation_id: None,

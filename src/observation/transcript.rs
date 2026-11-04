@@ -144,6 +144,9 @@ pub struct RuntimeClientTranscriptConfigurationApplied {
     /// The exact effective instructions the commit installed, read in
     /// bounded ranges through `content_read`.
     pub instructions: super::content::ContentRef,
+    /// The JSON catalog of the Tools and Skills the commit added or changed,
+    /// read in bounded ranges through `content_read`.
+    pub catalog: super::content::ContentRef,
 }
 /// The explicit Runtime Client transcript vocabulary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -405,9 +408,14 @@ pub(crate) fn configuration_applied_item(
     }
     Ok(RuntimeClientTranscriptConfigurationApplied {
         instructions: super::content::ContentRef::configuration_instructions(
-            event.conversation_id,
+            event.conversation_id.clone(),
             event.sequence,
             change.instructions_bytes,
+        ),
+        catalog: super::content::ContentRef::configuration_catalog(
+            event.conversation_id,
+            event.sequence,
+            change.catalog_bytes,
         ),
         event_id: event.event_id,
         timestamp: event.timestamp,
