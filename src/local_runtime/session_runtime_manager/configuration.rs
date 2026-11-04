@@ -219,6 +219,14 @@ impl SessionRuntimeManager {
         }?;
         let composition = resident.composition.lock().expect("composition mutex");
         let composition = composition.as_ref()?;
+        // A runtime that left `Running` on its own (a failed physical
+        // reclamation drains it in place) can commit nothing; its application
+        // defers to the next allocation exactly as a cold Session does.
+        if composition.runtime().lifecycle_state()
+            != crate::runtime::ConversationLifecycleState::Running
+        {
+            return None;
+        }
         Some((
             composition.runtime().clone(),
             std::sync::Arc::clone(composition.resource_loader()?),

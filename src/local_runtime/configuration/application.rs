@@ -123,6 +123,8 @@ pub(crate) struct ApplicationState {
     // runtime holds staged so a superseded candidate can never commit.
     fences: BTreeMap<String, Arc<AtomicU64>>,
     reasons: BTreeMap<String, ConfigurationChangeReason>,
+    // The runtime allocation each scope's Ready candidate is staged in.
+    pub(crate) staged_in: BTreeMap<String, Arc<()>>,
 }
 
 #[cfg(test)]
@@ -177,12 +179,14 @@ impl ConfigurationApplications {
         let mut state = self.lock();
         // A candidate staged in a replaced runtime can never commit into its
         // successor; the current input is prepared again for this allocation.
-        let obsolete = state.scopes.get(scope).is_some_and(|application| {
-            application
-                .units
-                .values()
-                .any(|unit| *unit == UnitApplication::Ready)
-        });
+        // Attaching the allocation that already holds it changes nothing.
+        let obsolete = state
+            .staged_in
+            .get(scope)
+            .is_some_and(|owner| !Arc::ptr_eq(owner, runtime.configuration_owner()));
+        if obsolete {
+            state.staged_in.remove(scope);
+        }
         if !obsolete && !state.deferred.remove(scope) {
             return false;
         }
@@ -214,6 +218,7 @@ impl ConfigurationApplications {
         state.inputs.remove(scope);
         state.deferred.remove(scope);
         state.reasons.remove(scope);
+        state.staged_in.remove(scope);
         if let Some(fence) = state.fences.remove(scope) {
             fence.store(0, Ordering::SeqCst);
         }

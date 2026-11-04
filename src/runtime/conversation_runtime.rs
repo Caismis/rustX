@@ -771,6 +771,9 @@ struct CoordinatorState {
     staged_configuration: Option<StagedConfiguration>,
     /// The staged commit found a capability lifecycle admission in flight.
     configuration_commit_waiting: bool,
+    /// An admission pass that reached a waiting staged commit; the worker
+    /// resumes exactly that pass once the commit boundary is released.
+    configuration_admission_deferred: bool,
     runtime_refresh_sequence: u64,
     runtime_catalog_failure: Option<RuntimeCatalogFailure>,
     explicit_model: bool,

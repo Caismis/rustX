@@ -942,6 +942,7 @@ impl ConversationRuntime {
                 catalog_admission_deferred: false,
                 staged_configuration: None,
                 configuration_commit_waiting: false,
+                configuration_admission_deferred: false,
                 runtime_refresh_sequence: 0,
                 runtime_catalog_failure: None,
                 explicit_model: config.explicit_model,

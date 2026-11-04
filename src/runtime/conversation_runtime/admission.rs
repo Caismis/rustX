@@ -417,6 +417,11 @@ impl RuntimeInner {
                         let mut state = inner.lock_state();
                         inner.publish_runtime_catalogs_locked(&mut state);
                         inner.commit_staged_configuration_locked(&mut state);
+                        if !state.configuration_commit_waiting
+                            && std::mem::take(&mut state.configuration_admission_deferred)
+                        {
+                            admit = true;
+                        }
                     }
                     if admit && !inner.admit_next_scheduled() {
                         inner.admit_next_attempt();
@@ -522,6 +527,13 @@ impl RuntimeInner {
         // admitted; a candidate a real owner still blocks stays staged and the
         // Attempt runs with the last committed configuration.
         self.commit_staged_configuration_locked(&mut state);
+        if state.configuration_commit_waiting {
+            // A ready candidate is only waiting for the capability commit
+            // boundary: this Attempt must capture it, so the pass is resumed
+            // by the worker once that boundary is released.
+            state.configuration_admission_deferred = true;
+            return;
+        }
         if self.runtime_catalog_preparer.get().is_some()
             && (state.catalog_commit_blocked
                 || state.pending_runtime_catalog.is_some()
