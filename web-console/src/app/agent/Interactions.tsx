@@ -65,7 +65,6 @@ export function Interactions({ client, state, view }: {
         {failure?.key===key&&<p role="alert">{failure.message}</p>}
         <ApprovalTakeover title={approval.tool_name} description={approval.reason}
           detail={<InteractionField client={client} view={view} index={index} identity={key} path={['request','kind','arguments']}/>} disabled={disabled} status={status} onAllow={()=>response('allow')} onDeny={()=>response('deny')}/>
-        <Button disabled={disabled} onClick={()=>run(key,()=>client.answer(view.id,item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>
       </div>;
     }
     if(!body)return <section key={key} className="interaction">
@@ -94,8 +93,6 @@ export function Interactions({ client, state, view }: {
             status={operation || disabled ? status : undefined} submitting={operation === 'in-flight'}
             onSubmit={submission => response({ type: 'review', response: { instance: kind.review.instance, subject_digest: kind.subject_digest, submission } })}
             onDecline={() => run(key, () => client.answer(view.id, item.interaction))} />}
-      {/* A questionnaire's own dismiss action is its decline. */}
-      {kind.type === 'approval' && <Button size="sm" disabled={disabled} onClick={() => run(key, () => client.answer(view.id, item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>}
     </div>;
   })}
   {failure?.key==='page'&&<p role="alert">{failure.message}</p>}

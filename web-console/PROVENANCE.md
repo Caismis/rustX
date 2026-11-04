@@ -5197,3 +5197,10 @@ Affected adapted source records are rehashed; existing source pins
 and native protocols are unchanged. Regression checks hold the native read
 responses open to prove the intermediate state, and browser checks observe DOM
 mutations, geometry, focus and disclosures in desktop/mobile light/dark views.
+
+Approval action follow-up: the same Harness `ApprovalCard.tsx` and
+`ApprovalPanel.tsx` expose Reject/Allow once for tool approvals, without a
+standalone Cancel interaction action beneath the card. Removed rustX's extra
+button from both complete and bounded approval cards. Approval rejection still
+uses its typed response; questionnaire/review dismissal keeps its own native
+operation. No native cancellation endpoint or decision semantics change.

@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import type { CheckpointReadCut, Request, RoutedInteraction, RuntimeClientInteractionHeader } from '../../protocol/app-server/v68';
 import { Interactions } from '../src/app/agent/Interactions';
@@ -7,6 +7,22 @@ import { Server, checkpoint, interaction } from './fixture';
 
 let server:Server|undefined;
 afterEach(()=>{cleanup();server?.client.disconnect();});
+
+it.each([false, true])('approval exposes Deny and Allow once without an extra cancellation action (bounded: %s)', async bounded => {
+  const current = server = new Server(), original = interaction('approval');
+  const header = bounded ? { ...original, body: null, body_complete: false, approval: { tool_name: 'bash', reason: 'Developer approval required', mode: 'foreground' as const, deferred_fields: [['arguments']] } } : original;
+  current.snapshots.get('A')!.pending_interactions = [header];
+  if (bounded) current.held.add('conversation/checkpointValueRead');
+  await current.attached('A');
+  function Pending() { const state = useSyncExternalStore(current.client.subscribe, current.client.getSnapshot); return <Interactions client={current.client} state={state} view={state.views.A}/>; }
+  render(<Pending/>);
+  expect(screen.queryByRole('button', { name: 'Cancel interaction' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Allow once' })).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Deny' })));
+  const request = await current.waitFor('interaction/respond', 1);
+  expect(request.params).toMatchObject({ interaction: header.interaction, response: { type: 'approval', decision: { type: 'deny' } } });
+  expect(current.requests.some(row => row.request.method === 'interaction/cancel')).toBe(false);
+});
 
 it('keeps the current approval command visible when the pending collection refreshes', async () => {
   const current = server = new Server();

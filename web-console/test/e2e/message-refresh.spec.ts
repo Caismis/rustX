@@ -23,6 +23,7 @@ for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
     await expect(workflow.locator('[data-workflow-node]')).toHaveCount(4);
     await expect(job).toContainText('Original job output');
     await expect(approval.locator('pre')).toHaveText('printf rustX');
+    await expect(page.getByRole('button', { name: 'Cancel interaction', exact: true })).toHaveCount(0);
     await page.locator('[data-compaction-checkpoint] button').click();
     await expect(root).toContainText('Visible summary preview');
     await expect(root).not.toContainText(/Loading|加载中|Assembling|组装中/);
