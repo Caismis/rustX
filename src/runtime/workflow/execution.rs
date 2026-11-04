@@ -565,6 +565,9 @@ impl WorkflowRuntime {
         }
         let mut active = std::collections::BTreeSet::from([block.entry.clone()]);
         let mut ready = std::collections::BTreeSet::from([block.entry.clone()]);
+        // A handled failure keeps its diagnostic value for the fail branch,
+        // but does not publish the producer's successful output contract.
+        let mut failed_outputs = imbl::OrdSet::new();
         let admitting = std::sync::atomic::AtomicBool::new(true);
         let mut pending = FuturesUnordered::new();
         let mut failures = BTreeMap::new();
@@ -575,6 +578,7 @@ impl WorkflowRuntime {
                 && let Some(id) = ready.pop_first()
             {
                 let scope = values.clone();
+                let failed_outputs = failed_outputs.clone();
                 let admitting = &admitting;
                 pending.push(async move {
                     #[cfg(test)]
@@ -590,6 +594,7 @@ impl WorkflowRuntime {
                             context,
                             input,
                             scope,
+                            &failed_outputs,
                             &id,
                             cancellation,
                         )
@@ -661,6 +666,9 @@ impl WorkflowRuntime {
                     }
                     if let Some(value) = value {
                         values.insert(id.clone(), value);
+                    }
+                    if port == WorkflowPort::Fail {
+                        failed_outputs.insert(id.clone());
                     }
                     if let Some(value) = result {
                         returned.insert(id.clone(), value);
@@ -796,6 +804,7 @@ impl WorkflowRuntime {
         context: &'a crate::runtime::subagent::NativeExecutionContext,
         input: &'a Value,
         mut values: imbl::OrdMap<String, Value>,
+        failed_outputs: &imbl::OrdSet<String>,
         node_id: &str,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<NodeCompletion<'a>, WorkflowRunError> {
@@ -1042,10 +1051,11 @@ impl WorkflowRuntime {
                     Ok(None)
                 }
                 WorkflowNodeProgram::Template { variables,template } => {
-                    let value = super::transform::render(template,variables,|part| evaluate_value(part,input,&values))?;
+                    let value = super::transform::render_isolated(template,variables,|part| evaluate_value(part,input,&values),cancellation).await?;
                     validate_commit(&super::transform::text_schema(),&value)?;
                     reservation.retain(&value)?;
-                    values.insert(node_id.to_owned(),value);
+                    let _previous = cancellation.child_signal().with_active(|| values.insert(node_id.to_owned(),value))
+                        .ok_or_else(|| WorkflowRunError::from_cancellation(cancellation))?;
                     Ok(None)
                 }
                 WorkflowNodeProgram::List {input:source,filter,sort,limit,extract,output_schema} => {
@@ -1061,7 +1071,10 @@ impl WorkflowRuntime {
                         let mut chosen = None;
                         for path in &group.variables {
                             let Some(producer) = path.first() else { return Err(WorkflowRunError::InvalidValue("empty aggregate selector".into())); };
-                            if producer != "args" && !values.contains_key(producer) { continue; }
+                            let source = if producer == "args" { Some(input) }
+                                else if failed_outputs.contains(producer) { None }
+                                else { values.get(producer) };
+                            if path[1..].iter().fold(source, |value, key| value.and_then(|value| value.get(key))).is_none() { continue; }
                             chosen = Some(path.clone());
                             break;
                         }

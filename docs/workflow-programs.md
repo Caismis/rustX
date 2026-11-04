@@ -505,6 +505,19 @@ source, resolved input context and rendered text each have a 64 KiB budget.
 Rendering also has a 50,000-operation fuel budget and recursion limit 32.
 The final output object must fit the ordinary 64 KiB node-value limit.
 
+Admission parses Jinja syntax without evaluating or constant-folding source.
+Compilation and rendering run in the native `workflow-renderer` helper beside
+`rustx` (built and installed with the other binaries by `cargo build --bins`
+or `cargo install --path .`). Its private input files each fit 64 KiB and
+remain owned until the existing process supervisor drains and reaps the
+worker. The worker has a 128 MiB live requested-heap limit, a one-second CPU
+limit and a two-second wall deadline; Linux additionally caps its address
+space at 512 MiB. Native filters, string/list expansion and captured blocks
+therefore cannot bypass the server's resource boundary. Cancellation waits
+for supervised settlement. At most two renderer workers run per server,
+including workers whose result waiters have gone away. A resource-limit
+failure fails the Template node.
+
 The visual editor starts with an unbound `arg1` and `{{ arg1 }}`. Inputs select
 native incoming variables of any JSON type. Typing `/` or `{` in the numbered
 Jinja editor selects an upstream variable, reuses an existing binding or adds

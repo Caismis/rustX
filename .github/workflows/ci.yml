@@ -400,7 +400,7 @@ jobs:
         run: uv run --frozen pytest
 
       # Compiling the external targets first also builds every real
-      # executable (`rustx`, `bash-supervisor`, `interactive-supervisor`)
+      # executable (`rustx`, `bash-supervisor`, `interactive-supervisor`, `workflow-renderer`)
       # against the same all-feature library the tests link, and places them
       # at `target/debug/`. The in-crate text_spill suite execs
       # `bash-supervisor` there by path; `cargo test --lib` alone does not
@@ -876,7 +876,7 @@ jobs:
       # The supervisor already compiles the rustx library; the real App Server
       # binary for the TUI Save integration suite adds only its own link.
       - name: Build native PTY ownership supervisor and the App Server
-        run: cargo build --bin interactive-supervisor --bin rustx --locked
+        run: cargo build --bins --locked
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}

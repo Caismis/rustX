@@ -304,7 +304,7 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
   }
   // A copied descendant must not shadow any variable around its new body.
   // Check the complete subtree before accepting the paste transaction.
-  const produces = (node: NodeDefinition) => ['agent', 'model', 'tool', 'code', 'loop', 'iteration', 'review'].includes(node.type);
+  const produces = (node: NodeDefinition) => ['agent', 'model', 'tool', 'code', 'template', 'list', 'classifier', 'aggregate', 'loop', 'iteration', 'review'].includes(node.type);
   const outer = new Set(['args', ...[...names].filter(([id]) => produces(fragment.nodes[id])).map(([, name]) => name)]);
   for (let depth = 0; depth <= path.length; depth++)
     for (const [id, node] of Object.entries(blockAt(document, path.slice(0, depth))?.nodes ?? {})) if (produces(node)) outer.add(id);

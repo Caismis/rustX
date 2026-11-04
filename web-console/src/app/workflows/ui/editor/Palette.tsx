@@ -21,6 +21,6 @@ export function Palette({ at, tools, omit, onChoose, onClose, insertion = false 
   return <div ref={root} className={css.palette} style={{ left: at.x, top: at.y, maxHeight: `min(460px, calc(100% - ${at.y}px - 8px))` }} role="dialog" aria-label={tx('workflows:canvas.add')}
     onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.stopPropagation(); onClose(); } }}>
     {insertion && <p className={css.note}>{tx('workflows:canvas.insertion-note')}</p>}
-    <NodeChooser tools={tools} input={input} omit={insertion ? [...omit, 'branch', 'loop_end', 'return'] : omit} onChoose={choice => { if (!('id' in choice)) onChoose(choice); }} />
+    <NodeChooser tools={tools} input={input} omit={insertion ? [...omit, 'classifier', 'branch', 'review', 'loop_end', 'return'] : omit} onChoose={choice => { if (!('id' in choice)) onChoose(choice); }} />
   </div>;
 }

@@ -13,6 +13,9 @@ use serde_json::json;
 use std::cmp::Ordering;
 use std::io::{self, Write};
 
+mod template_worker;
+pub(super) use template_worker::{render_isolated, run_worker};
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowAggregateGroup {
@@ -134,7 +137,19 @@ fn environment() -> minijinja::Environment<'static> {
     // on it still fail. Keep JSON inputs typed for filters and conditions.
     env.set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
     env.set_auto_escape_callback(|_| minijinja::AutoEscape::None);
-    env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
+    env.set_unknown_method_callback(|state, value, method, args| {
+        // pycompat 2.24 never advances its substring loop for an empty
+        // needle. Python counts the boundaries between characters instead.
+        if method == "count"
+            && let Some(text) = value.as_str()
+        {
+            let (needle,): (&str,) = minijinja::value::from_args(args)?;
+            if needle.is_empty() {
+                return Ok(minijinja::Value::from(text.chars().count() + 1));
+            }
+        }
+        minijinja_contrib::pycompat::unknown_method_callback(state, value, method, args)
+    });
     env.set_recursion_limit(32);
     env.set_fuel(Some(50_000));
     // No source loader or host objects. MiniJinja's built-in range is bounded
@@ -164,9 +179,16 @@ pub(super) fn validate_template(
     {
         return Err(invalid("template inputs require at most 32 identifier names").at("variables"));
     }
-    let mut env = environment();
-    env.add_template("workflow", template)
-        .map_err(|e| invalid(e.to_string()).at("template"))?;
+    // Compilation constant-folds expressions before fuel or output limits
+    // apply. Admission parses syntax only; the isolated renderer owns all
+    // compilation and evaluation of authored expressions.
+    minijinja::machinery::parse(
+        template,
+        "workflow",
+        minijinja::syntax::SyntaxConfig,
+        minijinja::machinery::WhitespaceConfig::default(),
+    )
+    .map_err(|e| invalid(e.to_string()).at("template"))?;
     Ok(())
 }
 
@@ -184,6 +206,7 @@ impl Write for Output {
     }
 }
 
+#[cfg(test)]
 pub(super) fn render(
     template: &str,
     variables: &BTreeMap<String, WorkflowValue>,
@@ -192,13 +215,17 @@ pub(super) fn render(
     let context = resolve(&WorkflowValue::Object {
         fields: variables.clone(),
     })?;
+    render_context(template, &context)
+}
+
+fn render_context(template: &str, context: &Value) -> Result<Value, WorkflowRunError> {
     let mut env = environment();
     env.add_template("workflow", template)
         .map_err(|e| runtime(e.to_string()))?;
     let mut output = Output(Vec::new());
     env.get_template("workflow")
         .map_err(|e| runtime(e.to_string()))?
-        .render_captured_to(&context, &mut output)
+        .render_captured_to(context, &mut output)
         .map_err(|e| runtime(e.to_string()))?;
     Ok(json!({"output":String::from_utf8(output.0).map_err(|e| runtime(e.to_string()))?}))
 }
@@ -655,3 +682,7 @@ fn classifier_messages(
         },
     ]
 }
+
+#[cfg(test)]
+#[path = "tests/template_limits.rs"]
+mod template_limits;

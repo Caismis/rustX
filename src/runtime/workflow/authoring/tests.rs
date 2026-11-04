@@ -1657,3 +1657,106 @@ fn scoped_clipboard_groups_preserve_native_workflow_validity() {
         }
     }
 }
+
+#[test]
+fn list_serial_choices_match_compiler_numeric_and_text_contracts() {
+    for kind in ["string", "number", "integer", "boolean", "object", "array"] {
+        let schema = match kind {
+            "object" => object(json!({}), &[]),
+            "array" => json!({"type":"array","items":{"type":"string"}}),
+            _ => json!({"type":kind}),
+        };
+        let candidate = definition(json!({
+            "input":object(json!({
+                "items":{"type":"array","items":{"type":"number"}},
+                "serial":schema
+            }), &["items", "serial"]),
+            "nodes":{
+                "start":{"type":"start"},
+                "select":{"type":"list","input":reference(&["args","items"]),
+                    "extract":reference(&["args","serial"])},
+                "done":{"type":"return","outputs":[{"variable":"items","value_selector":["select","result"]}]}
+            },
+            "edges":[{"from":"start","to":"select"},{"from":"select","to":"done"}]
+        }));
+        let compatible = matches!(kind, "string" | "number" | "integer");
+        let analysis = analyze(
+            &candidate,
+            Some(&query(
+                "select",
+                WorkflowConsumerField::ListExtract,
+                &["args", "serial"],
+            )),
+        )
+        .unwrap();
+        for choice in selected_and_catalog(&analysis) {
+            assert_eq!(choice.availability, Available, "serial: {kind}");
+            assert_eq!(
+                choice.compatibility,
+                if compatible { Compatible } else { Incompatible },
+                "serial: {kind}"
+            );
+        }
+        assert_eq!(
+            super::super::WorkflowProgram::compile(
+                super::super::WorkflowId::parse("list_serial").unwrap(),
+                candidate,
+            )
+            .is_ok(),
+            compatible,
+            "compiler serial: {kind}"
+        );
+    }
+}
+
+#[test]
+fn list_filter_choices_match_compiler_numeric_text_coercion() {
+    for target in ["number", "integer", "string", "boolean"] {
+        for kind in ["string", "number", "integer", "boolean"] {
+            let candidate = definition(json!({
+                "input":object(json!({
+                    "items":{"type":"array","items":object(json!({"score":{"type":target}}), &["score"])},
+                    "threshold":{"type":kind}
+                }), &["items", "threshold"]),
+                "nodes":{
+                    "start":{"type":"start"},
+                    "select":{"type":"list","input":reference(&["args","items"]),
+                        "filter":{"path":["score"],"operator":"equal","value":reference(&["args","threshold"])}},
+                    "done":{"type":"return","outputs":[{"variable":"items","value_selector":["select","result"]}]}
+                },
+                "edges":[{"from":"start","to":"select"},{"from":"select","to":"done"}]
+            }));
+            let compatible = if matches!(target, "number" | "integer") {
+                matches!(kind, "string" | "number" | "integer")
+            } else {
+                target == kind
+            };
+            let analysis = analyze(
+                &candidate,
+                Some(&query(
+                    "select",
+                    WorkflowConsumerField::ListFilterValue,
+                    &["args", "threshold"],
+                )),
+            )
+            .unwrap();
+            for choice in selected_and_catalog(&analysis) {
+                assert_eq!(choice.availability, Available, "filter: {target}/{kind}");
+                assert_eq!(
+                    choice.compatibility,
+                    if compatible { Compatible } else { Incompatible },
+                    "filter: {target}/{kind}"
+                );
+            }
+            assert_eq!(
+                super::super::WorkflowProgram::compile(
+                    super::super::WorkflowId::parse("list_filter").unwrap(),
+                    candidate,
+                )
+                .is_ok(),
+                compatible,
+                "compiler filter: {target}/{kind}"
+            );
+        }
+    }
+}

@@ -37,6 +37,10 @@ path = "src/bin/bash_supervisor.rs"
 name = "interactive-supervisor"
 path = "src/bin/interactive_supervisor.rs"
 
+[[bin]]
+name = "workflow-renderer"
+path = "src/bin/workflow_renderer.rs"
+
 [dependencies]
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 uuid = { version = "1.24", features = ["v7"] }
@@ -76,7 +80,7 @@ ignore = "0.4.33"
 grep-matcher = "0.1.9"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
-nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir", "inotify", "event", "user", "poll", "socket"] }
+nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir", "inotify", "event", "user", "poll", "socket", "resource"] }
 libc = "0.2"
 serde_yaml = "0.9"
 serde_path_to_error = "0.1"
@@ -133,7 +137,7 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["h
 
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 biodivine-lib-bdd = "0.6.3"
-minijinja = { version = "2", features = ["fuel", "json"] }
+minijinja = { version = "=2.24.0", features = ["fuel", "json", "unstable_machinery"] }
 minijinja-contrib = { version = "2", features = ["pycompat"] }
 
 [lints.rust]

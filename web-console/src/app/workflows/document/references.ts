@@ -1,4 +1,4 @@
-import type { Block, NodeDefinition, Predicate, Value } from './model';
+import { updateBlock, type Block, type BlockPath, type NodeDefinition, type Predicate, type Value, type WorkflowDocument } from './model';
 
 /** Rewrite one structured reference path, never text. */
 export type PathRewrite = (path: readonly string[]) => string[] | undefined;
@@ -76,6 +76,16 @@ export function rewriteRoundReferences(container: NodeDefinition, rewrite: PathR
   if (container.type === 'loop' && container.break_condition) return { ...container, break_condition: predicate(container.break_condition, rewrite) };
   if (container.type === 'iteration') return { ...container, output: value(container.output, rewrite) };
   return container;
+}
+
+/** All readers of a block's outputs, including its container's round fields.
+ * Sibling bodies remain in their own lexical scopes. */
+export function rewriteScopeReferences(document: WorkflowDocument, path: BlockPath, rewrite: PathRewrite): WorkflowDocument {
+  const parent = path.slice(0, -1), owner = path.at(-1)?.node;
+  const outer = owner ? updateBlock(document, parent, block => ({
+    ...block, nodes: { ...block.nodes, [owner]: rewriteRoundReferences(block.nodes[owner], rewrite) },
+  })) : document;
+  return updateBlock(outer, path, block => rewriteBlockReferences(block, rewrite));
 }
 
 /** References to `id`'s value: its own output, or a field of it. */

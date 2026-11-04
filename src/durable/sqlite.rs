@@ -309,7 +309,8 @@ fn count_conversation_store_open() {
 /// Version 80 also includes Workflow node-wait Journal and Auxiliary Call identities.
 /// Version 82 combines Scheduler and physical lifecycle contracts with reasoning-free
 /// model invocations, workspace changes and MCP draft preparation. Earlier stores are rejected.
-pub const SQLITE_SCHEMA_VERSION: i64 = 82;
+/// Version 83 adds original Workflow node input/output Journal facts and data-node kinds.
+pub const SQLITE_SCHEMA_VERSION: i64 = 83;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

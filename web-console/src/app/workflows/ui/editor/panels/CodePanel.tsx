@@ -8,11 +8,11 @@ import { Button } from '../../../../../presentation/primitives/Button';
 import { useCopyFeedback } from '../../../../../presentation/primitives/use-copy-feedback';
 import { CommandRejected, freshKey, renameCodeOutput, replaceNodeExits } from '../../../document/commands';
 import { encodeField, fieldValue, setField } from '../../../document/fields';
-import { blockAt, nodeAt, updateBlock } from '../../../document/model';
+import { blockAt, nodeAt } from '../../../document/model';
 import { setOrder } from '../../../document/geometry';
 import { orderedKeys } from '../../../document/presentation';
 import { codeDefaults, type CodeLanguage } from '../../../document/code';
-import { rewriteBlockReferences } from '../../../document/references';
+import { rewriteScopeReferences } from '../../../document/references';
 import { IconPlus } from '../../icons';
 import { ReferencePicker } from '../forms/ReferencePicker';
 import { ConflictActions, JsonField, useFieldError } from '../forms/fields';
@@ -37,11 +37,11 @@ export function CodePanel(props:PanelProps) {
     if(current?.type!=='code')throw new CommandRejected('missing_node');
     const {[name]:_,...outputs}=current.outputs;
     const next=setField(document,at('outputs'),outputs);
-    const rewritten=updateBlock(next,props.block,block=>rewriteBlockReferences(block,path=>path[0]===props.id&&path[1]===name?[]:undefined));
+    const rewritten=rewriteScopeReferences(next,props.block,path=>path[0]===props.id&&path[1]===name?[]:undefined);
     return setOrder(rewritten,orderTarget,orderedKeys(document,orderTarget,Object.keys(current.outputs)).filter(key=>key!==name));
   });
   const requestRemove=(name:string)=>{
-    let used=false;rewriteBlockReferences(blockAt(props.document,props.block)!,path=>{if(path[0]===props.id&&path[1]===name)used=true;return undefined;});
+    let used=false;rewriteScopeReferences(props.document,props.block,path=>{if(path[0]===props.id&&path[1]===name)used=true;return undefined;});
     if(used)setRemoving(name);else removeOutput(name);
   };
   return <div className={styles.panel}>
@@ -85,7 +85,7 @@ function CodeEditor(props:PanelProps) {
       const owner=blockAt(document,props.block),current=owner&&nodeAt(owner,props.id);if(current?.type!=='code')throw new CommandRejected('missing_node');
       const defaults=codeDefaults(language),removed=new Set(Object.keys(current.outputs).filter(name=>!Object.hasOwn(defaults.outputs,name)));
       const next=replaceNodeExits(document,props.block,props.id,{...current,...defaults,...(current.on_error?.type==='default_value'?{on_error:{type:'default_value' as const,value:{result:''}}}:{})});
-      return setOrder(updateBlock(next,props.block,block=>rewriteBlockReferences(block,path=>path[0]===props.id&&removed.has(path[1])?[]:undefined)),{kind:'node_output',address:{block:[...props.block],node:props.id},path:[]},['result']);
+      return setOrder(rewriteScopeReferences(next,props.block,path=>path[0]===props.id&&removed.has(path[1])?[]:undefined),{kind:'node_output',address:{block:[...props.block],node:props.id},path:[]},['result']);
     });
   };
   return <div ref={expand.anchor} style={expand.expanded?{height:expand.collapsedHeight}:undefined}>

@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { WorkflowCheckReport } from '../../protocol/app-server/v68';
 import { changeNode, nodeTemplate } from '../src/app/workflows/document/commands';
 import { checklist } from '../src/app/workflows/document/checklist';
+import { toggleAggregateGroups } from '../src/app/workflows/document/aggregate';
 import type { WorkflowDocument } from '../src/app/workflows/document/model';
 import { Checklist } from '../src/app/workflows/ui/editor/Checklist';
 
@@ -38,6 +39,24 @@ it('adds the native check\'s problem only where no message names one already', (
   const items = checklist(document, invalid('block.nodes.start', 'input schema is invalid'));
   expect(items.find(item => item.node === 'start')).toMatchObject({ type: 'start', messages: [{ text: { kind: 'native', reason: 'input schema is invalid' } }] });
   expect(checklist(document, invalid('description', 'description is empty')).at(-1)).toMatchObject({ node: undefined, messages: [{ text: { kind: 'native', reason: 'description is empty' }, field: 'description' }] });
+});
+
+it('requires sources only for active aggregate groups', () => {
+  const grouped: WorkflowDocument = { description: 'Aggregate groups', block: {
+    nodes: {
+      start: { type: 'start' },
+      merge: { type: 'aggregate', grouped: true, groups: [
+        { name: 'Group1', output_type: 'string', variables: [['args', 'text']] },
+        { name: 'Group2', variables: [] },
+      ] },
+      done: { type: 'return', outputs: [] },
+    },
+    edges: [{ from: 'start', to: 'merge' }, { from: 'merge', to: 'done' }],
+  } };
+  expect(checklist(grouped)).toMatchObject([{ node: 'merge', messages: [{ text: { kind: 'required', field: 'input' } }] }]);
+  const ungrouped = toggleAggregateGroups(grouped, [], 'merge', false);
+  expect(checklist(ungrouped)).toEqual([]);
+  expect(checklist(toggleAggregateGroups(ungrouped, [], 'merge', true))).toHaveLength(1);
 });
 
 it('words why the native admission blocks a node', () => {

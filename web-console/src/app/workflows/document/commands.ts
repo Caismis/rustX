@@ -6,7 +6,7 @@ import {
   type WorkflowDocument,
 } from './model';
 import { authoredEdge, edgePort, outputPorts, portsOf, RESERVED_PORTS, TIMEOUT_PORT, type ControlPort } from './ports';
-import { renameProducer, rewriteBlockReferences, rewriteRoundReferences } from './references';
+import { renameProducer, rewriteBlockReferences, rewriteRoundReferences, rewriteScopeReferences } from './references';
 
 /** Why an editing command was refused. The document is unchanged. These are
  * canvas ergonomics only; the native compiler remains the graph authority. */
@@ -318,13 +318,13 @@ export function renameExit(document: WorkflowDocument, path: BlockPath, id: stri
 /** Rename an aggregator's output together with every structured consumer. */
 export function renameAggregateOutput(document: WorkflowDocument, path: BlockPath, id: string, from: string, to: string): WorkflowDocument {
   const invalid=validLocalKey(to); if (invalid) throw new CommandRejected(invalid);
-  return updateBlock(document,path,block => {
+  const next=updateBlock(document,path,block => {
     const node=nodeAt(block,id);
     if (node?.type !== 'aggregate' || !node.groups.some(group=>group.name===from)) throw new CommandRejected('missing_field');
     if (node.groups.some(group=>group.name===to)) throw new CommandRejected('duplicate_identifier');
-    const changed={...block,nodes:{...block.nodes,[id]:{...node,groups:node.groups.map(group=>group.name===from ? {...group,name:to}:group)}}};
-    return rewriteBlockReferences(changed,reference=>reference[0]===id && reference[1]===from ? [id,to,...reference.slice(2)] : undefined);
+    return {...block,nodes:{...block.nodes,[id]:{...node,groups:node.groups.map(group=>group.name===from ? {...group,name:to}:group)}}};
   });
+  return rewriteScopeReferences(next,path,reference=>reference[0]===id && reference[1]===from ? [id,to,...reference.slice(2)] : undefined);
 }
 
 /** A Code output is a declared root field, so its structured readers rename too. */
@@ -337,8 +337,8 @@ export function renameCodeOutput(document: WorkflowDocument, path: BlockPath, id
     const node=nodeAt(block,id);
     if(node?.type!=='code' || !Object.hasOwn(node.outputs,from))throw new CommandRejected('missing_field');
     if(Object.hasOwn(node.outputs,to))throw new CommandRejected('duplicate_identifier');
-    const changed={...block,nodes:{...block.nodes,[id]:{...node,outputs:Object.fromEntries(Object.entries(node.outputs).map(([key,value])=>[key===from?to:key,value]))}}};
-    return rewriteBlockReferences(changed,reference=>reference[0]===id && reference[1]===from ? [id,to,...reference.slice(2)] : undefined);
+    return {...block,nodes:{...block.nodes,[id]:{...node,outputs:Object.fromEntries(Object.entries(node.outputs).map(([key,value])=>[key===from?to:key,value]))}}};
   });
-  return setOrder(next,target,order.map(key=>key===from?to:key));
+  const rewritten=rewriteScopeReferences(next,path,reference=>reference[0]===id && reference[1]===from ? [id,to,...reference.slice(2)] : undefined);
+  return setOrder(rewritten,target,order.map(key=>key===from?to:key));
 }

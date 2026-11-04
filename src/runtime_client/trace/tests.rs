@@ -4902,7 +4902,9 @@ mod header_tests;
 mod inspection_tests;
 
 #[test]
+#[allow(clippy::too_many_lines)] // One immutable-cut and original-body read proof.
 fn workflow_node_frontiers_refresh_at_the_original_tool_step_without_reading_bodies() {
+    use base64::Engine;
     let store = store("conv_a7f34b28-5c91-7e06-8d42-3fb8c0e17d54");
     start(&store);
     let frozen = request(&store, 0);
@@ -4987,7 +4989,6 @@ fn workflow_node_frontiers_refresh_at_the_original_tool_step_without_reading_bod
         &store, &cut, domain, 0, path, 0, 65_536,
     )
     .unwrap();
-    use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(body.bytes_base64)
         .unwrap();

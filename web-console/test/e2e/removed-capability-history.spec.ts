@@ -103,7 +103,9 @@ for (const width of [1440, 390]) {
       expect(original.root_agent.workflows).toEqual(['history_flow']);
       await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Execute capabilities before removal');
       await page.getByRole('button', { name: 'Send', exact: true }).click();
-      await expect(page.getByText('Original capabilities executed.', { exact: true })).toBeVisible();
+      // This crosses three provider requests plus native Tool/renderer
+      // execution and reaping; the UI assertion's default 5s is not a deadline.
+      await expect(page.getByText('Original capabilities executed.', { exact: true })).toBeVisible({ timeout: 15_000 });
       const before = await historicalTrace(page);
 
       // Remove the actual enabled capabilities and physically delete the YAML.
@@ -154,7 +156,9 @@ for (const width of [1440, 390]) {
       expect(errors).toEqual([]);
       passed = true;
     } finally {
-      await fixture.stop(passed);
+      const diagnostics = passed ? undefined : fixture.diagnostics();
+      const report = await fixture.stop(passed);
+      if (!passed) console.error('Historical capability failure:', JSON.stringify({ diagnostics, report }));
     }
   });
 }

@@ -359,7 +359,7 @@ struct ChoiceInference<'a> {
 enum NecessaryCondition {
     None,
     ToolArgumentsObject,
-    ClassifierInput,
+    NumberOrString,
     EqualityOperand,
     ForbiddenField,
 }
@@ -369,7 +369,7 @@ enum DestinationContract<'a> {
     Unknown,
     Complete(&'a Value),
     ToolArgumentsObject,
-    ClassifierInput,
+    NumberOrString,
     Equality(Option<&'a Value>),
     ForbiddenField,
 }
@@ -389,8 +389,9 @@ fn necessary_condition(
         (WorkflowNodeDefinition::Tool { .. }, WorkflowConsumerField::Arguments) => {
             NecessaryCondition::ToolArgumentsObject
         }
-        (WorkflowNodeDefinition::Classifier { .. }, WorkflowConsumerField::TransformInput) => {
-            NecessaryCondition::ClassifierInput
+        (WorkflowNodeDefinition::Classifier { .. }, WorkflowConsumerField::TransformInput)
+        | (WorkflowNodeDefinition::List { .. }, WorkflowConsumerField::ListExtract) => {
+            NecessaryCondition::NumberOrString
         }
         _ => NecessaryCondition::None,
     }
@@ -425,11 +426,6 @@ fn consumer<'a>(
             Some(Cow::Owned(serde_json::json!({"type":"array"}))),
             false,
         ),
-        (N::List { .. }, F::ListExtract) => (
-            Expression::Value(&UNSET_REFERENCE),
-            Some(Cow::Owned(serde_json::json!({"type":"number"}))),
-            false,
-        ),
         (N::Classifier { input, .. }, F::TransformInput) => (Expression::Value(input), None, false),
         (N::Classifier { classes, .. }, F::ClassifierClass { index }) => {
             classes.get(*index as usize)?;
@@ -450,7 +446,7 @@ fn consumer<'a>(
             messages.get(*index as usize)?;
             (Expression::Value(&UNSET_REFERENCE), None, false)
         }
-        (N::List { .. }, F::ListFilterValue)
+        (N::List { .. }, F::ListExtract | F::ListFilterValue)
         | (N::Classifier { .. }, F::ClassifierInstruction)
         | (N::Agent { .. }, F::Task)
         | (N::Review { .. }, F::ReviewContent)
@@ -734,7 +730,7 @@ fn destination_compatibility(
     use WorkflowReferenceCompatibility as C;
     match (schema, contract) {
         (_, DestinationContract::ForbiddenField) => C::Incompatible,
-        (Some(actual), DestinationContract::ClassifierInput) => {
+        (Some(actual), DestinationContract::NumberOrString) => {
             let string = serde_json::json!({"type":"string"});
             let number = serde_json::json!({"type":"number"});
             match inference.compatible(actual, &string) {
@@ -1296,9 +1292,13 @@ fn analyze_query(
                 .and_then(|fields| fields.get(key))
                 .unwrap_or(&Value::Null);
         }
-        consumer.expected = super::schema_type(item).map(|kind| {
-            Cow::Owned(serde_json::json!({"type":if kind=="integer" {"number"}else{kind}}))
-        });
+        if matches!(super::schema_type(item), Some("number" | "integer")) {
+            consumer.expected = None;
+            consumer.necessary = NecessaryCondition::NumberOrString;
+        } else {
+            consumer.expected =
+                super::schema_type(item).map(|kind| Cow::Owned(serde_json::json!({"type":kind})));
+        }
     }
     let invalid_consumer = consumer.is_none();
     let expected = consumer
@@ -1307,7 +1307,7 @@ fn analyze_query(
     let destination = match consumer.as_ref().map(|consumer| consumer.necessary) {
         Some(NecessaryCondition::ForbiddenField) => DestinationContract::ForbiddenField,
         Some(NecessaryCondition::ToolArgumentsObject) => DestinationContract::ToolArgumentsObject,
-        Some(NecessaryCondition::ClassifierInput) => DestinationContract::ClassifierInput,
+        Some(NecessaryCondition::NumberOrString) => DestinationContract::NumberOrString,
         Some(NecessaryCondition::EqualityOperand) => DestinationContract::Equality(expected),
         _ => expected
             .filter(|schema| validate_workflow_schema(schema, "expected").is_ok())

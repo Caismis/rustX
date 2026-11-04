@@ -15,7 +15,7 @@ import { handoff } from '../src/browser.ts';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const nativeDirectory = mkdtempSync(join(tmpdir(), 'rustx-native-test-'));
 const nativeBinary = join(nativeDirectory, 'rustx');
-for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
   writeFileSync(join(nativeDirectory, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
 }
 after(() => rmSync(nativeDirectory, { recursive: true, force: true }));
@@ -285,11 +285,11 @@ for (const first of ['eof', 'child', 'SIGINT', 'SIGHUP', 'SIGTERM'] as const) te
   assert.equal(child.stops, 1);
 });
 
-for (const missing of ['bash-supervisor', 'interactive-supervisor']) {
+for (const missing of ['bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
   test(`missing ${missing} prevents launch before any child starts`, async t => {
     const directory = mkdtempSync(join(tmpdir(), 'rustx-incomplete-'));
     t.after(() => rmSync(directory, { recursive: true, force: true }));
-    for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+    for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
       if (name !== missing) writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     }
     const h = harness(), launcher = new Launcher(root, h.spawn);

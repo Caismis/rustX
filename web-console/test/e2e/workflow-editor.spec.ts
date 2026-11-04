@@ -132,7 +132,7 @@ test('unfinished input schemas hide self, forward and alternate branch outputs',
   } finally { await fixture.stop(false); }
 });
 
-test('equality picker rejects numeric operands and admits a matching string binding after editing the literal', async ({ page }) => {
+test('equality picker matches numeric and string bindings to the edited literal type', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
@@ -150,7 +150,7 @@ test('equality picker rejects numeric operands and admits a matching string bind
     const inspector = page.getByRole('complementary', { name: 'Inspector' }), pick = inspector.getByRole('button', { name: 'Choose a variable', exact: true });
     await inspector.getByRole('button', { name: 'Advanced conditions', exact: true }).click();
     await pick.click();
-    await expect(inspector.getByRole('button', { name: /^args \/ count ·/ })).toBeDisabled();
+    await expect(inspector.getByRole('button', { name: /^args \/ count ·/ })).toBeEnabled();
     await expect(inspector.getByRole('button', { name: /^args \/ text ·/ })).toBeDisabled();
     await pick.click();
     await inspector.getByLabel('Literal JSON', { exact: true }).fill('"known"'); await inspector.getByLabel('Literal JSON', { exact: true }).blur();

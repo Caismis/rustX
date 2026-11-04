@@ -22,6 +22,7 @@ mod capacity_admission;
 mod publication;
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One complete native call and routing proof.
 async fn classifier_uses_one_auxiliary_call_and_only_the_validated_class_path() {
     for (class, expected) in [
         ("support", Some("Support")),

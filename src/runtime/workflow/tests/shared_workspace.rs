@@ -70,9 +70,10 @@ fn bash_context(
 
 fn code_definition(script: &str, extra: Value) -> WorkflowDefinition {
     let mut node = json!({"type":"code","code_language":"python3","variables":{},"code":script,"outputs":{"result":"string"}});
-    node.as_object_mut()
-        .unwrap()
-        .extend(extra.as_object().unwrap().clone());
+    let Value::Object(extra) = extra else {
+        panic!("Code overrides must be an object")
+    };
+    node.as_object_mut().unwrap().extend(extra);
     serde_json::from_value(json!({"description":"Typed code through Bash","block":{"nodes":{"start":{"type":"start"},"script":node,"done":returns("script", &["result"])},"edges":[{"from":"start","to":"script"},{"from":"script","to":"done"}]}})).unwrap()
 }
 
@@ -139,7 +140,7 @@ def main(message, payload):
     return {"result": identity(payload)}
 "#
         } else {
-            r#"const fs = require('node:fs');
+            r"const fs = require('node:fs');
 const identity = require('./helper.cjs');
 async function main({message, payload}) {
     console.log('user log');
@@ -148,7 +149,7 @@ async function main({message, payload}) {
     fs.writeFileSync('directory.txt', process.cwd());
     return {result: identity(payload)};
 }
-"#
+"
         };
         let mut definition = code_definition(
             script,
@@ -190,22 +191,22 @@ async fn code_invalid_return_is_retried_through_distinct_native_invocations() {
     for (language, script) in [
         (
             "python3",
-            r#"from pathlib import Path
+            r"from pathlib import Path
 def main():
     if Path('attempted').exists(): return {'result':'ok'}
     Path('attempted').touch()
     return {'result':42}
-"#,
+",
         ),
         (
             "javascript",
-            r#"const fs = require('node:fs');
+            r"const fs = require('node:fs');
 function main() {
     if(fs.existsSync('attempted')) return {result:'ok'};
     fs.writeFileSync('attempted', '');
     return {result:42};
 }
-"#,
+",
         ),
     ] {
         let plane = workflow_test_plane(1);

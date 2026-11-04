@@ -24,7 +24,7 @@ async function loadOriginalHistory(page: Page) {
   await expect(earlier).toHaveCount(0);
 }
 
-test('native history, rich settlement, real image decode/lightbox, reconnect and native upload receipts', async ({ page }) => {
+test('native history, rich settlement, real image previews, reconnect and native upload receipts', async ({ page }) => {
   const fixture = await startDogfood('web_chat_history');
   const wire = await wireProbe(page);
   const reconnectChat = async () => {
@@ -254,10 +254,15 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
       await expect(image).toBeVisible();
       await expect.poll(() => image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0 && node.naturalHeight > 0)).toBe(true);
       await image.click();
-      const original = page.getByRole('dialog').locator('img');
+      // Both the thumbnail and filename open the retained preview workspace.
+      const preview = page.getByRole('complementary', { name: 'Previews', exact: true });
+      const original = preview.getByRole('img', { name: 'artifact_1', exact: true });
       await expect(original).toBeVisible();
       await expect.poll(() => original.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
-      await page.keyboard.press('Escape');
+      expect(await urlCount()).toBe(2);
+      await preview.getByRole('button', { name: 'Close preview artifact_1', exact: true }).click();
+      await expect(preview).toHaveCount(0);
+      await expect.poll(urlCount).toBe(1);
     };
     await decode();
     expect(await urlCount()).toBe(1);

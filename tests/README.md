@@ -687,7 +687,7 @@ Mandatory prerequisites fail closed; only explicitly opt-in tooling may
 skip:
 
 - **Real executables.** Tests that exec `bash-supervisor`,
-  `interactive-supervisor` or `rustx` need `cargo build --bins` first;
+  `interactive-supervisor`, `workflow-renderer` or `rustx` need `cargo build --bins` first;
   integration targets receive `CARGO_BIN_EXE_*` from Cargo. A missing
   executable fails the spawn.
 - **A verified case-insensitive filesystem on macOS.** The `process` target's

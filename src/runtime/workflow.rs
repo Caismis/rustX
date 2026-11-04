@@ -31,6 +31,13 @@ pub mod authoring;
 mod code;
 pub use authoring::{WorkflowModelPolicy, WorkflowToolSelector};
 pub use code::WorkflowCodeLanguage;
+
+/// Internal entry point of the resource-bounded Template renderer binary.
+#[doc(hidden)]
+#[must_use]
+pub fn run_template_renderer() -> i32 {
+    transform::run_worker()
+}
 mod defaults;
 pub(crate) use defaults::apply_schema_defaults;
 mod execution;
