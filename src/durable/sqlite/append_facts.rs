@@ -131,28 +131,25 @@ pub(super) fn aggregates(
         .map(|capture| &capture.bytes);
     let member_bytes = prepared.members.as_ref().map(|capture| &capture.bytes);
     let anchor = prepared.member_anchor();
-    let checkpoint = prepared.statistics.checkpoint.as_ref();
     let sql = match (
         trace.is_some(),
         statistics.is_some(),
         member_bytes.is_some(),
     ) {
         (true, true, true) => {
-            "UPDATE events SET observation_trace_total=?1,observation_statistics=?2,observation_statistics_checkpoint=?6,observation_members=?3,observation_member_anchor=?4 WHERE sequence=?5"
+            "UPDATE events SET observation_trace_total=?1,observation_statistics=?2,observation_members=?3,observation_member_anchor=?4 WHERE sequence=?5"
         }
         (true, true, false) => {
-            "UPDATE events SET observation_trace_total=?1,observation_statistics=?2,observation_statistics_checkpoint=?6 WHERE sequence=?5"
+            "UPDATE events SET observation_trace_total=?1,observation_statistics=?2 WHERE sequence=?5"
         }
         (true, false, true) => {
             "UPDATE events SET observation_trace_total=?1,observation_members=?3,observation_member_anchor=?4 WHERE sequence=?5"
         }
         (true, false, false) => "UPDATE events SET observation_trace_total=?1 WHERE sequence=?5",
         (false, true, true) => {
-            "UPDATE events SET observation_statistics=?2,observation_statistics_checkpoint=?6,observation_members=?3,observation_member_anchor=?4 WHERE sequence=?5"
+            "UPDATE events SET observation_statistics=?2,observation_members=?3,observation_member_anchor=?4 WHERE sequence=?5"
         }
-        (false, true, false) => {
-            "UPDATE events SET observation_statistics=?2,observation_statistics_checkpoint=?6 WHERE sequence=?5"
-        }
+        (false, true, false) => "UPDATE events SET observation_statistics=?2 WHERE sequence=?5",
         (false, false, true) => {
             "UPDATE events SET observation_members=?3,observation_member_anchor=?4 WHERE sequence=?5"
         }
@@ -161,15 +158,9 @@ pub(super) fn aggregates(
     connection
         .prepare_cached(sql)
         .and_then(|mut statement| {
-            let values: [&dyn rusqlite::ToSql; 6] = [
-                &trace,
-                &statistics,
-                &member_bytes,
-                &anchor,
-                &event.sequence,
-                &checkpoint,
-            ];
-            statement.execute(&values[..if statistics.is_some() { 6 } else { 5 }])
+            let values: [&dyn rusqlite::ToSql; 5] =
+                [&trace, &statistics, &member_bytes, &anchor, &event.sequence];
+            statement.execute(&values[..])
         })
         .map_err(|error| storage(error.to_string()))?;
     Ok(prepared.statistics)

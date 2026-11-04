@@ -1,7 +1,6 @@
-// Statistical facts are independent of native bodies; checkpoint validity and
-// replay distance are part of the new format, not compatibility behavior.
+// Each statistical event owns one independently bound full historical record.
 #[test]
-fn statistics_contributions_remove_full_per_event_materialization_and_match_all_cuts() {
+fn statistics_full_records_match_every_cut_with_one_direct_read() {
     use self::observation_response_tests::{response_complete, response_message, response_start};
     use crate::runtime_client::agent_statistics::StatisticsFold;
     let directory = tempfile::tempdir().unwrap();
@@ -16,7 +15,7 @@ fn statistics_contributions_remove_full_per_event_materialization_and_match_all_
     for i in 0..40 {
         response_message(&store, &attempt, &format!("contribution-message-{i}"));
     }
-    assert_eq!(observation_statistics::write_work(), (2, 41));
+    assert_eq!(observation_statistics::write_work(), (41, 41));
     assert_eq!(observation_statistics::fold_work(), (40, 1));
     assert_eq!(
         observation_statistics::read_work().0,
@@ -25,8 +24,15 @@ fn statistics_contributions_remove_full_per_event_materialization_and_match_all_
     );
     response_complete(&store, &attempt);
     assert_eq!(observation_statistics::write_work(), (1, 1));
-    let counts:(u64,u64)=store.lock().unwrap().query_row("SELECT count(observation_statistics),count(observation_statistics_checkpoint) FROM events",[],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
-    assert_eq!(counts, (42, 3));
+    let count: u64 = store.lock().unwrap().query_row(
+        "SELECT count(observation_statistics) FROM events", [], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(count, 42);
+    let obsolete: bool = store.lock().unwrap().query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_xinfo('events') WHERE name='observation_statistics_checkpoint')",
+        [], |row| row.get(0),
+    ).unwrap();
+    assert!(!obsolete, "there is one full record column, not two history forms");
     let events = store.read_events(None, 128).unwrap().events;
     for cut in 0..=events.len() {
         let expected = StatisticsFold::reference_events(&events[..cut]);
@@ -36,8 +42,8 @@ fn statistics_contributions_remove_full_per_event_materialization_and_match_all_
             expected
         );
         let (rows, bytes, bodies) = observation_statistics::read_work();
-        assert!(rows <= 18, "{rows} at {cut}");
-        assert!(bytes <= 18 * 49_152);
+        assert!(rows <= 1, "{rows} at {cut}");
+        assert!(bytes <= 98_340);
         assert_eq!(bodies, 0);
     }
     drop(store);
@@ -51,76 +57,38 @@ fn statistics_contributions_remove_full_per_event_materialization_and_match_all_
 }
 
 #[test]
-fn statistics_checkpoint_is_independent_of_older_contribution_damage_but_not_its_own_bytes() {
+fn statistics_full_record_is_independent_of_older_damage_but_not_its_own_bytes() {
     use self::observation_response_tests::{response_message, response_start};
     let store = store();
     store.initialize(&[]).unwrap();
     let attempt = response_start(&store, "independent-statistics");
     for i in 0..32 {
-        response_message(
-            &store,
-            &attempt,
-            &format!("independent-statistics-message-{i}"),
-        );
+        response_message(&store, &attempt, &format!("independent-statistics-message-{i}"));
     }
-    {
-        let connection = store.lock().unwrap();
-        let original: Vec<u8> = connection
-            .query_row(
-                "SELECT observation_statistics FROM events WHERE sequence=16",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let mut changed: serde_json::Value = observation_codec::decode(&original).unwrap();
-        let seconds = changed[3][1][0].as_i64().unwrap();
-        changed[3][1][0] = (seconds + 1).into();
-        let transaction = connection.unchecked_transaction().unwrap();
-        transaction
-            .execute(
-                "UPDATE events SET observation_statistics=?1 WHERE sequence=16",
-                [observation_codec::encode_admitted(&changed).unwrap()],
-            )
-            .unwrap();
-        assert!(
-            observation_statistics::read(&transaction, 16).is_err(),
-            "checkpoint must bind its own authoritative fact too"
-        );
-        transaction.rollback().unwrap();
-    }
-    let before = store.observation_statistics(16).unwrap();
+    let third = store.observation_statistics(3).unwrap();
     let latest = store.observation_statistics(33).unwrap();
     for replacement in ["x'ff'", "NULL"] {
-        store
-            .lock()
-            .unwrap()
-            .execute_batch(&format!(
-                "UPDATE events SET observation_statistics={replacement} WHERE sequence=2"
-            ))
-            .unwrap();
-        assert!(store.observation_statistics(3).is_err());
-        assert_eq!(store.observation_statistics(16).unwrap(), before);
+        store.lock().unwrap().execute_batch(&format!(
+            "UPDATE events SET observation_statistics={replacement} WHERE sequence=2"
+        )).unwrap();
+        assert!(store.observation_statistics(2).is_err());
+        assert_eq!(store.observation_statistics(3).unwrap(), third);
         assert_eq!(store.observation_statistics(33).unwrap(), latest);
     }
     response_message(&store, &attempt, "after-old-statistics-damage");
     assert_eq!(store.observation_statistics(34).unwrap().turns, 1);
-    store
-        .lock()
-        .unwrap()
-        .execute(
-            "UPDATE events SET observation_statistics_checkpoint=x'ff' WHERE sequence=32",
-            [],
-        )
-        .unwrap();
+    store.lock().unwrap().execute(
+        "UPDATE events SET observation_statistics=x'ff' WHERE sequence=34", [],
+    ).unwrap();
     assert!(store.observation_statistics(34).is_err());
-    response_message(&store, &attempt, "after-current-checkpoint-damage");
+    response_message(&store, &attempt, "after-current-statistics-damage");
     assert!(store.observation_statistics(35).is_err());
     assert_eq!(store.load_canonical().unwrap().len(), 34);
     assert_eq!(store.read_events(None, 128).unwrap().events.len(), 35);
 }
 
 #[test]
-fn statistics_replay_never_reads_native_bodies_or_timestamps() {
+fn statistics_full_record_never_reads_native_bodies_or_timestamps() {
     use self::observation_response_tests::{response_message, response_start};
     let store = store();
     store.initialize(&[]).unwrap();
@@ -184,46 +152,26 @@ fn statistics_savepoint_rollback_cannot_publish_a_provisional_fold() {
 }
 
 #[test]
-fn statistics_forged_ancient_anchor_fails_with_bounded_index_work() {
+fn statistics_full_record_is_row_bound_and_uses_one_bounded_head_lookup() {
     use self::observation_response_tests::{response_message, response_start};
     let store = store();
     store.initialize(&[]).unwrap();
     let attempt = response_start(&store, "bounded-statistical-history");
     for i in 0..40 {
-        response_message(
-            &store,
-            &attempt,
-            &format!("bounded-statistical-message-{i}"),
-        );
+        response_message(&store, &attempt, &format!("bounded-statistical-message-{i}"));
     }
     let connection = store.lock().unwrap();
-    let bytes: Vec<u8> = connection
-        .query_row(
-            "SELECT observation_statistics FROM events WHERE sequence=41",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let mut record: serde_json::Value = observation_codec::decode(&bytes).unwrap();
-    record[1] = 0.into();
-    record[2] = 1.into();
-    connection
-        .execute(
-            "UPDATE events SET observation_statistics=?1 WHERE sequence=41",
-            [observation_codec::encode_admitted(&record).unwrap()],
-        )
-        .unwrap();
-    let sql = "SELECT sequence,CASE WHEN typeof(observation_statistics)='blob' AND length(observation_statistics)<=49152 THEN observation_statistics ELSE 0 END,observation_statistics_checkpoint IS NOT NULL FROM events INDEXED BY events_aggregate_heads_idx WHERE observation_aggregate_heads>0 AND observation_aggregate_heads=?1 AND sequence>?2 AND sequence<=?3 ORDER BY sequence LIMIT 16";
-    connection
-        .prepare_cached(sql)
-        .unwrap()
-        .reset_status(rusqlite::StatementStatus::VmStep);
+    let bytes: Vec<u8> = connection.query_row(
+        "SELECT observation_statistics FROM events WHERE sequence=40", [], |row| row.get(0),
+    ).unwrap();
+    connection.execute(
+        "UPDATE events SET observation_statistics=?1 WHERE sequence=41", [&bytes],
+    ).unwrap();
+    let sql = super::event_heads::STATISTICS;
+    connection.prepare_cached(sql).unwrap().reset_status(rusqlite::StatementStatus::VmStep);
     assert!(observation_statistics::read(&connection, 41).is_err());
     let statement = connection.prepare_cached(sql).unwrap();
-    assert_eq!(
-        statement.get_status(rusqlite::StatementStatus::FullscanStep),
-        0
-    );
+    assert_eq!(statement.get_status(rusqlite::StatementStatus::FullscanStep), 0);
     assert_eq!(statement.get_status(rusqlite::StatementStatus::Sort), 0);
     assert!(statement.get_status(rusqlite::StatementStatus::VmStep) < 1000);
 }
@@ -340,11 +288,12 @@ fn statistics_start_facts_derive_deferred_clock_coordinates_and_preserve_exact_t
         )
         .unwrap();
     assert!(
-        bytes.len() < 128,
-        "a giant identity leaves a bounded scalar fact"
+        bytes.len() < 2048,
+        "a giant identity leaves a bounded full record and deferred clock"
     );
-    let record: serde_json::Value = observation_codec::decode(&bytes).unwrap();
-    let identity = record[3][2].as_array().unwrap();
+    let (fact, _) = observation_statistics::stored_parts(start.sequence, &bytes).unwrap();
+    let record: serde_json::Value = observation_codec::decode(fact).unwrap();
+    let identity = record[1][2].as_array().unwrap();
     assert_eq!(identity.len(), 2);
     assert!(identity[0].is_null());
     assert_eq!(identity[1], serde_json::json!(reference.encoded_bytes));
