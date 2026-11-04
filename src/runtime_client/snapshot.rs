@@ -517,11 +517,10 @@ impl From<RuntimeClientTranscriptCursor> for crate::durable::TranscriptCursor {
 pub(crate) fn transcript_page_view(
     page: crate::durable::TranscriptPage,
 ) -> Result<RuntimeClientTranscriptPage, String> {
-    let entries = page
-        .entries
-        .into_iter()
-        .map(transcript_entry_view)
-        .collect::<Result<Vec<_>, String>>()?;
+    let mut entries = Vec::with_capacity(page.entries.len());
+    for entry in page.entries {
+        entries.push(std::sync::Arc::new(transcript_entry_view(entry)?));
+    }
     Ok(RuntimeClientTranscriptPage {
         source_cut: None,
         content: Vec::new().into(),
@@ -529,11 +528,7 @@ pub(crate) fn transcript_page_view(
         deferred_entries: Vec::new().into(),
         inherited_through: Some(page.inherited_through.into()),
         statistics: None,
-        entries: entries
-            .into_iter()
-            .map(std::sync::Arc::new)
-            .collect::<Vec<_>>()
-            .into(),
+        entries: entries.into(),
         next_cursor: page.next_cursor.map(Into::into),
     })
 }

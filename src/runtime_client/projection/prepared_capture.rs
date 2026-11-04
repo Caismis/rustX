@@ -293,16 +293,19 @@ impl MetadataFrontiers {
         values: Vec<checkpoint::CollectionFrontier>,
     ) -> Vec<checkpoint::MetadataFragment<checkpoint::CollectionFrontier>> {
         let owners = self.current.get().unwrap_or(&self.previous);
-        let result: Vec<_> = values
-            .into_iter()
-            .map(|value| {
+        // Collecting owned 64-byte frontiers into 8-byte owners can reuse the
+        // source allocation and retain its much larger byte capacity. This is
+        // the immutable pointer array: allocate only its own finite slots.
+        let mut result = Vec::with_capacity(values.len());
+        for value in values {
+            result.push(
                 owners
                     .get(&value.domain)
                     .filter(|owner| ***owner == value)
                     .cloned()
-                    .unwrap_or_else(|| value.into())
-            })
-            .collect();
+                    .unwrap_or_else(|| value.into()),
+            );
+        }
         let _ = self.current.get_or_init(|| {
             Arc::new(
                 result
@@ -421,5 +424,25 @@ mod tests {
             assert_ne!(serde_json::to_vec(&current).unwrap(), before);
         }
         assert_eq!(serde_json::to_vec(&first).unwrap(), before);
+    }
+    #[test]
+    fn frontier_pointer_array_does_not_retain_larger_value_allocation() {
+        let mut values = Vec::with_capacity(128);
+        for index in 0..37 {
+            values.push(checkpoint::CollectionFrontier {
+                domain: format!("domain-{index}"),
+                revision: 9,
+                total: 1,
+                loaded: 1,
+                next_offset: None,
+            });
+        }
+        let wanted = serde_json::to_vec(&values).unwrap();
+        let prepared = MetadataFrontiers::default().prepare(values);
+        assert!(
+            prepared.capacity() <= prepared.len() * 2,
+            "a pointer array must not keep the wider input's byte allocation"
+        );
+        assert_eq!(serde_json::to_vec(&prepared).unwrap(), wanted);
     }
 }
