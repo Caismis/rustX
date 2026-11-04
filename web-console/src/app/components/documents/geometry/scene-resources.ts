@@ -1,6 +1,15 @@
 import { Box3, BufferAttribute, BufferGeometry, Color, Group, Material, Mesh, MeshStandardMaterial, Sphere, Texture, Vector3, type Object3D } from 'three';
 import { GEOMETRY_LIMITS as L, requireGeometry as check } from './limits';
-import { type GeometryModel, type GeometryNode } from './model';
+import { validateModelStructure, type GeometryModel, type GeometryNode, type GeometryPreviewData } from './model';
+
+export interface GeometryPreviewState { pending: boolean; geometry?: BufferGeometry; error: number }
+const previews = new WeakMap<BufferGeometry, GeometryPreviewState>();
+export const geometryPreviewState = (geometry: BufferGeometry) => previews.get(geometry);
+export function takeGeometryPreview(geometry: BufferGeometry) {
+  const state = previews.get(geometry);
+  if (!state?.geometry) return;
+  const result = { geometry: state.geometry, error: state.error }; state.geometry = undefined; return result;
+}
 
 function materials(root: Object3D[]): Set<Material> {
   const values = new Set<Material>();
@@ -22,7 +31,7 @@ export function disposeScene(roots: Object3D[], additionalTextures: Iterable<Tex
   }
   for (const material of mats) material.dispose();
   for (const root of roots) { root.traverse(object => { if (object instanceof Mesh) geometry.add(object.geometry); }); root.removeFromParent(); }
-  for (const item of geometry) item.dispose();
+  for (const item of geometry) { previews.get(item)?.geometry?.dispose(); previews.delete(item); item.dispose(); }
 }
 function validateBounds(bounds: Box3): Box3 {
   check(!bounds.isEmpty(), 'empty');
@@ -43,19 +52,16 @@ function positionBounds(position: BufferAttribute): Box3 {
   return new Box3(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
 }
 export function validateScene(roots: Object3D[], selected?: Object3D): Box3 {
+  return admitScene(roots, selected);
+}
+/** Generated geometries include every transferred stream, including unreferenced
+ * meshes. Scan them once; the graph walk separately charges occurrences. */
+function admitScene(roots: Object3D[], selected?: Object3D, generated?: BufferGeometry[]): Box3 {
   const unique = new Set<BufferGeometry>(), mats = materials(roots);
   let vertices = 0, triangles = 0, bytes = 0, nodes = 0, parts = 0, draws = 0, pixels = 0;
   check(mats.size <= L.materials, 'limit');
-  for (const root of roots) {
-    root.updateMatrixWorld(true);
-    root.traverse(object => {
-      check(++nodes <= L.nodes && object.matrixWorld.elements.every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate), 'limit');
-      if (!(object instanceof Mesh)) return;
-      check(++parts <= L.parts, 'limit');
-      const geometry: BufferGeometry = object.geometry, position = geometry.getAttribute('position'); check(position && position.itemSize === 3);
-      const count = geometry.index?.count ?? position.count; check(count > 0 && count % 3 === 0, 'empty');
-      triangles += count / 3; draws += Math.max(1, geometry.groups.length);
-      check(triangles <= L.triangles && draws <= L.drawCalls, 'limit');
+  const admitGeometry = (geometry: BufferGeometry) => {
+      const position = geometry.getAttribute('position'); check(position && position.itemSize === 3);
       if (unique.has(geometry)) return; unique.add(geometry); vertices += position.count;
       check(vertices <= L.vertices, 'limit');
       if (geometry.index) {
@@ -65,14 +71,14 @@ export function validateScene(roots: Object3D[], selected?: Object3D): Box3 {
         } else for (let index = 0; index < attribute.count; index++) { const value = attribute.getX(index); check(Number.isSafeInteger(value) && value >= 0 && value < position.count); }
       }
       const bounds = position instanceof BufferAttribute && position.array instanceof Float32Array && !position.normalized ? positionBounds(position) : undefined;
-      for (const attribute of Object.values(geometry.attributes)) {
+      for (const [name, attribute] of Object.entries(geometry.attributes)) {
         check(attribute.count === position.count && attribute.itemSize >= 1 && attribute.itemSize <= 4);
         bytes += attribute.count * attribute.itemSize * 4;
         check(bytes <= L.decodedBytes, 'limit');
         if (attribute === position && bounds) continue;
         if (attribute instanceof BufferAttribute && attribute.array instanceof Float32Array && !attribute.normalized) {
-          const values = attribute.array;
-          for (let index = 0; index < values.length; index++) check(Number.isFinite(values[index]) && Math.abs(values[index]) <= L.coordinate);
+          const values = attribute.array, minimum = generated && name === 'color' ? 0 : -L.coordinate, maximum = generated && name === 'color' ? 1 : L.coordinate;
+          for (let index = 0; index < values.length; index++) check(Number.isFinite(values[index]) && values[index] >= minimum && values[index] <= maximum);
           continue;
         }
         for (let index = 0; index < attribute.count; index++) for (let component = 0; component < attribute.itemSize; component++) {
@@ -90,6 +96,19 @@ export function validateScene(roots: Object3D[], selected?: Object3D): Box3 {
       check(sphere && sphere.center.toArray().every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate)
         && Number.isFinite(sphere.radius) && sphere.radius >= 0);
       bytes += geometry.index?.array.byteLength ?? 0;
+  };
+  if (generated) for (const geometry of generated) admitGeometry(geometry);
+  for (const root of roots) {
+    root.updateMatrixWorld(true);
+    root.traverse(object => {
+      check(++nodes <= L.nodes && object.matrixWorld.elements.every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate), 'limit');
+      if (!(object instanceof Mesh)) return;
+      check(++parts <= L.parts, 'limit');
+      const geometry: BufferGeometry = object.geometry, position = geometry.getAttribute('position'); check(position && position.itemSize === 3);
+      const count = geometry.index?.count ?? position.count; check(count > 0 && count % 3 === 0, 'empty');
+      triangles += count / 3; draws += Math.max(1, geometry.groups.length);
+      check(triangles <= L.triangles && draws <= L.drawCalls, 'limit');
+      admitGeometry(geometry);
     });
   }
   check(parts > 0, 'empty');
@@ -111,9 +130,8 @@ export function validateScene(roots: Object3D[], selected?: Object3D): Box3 {
 }
 
 /** Geometry stays in source coordinates; only camera framing changes. */
-export function modelScene(model: GeometryModel): { scene: Group; bounds: Box3 } {
-  // The main-thread receiver owns model validation. The generated scene still
-  // passes independent GPU admission below, without an intervening model scan.
+export function modelScene(model: GeometryModel) {
+  validateModelStructure(model);
   const root = new Group(), resources = new Group();
   const palette = new Map<string, MeshStandardMaterial>();
   const material = (color: Color, vertexColors = false) => {
@@ -149,6 +167,45 @@ export function modelScene(model: GeometryModel): { scene: Group; bounds: Box3 }
       for (const index of item.meshes) group.add(meshes[index].clone());
       for (const child of item.children) node(child, group);
     }
-    node(model.root, root); return { scene: root, bounds: validateScene([root]) };
+    node(model.root, root);
+    const bounds = admitScene([root], undefined, meshes.map(mesh => mesh.geometry));
+    let previewBytes = 0, previewTriangles = 0;
+    return { scene: root, bounds,
+      markPreviews(indices: number[]) {
+        check(indices.length <= L.parts && new Set(indices).size === indices.length);
+        for (const index of indices) {
+          check(Number.isInteger(index) && index >= 0 && index < meshes.length);
+          check(!model.meshes[index].colors && model.meshes[index].groups.length === 0);
+          previews.set(meshes[index].geometry, { pending: true, error: 0 });
+        }
+      },
+      setPreview(index: number, data: GeometryPreviewData) {
+        check(Number.isInteger(index) && index >= 0 && index < meshes.length);
+        const original = meshes[index].geometry, state = previews.get(original), source = model.meshes[index];
+        check(state?.pending && !state.geometry && !source.colors && source.groups.length === 0);
+        check(data && data.positions instanceof Float32Array && data.normals instanceof Float32Array && data.sourceVertices instanceof Uint32Array && data.normalVertices instanceof Uint32Array
+          && data.positions.length > 0 && data.positions.length % 9 === 0 && data.normals.length === data.positions.length && data.sourceVertices.length === data.positions.length / 3 && data.normalVertices.length === data.sourceVertices.length);
+        const sourceBox = original.boundingBox!, size = sourceBox.getSize(new Vector3()), scale = Math.max(size.x, size.y, size.z);
+        check(Number.isFinite(data.error) && data.error >= 0 && data.error <= scale * L.previewError);
+        previewBytes += data.positions.byteLength + data.normals.byteLength + data.sourceVertices.byteLength + data.normalVertices.byteLength; previewTriangles += data.positions.length / 9;
+        check(previewBytes <= L.previewBytes && previewTriangles <= L.previewTriangles, 'limit');
+        const input = new Uint32Array(source.positions.buffer, source.positions.byteOffset, source.positions.length), output = new Uint32Array(data.positions.buffer, data.positions.byteOffset, data.positions.length), sourceNormals = original.getAttribute('normal').array as Float32Array;
+        const normalInput = new Uint32Array(sourceNormals.buffer, sourceNormals.byteOffset,sourceNormals.length), normalOutput = new Uint32Array(data.normals.buffer,data.normals.byteOffset,data.normals.length);
+        for (const stream of [data.positions, data.normals, data.sourceVertices, data.normalVertices]) check(stream.byteOffset === 0 && stream.byteLength === stream.buffer.byteLength);
+        for (let vertex = 0; vertex < data.sourceVertices.length; vertex++) {
+          const sourceVertex = data.sourceVertices[vertex], normalVertex = data.normalVertices[vertex]; check(sourceVertex < source.positions.length / 3 && normalVertex < sourceNormals.length / 3);
+          for (let component = 0; component < 3; component++) {
+            check(output[vertex * 3 + component] === input[sourceVertex * 3 + component]);
+            check(normalOutput[vertex*3+component] === normalInput[normalVertex*3+component]);
+          }
+        }
+        const box = positionBounds(new BufferAttribute(data.positions, 3)), error = data.error;
+        for (const axis of ['x', 'y', 'z'] as const) if (Math.abs(box.min[axis] - sourceBox.min[axis]) > error || Math.abs(box.max[axis] - sourceBox.max[axis]) > error) return;
+        const geometry = new BufferGeometry().setAttribute('position', new BufferAttribute(data.positions, 3)).setAttribute('normal', new BufferAttribute(data.normals, 3));
+        geometry.addGroup(0, data.sourceVertices.length, 0); geometry.boundingBox = sourceBox.clone(); geometry.boundingSphere = original.boundingSphere!.clone();
+        state.geometry = geometry; state.error = error;
+      },
+      finishPreviews() { for (const mesh of meshes) { const state = previews.get(mesh.geometry); if (state) state.pending = false; } },
+    };
   } catch (error) { disposeScene([resources, root]); throw error; }
 }

@@ -12,7 +12,9 @@ const loadGeometry = () => import('./geometry/GeometryPreview').then(module => (
 // authorized source read, without opening a file or retaining a scene/Worker.
 export function preloadGeometry(name: string) {
   void loadGeometry().catch(() => {});
-  if (geometryFormat(name) === 'glb') void import('three/addons/loaders/GLTFLoader.js').catch(() => {});
+  const format = geometryFormat(name);
+  if (format === 'glb') void import('three/addons/loaders/GLTFLoader.js').catch(() => {});
+  else if (format !== 'stl') void import('./geometry/cad-code').then(module => module.cadCode()).catch(() => {});
 }
 export function GeometryDocument(props: GeometryPreviewProps) {
   const locale = useLocale(), [Viewer, setViewer] = useState(() => loaded), [failed, setFailed] = useState(false);

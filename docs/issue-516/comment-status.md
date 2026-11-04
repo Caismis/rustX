@@ -1,17 +1,17 @@
 # PR 517 comment implementation status
 
-Checked on 2026-11-04, Asia/Shanghai, against all twelve top-level/review timeline
+Checked on 2026-11-05, Asia/Shanghai, against all thirteen top-level/review timeline
 entries, their IDs and update times, and the complete review-thread response.
-Comment 6625398717 adds an off-origin camera reconstruction regression;
+Comment 6636090073 adds a dense-foreground picking regression;
 the inline-thread list was empty. This is an implementation inventory, not a public reply or an
 acceptance of the remaining latency budget. The current implementation and
-verification are recorded in [the interaction report](interaction-roadmap.md).
+verification are recorded in [the surface-preview report](surface-preview-optimization.md).
 
 ## Requested PR work still open
 
 | Request | Current state | Source |
 | --- | --- | --- |
-| Approximately 200 MiB geometry: first usable picture within 200 ms, every interaction below 50 ms, complete geometry when settled | Still unachieved. Bounded lossy moving pictures and complete settled draws are implemented. The current gate checks maximum input latency and includes the large closed STL; loading text, P95 and historical smaller workloads do not certify the requirement. | [Large-model quality evidence](large-model-quality.md) |
+| Approximately 200 MiB geometry: first usable picture within 200 ms, every interaction below 50 ms, complete geometry when settled | Still unachieved. Bounded surface approximations preserve original shading and complete settled draws are enforced. The gate checks maximum input latency and includes the large closed STL; loading text, P95 and historical smaller workloads do not certify the requirement. | [Surface-preview evidence](surface-preview-optimization.md) |
 
 ## Roadmap and evidence follow-ups
 
@@ -32,6 +32,7 @@ These follow-ups are not represented as disabled placeholder controls.
 
 | Comment | Implementation status |
 | --- | --- |
+| [6636090073](https://github.com/Caismis/rustX/pull/517#issuecomment-6636090073) | Picking intersects admitted original geometry, independently of temporary display quality. A real-Raycaster dense-foreground/background test first reproduced the omitted-triangle error, then passed in both moving and complete modes. Original material/geometry references remain intact. Browser selection search is rerun in the current production-fixture validation. |
 | [6625398717](https://github.com/Caismis/rustX/pull/517#issuecomment-6625398717) | Preserve intended camera position/quaternion/zoom across real OrbitControls construction before applying the retained target and limits. Front/Top real-controls reproductions and the browser Focus/projection roundtrip cover tiny off-origin occurrences. Current verification and the still-failing performance gate are recorded in [the budget follow-up](budget-follow-up.md). |
 | [6623187578](https://github.com/Caismis/rustX/pull/517#issuecomment-6623187578) | Shared request classifiers distinguish actual WASM bytes and executable CAD glue/Workers from Vite URL-import metadata. Cancellation, two-owner reuse and STL lazy-loading assertions retain their original resource and lifetime requirements. Default Vite and production-fixture validation is recorded in [the takeover report](takeover-validation.md). |
 | [6620597789](https://github.com/Caismis/rustX/pull/517#issuecomment-6620597789) | Outline depth tolerance is derived from perspective projection and one part per million of eye distance, replacing the fixed NDC offset. Numerical thin-overlap coverage spans three scales. Real OrbitControls input coverage verifies tiny pans render and persist, including retirement before queued input observation through the retirement publisher. Browser pixel coverage is included; current-run results are tracked separately from prior-head evidence. |
@@ -42,8 +43,8 @@ These follow-ups are not represented as disabled placeholder controls.
 | [6595300365](https://github.com/Caismis/rustX/pull/517#issuecomment-6595300365) | Selected GLB scenes have independent nonempty bounds admission. Part ancestry follows whole occurrence-ID segments, including unnamed branches and numeric siblings. |
 | [6598650036](https://github.com/Caismis/rustX/pull/517#issuecomment-6598650036) | Final camera metadata cannot reenter body admission during lease retirement; the real full-capacity coordinator regression covers replacement and final-pose preservation. |
 | [6599073494](https://github.com/Caismis/rustX/pull/517#issuecomment-6599073494) | Bounded mesh silhouette/boundary/crease lines, individual view icons and direct signed-axis navigation are implemented. Axis lines/labels are the pointer targets; keyboard semantics share that indicator. Outlines default on and retain an explicit off preference. |
-| [6600405482](https://github.com/Caismis/rustX/pull/517#issuecomment-6600405482) | Historical checkpoint. Its lossy simplification and shading/MSAA tradeoffs were removed; startup/compiler experiments and separate timing lanes are documented. Its paused state does not describe this active implementation. The latency gap remains open. |
-| [6600502539](https://github.com/Caismis/rustX/pull/517#issuecomment-6600502539) | Optional preparation cannot consume the import deadline reserve; lossy simplification is removed. Dense near-limit closed STL and tiny disconnected-solid regressions retain admitted geometry/bounds. |
+| [6600405482](https://github.com/Caismis/rustX/pull/517#issuecomment-6600405482) | Historical checkpoint. Admitted geometry is lossless and original PBR/MSAA remain. Current lossy surface representations are temporary display resources with independent bounds, provenance, screen-error admission and disposal. Its paused state does not describe this active implementation. The latency gap remains open. |
+| [6600502539](https://github.com/Caismis/rustX/pull/517#issuecomment-6600502539) | Exact preparation preserves the import deadline reserve and admitted geometry. Optional lossy display work starts after receiver admission and first GPU readiness, within its separate 2-second cap and the original deadline. Dense closed STL and tiny disconnected-solid regressions retain complete settled geometry/bounds. |
 
 [The review follow-up](review-follow-up.md) contains current validation, chat
 captures and final measured performance gaps. PR #517 remains draft.

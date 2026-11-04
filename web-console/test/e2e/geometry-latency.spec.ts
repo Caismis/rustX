@@ -53,12 +53,21 @@ for (const workload of ['stl-735000-vertices', 'cad-96-parts', 'stl-200mib']) te
     expect(imports).toHaveLength(1); expect(imports[0].reduce((sum, mesh) => sum + mesh.triangles, 0)).toBe(source.triangles);
     expect(await page.evaluate(() => (window as any).geometryDrawCalls.lastModelTriangles)).toBe(source.triangles);
     await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('stl-200mib-complete.png') });
+    await page.getByRole('button',{name:'View angle',exact:true}).click();await page.getByRole('menuitem',{name:'Reset view',exact:true}).click();
+    await expect(canvas).toHaveAttribute('data-geometry-quality','complete');
+    await canvas.evaluate(async(canvas:HTMLCanvasElement)=>{const gl=canvas.getContext('webgl2')!,fence=gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE,0)!;gl.flush();await new Promise<void>((resolve,reject)=>{const check=()=>{const status=gl.clientWaitSync(fence,0,0);if(status===gl.TIMEOUT_EXPIRED)setTimeout(check,1);else{gl.deleteSync(fence);status===gl.WAIT_FAILED?reject(new Error('Capture fence failed')):resolve();}};check();});});
+    const frame=await canvas.boundingBox();await page.mouse.move(frame!.x+frame!.width/2,frame!.y+frame!.height/2);await page.mouse.down();await page.mouse.move(frame!.x+frame!.width/2+12,frame!.y+frame!.height/2+4,{steps:2});
+    await expect.poll(()=>page.evaluate(()=>(window as any).geometryDrawCalls.lastModelTriangles)).toBeLessThan(source.triangles);
+    await canvas.screenshot({path:info.outputPath('stl-200mib-moving.png')});await page.mouse.up();
+    await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.pending)).toBe(0);
+    await expect(canvas).toHaveAttribute('data-geometry-quality','complete');
   }
   const result = { workload, source, idleDraws, browser, transport: process.env.RUSTX_GEOMETRY_DIRECT === '1' ? 'native-loopback' : 'Playwright-forwarded-loopback', firstFrameReadyMs: await page.evaluate(() => (window as any).geometryLatency.first), orbit, pan,
     firstGpuReadyMs: await page.evaluate(() => (window as any).geometryLatency.firstGpuReady),
     imports: await page.evaluate(() => ({ models: (window as any).geometryImports, timings: (window as any).geometryImportTimings })),
     mainPhases: await page.evaluate(() => performance.getEntriesByType('measure').filter(entry => entry.name.startsWith('geometry:')).map(entry => ({ name: entry.name, ms: entry.duration }))),
     drawCommands: await page.evaluate(() => ({ ...(window as any).geometryDrawCalls })),
+    previews:await page.evaluate(()=>(window as any).geometryPreviewTimings),modelFrames:await page.evaluate(()=>(window as any).geometryModelFrames),
     targets: { firstDisplayMs: 200, interactionMaxMs: 50 }, method: 'Proxy: trusted browser pointer timestamp to the actual model-render microtask, GPU fence settlement, and next rAF rendering opportunity. This does not observe compositor/physical display presentation. Source modules cold in each context. Original whole-drag display harness is retained separately.' };
   await page.getByRole('button', { name: `Close preview ${name}`, exact: true }).click();
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });

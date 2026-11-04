@@ -21,6 +21,7 @@ export interface PreviewContentSnapshot {
 }
 type Intent = { kind: 'read'; offset: number } | { kind: 'validate' };
 const TEXT_PREFIX_BYTES = 64 * 1024 * 1024;
+const INACTIVE_BYTES = 64 * 1024 * 1024;
 export class PreviewContentOwner {
   private state: PreviewContentSnapshot = { revision: 0, loading: false, loadedLines: 0 };
   private saved?: PreviewContentSnapshot;
@@ -38,12 +39,23 @@ export class PreviewContentOwner {
   private lifetime = new AbortController();
   private retirement: Promise<void> = Promise.resolve();
   private observedVersion?: string;
+  private geometryConsumed = false;
   constructor(private readonly reader: PreviewReader) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
   get automaticRefresh() { return this.state.mode !== 'geometry' && (this.reader.immutable || this.reader.observe !== undefined); }
   get retired() { return this.closed; }
   get retainedBytes() { const value = this.saved ?? this.state; return (value.data?.byteLength ?? 0) + (value.text?.length ?? 0) * 2; }
+  /** A large raw copy cannot fit the inactive cache. Relinquish it to the
+   * admitted import, keeping only this object's copy identity until hiding.
+   * Original Download has its own independently authorized read. */
+  takeGeometryBytes(data: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> | undefined {
+    if (!this.visible || this.closed || !this.reader.current() || this.state.mode !== 'geometry' || this.state.data !== data
+      || data.byteLength <= INACTIVE_BYTES || data.byteOffset !== 0 || data.byteLength !== data.buffer.byteLength) return;
+    const owned = structuredClone(data, { transfer: [data.buffer] });
+    this.geometryConsumed = true; return owned;
+  }
+  releaseGeometryBytes(data: Uint8Array<ArrayBuffer>): boolean { return this.takeGeometryBytes(data) !== undefined; }
   private publish(patch: Partial<PreviewContentSnapshot>) { this.state = { ...this.state, ...patch }; this.notify(); }
   private notify() { this.listeners.forEach(listener => listener()); }
   activate() {
@@ -63,6 +75,7 @@ export class PreviewContentOwner {
     this.visible = false; this.epoch++; this.pending = undefined; this.resume = undefined; this.controller?.abort();
     if (!this.observation) this.retireObservation();
     this.publish({ loading: false });
+    if (this.geometryConsumed) this.evict();
     if (!this.reader.immutable && !this.reader.observe && this.state.mode !== 'geometry') this.evict();
   }
   private current(epoch: number) { return !this.closed && this.visible && this.reader.current() && this.epoch === epoch; }
@@ -87,6 +100,7 @@ export class PreviewContentOwner {
     this.wantedLines = Math.max(this.wantedLines, this.state.loadedLines, this.saved?.loadedLines ?? 0); this.reset(this.state.mode, !this.observation && !!this.reader.observe);
   }
   private reset(mode: PreviewLoadMode, validate = false) {
+    this.geometryConsumed = false;
     this.epoch++; this.controller?.abort(); this.saved = undefined; this.resume = undefined;
     this.pending = validate ? { kind: 'validate' } : { kind: 'read', offset: 1 };
     this.state = { revision: this.state.revision + 1, mode, loading: true, loadedLines: 0 };
@@ -189,6 +203,7 @@ export class PreviewContentOwner {
     void operation.finally(() => { if (this.active === operation) { this.active = undefined; this.activeIntent = undefined; this.controller = undefined; this.drain(); } });
   }
   evict() {
+    this.geometryConsumed = false;
     this.saved = undefined; this.resume = undefined;
     if (!this.visible) this.retireObservation();
     this.state = { revision: this.state.revision + 1, mode: this.state.mode, loading: false, loadedLines: 0 }; this.notify();
@@ -217,7 +232,7 @@ export class PreviewContentCache {
   private trim() {
     let bytes = [...this.inactive.keys()].reduce((sum, entry) => sum + entry.retainedBytes, 0);
     for (const entry of this.inactive.keys()) {
-      if (this.inactive.size <= 8 && bytes <= 64 * 1024 * 1024) break;
+      if (this.inactive.size <= 8 && bytes <= INACTIVE_BYTES) break;
       bytes -= entry.retainedBytes; this.release(entry); entry.evict();
     }
   }

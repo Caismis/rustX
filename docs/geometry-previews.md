@@ -93,9 +93,9 @@ Revocation, Refresh and occurrence replacement cannot save obsolete view state.
 Initial hidden-part restoration publishes once, and camera-only publications do
 not rebuild the part rows or their derived metadata. Repeating an unchanged
 selection or visibility action does not publish or schedule a draw.
-Picking prunes hidden subtrees before nonrecursive raycasts against bounded
-display samples and resolves approximate hits through the original occurrence
-map. Inspection and framing always use admitted original geometry. Size, DPR
+Picking prunes hidden subtrees before nonrecursive raycasts against admitted
+original geometry, preserving foreground occlusion even while a display
+approximation is pending. Inspection and framing use the same originals. Size, DPR
 and quality changes are coalesced into one public drawing-buffer update at the
 next draw; an unchanged effective buffer causes no allocation.
 Both entry points mount inside the existing document sidebar, retaining its tabs,
@@ -164,23 +164,53 @@ the visible scene. Generated
 materials use the original Standard shading, metalness 0.05 and roughness 0.65;
 renderer MSAA remains enabled.
 
-The first submitted picture and subsequent camera/selection/visibility actions
-use a disposable low-cost picture: evenly sampled source triangles, one neutral
-unlit material, no mesh outline shaders, and DPR at most 0.25. Selection boxes
-and axis navigation remain visible. Sampling visits at most 20,000 triangles
-plus one rounding triangle per occurrence (at most 256), and reuses a sample
-for repeated geometry. Only positions are copied, at most 729,216 bytes per
-body; original attributes, indices, materials, transforms, hierarchy and bounds
-are retained. Geometry/material references are restored synchronously after
-submission or picking, including on exceptions, before inspection or metadata
-publication can run. No source or admitted mesh is simplified by this pass.
+Small generated assemblies can combine identity-transform occurrences that share
+one opaque material into an exact draw batch using Three.js `mergeGeometries`.
+This preserves every position, normal, index and triangle without transforming
+source floats. Combined input is capped at 16 MiB and groups smaller than four
+occurrences stay separate. Hidden ancestors, changed geometry, transparency and
+transformed occurrences retain their original draws. Batches attach only during
+synchronous submission and are removed in `finally`; original selection,
+hierarchy, visibility and inspection remain authoritative. Their copied buffers
+are disposed with the body. This reduces small-assembly draw overhead without
+lowering pixel quality or shading.
 
-After 120 ms without a changed view and after the gesture ends, one frame restores
+Initial and moving pictures retain the original PBR materials, authored normals,
+colors and textures. Their pixel ratio is at most 0.5 and one megapixel. Small
+meshes, GLB, colored meshes and material-seamed meshes retain their original
+geometry. For eligible generated meshes the import Worker prepares an optional
+surface representation using the locked meshoptimizer 1.1.1 simplifier. Locked
+borders, attribute-aware joining and a relative error limit of 0.002 protect
+boundaries and shading; the renderer additionally requires at most one CSS pixel
+of projected error. Near views that exceed this limit draw the original geometry.
+This is a display approximation, not a replacement for the admitted model.
+
+Large binary STL is processed in fixed 786,432-vertex chunks from the already
+owned source buffer. Shared chunk borders remain locked until an attribute-aware
+join removes their redundant triangulation. Other jobs copy at most 16 MiB of
+attributes in total. Output is bounded to 200,000 unique triangles and 20 MiB,
+including original position/normal vertex IDs. The receiver independently checks
+types, backing buffers, counts, exact source float bits, finite error and whole
+mesh extents before adopting it. Original geometry, materials, transforms,
+hierarchy, bounds and inspection counts remain authoritative.
+
+Only while that bounded background job is pending, evenly sampled source
+triangles bridge the first picture. The bridge copies all original attributes,
+including normals, and retains the original material. It visits at most 20,000
+triangles plus one rounding triangle per occurrence and shares repeated geometry.
+It is disposed as soon as background work finishes; unavailable, over-budget or
+ineligible approximations then use the original. Selection boxes and axis
+navigation remain visible. Mesh outline shaders pause during motion and return
+with the settled picture. Geometry references are restored synchronously after
+every submission, including on exceptions. Picking always uses originals.
+
+After background work settles, 120 ms without a changed view and the end of the
+gesture allow one frame to restore
 every admitted triangle, authored material/normal/color/texture, mesh outline
 and the original full-resolution pixel policy. New actions cancel/coalesce that
 refinement. A gesture with no pose/selection change schedules no extra work.
-An idle view has no quality loop. All samples and their shared material are
-disposed with the visible body. `data-geometry-quality` distinguishes pending
+An idle view has no quality loop. All bridge and surface buffers are disposed
+with the visible body. `data-geometry-quality` distinguishes pending
 interactive pictures from a submitted complete picture for diagnostics; it is
 not a GPU-completion or presentation timestamp.
 
@@ -188,7 +218,7 @@ The acceptance workload is approximately 200 MiB of source geometry on the
 project's fixed browser/test machine. First demand to a usable model picture
 must be at most 200 ms; every observed interaction must be below 50 ms. Initial
 and moving pictures may be lossy, while a settled picture must use all admitted
-geometry. The [large-model report](issue-516/large-model-quality.md) records the
+geometry. The [surface-preview report](issue-516/surface-preview-optimization.md) records the
 actual failing gate and remaining source/import costs. Loading text and an
 empty canvas do not satisfy first display; P95 does not replace the maximum
 latency requirement. The current raw-file pipeline does not meet this contract.
@@ -224,7 +254,13 @@ new content generation and reauthorizes the current source; loading/errors follo
 the existing preview flow. Other viewers keep their automatic-refresh behavior.
 
 Hidden bodies terminate their import Worker and release every renderer resource.
-Only admitted source bytes remain in the existing 8-entry/64-MiB inactive cache.
+Small admitted source copies can remain in the existing 8-entry/64-MiB inactive
+cache. A larger copy cannot fit that cache: its content owner relinquishes the
+buffer directly to the ready STL/CAD Worker instead of making another source-sized
+copy. GLB releases its large raw copy after successful admission. The detached
+data object remains only as the current copy token; hiding evicts it, so reopening
+performs a newly authorized read. Retirement, Refresh and failed imports cannot
+reuse detached bytes. Download remains an independent original-source action.
 Separately, the page may retain one compiled immutable CAD code module, just as
 it retains loaded JavaScript code. It contains no source, parsed model, WASM
 instance or linear memory. Every admitted CAD import instantiates fresh memory
@@ -262,8 +298,9 @@ GLTFLoader only for GLB demand and uses it on the main thread after preflight.
 STL and CAD use separate Worker entry bundles; STL cannot load CAD glue/WASM.
 Workers reuse one protocol, admission owner and cancellation/deadline handler.
 All assets are shipped locally, with no runtime CDN use.
-CAD code compilation starts only on admitted body demand. The original parent
-deadline and two-owner reservation include compilation wait. Cancelled waiters
+CAD code compilation starts on explicit visible CAD demand alongside source and
+viewer code loading. STL demand does not compile CAD. The original parent
+deadline and two-owner reservation include any remaining compilation wait. Cancelled waiters
 clear their source and callbacks and cannot create a late Worker. A failed code
 compilation clears the shared promise for an explicit retry; static asset fetch
 has its own bounded timeout. The exact pinned binary/glue remain unchanged.
@@ -286,20 +323,33 @@ The following are per visible body unless stated otherwise:
 | CAD WASM linear-memory maximum | 2 GiB, verified in both the shipped binary declaration and glue |
 | Aggregate renderer contexts / import Workers | 2 / 2, additionally restricted by existing visible-body ownership |
 | Submitted GPU frames / owned fences | 1 per visible body, 2 aggregate |
-| Moving-picture triangles / additional position buffers | At most 20,256 / 729,216 bytes per body; one shared unlit material |
+| Temporary bridge triangles / copied position and normal buffers | At most 20,256 / 1,458,432 bytes per body; original materials retained |
+| Optional surface input / decoded STL chunk | 16 MiB total copied input, or one 786,432-vertex position chunk from the owned raw STL; no full decoded-model copy |
+| Optional surface output / error / Worker budget | 200,000 unique triangles / 20 MiB including provenance; relative error at most 0.002, projected error at most 1 CSS pixel; 2 seconds within the original deadline |
+| Exact small-assembly batch input | At most 16 MiB per body, including repeated occurrences; original attributes/materials and all triangles retained |
 | Optional outline unique input triangles / copied attributes and indices | 100,000 / 16 MiB per body |
 | Optional outline segments, including repeated occurrences / extra draws | 65,536 / 256 per body; 131,072 / 512 for two bodies |
 | Optional outline output vertex buffers | 5 MiB per body, 10 MiB aggregate (80 bytes per segment); at most two shared line materials per body |
 | Optional outline Worker deadline | 2 seconds, followed by termination; packing and receiver validation are cooperative |
 | Physical GLB imports, including retiring image decodes | 2; capacity remains occupied until all declared texture work settles |
 
-Original bytes stay with the content owner. Worker input is a separately charged
-source-sized copy, transferred without detaching the retained source. Only
-validated typed result buffers leave the Worker. Three.js adopts those arrays
-without another full attribute copy. Visible bodies do not allocate unused
+Copies that fit the inactive cache stay with the content owner and use a separate
+Worker input copy. Larger copies transfer ownership directly at Worker dispatch.
+The receiver admits every generated numeric stream, including unreferenced meshes,
+in a single scan that also derives bounds. No repeated receiver value scan or
+full attribute copy is needed. Optional surface work starts only after receiver
+admission and the first GPU fence complete; the same import Worker and its owner
+remain responsible for it. The first-frame fence poll stops after that milestone.
+Visible bodies do not allocate unused
 original-file Blob URLs. GLB loader-created image URLs/bitmaps are separately
 disposed with the scene.
-An outline Worker starts only after import has settled; a visible body owns at
+The demand-owned renderer context and trusted three-vertex PBR shader preparation
+overlap import. This preparation submits no model draw. Early cancellation,
+context loss or import failure disposes it under the same two-context cap.
+Trusted camera inputs submit the latest coalesced pose at the microtask checkpoint,
+avoiding an extra animation-frame wait while retaining the single GPU-fence limit.
+
+An outline Worker starts only after import and optional surface work settle; a visible body owns at
 most one import or outline-preparation Worker at a time. Input buffers are
 separate copies; output backing buffers, values and segment/draw totals pass
 independent receiver checks. The adjacency job holds at most 300,000 edge records

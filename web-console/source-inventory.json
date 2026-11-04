@@ -5768,7 +5768,7 @@
         "./resources",
         "react"
       ],
-      "local_sha256": "e15f2c5e23c19e6b15203ca4b88b0d853e7a2cdcb68b720f5e66a724d963c3ee"
+      "local_sha256": "3d83e2796f043eb36cdd0cb3d7c38c736f720262f78f9b8cc2e6ed218d2d50f6"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",

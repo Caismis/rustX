@@ -16,7 +16,7 @@ vi.mock('three', async original => {
     getContext = () => this.gl;
     setDrawingBufferSize = (width: number, height: number) => this.size.set(width, height);
     getSize = (target: Vector2) => target.copy(this.size);
-    setViewport() {} render = vi.fn(); clearDepth() {} dispose = vi.fn(); forceContextLoss() {}
+    setViewport() {} compile(){} render = vi.fn(); clearDepth() {} dispose = vi.fn(); forceContextLoss() {}
     constructor() {
       Object.defineProperties(this.domElement, { clientWidth: { value: 640 }, clientHeight: { value: 480 } });
       this.domElement.setPointerCapture = vi.fn(); this.domElement.releasePointerCapture = vi.fn();
@@ -53,14 +53,15 @@ function pointer(target: EventTarget, type: string, x: number) {
 }
 it('renders a 120px sub-EPS pan during the gesture and persists its final pose without idle polling', async () => {
   const f = mount(); const before = f.renderer.render.mock.calls.at(-2)![1].position.clone();
+  const draws = f.renderer.render.mock.calls.length;
   pointer(f.canvas, 'pointerdown', 300); pointer(document, 'pointermove', 420);
-  await Promise.resolve(); expect(frames.size).toBe(1); expect(f.changed).not.toHaveBeenCalled();
+  await Promise.resolve(); await Promise.resolve(); expect(frames.size).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws + 2); expect(f.changed).not.toHaveBeenCalled();
   draw(); expect(f.renderer.render.mock.calls.at(-2)![1].position.distanceTo(before)).toBeGreaterThan(1e-7);
   pointer(document, 'pointerup', 420);
   expect(f.changed).toHaveBeenCalledOnce(); const pose = f.changed.mock.lastCall![0].camera;
   expect(Math.abs(pose.position[0] - before.x)).toBeGreaterThan(1e-7); expect(Math.abs(pose.position[0] - before.x)).toBeLessThan(1e-5);
   vi.advanceTimersByTime(L.refineDelayMs); draw();
-  const draws = f.renderer.render.mock.calls.length; vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws);
+  const settledDraws = f.renderer.render.mock.calls.length; vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(settledDraws);
 });
 it('retires an input pose before its queued observation through the supplied retirement callback only', async () => {
   const f = mount(), retired = vi.fn();
@@ -72,8 +73,9 @@ it('retires an input pose before its queued observation through the supplied ret
 });
 it('captures tiny keyboard pans and wheel zooms, and fences queued observations on disposal', async () => {
   const f = mount();
+  const draws = f.renderer.render.mock.calls.length;
   f.canvas.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight', bubbles: true, cancelable: true }));
-  await Promise.resolve(); expect(frames.size).toBe(1); vi.advanceTimersByTime(100);
+  await Promise.resolve(); await Promise.resolve(); expect(frames.size).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws + 2); vi.advanceTimersByTime(100);
   expect(f.changed).toHaveBeenCalledOnce(); const before = f.changed.mock.lastCall![0].camera;
   f.canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 300, clientY: 200, bubbles: true, cancelable: true }));
   expect(f.changed).toHaveBeenCalledTimes(2); expect(f.changed.mock.lastCall![0].camera.position).not.toEqual(before.position);

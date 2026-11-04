@@ -1,15 +1,19 @@
 # CAD sidebar validation
 
 Geometry previews admit up to 200 MiB through authorized, single-version byte
-ranges. Initial and moving pictures use bounded temporary display samples; a
+ranges. Initial and moving pictures preserve original shading and use bounded
+surface approximations where eligible; a
 settled view restores every admitted triangle, original shading and full pixel
 quality, then stops drawing. The current acceptance requirement is a usable
 model picture within 200 ms and every interaction below 50 ms on the fixed
 browser/test machine. **The complete latency contract remains unmet.**
 
-The [large-model quality report](large-model-quality.md) is the current validation
-record, including the approximately 200-MiB closed STL, exact full-geometry draw
-counts, input maxima, resource retirement and failed budget assertions.
+The [surface-preview optimization report](surface-preview-optimization.md) is the
+current validation record, including a same-machine comparison against
+`1d6c1e01d`, approximately 200-MiB closed STL, complete-geometry draws, input
+maxima, resource retirement and failed budget assertions. The
+[large-model quality report](large-model-quality.md) retains the prior revision's
+measurements.
 Earlier [review](review-follow-up.md), [takeover](takeover-validation.md) and
 [budget](budget-follow-up.md) reports retain their named source revisions and
 historical observations.
@@ -29,7 +33,11 @@ GLB, binary/ASCII STL, STEP/STP, IGES/IGS and Open CASCADE BREP open through the
 shared delivery/Workbench document body. The original PBR shading and MSAA are
 preserved. Exact indexing and certified planar preparation retain represented
 surfaces, bounds, scale, normals/color semantics, hierarchy and original bytes.
-Temporary lossy display samples do not replace admitted geometry or source bytes.
+Temporary surface approximations do not replace admitted geometry. Original PBR
+materials and normals remain visible during motion. Picking intersects original
+geometry, including dense opaque foregrounds. Large source buffers transfer
+directly into the ready import Worker and are evicted on hide; retained small
+copies keep their existing fixed-copy behavior.
 No warm parsed-model/Worker/WASM-instance cache is shipped.
 
 The 50-ms interaction maximum / 200-ms first-display contract remains unmet.
@@ -85,8 +93,8 @@ two-pane capacity, rather than relying on a capacity-free mock.
 
 The pinned browser verifies zero idle draws and zero owned Workers, contexts,
 buffers, textures and URLs after closing. Resource ceilings and CAD tolerances
-remain as documented. Source-only inactive retention and authorization remain
-with the existing owners.
+remain as documented. Inactive retention and source authorization remain with
+the existing owners.
 
 ## Current visual evidence
 

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { parseGeometry } from '../src/app/components/documents/geometry/parse';
 import { GEOMETRY_LIMITS } from '../src/app/components/documents/geometry/limits';
 import type { GeometryModel } from '../src/app/components/documents/geometry/model';
+import { BufferGeometry } from 'three';
+import { geometryPreviewState } from '../src/app/components/documents/geometry/scene-resources';
 
 const code = vi.hoisted(() => ({ load: vi.fn<() => Promise<WebAssembly.Module>>() }));
 vi.mock('../src/app/components/documents/geometry/cad-code', () => ({ cadCode: code.load }));
@@ -27,8 +29,20 @@ it('transfers a separate copy and terminates exactly once after admitted output'
   expect(worker.input?.module).toBe(module);
   expect(worker.input?.bytes).toEqual(bytes); expect(worker.input?.bytes.buffer).not.toBe(bytes.buffer);
   worker.onmessage!({ data: { ok: true, model: model() } });
-  await expect(result).resolves.toMatchObject({ meshes: [expect.anything()] });
+  const prepared = await result; expect(prepared.scene.children).toHaveLength(1); expect(prepared.bounds.max.toArray()).toEqual([1,1,0]); prepared.dispose();
   controller.abort(); expect(worker.terminated).toBe(1); expect(bytes).toEqual(new Uint8Array([1, 2, 3]));
+});
+it('takes an explicitly relinquished source only when the admitted Worker is ready', async () => {
+  vi.stubGlobal('Worker', ImportWorker);
+  let complete!: (value: WebAssembly.Module) => void;
+  code.load.mockReturnValue(new Promise(resolve => { complete = resolve; }));
+  const bytes = new Uint8Array([1,2,3]), slice = vi.spyOn(bytes, 'slice');
+  const take = vi.fn(() => structuredClone(bytes, { transfer: [bytes.buffer] }));
+  const pending = parseGeometry(bytes, 'step', new AbortController().signal, undefined, take);
+  expect(take).not.toHaveBeenCalled(); complete(module); await Promise.resolve();
+  const worker = ImportWorker.instances[0]; expect(take).toHaveBeenCalledOnce(); expect(slice).not.toHaveBeenCalled();
+  expect(bytes.byteLength).toBe(0); expect([...worker.input!.bytes]).toEqual([1,2,3]);
+  worker.onmessage!({ data: { ok:true, model:model() } }); (await pending).dispose();
 });
 it('bounds aggregate workers and rejects stale completion after cancellation', async () => {
   vi.stubGlobal('Worker', ImportWorker);
@@ -105,7 +119,7 @@ it('loads two admitted Workers during compilation, retires cancelled input and d
   expect(workers[0].input?.module).toBe(module); expect(workers[1].input?.module).toBe(module);
   expect(workers[1].input?.bytes.buffer).not.toBe(source.buffer);
   for (const worker of workers) worker.onmessage!({ data: { ok: true, model: model() } });
-  await Promise.all([b,c]); expect(workers.map(worker => worker.terminated)).toEqual([1,1]);
+  (await Promise.all([b,c])).forEach(prepared => prepared.dispose()); expect(workers.map(worker => worker.terminated)).toEqual([1,1]);
 });
 it('keeps the original deadline while awaiting code and fences a late successful compilation', async () => {
   vi.stubGlobal('Worker', ImportWorker); vi.useFakeTimers();
@@ -124,7 +138,27 @@ it('retires the waiting Worker on compilation failure and allows an explicit ret
   await expect(parseGeometry(new Uint8Array([1]), 'step', new AbortController().signal)).rejects.toMatchObject({ code: 'worker' });
   expect(ImportWorker.instances).toHaveLength(1); expect(ImportWorker.instances[0].terminated).toBe(1); expect(ImportWorker.instances[0].input).toBeUndefined();
   const result = parseGeometry(new Uint8Array([1]), 'step', new AbortController().signal); await Promise.resolve();
-  ImportWorker.instances[1].onmessage!({ data: { ok: true, model: model() } }); await expect(result).resolves.toMatchObject({ meshes: [expect.anything()] });
+  ImportWorker.instances[1].onmessage!({ data: { ok: true, model: model() } }); const prepared = await result; expect(prepared.scene.children).toHaveLength(1); prepared.dispose();
+});
+it.each(['position', 'normal', 'color', 'unused'])('independently rejects invalid %s values during fused receiver admission', async kind => {
+  vi.stubGlobal('Worker', ImportWorker);
+  const source = model();
+  if (kind === 'position') source.meshes[0].positions[0] = Infinity;
+  if (kind === 'normal') source.meshes[0].normals = new Float32Array([NaN,0,1, 0,0,1, 0,0,1]);
+  if (kind === 'color') source.meshes[0].colors = new Float32Array([-1,0,0, 0,0,0, 0,0,0]);
+  if (kind === 'unused') { const unused = model().meshes[0]; unused.positions[0] = NaN; source.meshes.push(unused); }
+  const result = parseGeometry(new Uint8Array([1]), 'stl', new AbortController().signal);
+  ImportWorker.instances[0].onmessage!({ data: { ok: true, model: source } });
+  await expect(result).rejects.toMatchObject({ code: 'invalid' }); expect(ImportWorker.instances[0].terminated).toBe(1);
+});
+it('disposes an admitted scene if receiver preparation consumes the original deadline', async () => {
+  vi.stubGlobal('Worker', ImportWorker); let now = 0;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const setAttribute = BufferGeometry.prototype.setAttribute, disposed = vi.spyOn(BufferGeometry.prototype, 'dispose');
+  vi.spyOn(BufferGeometry.prototype, 'setAttribute').mockImplementation(function (this: BufferGeometry, ...args) { now = GEOMETRY_LIMITS.timeoutMs + 1; return Reflect.apply(setAttribute, this, args); });
+  const result = parseGeometry(new Uint8Array([1]), 'stl', new AbortController().signal);
+  ImportWorker.instances[0].onmessage!({ data: { ok: true, model: model() } });
+  await expect(result).rejects.toMatchObject({ code: 'timeout' }); expect(disposed).toHaveBeenCalledOnce();
 });
 it('fences an early Worker result and retires a crashed waiting Worker before code arrives', async () => {
   vi.stubGlobal('Worker', ImportWorker);
@@ -135,4 +169,24 @@ it('fences an early Worker result and retires a crashed waiting Worker before co
   worker.onmessage!({ data: { ok: true, model: model() } }); expect(worker.terminated).toBe(0);
   worker.onerror!(); await rejected; complete(module); await Promise.resolve();
   expect(worker.terminated).toBe(1); expect(worker.input).toBeUndefined(); expect(slice).not.toHaveBeenCalled(); expect(source).toEqual(new Uint8Array([1,2,3]));
+});
+it('publishes the admitted original before optional preview work settles and retains just its one Worker', async () => {
+  vi.stubGlobal('Worker', ImportWorker);
+  const source = model(), pending = parseGeometry(new Uint8Array([1]), 'stl', new AbortController().signal), worker = ImportWorker.instances[0];
+  worker.onmessage!({ data: { ok:true, model:source, pendingPreviews:[0] } }); const prepared = await pending;
+  try {
+    expect(worker.terminated).toBe(0); const geometry = (prepared.scene.children[0].children[0] as any).geometry;
+    expect(geometryPreviewState(geometry)?.pending).toBe(true);
+    prepared.startPreview();
+    worker.onmessage!({ data:{kind:'preview',previews:[{mesh:0,data:{positions:source.meshes[0].positions.slice(),normals:new Float32Array([0,0,1,0,0,1,0,0,1]),sourceVertices:new Uint32Array([0,1,2]),normalVertices:new Uint32Array([0,1,2]),error:0}}]} });
+    await prepared.ready; expect(worker.terminated).toBe(1); expect(geometryPreviewState(geometry)?.geometry).toBeDefined();
+    expect(geometryPreviewState(geometry)?.pending).toBe(false);
+  } finally { prepared.dispose(); }
+});
+it('retires timed-out optional work without rejecting or replacing the admitted scene', async () => {
+  vi.stubGlobal('Worker', ImportWorker); vi.useFakeTimers();
+  const pending = parseGeometry(new Uint8Array([1]), 'stl', new AbortController().signal), worker = ImportWorker.instances[0];
+  worker.onmessage!({data:{ok:true,model:model(),pendingPreviews:[0]}}); const prepared=await pending;
+  try { await vi.advanceTimersByTimeAsync(GEOMETRY_LIMITS.previewTimeoutMs); await prepared.ready; expect(worker.terminated).toBe(1); expect(prepared.scene.children).toHaveLength(1); }
+  finally { prepared.dispose(); }
 });

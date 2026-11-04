@@ -7,6 +7,9 @@ export interface GeometryMesh {
 }
 export interface GeometryNode { name: string; meshes: number[]; children: GeometryNode[] }
 export interface GeometryModel { meshes: GeometryMesh[]; root: GeometryNode }
+/** Optional surface representation. Error is absolute in source coordinates;
+ * both attribute streams carry their original vertex provenance. */
+export interface GeometryPreviewData { positions: Float32Array; normals: Float32Array; sourceVertices: Uint32Array; normalVertices: Uint32Array; error: number }
 
 function finiteValues(values: Float32Array, minimum: number, maximum: number) {
   for (let index = 0; index < values.length; index++) {
@@ -14,9 +17,10 @@ function finiteValues(values: Float32Array, minimum: number, maximum: number) {
   }
 }
 
-/** Validate output before it crosses the Worker boundary and again before GPU use. */
-export function validateModel(model: GeometryModel): void {
-  check(Array.isArray(model.meshes) && model.meshes.length > 0, 'empty');
+/** Cheap layout admission before constructing attributes. The receiver always
+ * admits every numeric value before graphics upload or optional Worker work. */
+export function validateModelStructure(model: GeometryModel): void {
+  check(model && Array.isArray(model.meshes) && model.meshes.length > 0, 'empty');
   check(model.meshes.length <= L.parts, 'limit');
   let vertices = 0, triangles = 0, bytes = 0, draws = 0;
   for (const mesh of model.meshes) {
@@ -24,14 +28,13 @@ export function validateModel(model: GeometryModel): void {
     const count = mesh.positions.length / 3;
     vertices += count; bytes += mesh.positions.byteLength;
     check(count > 0, 'empty');
-    finiteValues(mesh.positions, -L.coordinate, L.coordinate);
-    if (mesh.normals) { check(mesh.normals instanceof Float32Array && mesh.normals.length === mesh.positions.length); bytes += mesh.normals.byteLength; finiteValues(mesh.normals, -Infinity, Infinity); }
-    if (mesh.colors) { check(mesh.colors instanceof Float32Array && mesh.colors.length === mesh.positions.length); bytes += mesh.colors.byteLength; finiteValues(mesh.colors, 0, 1); }
-    if (mesh.indices) { check(mesh.indices instanceof Uint32Array && mesh.indices.length % 3 === 0); bytes += mesh.indices.byteLength; for (let index = 0; index < mesh.indices.length; index++) check(mesh.indices[index] < count); }
+    if (mesh.normals) { check(mesh.normals instanceof Float32Array && mesh.normals.length === mesh.positions.length); bytes += mesh.normals.byteLength; }
+    if (mesh.colors) { check(mesh.colors instanceof Float32Array && mesh.colors.length === mesh.positions.length); bytes += mesh.colors.byteLength; }
+    if (mesh.indices) { check(mesh.indices instanceof Uint32Array && mesh.indices.length % 3 === 0); bytes += mesh.indices.byteLength; }
     else check(count % 3 === 0);
     const elements = mesh.indices?.length ?? count;
     triangles += elements / 3; draws += Math.max(1, mesh.groups.length);
-    check(mesh.groups.length <= L.drawCalls, 'limit');
+    check(Array.isArray(mesh.groups) && mesh.groups.length <= L.drawCalls, 'limit');
     for (const group of mesh.groups) {
       check(Number.isSafeInteger(group.start) && group.start >= 0 && Number.isSafeInteger(group.count) && group.count > 0 && group.start % 3 === 0 && group.count % 3 === 0 && group.start + group.count <= elements);
       check(group.color.length === 3 && group.color.every(value => Number.isFinite(value) && value >= 0 && value <= 1));
@@ -51,6 +54,16 @@ export function validateModel(model: GeometryModel): void {
     for (const child of node.children) queue.push({ node: child, depth: depth + 1 });
   }
   check(instances > 0, 'empty');
+}
+/** Validate all Worker-owned values before optional geometry preparation. */
+export function validateModel(model: GeometryModel): void {
+  validateModelStructure(model);
+  for (const mesh of model.meshes) {
+    finiteValues(mesh.positions, -L.coordinate, L.coordinate);
+    if (mesh.normals) finiteValues(mesh.normals, -Infinity, Infinity);
+    if (mesh.colors) finiteValues(mesh.colors, 0, 1);
+    if (mesh.indices) for (let index = 0; index < mesh.indices.length; index++) check(mesh.indices[index] < mesh.positions.length / 3);
+  }
 }
 export function modelTransfers(model: GeometryModel): ArrayBuffer[] {
   return [...new Set(model.meshes.flatMap(mesh => [mesh.positions, mesh.normals, mesh.indices, mesh.colors].filter(value => value !== undefined).map(value => value.buffer as ArrayBuffer)))];

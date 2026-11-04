@@ -6,17 +6,25 @@ import GeometryPreview from '../src/app/components/documents/geometry/GeometryPr
 import { disposeScene, validateScene } from '../src/app/components/documents/geometry/scene-resources';
 import { localeController } from '../src/locale/controller';
 import type { GeometryImportStage } from '../src/app/components/documents/geometry/stages';
+import { GeometryError } from '../src/app/components/documents/geometry/limits';
+const graphics = vi.hoisted(() => vi.fn(() => ({ dispose: vi.fn() })));
 const imports = vi.hoisted(() => ({ pending: [] as { resolve: (value: unknown) => void; reject: (reason: unknown) => void }[], cad: [] as { stage: (stage: GeometryImportStage) => void; resolve: (value: unknown) => void }[], mounts: [] as { fit: ReturnType<typeof vi.fn>; setOutlines: ReturnType<typeof vi.fn>; setProjection: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; publish: (patch: unknown) => void; pending?: unknown; saved?: unknown; flush: ReturnType<typeof vi.fn> }[] }));
 vi.mock('../src/app/components/documents/geometry/glb', () => ({ importGlb: () => new Promise((resolve, reject) => { imports.pending.push({ resolve, reject }); }) }));
 vi.mock('../src/app/components/documents/geometry/parse', () => ({ parseGeometry: (_bytes: unknown, _format: unknown, _signal: unknown, stage: (stage: GeometryImportStage) => void) => new Promise(resolve => { imports.cad.push({ stage, resolve }); }) }));
-vi.mock('../src/app/components/documents/geometry/viewport', () => ({ mountGeometry: (_element: unknown, _object: unknown, _bounds: unknown, saved: unknown, _labels: unknown, publish: (patch: unknown) => void) => {
-  const control = { fit: vi.fn(), reset: vi.fn(), focus: vi.fn(), isolate: vi.fn(), restore: vi.fn(), showAll: vi.fn(), projection: 'perspective', setProjection: vi.fn(), setOutlines: vi.fn(async () => 'on'), relabel: vi.fn(), inspect: () => ({ name: 'Body', triangles: 12, visibleTriangles: 12, min: [-5, -5, -5], max: [5, 5, 5], dimensions: [10, 10, 10] }), dispose: vi.fn(), publish, saved, pending: undefined as unknown, flush: vi.fn((save = publish) => { if (control.pending) { const patch = control.pending; control.pending = undefined; save(patch); } }), select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }] }; imports.mounts.push(control); return control;
+vi.mock('../src/app/components/documents/geometry/viewport', () => ({ prepareGeometryGraphics:graphics,mountGeometry: (_element: unknown, _object: unknown, _bounds: unknown, saved: unknown, _labels: unknown, publish: (patch: unknown) => void) => {
+  const control = { fit: vi.fn(), reset: vi.fn(), focus: vi.fn(), isolate: vi.fn(), restore: vi.fn(), showAll: vi.fn(), refreshPreview: vi.fn(), projection: 'perspective', setProjection: vi.fn(), setOutlines: vi.fn(async () => 'on'), relabel: vi.fn(), inspect: () => ({ name: 'Body', triangles: 12, visibleTriangles: 12, min: [-5, -5, -5], max: [5, 5, 5], dimensions: [10, 10, 10] }), dispose: vi.fn(), publish, saved, pending: undefined as unknown, flush: vi.fn((save = publish) => { if (control.pending) { const patch = control.pending; control.pending = undefined; save(patch); } }), select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }] }; imports.mounts.push(control); return control;
 } }));
 afterEach(() => { cleanup(); imports.pending = []; imports.cad = []; imports.mounts = []; });
 function graph() {
   const scene = new Group(), geometry = new BoxGeometry(10, 10, 10); scene.add(new Mesh(geometry, new MeshStandardMaterial()));
   const disposed = vi.spyOn(geometry, 'dispose'); return { value: { scene, scenes: [scene], bounds: validateScene([scene]), dispose: () => disposeScene([scene]) }, disposed };
 }
+it('reports early graphics failure and disposes an import that completes after retirement', async () => {
+  graphics.mockImplementationOnce(() => { throw new GeometryError('webgl'); });
+  const source = graph(), ui = render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="copy" signal={new AbortController().signal} current={() => true} viewState={{}} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
+  await act(async () => {}); expect(ui.getByRole('alert')).toBeDefined(); expect(imports.mounts).toHaveLength(0);
+  await act(async () => imports.pending[0].resolve(source.value)); expect(source.disposed).toHaveBeenCalledOnce();
+});
 it.each([undefined, true, false])('starts outlines by default and respects the saved preference: %s', async preference => {
   const source = graph();
   const ui = render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="copy" signal={new AbortController().signal} current={() => true} viewState={{ geometry: { copyId: 'copy', outlines: preference } }} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
@@ -83,7 +91,7 @@ it.each(['en', 'zh'] as const)('shows observed localized import stages and remov
   for (const [index, stage] of (['initializing', 'importing', 'preparing'] as const).entries()) {
     act(() => imports.cad[0].stage(stage)); expect(ui.getByRole('status').textContent).toBe(labels[index + 1]); expect(imports.mounts).toHaveLength(0);
   }
-  await act(async () => imports.cad[0].resolve({ root: { name: '', meshes: [0], children: [] }, meshes: [{ name: 'Triangle', positions: new Float32Array([0,0,0, 1,0,0, 0,1,0]), groups: [] }] }));
+  await act(async () => imports.cad[0].resolve({ ...graph().value, prepareStart: performance.now(), ready: Promise.resolve() }));
   expect(imports.mounts).toHaveLength(1); expect(ui.queryByRole('status')).toBeNull();
   expect(performance.getEntriesByName('geometry:display-prepare:step')).toHaveLength(1);
 });

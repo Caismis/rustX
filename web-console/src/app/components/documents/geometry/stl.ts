@@ -1,6 +1,6 @@
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { GEOMETRY_LIMITS as L, requireGeometry as check } from './limits';
-import { validateModel, type GeometryModel } from './model';
+import { validateModel, validateModelStructure, type GeometryModel } from './model';
 
 export function importStl(bytes: Uint8Array<ArrayBuffer>): GeometryModel {
   check(bytes.length <= L.sourceBytes, 'limit');
@@ -44,6 +44,10 @@ export function importStl(bytes: Uint8Array<ArrayBuffer>): GeometryModel {
       return { name: typeof label === 'string' ? label.trim().slice(0, 256) : '', positions: pack(positions.array, start, end), normals: pack(normals.array, start, end), colors: colors ? pack(colors.array, start, end) : undefined, groups: [] };
     });
     const model: GeometryModel = { meshes, root: { name: '', meshes: meshes.map((_, index) => index), children: [] } };
-    validateModel(model); return model;
+    // Large streams cannot enter optional Worker preparation. Bound their
+    // layout here; the receiver scans every value before display/preview ACK.
+    if (meshes.every(mesh => mesh.positions.length / 3 > L.preparationVertices)) validateModelStructure(model);
+    else validateModel(model);
+    return model;
   } finally { geometry.dispose(); }
 }

@@ -83,7 +83,7 @@ Object.assign(window, { geometryContract: {
       result.dispose(); return elapsed;
     }
     const { parseGeometry } = await import('../../src/app/components/documents/geometry/parse');
-    const start = performance.now(); await parseGeometry(bytes, format, signal); return performance.now() - start;
+    const start = performance.now(), loaded = await parseGeometry(bytes, format, signal), elapsed = performance.now() - start; loaded.dispose(); return elapsed;
   },
   replace(name: string, data: number[]) { files.set(name, { data: new Uint8Array(data), version: (files.get(name)?.version ?? 0) + 1 }); hints.forEach(changed => changed()); },
   grid(side: number) {

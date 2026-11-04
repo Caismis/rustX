@@ -1,32 +1,71 @@
 import { expect, it, vi } from 'vitest';
-import { BoxGeometry, Group, LineSegments, BufferGeometry, LineBasicMaterial, Mesh, MeshBasicMaterial, MeshStandardMaterial, ShaderMaterial, Scene } from 'three';
+import { BoxGeometry, PlaneGeometry, Raycaster, Vector3, Group, LineSegments, BufferGeometry, Mesh, MeshStandardMaterial, ShaderMaterial, Scene, PerspectiveCamera } from 'three';
 import { createDisplayQuality } from '../src/app/components/documents/geometry/display-quality';
+import { modelScene, disposeScene } from '../src/app/components/documents/geometry/scene-resources';
 import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/limits';
 
-it('shares bounded samples across occurrences and restores exact geometry/materials even when submission throws', () => {
-  const scene = new Scene(), root = new Group(), geometry = new BoxGeometry(1, 1, 1, 100, 100, 100), material = new MeshStandardMaterial(); scene.add(root);
-  const first = new Mesh(geometry, [material]), second = first.clone(); root.add(first, second);
-  const lines = new LineSegments(new BufferGeometry(), new ShaderMaterial()), highlight = new LineSegments(new BufferGeometry(), new LineBasicMaterial()); root.add(lines, highlight);
-  const quality = createDisplayQuality(root); let sample: BufferGeometry | undefined;
-  try {
-    expect(() => quality.draw(scene, true, () => {
-      sample = first.geometry; expect(second.geometry).toBe(sample); expect(sample).not.toBe(geometry);
-      expect(sample.getAttribute('position').count / 3 * 2).toBeLessThanOrEqual(L.movingTriangles + L.parts);
-      expect(lines.visible).toBe(false); expect(highlight.visible).toBe(true); expect(first.material).toBeInstanceOf(MeshBasicMaterial); throw new Error('submission failed');
-    })).toThrow('submission failed');
-    expect(first.geometry).toBe(geometry); expect(second.geometry).toBe(geometry); expect(first.material).toEqual([material]);
-    expect(scene.overrideMaterial).toBeNull(); expect(lines.visible).toBe(true);
-    quality.draw(scene, false, () => { expect(first.geometry).toBe(geometry); expect(scene.overrideMaterial).toBeNull(); });
-    const dispose = vi.spyOn(sample!, 'dispose'), originalDispose = vi.spyOn(geometry, 'dispose'); quality.dispose();
-    expect(dispose).toHaveBeenCalledOnce(); expect(originalDispose).not.toHaveBeenCalled();
-  } finally { quality.dispose(); geometry.dispose(); material.dispose(); lines.geometry.dispose(); lines.material.dispose(); highlight.geometry.dispose(); highlight.material.dispose(); }
-});
-it('does not reenable hidden lines and samples only the admitted draw range', () => {
-  const scene = new Scene(), root = new Group(), geometry = new BoxGeometry(), mesh = new Mesh(geometry, new MeshStandardMaterial()); scene.add(root); root.add(mesh);
-  geometry.setDrawRange(6, 6); const line = new LineSegments(new BufferGeometry(), new LineBasicMaterial()); line.visible = false; root.add(line);
+const camera = () => { const value = new PerspectiveCamera(45, 1, .001, 100); value.position.z = 3; value.lookAt(0,0,0); value.updateMatrixWorld(true); return value; };
+function generated(side = 100) {
+  const indexed = new BoxGeometry(1,1,1,side,side,side), geometry = indexed.toNonIndexed(); indexed.dispose();
+  const positions = geometry.getAttribute('position').array as Float32Array, normals = geometry.getAttribute('normal').array as Float32Array; geometry.dispose();
+  const prepared = modelScene({ meshes: [{name:'Body',positions,normals,groups:[]}], root:{name:'',meshes:[0],children:[]} });
+  const mesh = prepared.scene.children[0].children[0] as Mesh; return { prepared, mesh, positions };
+}
+it('keeps all geometry, authored material and UV during motion, and restores optional outlines', () => {
+  const scene = new Scene(), root = new Group(), geometry = new BoxGeometry(), material = new MeshStandardMaterial(); scene.add(root);
+  const mesh = new Mesh(geometry, material), line = new LineSegments(new BufferGeometry(), new ShaderMaterial()); root.add(mesh, line);
   const quality = createDisplayQuality(root);
+  try { quality.draw(scene, true, camera(), 480, () => { expect(mesh.geometry).toBe(geometry); expect(mesh.material).toBe(material); expect(line.visible).toBe(false); expect(mesh.geometry.getAttribute('uv')).toBe(geometry.getAttribute('uv')); }); expect(line.visible).toBe(true); }
+  finally { quality.dispose(); disposeScene([scene]); line.geometry.dispose(); line.material.dispose(); }
+});
+it('uses a bounded bridge with original shading only while background work is pending, and restores on exceptions', () => {
+  const { prepared, mesh } = generated(), original = mesh.geometry, material = mesh.material, scene = new Scene(); scene.add(prepared.scene); prepared.markPreviews([0]);
+  const quality = createDisplayQuality(prepared.scene), line = new LineSegments(new BufferGeometry(), new ShaderMaterial()); scene.add(line); let sample: BufferGeometry | undefined;
   try {
-    quality.draw(scene, true, () => { expect(mesh.geometry.getAttribute('position').count).toBe(6); expect(line.visible).toBe(false); });
-    expect(line.visible).toBe(false); expect(geometry.drawRange).toEqual({ start: 6, count: 6 });
-  } finally { quality.dispose(); geometry.dispose(); mesh.material.dispose(); line.geometry.dispose(); line.material.dispose(); }
+    expect(() => quality.draw(scene, true, camera(), 480, () => {
+      sample = mesh.geometry; expect(sample).not.toBe(original); expect(sample.getAttribute('position').count / 3).toBeLessThanOrEqual(L.movingTriangles + L.parts);
+      expect(sample.getAttribute('normal')).toBeDefined(); expect(mesh.material).toBe(material); expect(line.visible).toBe(false); throw new Error('submission failed');
+    })).toThrow('submission failed');
+    expect(mesh.geometry).toBe(original); expect(mesh.material).toBe(material); expect(line.visible).toBe(true);
+    const disposed = vi.spyOn(sample!, 'dispose'); prepared.finishPreviews();
+    quality.draw(scene, true, camera(), 480, () => expect(mesh.geometry).toBe(original)); expect(disposed).toHaveBeenCalledOnce();
+  } finally { quality.dispose(); disposeScene([prepared.scene]); line.geometry.dispose(); line.material.dispose(); }
+});
+it('adopts a complete surface LOD without changing materials and releases it exactly once', () => {
+  const { prepared, mesh, positions } = generated(10), original = mesh.geometry, scene = new Scene(); scene.add(prepared.scene);
+  const cube = new BoxGeometry().toNonIndexed(), p = cube.getAttribute('position').array as Float32Array, n = cube.getAttribute('normal').array as Float32Array;
+  const ids = new Map<string, number>(); for (let i=0;i<positions.length;i+=3) ids.set(`${positions[i]},${positions[i+1]},${positions[i+2]}`, i/3);
+  const sourceVertices = Uint32Array.from({length:p.length/3}, (_,i) => ids.get(`${p[i*3]},${p[i*3+1]},${p[i*3+2]}`)!);
+  const sourceNormals=original.getAttribute('normal').array, normalVertices=new Uint32Array(sourceVertices.length);
+  for(let vertex=0;vertex<normalVertices.length;vertex++) for(let source=0;source<sourceNormals.length;source+=3) if(sourceNormals[source]===n[vertex*3] && sourceNormals[source+1]===n[vertex*3+1] && sourceNormals[source+2]===n[vertex*3+2]) {normalVertices[vertex]=source/3;break;}
+  prepared.markPreviews([0]); prepared.setPreview(0, { positions:p, normals:n, sourceVertices, normalVertices,error:0 }); prepared.finishPreviews();
+  const quality = createDisplayQuality(prepared.scene); let lod: BufferGeometry | undefined;
+  try {
+    quality.draw(scene, true, camera(), 480, () => { lod=mesh.geometry; expect(lod).not.toBe(original); expect(lod.getAttribute('position').count/3).toBe(12); });
+    expect(mesh.geometry).toBe(original); const disposed = vi.spyOn(lod!, 'dispose'); quality.dispose(); expect(disposed).toHaveBeenCalledOnce();
+  } finally { quality.dispose(); disposeScene([prepared.scene]); cube.dispose(); }
+});
+it('keeps generated motion colors, normals and original PBR references',()=>{
+  const {prepared,mesh}=generated(),scene=new Scene();scene.add(prepared.scene);prepared.markPreviews([0]);
+  const original=mesh.material,quality=createDisplayQuality(prepared.scene);
+  try{quality.draw(scene,true,camera(),480,()=>{expect(mesh.material).toBe(original);expect(mesh.geometry.getAttribute('normal')).toBeDefined();});expect(mesh.material).toBe(original);}
+  finally{quality.dispose();disposeScene([prepared.scene]);}
+});
+it.each([false, true])('picks the opaque dense foreground through omitted bridge triangles (moving=%s)', moving => {
+  const plane = new PlaneGeometry(1,1,200,200).toNonIndexed(), scene = new Scene();
+  const positions = plane.getAttribute('position').array as Float32Array, normals = plane.getAttribute('normal').array as Float32Array;
+  const prepared = modelScene({ meshes:[{name:'foreground',positions,normals,groups:[]}], root:{name:'',meshes:[0],children:[]} });
+  const front = prepared.scene.children[0].children[0] as Mesh, original = front.geometry;
+  const back = new Mesh(new PlaneGeometry(2,2), new MeshStandardMaterial()); back.position.z = -.1;
+  scene.add(prepared.scene, back); scene.updateMatrixWorld(true); prepared.markPreviews([0]);
+  const quality = createDisplayQuality(scene), raycaster = new Raycaster();
+  try {
+    quality.draw(scene, moving, camera(), 480, () => {});
+    for (let triangle=0;triangle<50;triangle++) {
+      const at=triangle*9, x=(positions[at]+positions[at+3]+positions[at+6])/3,y=(positions[at+1]+positions[at+4]+positions[at+7])/3;
+      raycaster.set(new Vector3(x,y,1),new Vector3(0,0,-1));
+      expect(quality.pick(raycaster,[front,back])?.object).toBe(front);
+    }
+    expect(front.geometry).toBe(original);
+  } finally { quality.dispose(); disposeScene([scene]); plane.dispose(); }
 });

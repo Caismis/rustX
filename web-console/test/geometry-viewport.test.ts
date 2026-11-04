@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Box3, BoxGeometry, Group, LineSegments, Mesh, MeshBasicMaterial, MeshStandardMaterial, OrthographicCamera, ShaderMaterial, Vector2, Vector3, type BufferGeometry, type PerspectiveCamera } from 'three';
-import { mountGeometry } from '../src/app/components/documents/geometry/viewport';
+import { mountGeometry, prepareGeometryGraphics } from '../src/app/components/documents/geometry/viewport';
 import { outlineData } from '../src/app/components/documents/geometry/outline-data';
 import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/limits';
-import { validateScene } from '../src/app/components/documents/geometry/scene-resources';
+import { validateScene, modelScene } from '../src/app/components/documents/geometry/scene-resources';
 import { en } from '../src/locale/dictionaries/geometry';
 const runtime = vi.hoisted(() => ({ renderers: [] as any[], controls: [] as any[] }));
 vi.mock('three', async original => {
@@ -15,7 +15,7 @@ vi.mock('three', async original => {
     getContext = () => this.gl;
     setDrawingBufferSize = vi.fn((width: number, height: number) => this.size.set(width, height));
     getSize = (target: Vector2) => target.copy(this.size);
-    setViewport = vi.fn(); render = vi.fn(); clearDepth = vi.fn(); dispose = vi.fn(); forceContextLoss = vi.fn();
+    setViewport = vi.fn();compile=vi.fn(); render = vi.fn(); clearDepth = vi.fn(); dispose = vi.fn(); forceContextLoss = vi.fn();
     constructor() { runtime.renderers.push(this); }
   } };
 });
@@ -27,11 +27,12 @@ vi.mock('three/addons/controls/OrbitControls.js', async () => {
     update() { this.object.lookAt(this.target); this.object.updateMatrixWorld(true); this.dispatchEvent({ type: 'change' }); }
   } };
 });
-let resize: () => void, disconnect: ReturnType<typeof vi.fn>, frames: Map<number, FrameRequestCallback>, queries: { listener?: () => void; removeEventListener: ReturnType<typeof vi.fn> }[];
+let resize: () => void, disconnect: ReturnType<typeof vi.fn>, frames: Map<number, FrameRequestCallback>, microtasks:(()=>void)[],queries: { listener?: () => void; removeEventListener: ReturnType<typeof vi.fn> }[];
 const mounted: ReturnType<typeof mountGeometry>[] = [];
 beforeEach(() => {
   vi.useFakeTimers({ now: 0, toFake: ['setTimeout', 'clearTimeout', 'performance'] });
-  runtime.renderers.length = 0; runtime.controls.length = 0; frames = new Map(); queries = []; disconnect = vi.fn();
+  runtime.renderers.length = 0; runtime.controls.length = 0; frames = new Map();microtasks=[]; queries = []; disconnect = vi.fn();
+  vi.stubGlobal('queueMicrotask',(callback:()=>void)=>{microtasks.push(callback);});
   vi.stubGlobal('devicePixelRatio', 1);
   vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect = disconnect; });
   let frame = 0;
@@ -46,8 +47,22 @@ function mount(object = new Group(), saved?: Parameters<typeof mountGeometry>[3]
   const changed = vi.fn(), lost = vi.fn(), view = mountGeometry(element, object, new Box3().setFromObject(object), saved, en, changed, lost, options); mounted.push(view);
   return { view, changed, lost, element, renderer: runtime.renderers.at(-1), control: () => runtime.controls.at(-1) };
 }
-function draw() { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); }
+function draw() { while(microtasks.length)microtasks.shift()!();const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); }
 function move(control: any, x: number) { control.object.position.x = x; control.update(); }
+it('owns bounded early shader preparation without submitting a model or leaking context admission', () => {
+  const lost = vi.fn(), first = prepareGeometryGraphics(true, lost), second = prepareGeometryGraphics(false, lost);
+  try {
+    expect(() => prepareGeometryGraphics(true, lost)).toThrow('capacity');
+    const warm = runtime.renderers[0].compile.mock.calls[0][0] as Group, mesh = warm.children.find(item => item instanceof Mesh) as Mesh;
+    expect(mesh.geometry.getAttribute('position').count).toBe(3); expect(first.renderer.render).not.toHaveBeenCalled();
+    expect(second.renderer.compile).not.toHaveBeenCalled();
+    const geometry = vi.spyOn(mesh.geometry, 'dispose'), material = vi.spyOn(mesh.material as MeshStandardMaterial, 'dispose');
+    first.renderer.domElement.dispatchEvent(new Event('webglcontextlost', { cancelable: true }));
+    first.dispose(); expect(lost).toHaveBeenCalledOnce(); expect(geometry).toHaveBeenCalledOnce(); expect(material).toHaveBeenCalledOnce();
+    expect(first.renderer.dispose).toHaveBeenCalledOnce();
+    const next = prepareGeometryGraphics(false, lost); next.dispose();
+  } finally { first.dispose(); second.dispose(); }
+});
 it('coalesces poses while the GPU owns a frame and releases its fence on retirement', () => {
   const f = mount(); draw(); expect(f.renderer.render).toHaveBeenCalledTimes(2);
   f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.TIMEOUT_EXPIRED);
@@ -57,13 +72,21 @@ it('coalesces poses while the GPU owns a frame and releases its fence on retirem
   expect(f.renderer.render).toHaveBeenCalledTimes(4); expect(frames.size).toBe(0);
   f.view.dispose(); expect(f.renderer.gl.deleteSync).toHaveBeenCalledTimes(2);
 });
+it('starts background work only after the first GPU fence settles, without another submitted frame', () => {
+  const ready=vi.fn(),f=mount(undefined,undefined,{generated:true,onFirstGpuReady:ready}); draw();
+  expect(ready).not.toHaveBeenCalled(); f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.TIMEOUT_EXPIRED); draw(); expect(ready).not.toHaveBeenCalled();
+  f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.ALREADY_SIGNALED); draw(); expect(ready).toHaveBeenCalledOnce(); expect(f.renderer.render).toHaveBeenCalledTimes(2);
+  f.view.dispose(); expect(frames.size).toBe(0);
+});
 it('draws a bounded moving preview, restores the exact scene after settling and then stops drawing', () => {
-  const object = new Group(), original = new BoxGeometry(1, 1, 1, 100, 100, 100), mesh = new Mesh(original, new MeshStandardMaterial()); object.add(mesh);
+  const indexed = new BoxGeometry(1, 1, 1, 100, 100, 100), geometry = indexed.toNonIndexed(); indexed.dispose();
+  const prepared = modelScene({ meshes:[{name:'',positions:geometry.getAttribute('position').array as Float32Array,normals:geometry.getAttribute('normal').array as Float32Array,groups:[]}],root:{name:'',meshes:[0],children:[]} }); geometry.dispose(); prepared.markPreviews([0]);
+  const object = prepared.scene, mesh = object.children[0].children[0] as Mesh, original = mesh.geometry;
   const f = mount(object), before = f.view.inspect(), samples: { triangles: number; material: unknown }[] = [];
   f.renderer.render.mockImplementation((scene: Group & { overrideMaterial?: unknown }) => {
     if (scene.children.includes(object.parent!)) samples.push({ triangles: (mesh.geometry.index?.count ?? mesh.geometry.getAttribute('position').count) / 3, material: mesh.material });
   });
-  draw(); expect(samples[0].triangles).toBeLessThan(30_000); expect(samples[0].material).not.toBe(mesh.material);
+  draw(); expect(samples[0].triangles).toBeLessThan(30_000); expect(samples[0].material).toBe(mesh.material);
   expect(mesh.geometry).toBe(original); expect(f.view.inspect()).toEqual(before);
   vi.advanceTimersByTime(150); draw(); expect(samples.at(-1)!.triangles).toBe(120_000); expect(samples.at(-1)!.material).toBe(mesh.material);
   f.control().dispatchEvent({ type: 'start' }); move(f.control(), 4); draw(); expect(samples.at(-1)!.triangles).toBeLessThan(30_000);
@@ -134,7 +157,7 @@ it('prunes hidden subtrees before raycasting and selects the nearest visible mes
 });
 it('coalesces size, DPR and quality into drawing-buffer updates and releases all idle scheduling and listeners', () => {
   const f = mount(); expect(f.renderer.setDrawingBufferSize).not.toHaveBeenCalled();
-  resize(); resize(); draw(); expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledExactlyOnceWith(640, 480, .25);
+  resize(); resize(); draw(); expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledExactlyOnceWith(640, 480, .5);
   vi.advanceTimersByTime(L.refineDelayMs); draw(); expect(f.renderer.setDrawingBufferSize).toHaveBeenLastCalledWith(640, 480, 1);
   resize(); resize(); expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledTimes(2);
   vi.stubGlobal('devicePixelRatio', 1.5); queries[0].listener!(); resize();
@@ -193,7 +216,7 @@ function generatedFixture() {
 function outlineWorker() {
   vi.stubGlobal('Worker', class {
     onmessage: any; onerror: any; onmessageerror: any; terminate() {}
-    postMessage({ inputs }: { inputs: Parameters<typeof outlineData>[0][] }) { queueMicrotask(() => this.onmessage?.({ data: { ok: true, data: inputs.map(value => outlineData(value, L.outlineSegments, performance.now() + 2000)) } })); }
+    postMessage({ inputs }: { inputs: Parameters<typeof outlineData>[0][] }) { void Promise.resolve().then(() => this.onmessage?.({ data: { ok: true, data: inputs.map(value => outlineData(value, L.outlineSegments, performance.now() + 2000)) } })); }
   });
 }
 it('owns generated outline buffers beside centered sources and preserves picking, focus, inspection and visibility', async () => {

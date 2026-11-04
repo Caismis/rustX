@@ -6,6 +6,8 @@ export async function instrument(page: Page) {
     const drawing = { calls: 0, modelCalls: 0, scheduled: false, frameTriangles: 0, lastModelTriangles: 0 };
     const imports: { vertices: number; triangles: number }[][] = [];
     const importTimings: { elapsedMs: number; profile: unknown }[] = [];
+    const previews: {elapsedMs:number;meshes:{triangles:number;error:number;bytes:number}[]}[]=[];
+    const modelFrames:{ms:number;triangles:number;width:number;height:number}[]=[];
     for (const method of ['drawArrays', 'drawElements'] as const) {
       const original = WebGL2RenderingContext.prototype[method];
       Object.defineProperty(WebGL2RenderingContext.prototype, method, { value: function (this: WebGL2RenderingContext, ...args: unknown[]) {
@@ -13,7 +15,7 @@ export async function instrument(page: Page) {
         if (args[0] === this.TRIANGLES) {
           drawing.modelCalls++;
           drawing.frameTriangles += Number(args[method === 'drawArrays' ? 2 : 1]) / 3;
-          if (!drawing.scheduled) { drawing.scheduled = true; queueMicrotask(() => { drawing.scheduled = false; drawing.lastModelTriangles = drawing.frameTriangles; drawing.frameTriangles = 0; document.dispatchEvent(new CustomEvent('geometry-test-model-submitted', { detail: this.canvas })); }); }
+          if (!drawing.scheduled) { drawing.scheduled = true; queueMicrotask(() => { drawing.scheduled = false; drawing.lastModelTriangles = drawing.frameTriangles; drawing.frameTriangles = 0; if(modelFrames.length<1024)modelFrames.push({ms:performance.now(),triangles:drawing.lastModelTriangles,width:this.canvas.width,height:this.canvas.height}); document.dispatchEvent(new CustomEvent('geometry-test-model-submitted', { detail: this.canvas })); }); }
         }
         return result;
       } });
@@ -27,6 +29,7 @@ export async function instrument(page: Page) {
           imports.push(event.data.model.meshes.map((mesh: any) => ({ vertices: mesh.positions.length / 3, triangles: (mesh.indices?.length ?? mesh.positions.length / 3) / 3 })));
           importTimings.push({ elapsedMs: performance.now() - start, profile: event.data.profile });
         } });
+        this.addEventListener('message',event=>{if(event.data?.kind==='preview'&&Array.isArray(event.data.previews))previews.push({elapsedMs:performance.now()-start,meshes:event.data.previews.map((value:any)=>({triangles:value.data.positions.length/9,error:value.data.error,bytes:value.data.positions.byteLength+value.data.normals.byteLength+value.data.sourceVertices.byteLength+value.data.normalVertices.byteLength}))});});
       }
       postMessage(message: any, options?: Transferable[] | StructuredSerializeOptions) {
         const profiled = message?.bytes ? { ...message, profile: true } : message;
@@ -54,7 +57,7 @@ export async function instrument(page: Page) {
     const createUrl = URL.createObjectURL, revokeUrl = URL.revokeObjectURL, urls = new Set<string>();
     URL.createObjectURL = value => { const url = createUrl(value); urls.add(url); counts.urls++; return url; };
     URL.revokeObjectURL = url => { if (urls.delete(url)) counts.urls--; revokeUrl(url); };
-    Object.assign(window, { geometryResources: counts, geometryDrawCalls: drawing, geometryImports: imports, geometryImportTimings: importTimings });
+    Object.assign(window, { geometryResources: counts, geometryDrawCalls: drawing, geometryImports: imports, geometryImportTimings: importTimings, geometryPreviewTimings:previews, geometryModelFrames:modelFrames });
   });
 }
 export const resources = (page: Page) => page.evaluate(() => ({ ...(window as any).geometryResources }));
