@@ -1920,13 +1920,18 @@ changed domains (`instructions`, `context_policy`, `tools`, `skills`, `model`,
 startup policies), bounded Tool and Skill names — at most 16 and 1 KiB of
 encoded names per added/removed/changed list, each with its exact total — and
 `instructions_bytes` and `catalog_bytes`. A same-name Tool whose definition or
-implementation (server binding, or enabled Workflow program) changed, and a
+implementation (server binding, enabled Workflow program, or the Named Agent
+definitions it runs) changed, and a
 same-name Skill whose content version changed, is `changed`. `instructions` is a
 `ContentRef` to the exact effective instructions the commit installed; `catalog`
-is a `ContentRef` to a JSON document of every Tool and Skill the commit added or
-changed: `{ tools: [{ definition, model_input_schema, server_binding_digest,
-workflow }], skills: [{ entry, version_id }] }`. The server binding appears only
-as a digest of its transport and policy, never its credentials. Both are
+is a `ContentRef` to a JSON document of every Tool and Skill the commit added,
+changed or removed: `{ tools: [{ name, change, before, after }], skills: [...] }`
+with `before` for a change or removal and `after` for an addition or change. A
+Tool state is `{ definition, model_input_schema, server_binding_digest,
+workflow, agents }` (`agents`: the Named Agent definition digests a Workflow froze
+or `subagent` admits); a Skill state is `{ entry, version_id }`. The server
+binding appears only as a digest of its transport and policy, never its
+credentials. Both are
 retained with the fact and read through `conversation/contentRead` (or the
 history equivalent) within the reader's cut; a Trace configuration record opens
 them through its detail cut.
@@ -1942,9 +1947,12 @@ Invariants:
   `configuration_applied` fact, released to the transcript and Trace in Journal
   order and counted in the Trace total. A failed append is an absorbing
   `record_configuration_change` durability failure and leaves the unit
-  `uncertain`: published, not recorded, with new work fenced. No later
-  application of that Session reports `applied` — a comment-only edit or a
-  rescan included — until a resident runtime without that failure attaches.
+  `uncertain`: published, not recorded, with new work fenced. The attached
+  runtime allocation's own durability gate decides this, read by every
+  application view: while it reports the failure no unit reads `applied`,
+  whatever later edit or late settlement arrives. Units keep their real
+  outcome, so a published unit is retained across reload either way; a healthy
+  replacement allocation recovers the view.
 - The fact never enters model context. Web Chat shows only Tool additions and
   removals from it; instruction, context, Skill and same-name Tool changes stay
   in Trace and inspection.

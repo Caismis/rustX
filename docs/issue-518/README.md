@@ -57,23 +57,28 @@ Server protocol/connection layer.
   Journal order to the Runtime Client (`configuration_applied`), the transcript
   read domain and Trace (`TraceKind::Configuration`, counted in the Trace
   total by the same `TraceFactKind::is_anchor` the queries use). A Tool
-  compares by definition and implementation (server binding, or the enabled
-  Workflow program digest), a Skill by content version. The independently
+  compares by definition and implementation (server binding, the enabled
+  Workflow program digest, and the Named Agent definition digests a Workflow
+  froze or `subagent` admits), a Skill by content version; an Agent nothing
+  runs changes nothing. The independently
   published execution-policy unit (approval mode, model timeout, Tool
   deadline, MCP startup) records its own `execution_policy` fact (equal
   binding revisions). The same transaction retains the exact effective
   instructions (`ContentSource::ConfigurationInstructions`) and a JSON catalog
-  of every added or changed Tool and Skill (`ConfigurationCatalog`: definition,
-  model schema, server-binding digest of transport and policy — never
-  credentials — or Workflow identity; Skill entry and version), read through
+  of every added, changed or removed Tool and Skill with its `before` and
+  `after` state (`ConfigurationCatalog`: definition, model schema,
+  server-binding digest of transport and policy — never credentials —
+  Workflow identity and Agent digests; Skill entry and version), read through
   `content_read` from the row (`instructions`, `catalog`) or the Trace record
   (`configuration_instructions`, `configuration_catalog`). Name lists are
   bounded by count (16) and encoded bytes (1 KiB each). No effective change, no
   fact. A failed append is an absorbing `record_configuration_change`
   durability failure and reports the commit `uncertain`; Web and TUI say it is
-  published but not recorded. The Session stays `uncertain` — a comment-only
-  edit's semantic no-op included — until a resident runtime that does not
-  report that failure attaches.
+  published but not recorded. The attached allocation's durability gate is the
+  authority: every application view reads it, so no unit reads `applied` while
+  it reports the failure, however late the settlement or whatever no-op edit
+  follows. Units keep their real outcome, so a published unit is still
+  retained for reload; a healthy replacement allocation recovers the view.
 - **External edits.** A bounded `notify` watcher routes changed paths to their
   owning source target and feeds `observe_source_change`, the same capture,
   fence and validation path as a native write. Coverage: User document
@@ -111,9 +116,12 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | A reallocation consumes its cold deferral; a later attach to it keeps the candidate | `automatic_commit::a_reallocation_consumes_its_deferral_and_a_later_attach_keeps_the_candidate` |
 | Skill body-only, Tool implementation-only and Workflow program-only changes record one `changed` fact; the next call runs the new program | `automatic_commit::body_only_skill_edit_records_one_changed_fact`, `mcp_readiness::implementation_only_tool_change_records_one_changed_fact`, `automatic_commit::workflow_program_only_change_records_one_changed_fact` |
 | Execution-policy unit records its own fact without rebinding: approval, timeout alone, deadline alone; running Attempt keeps its capture | `automatic_commit::t04_every_resident_session_commits_and_t09_policy_and_healthy_rescan_are_noops`, `automatic_commit::timeout_and_deadline_edits_alone_each_record_one_execution_policy_fact` |
-| Unused commits each keep readable instructions and installed catalog; wrong refs refused | `configuration::tests::configuration_change_fact_is_a_complete_transcript_row`; real server `test/e2e/trajectory-integration.spec.ts` (read before first use, Inspector) |
+| Unused commits each keep readable instructions and affected-item catalog; wrong refs refused | `configuration::tests::configuration_change_fact_is_a_complete_transcript_row`; real server `test/e2e/trajectory-integration.spec.ts` (read before first use, Inspector) |
 | Successive Skill versions with no request stay readable after the file moved on and the runtime is gone; Tool catalog carries a binding digest, no credentials | `automatic_commit::body_only_skill_edit_records_one_changed_fact`, `mcp_readiness::implementation_only_tool_change_records_one_changed_fact` |
-| An unrecorded commit stays `uncertain` across a comment-only edit; admission fenced | `automatic_commit::an_unrecorded_live_commit_is_uncertain_and_fences_admission` |
+| An unrecorded commit stays `uncertain` across a comment-only edit, also when its settlement arrives after that edit; admission fenced | `automatic_commit::an_unrecorded_live_commit_is_uncertain_and_fences_admission`, `automatic_commit::a_late_unrecorded_settlement_is_never_reported_applied` |
+| A policy published after an unrecorded commit survives unload/load; the healthy replacement recovers the view | `automatic_commit::a_published_policy_after_an_unrecorded_commit_survives_reload` |
+| An Agent edit changes exactly the Tools that run it (`review` Workflow, `subagent`); an unadmitted Agent changes nothing; the next call runs the edit | `automatic_commit::named_agent_edits_change_exactly_the_tools_that_run_them` |
+| A removal of 17 bootstrap Skills (no request, no earlier fact) keeps every removed definition, readable after the runtime and files are gone | `automatic_commit::a_removal_retains_every_removed_definition` |
 | Oversized/escaped names stay within the header; Trace total counts configuration (alone and mixed) | `configuration_commit::tests::name_lists_are_bounded_by_encoded_bytes`, `trace::tests::header_tests::configuration_records_are_counted_and_unbounded_names_stay_readable` |
 | Real background owner defers; its settlement alone commits | `automatic_commit::t11_background_ownership_defers_commit_until_it_settles` |
 | Subagent owner defers; settlement commits exactly once; stale baseline superseded; no fact without change | `configuration::tests::subagent_settlement_commits_the_current_staged_configuration` |
@@ -134,8 +142,8 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 ## Cost
 
 One Journal row, one transcript reference, one retained copy of the
-effective instructions and one JSON catalog of the added and changed Tools and
-Skills per actual commit (unchanged items are not copied), nothing per file notification,
+effective instructions and one JSON catalog of the affected Tools and Skills
+(before and after states) per actual commit (unchanged items are not copied), nothing per file notification,
 preparation tick or stream delta. Each name list is capped at 16 names and
 1 KiB of encoded names whatever a source names its Tools, so a change fact
 stays under 8 KiB (asserted), below the 16,384-byte header bound. The
