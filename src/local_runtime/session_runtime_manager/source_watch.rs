@@ -33,6 +33,11 @@
 //! sees exactly the sources they read. The entry decides by identity, never
 //! by probing the volume through an unrelated name.
 //!
+//! A path belongs to every source target whose loaders read it, and only to
+//! those: a known Workspace inside the User root, or inside another
+//! Workspace's `.agents`, shares a source the other reads instead of taking
+//! it, so its User consumers in every cwd are still captured.
+//!
 //! Anything else under `.agents` — Session uploads in particular — is not a
 //! configuration source and is neither watched nor routed.
 //!
@@ -49,25 +54,6 @@ use super::SessionRuntimeManager;
 use crate::local_runtime::configuration::settings::SourceTarget;
 
 use crate::local_runtime::resource_directory::SOURCE_ENTRIES;
-
-/// Whether `path` is `root` itself, one of its guidance files, or lies under
-/// one of its source entries.
-fn is_resource(path: &Path, root: &Path) -> bool {
-    path.strip_prefix(root).is_ok_and(|relative| {
-        let mut components = relative.components();
-        components.next().is_none_or(|entry| {
-            SOURCE_ENTRIES.iter().any(|name| entry.as_os_str() == *name)
-                || (components.next().is_none() && is_guidance(entry.as_os_str()))
-        })
-    })
-}
-
-/// Whether `name` is one of the guidance files the loader reads.
-fn is_guidance(name: &std::ffi::OsStr) -> bool {
-    crate::runtime::resources::PROJECT_CONTEXT_FILENAMES
-        .iter()
-        .any(|guidance| name == *guidance)
-}
 
 /// Whether `actual` and `fixed`, two spellings of one name in one directory,
 /// are the entry a loader opening `fixed` reaches: the same file (a volume
@@ -135,39 +121,38 @@ fn beneath<'p>(
     Some(components)
 }
 
-/// `path` as its owner reads it: the most specific known source — a resource
-/// root, a Workspace document or the User document — that `path` lies in,
-/// matched [`beneath`] its own canonical base and through the fixed names
-/// the loaders open, respelled under that base. Each owner is matched against
-/// the reported path itself, so one candidate's spelling never changes what
-/// another sees. A path no source owns is returned unchanged.
-fn loader_path(
+/// Every source target whose loaders read `path`, each with `path` as that
+/// owner opens it. Each owner — the User and each known Workspace, through a
+/// resource root or a document — is matched [`beneath`] its own canonical
+/// base and through the fixed names its loaders open against the reported
+/// path itself, then respelled under that base, so one owner's spelling
+/// never changes what another sees. A path several owners read, such as a
+/// User Skill inside a known Workspace, belongs to each of them: registering a
+/// directory as a Workspace never ends another source's consumers.
+fn owners(
     path: &Path,
     user: &UserSourceRoots,
     workspaces: &[PathBuf],
     same: &impl Fn(&Path, &Path) -> bool,
-) -> PathBuf {
+) -> Vec<(SourceTarget, PathBuf)> {
     let guidance = || crate::runtime::resources::PROJECT_CONTEXT_FILENAMES.into_iter();
-    let mut owned: Option<(usize, PathBuf)> = None;
-    let mut own = |base: &Path, respelled: PathBuf| {
-        let specificity = base.components().count();
-        if owned
-            .as_ref()
-            .is_none_or(|(current, _)| specificity > *current)
-        {
-            owned = Some((specificity, respelled));
-        }
+    let workspace = |directory: &Path| SourceTarget::Workspace {
+        directory: directory.to_path_buf(),
     };
+    let mut owners = Vec::new();
     let resource_roots = std::iter::once((
+        SourceTarget::User,
         user.resources.ancestors().nth(USER_RESOURCES.len()),
         &USER_RESOURCES[..],
     ))
-    .chain(
-        workspaces
-            .iter()
-            .map(|workspace| (Some(workspace.as_path()), &[".agents"][..])),
-    );
-    for (base, fixed) in resource_roots {
+    .chain(workspaces.iter().map(|directory| {
+        (
+            workspace(directory),
+            Some(directory.as_path()),
+            &[".agents"][..],
+        )
+    }));
+    for (target, base, fixed) in resource_roots {
         let Some(base) = base else {
             continue;
         };
@@ -189,7 +174,7 @@ fn loader_path(
             continue;
         }
         let Some(entry) = components.next() else {
-            own(base, root);
+            owners.push((target, root));
             continue;
         };
         let rest = components.as_path();
@@ -200,37 +185,64 @@ fn loader_path(
                 .into_iter()
                 .flatten(),
         );
-        // An entry that is no source here may still belong to a more
-        // specific Workspace inside this root.
         if let Some(name) = loader_name(&root, entry.as_os_str(), names, same) {
-            own(base, root.join(name).join(rest));
+            owners.push((target, root.join(name).join(rest)));
         }
     }
     let document = |directory: &Path| {
         let mut components = beneath(path, directory, same)?;
         let file = components.next()?;
-        components.next().is_none().then_some(file)
+        components.next().is_none().then_some(file.as_os_str())
     };
     if let Some(directory) = user.document.parent()
         && let Some(file) = document(directory)
         && let Some(fixed) = user.document.file_name().and_then(|name| name.to_str())
-        && let Some(name) = loader_name(directory, file.as_os_str(), std::iter::once(fixed), same)
+        && let Some(name) = loader_name(directory, file, std::iter::once(fixed), same)
     {
-        own(directory, directory.join(name));
+        owners.push((SourceTarget::User, directory.join(name)));
     }
-    for workspace in workspaces {
-        if let Some(file) = document(workspace) {
-            let name = loader_name(
-                workspace,
-                file.as_os_str(),
-                std::iter::once("rustx.toml").chain(guidance()),
-                same,
-            )
-            .map_or_else(|| file.as_os_str().to_owned(), Into::into);
-            own(workspace, workspace.join(name));
+    for directory in workspaces {
+        let Some(file) = document(directory) else {
+            continue;
+        };
+        // The document, the guidance files, and any root `*.md` as listed.
+        let name = loader_name(
+            directory,
+            file,
+            std::iter::once("rustx.toml").chain(guidance()),
+            same,
+        )
+        .map(std::ffi::OsStr::new)
+        .or_else(|| {
+            Path::new(file)
+                .extension()
+                .is_some_and(|extension| extension == "md")
+                .then_some(file)
+        });
+        if let Some(name) = name {
+            owners.push((workspace(directory), directory.join(name)));
         }
     }
-    owned.map_or_else(|| path.to_path_buf(), |(_, path)| path)
+    owners
+}
+
+/// The source targets a notification at `path` invalidates. The watches at
+/// or below it, as reported and as each owner opens it, are registered again.
+fn notified(
+    path: &Path,
+    user: &UserSourceRoots,
+    workspaces: &[PathBuf],
+    same: &impl Fn(&Path, &Path) -> bool,
+    active: &mut BTreeMap<PathBuf, RecursiveMode>,
+) -> Vec<SourceTarget> {
+    invalidate(active, path);
+    owners(path, user, workspaces, same)
+        .into_iter()
+        .map(|(target, path)| {
+            invalidate(active, &path);
+            target
+        })
+        .collect()
 }
 
 /// The watches of one existing resource root: the root itself, for its
@@ -254,32 +266,6 @@ const USER_RESOURCES: [&str; 2] = ["rustx", ".agents"];
 pub(super) struct UserSourceRoots {
     pub(super) document: PathBuf,
     pub(super) resources: PathBuf,
-}
-
-/// The source target that owns a changed `path`, or `None` for a path no
-/// supported source reads.
-pub(super) fn route(
-    path: &Path,
-    user: &UserSourceRoots,
-    workspaces: &[PathBuf],
-) -> Option<SourceTarget> {
-    if path == user.document || is_resource(path, &user.resources) {
-        return Some(SourceTarget::User);
-    }
-    workspaces
-        .iter()
-        .filter(|workspace| {
-            is_resource(path, &workspace.join(".agents"))
-                || (path.parent() == Some(workspace.as_path())
-                    && (path
-                        .file_name()
-                        .is_some_and(|name| name == "rustx.toml" || is_guidance(name))
-                        || path.extension().is_some_and(|extension| extension == "md")))
-        })
-        .max_by_key(|workspace| workspace.as_os_str().len())
-        .map(|workspace| SourceTarget::Workspace {
-            directory: workspace.clone(),
-        })
 }
 
 /// What one platform notification invalidates.
@@ -454,9 +440,7 @@ impl SessionRuntimeManager {
                     while let Some(signal) = next {
                         let owners = match signal {
                             Signal::Path(path) => {
-                                let path = loader_path(&path, &user, &workspaces, &same);
-                                invalidate(&mut active, &path);
-                                route(&path, &user, &workspaces).into_iter().collect()
+                                notified(&path, &user, &workspaces, &same, &mut active)
                             }
                             Signal::Rescan => {
                                 active.clear();
@@ -511,23 +495,32 @@ mod tests {
         }
     }
 
+    /// The targets that read `path` as reported, where no other spelling is
+    /// the same entry.
+    fn route(path: &Path, user: &UserSourceRoots, workspaces: &[PathBuf]) -> Vec<SourceTarget> {
+        owners(path, user, workspaces, &|_: &Path, _: &Path| false)
+            .into_iter()
+            .map(|(target, _)| target)
+            .collect()
+    }
+
     #[test]
     fn notifications_route_only_supported_sources_to_their_owner() {
         let home = Path::new("/home/u");
         let user = roots(home);
         let workspaces = vec![PathBuf::from("/work/a"), PathBuf::from("/work/a/nested")];
         let workspace = |directory: &str| {
-            Some(SourceTarget::Workspace {
+            vec![SourceTarget::Workspace {
                 directory: directory.into(),
-            })
+            }]
         };
         assert_eq!(
             route(&home.join("config/rustx.toml"), &user, &workspaces),
-            Some(SourceTarget::User)
+            vec![SourceTarget::User]
         );
         assert_eq!(
             route(&home.join("config/other.toml"), &user, &workspaces),
-            None
+            Vec::<SourceTarget>::new()
         );
         assert_eq!(
             route(
@@ -535,7 +528,7 @@ mod tests {
                 &user,
                 &workspaces
             ),
-            Some(SourceTarget::User)
+            vec![SourceTarget::User]
         );
         assert_eq!(
             route(Path::new("/work/a/rustx.toml"), &user, &workspaces),
@@ -549,7 +542,7 @@ mod tests {
             route(Path::new("/work/a/.agents/mcp.toml"), &user, &workspaces),
             workspace("/work/a")
         );
-        // The most specific known Workspace owns its own sources.
+        // A nested Workspace's document is not its parent's source.
         assert_eq!(
             route(Path::new("/work/a/nested/rustx.toml"), &user, &workspaces),
             workspace("/work/a/nested")
@@ -561,15 +554,15 @@ mod tests {
                 &user,
                 &workspaces
             ),
-            None
+            Vec::<SourceTarget>::new()
         );
         assert_eq!(
             route(&home.join("rustx/.agents/uploads/x"), &user, &workspaces),
-            None
+            Vec::<SourceTarget>::new()
         );
         assert_eq!(
             route(&home.join("rustx/.agents"), &user, &workspaces),
-            Some(SourceTarget::User)
+            vec![SourceTarget::User]
         );
         // Every guidance file the loader reads, at either root.
         for name in ["AGENTS.override.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"] {
@@ -579,12 +572,12 @@ mod tests {
             );
             assert_eq!(
                 route(&home.join("rustx/.agents").join(name), &user, &workspaces),
-                Some(SourceTarget::User)
+                vec![SourceTarget::User]
             );
         }
         assert_eq!(
             route(&home.join("rustx/.agents/notes.md"), &user, &workspaces),
-            None
+            Vec::<SourceTarget>::new()
         );
         assert_eq!(
             route(
@@ -592,20 +585,20 @@ mod tests {
                 &user,
                 &workspaces
             ),
-            None
+            Vec::<SourceTarget>::new()
         );
         // Ordinary project files never reach configuration.
         assert_eq!(
             route(Path::new("/work/a/src/main.rs"), &user, &workspaces),
-            None
+            Vec::<SourceTarget>::new()
         );
         assert_eq!(
             route(Path::new("/work/a/docs/notes.md"), &user, &workspaces),
-            None
+            Vec::<SourceTarget>::new()
         );
         assert_eq!(
             route(Path::new("/elsewhere/rustx.toml"), &user, &workspaces),
-            None
+            Vec::<SourceTarget>::new()
         );
     }
 
@@ -626,7 +619,7 @@ mod tests {
         let aliases = |_: &Path, _: &Path| true;
         let distinct = |_: &Path, _: &Path| false;
         let spelled = |path: &str, same: &dyn Fn(&Path, &Path) -> bool| {
-            loader_path(Path::new(path), &user, &workspaces, &same)
+            owners(Path::new(path), &user, &workspaces, &same)
         };
         for (actual, loader, owner) in [
             (
@@ -669,18 +662,17 @@ mod tests {
                 "/w/.agents/project",
             ),
         ] {
-            let path = spelled(actual, &aliases);
-            assert_eq!(path, Path::new(loader));
             assert_eq!(
-                route(&path, &user, &workspaces),
-                Some(SourceTarget::Workspace {
-                    directory: owner.into()
-                }),
+                spelled(actual, &aliases),
+                [(
+                    SourceTarget::Workspace {
+                        directory: owner.into()
+                    },
+                    PathBuf::from(loader)
+                )],
                 "{actual}"
             );
-            let path = spelled(actual, &distinct);
-            assert_eq!(path, Path::new(actual));
-            assert_eq!(route(&path, &user, &workspaces), None, "{actual}");
+            assert!(spelled(actual, &distinct).is_empty(), "{actual}");
         }
         for (actual, loader) in [
             (
@@ -694,32 +686,43 @@ mod tests {
             ("/home/u/RUSTX/.AGENTS", "/home/u/rustx/.agents"),
             ("/home/u/config/RUSTX.toml", "/home/u/config/rustx.toml"),
         ] {
-            let path = spelled(actual, &aliases);
-            assert_eq!(path, Path::new(loader));
-            assert_eq!(route(&path, &user, &workspaces), Some(SourceTarget::User));
-            assert_eq!(route(&spelled(actual, &distinct), &user, &workspaces), None);
+            assert_eq!(
+                spelled(actual, &aliases),
+                [(SourceTarget::User, PathBuf::from(loader))]
+            );
+            assert!(spelled(actual, &distinct).is_empty(), "{actual}");
         }
         // Uploads stay unrouted in any case.
-        assert_eq!(
-            route(
-                &spelled("/w/.Agents/Uploads/s/AGENTS.md", &aliases),
-                &user,
-                &workspaces
-            ),
-            None
-        );
+        assert!(spelled("/w/.Agents/Uploads/s/AGENTS.md", &aliases).is_empty());
         // The exact spelling wins where both exist.
-        assert_eq!(spelled("/w/AGENTS.MD", &aliases), Path::new("/w/AGENTS.MD"));
-        // A replaced case-variant directory re-registers the watches beneath
-        // the loaders' spelling.
+        assert_eq!(
+            spelled("/w/AGENTS.MD", &aliases),
+            [(
+                SourceTarget::Workspace {
+                    directory: "/w".into()
+                },
+                PathBuf::from("/w/AGENTS.MD")
+            )]
+        );
+    }
+
+    /// A replaced case-variant directory re-registers the watches beneath the
+    /// loaders' spelling.
+    #[test]
+    fn a_case_variant_notification_reregisters_the_loaders_watches() {
+        let user = roots(Path::new("/home/u"));
+        let workspaces = vec![PathBuf::from("/w")];
         let mut active = BTreeMap::from([
             (PathBuf::from("/w"), RecursiveMode::NonRecursive),
             (PathBuf::from("/w/.agents"), RecursiveMode::NonRecursive),
             (PathBuf::from("/w/.agents/skills"), RecursiveMode::Recursive),
         ]);
-        invalidate(&mut active, &spelled("/w/.agents/Skills", &aliases));
+        let notify = |path: &str, active: &mut BTreeMap<PathBuf, RecursiveMode>| {
+            notified(Path::new(path), &user, &workspaces, &|_, _| true, active)
+        };
+        notify("/w/.agents/Skills", &mut active);
         assert_eq!(active.len(), 2);
-        invalidate(&mut active, &spelled("/w/.Agents", &aliases));
+        notify("/w/.Agents", &mut active);
         assert_eq!(active.keys().collect::<Vec<_>>(), [Path::new("/w")]);
     }
 
@@ -739,7 +742,7 @@ mod tests {
         let aliases = |_: &Path, _: &Path| true;
         let distinct = |_: &Path, _: &Path| false;
         let spelled = |path: &str, same: &dyn Fn(&Path, &Path) -> bool| {
-            loader_path(Path::new(path), &user, &workspaces, &same)
+            owners(Path::new(path), &user, &workspaces, &same)
         };
         for (actual, loader, owner, exact) in [
             (
@@ -761,19 +764,81 @@ mod tests {
                 false,
             ),
         ] {
-            let owner = Some(SourceTarget::Workspace {
-                directory: owner.into(),
-            });
-            let path = spelled(actual, &aliases);
-            assert_eq!(path, Path::new(loader));
-            assert_eq!(route(&path, &user, &workspaces), owner, "{actual}");
-            let path = spelled(actual, &distinct);
-            assert_eq!(
-                route(&path, &user, &workspaces),
-                if exact { owner } else { None },
-                "{actual}"
-            );
+            let owner = [(
+                SourceTarget::Workspace {
+                    directory: owner.into(),
+                },
+                PathBuf::from(loader),
+            )];
+            assert_eq!(spelled(actual, &aliases), owner, "{actual}");
+            let distinct = spelled(actual, &distinct);
+            if exact {
+                assert_eq!(distinct, owner, "{actual}");
+            } else {
+                assert!(distinct.is_empty(), "{actual}");
+            }
         }
+    }
+
+    /// A source belongs to every owner whose loaders read it: a known
+    /// Workspace inside the User root, or inside another Workspace's
+    /// `.agents`, never takes a User Agent or Skill, or that Workspace's
+    /// guidance, from the owner that reads it, whatever the spelling.
+    #[test]
+    fn a_source_belongs_to_every_owner_that_reads_it() {
+        let user = roots(Path::new("/home/u"));
+        let workspaces = vec![
+            PathBuf::from("/home/u/RustX/.agents/agents"),
+            PathBuf::from("/home/u/RustX/.agents/skills/guide"),
+            PathBuf::from("/w"),
+            PathBuf::from("/w/.agents"),
+        ];
+        let workspace = |directory: &str, path: &str| {
+            (
+                SourceTarget::Workspace {
+                    directory: directory.into(),
+                },
+                PathBuf::from(path),
+            )
+        };
+        let aliases = |_: &Path, _: &Path| true;
+        assert_eq!(
+            owners(
+                Path::new("/home/u/RustX/.agents/agents/reviewer.toml"),
+                &user,
+                &workspaces,
+                &aliases
+            ),
+            [(
+                SourceTarget::User,
+                PathBuf::from("/home/u/rustx/.agents/agents/reviewer.toml")
+            )]
+        );
+        assert_eq!(
+            owners(
+                Path::new("/home/u/RustX/.agents/skills/guide/SKILL.md"),
+                &user,
+                &workspaces,
+                &aliases
+            ),
+            [
+                (
+                    SourceTarget::User,
+                    PathBuf::from("/home/u/rustx/.agents/skills/guide/SKILL.md")
+                ),
+                workspace(
+                    "/home/u/RustX/.agents/skills/guide",
+                    "/home/u/RustX/.agents/skills/guide/SKILL.md"
+                ),
+            ]
+        );
+        assert_eq!(
+            route(Path::new("/w/.agents/AGENTS.md"), &user, &workspaces),
+            [
+                workspace("/w", "/w/.agents/AGENTS.md").0,
+                workspace("/w/.agents", "/w/.agents/AGENTS.md").0,
+            ]
+        );
     }
 
     /// On a verified case-sensitive volume, a case variant that exists apart
@@ -804,18 +869,24 @@ mod tests {
             "RustX.toml",
         ] {
             let actual = workspace.join(actual);
-            let path = loader_path(&actual, &user, &workspaces, &same_entry);
-            assert_eq!(path, actual);
-            assert_eq!(route(&path, &user, &workspaces), None, "{actual:?}");
+            assert!(
+                owners(&actual, &user, &workspaces, &same_entry).is_empty(),
+                "{actual:?}"
+            );
         }
         assert_eq!(
-            loader_path(
+            owners(
                 &workspace.join(".agents/Tools"),
                 &user,
                 &workspaces,
                 &same_entry
             ),
-            workspace.join(".agents/tools")
+            [(
+                SourceTarget::Workspace {
+                    directory: workspace.clone()
+                },
+                workspace.join(".agents/tools")
+            )]
         );
     }
 
@@ -937,13 +1008,14 @@ mod case_insensitive_tests {
                 b"source",
                 "the loaders read {actual:?}"
             );
-            let path = loader_path(actual, &user, &workspaces, &same_entry);
-            assert_eq!(&path, loader);
             assert_eq!(
-                route(&path, &user, &workspaces),
-                Some(SourceTarget::Workspace {
-                    directory: (*workspace).clone()
-                })
+                owners(actual, &user, &workspaces, &same_entry),
+                [(
+                    SourceTarget::Workspace {
+                        directory: (*workspace).clone()
+                    },
+                    loader.clone()
+                )]
             );
         }
         // A User Skill under `RustX`, which the loaders read through
@@ -953,9 +1025,10 @@ mod case_insensitive_tests {
         std::fs::write(&skill, b"user").unwrap();
         let loader = user.resources.join("skills/guide/SKILL.md");
         assert_eq!(std::fs::read(&loader).unwrap(), b"user");
-        let path = loader_path(&skill, &user, &workspaces, &same_entry);
-        assert_eq!(path, loader);
-        assert_eq!(route(&path, &user, &workspaces), Some(SourceTarget::User));
+        assert_eq!(
+            owners(&skill, &user, &workspaces, &same_entry),
+            [(SourceTarget::User, loader)]
+        );
         // Workspaces whose canonical paths keep `RustX` and `.Agents` stay
         // the owners of their own documents, notified under that spelling or
         // the loaders'.
@@ -971,13 +1044,14 @@ mod case_insensitive_tests {
         for owner in &owners {
             std::fs::write(owner.join("rustx.toml"), b"workspace").unwrap();
             for actual in [owner.join("rustx.toml"), owner.join("RustX.toml")] {
-                let path = loader_path(&actual, &user, &workspaces, &same_entry);
-                assert_eq!(path, owner.join("rustx.toml"));
                 assert_eq!(
-                    route(&path, &user, &workspaces),
-                    Some(SourceTarget::Workspace {
-                        directory: owner.clone()
-                    }),
+                    owners(&actual, &user, &workspaces, &same_entry),
+                    [(
+                        SourceTarget::Workspace {
+                            directory: owner.clone()
+                        },
+                        owner.join("rustx.toml")
+                    )],
                     "{actual:?}"
                 );
             }
@@ -987,9 +1061,12 @@ mod case_insensitive_tests {
             (root.join(".agents"), RecursiveMode::NonRecursive),
             (root.join(".agents/skills"), RecursiveMode::Recursive),
         ]);
-        invalidate(
+        notified(
+            &root.join(".Agents"),
+            &user,
+            &workspaces,
+            &same_entry,
             &mut active,
-            &loader_path(&root.join(".Agents"), &user, &workspaces, &same_entry),
         );
         assert!(active.is_empty());
     }

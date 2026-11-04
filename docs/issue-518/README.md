@@ -135,9 +135,14 @@ Server protocol/connection layer.
   Workspace inside another Workspace's `.agents` still owns its documents.
   Every candidate owner is matched against the reported path itself — its
   own canonical base component by component, by the same identity rule —
-  and the most specific owner respells the path under that base, so one
+  and each owner that reads the path respells it under that base, so one
   candidate's spelling never changes what another sees: a Workspace whose
-  canonical path keeps `RustX` or `.Agents` still owns its documents. Session uploads under
+  canonical path keeps `RustX` or `.Agents` still owns its documents. Only a
+  source the owner's loaders read makes it an owner, and a path several owners
+  read is captured for each: a known Workspace inside the User root never
+  takes a User Agent or Skill — or its consumers in other cwds — from the
+  User, nor one inside another Workspace's `.agents` that Workspace's
+  guidance. Session uploads under
   `.agents/uploads` are never watched (the full browser suite caught an early
   version that did).
 
@@ -182,7 +187,7 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | A new shared Skill environment root is `execution_policy` with every authorized entry, Tool and Skill unchanged; no path is retained | `automatic_commit::a_new_skill_environment_is_execution_policy` |
 | Session uploads and unread `.agents` entries leave the resource revision unchanged | `resource_directory::tests::only_configuration_entries_change_the_revision` |
 | The revision follows the loaders' fixed paths: `Skills` counts on a case-insensitive volume and not on a case-sensitive one | `resource_directory::case_insensitive_tests::a_case_variant_the_loaders_open_is_configuration` (macOS), `resource_directory::tests::a_case_variant_the_loaders_never_open_is_not_configuration` |
-| On a case-folding volume an ordinary notification for `.Agents/Skills/…`, the only one, commits the Skill version the loaders read with exactly one fact; root, entry, guidance and document variants route and invalidate only as the entry the loaders open, in a Workspace of any name, beneath a `RustX` User home directory, or inside another Workspace's `.agents` | `automatic_commit::a_case_variant_notification_commits_the_source_the_loaders_read`, `source_watch::tests::a_case_variant_routes_only_as_the_entry_the_loaders_open`, `source_watch::tests::an_owner_keeps_its_canonical_spelling`, `source_watch::tests::distinct_case_variants_are_not_the_entry_the_loaders_open` (Linux, verified case-sensitive), `source_watch::case_insensitive_tests::a_case_variant_the_loaders_read_routes_to_its_workspace` (macOS: `.agents/Skills`, `.Agents`, `2026/RustX.toml`, a nested Workspace's `RustX.toml`, a User Skill under `RustX`, canonical Workspaces under `RustX/.agents` and `.Agents`, a renamed-away root) |
+| On a case-folding volume an ordinary notification for `.Agents/Skills/…`, the only one, commits the Skill version the loaders read with exactly one fact; root, entry, guidance and document variants route and invalidate only as the entry the loaders open, in a Workspace of any name, beneath a `RustX` User home directory, or inside another Workspace's `.agents`; a source several owners read — a User Agent or Skill inside a known Workspace — is captured for every one of them, so a User Skill consumer in another cwd is refreshed | `automatic_commit::a_case_variant_notification_commits_the_source_the_loaders_read`, `source_watch::tests::a_case_variant_routes_only_as_the_entry_the_loaders_open`, `source_watch::tests::an_owner_keeps_its_canonical_spelling`, `source_watch::tests::a_source_belongs_to_every_owner_that_reads_it`, `automatic_commit::a_user_skill_inside_a_workspace_refreshes_every_consumer`, `source_watch::tests::distinct_case_variants_are_not_the_entry_the_loaders_open` (Linux, verified case-sensitive), `source_watch::case_insensitive_tests::a_case_variant_the_loaders_read_routes_to_its_workspace` (macOS: `.agents/Skills`, `.Agents`, `2026/RustX.toml`, a nested Workspace's `RustX.toml`, a User Skill under `RustX`, canonical Workspaces under `RustX/.agents` and `.Agents`, a renamed-away root) |
 | A platform rescan without a path recaptures a Workspace whose notifications were lost; a repeated rescan records nothing | `automatic_commit::a_rescan_recaptures_sources_whose_notifications_were_lost` |
 | A parameter change of a model only a direct Workflow Model node names is one Model fact; an unselected model records nothing | `automatic_commit::a_workflow_model_node_is_a_model_that_runs` |
 | An environment value change changes `subagent` and execution policy; the catalog names the variable, never its value | `automatic_commit::an_environment_value_change_is_recorded_without_its_value` |
