@@ -410,6 +410,9 @@ Selection retains the full native visit identity across reader replacement in th
 same cache epoch, including cold Load Earlier reads. Until the new reader admits
 that visit, the Inspector remains busy without exposing retired content or
 falling back to the run or another visit. Explicit close or collapse clears it.
+A failed replacement retains that visit's Inspector with the native read error
+and a retry action. Retrying preserves the visit and facet, revalidates the full
+collection, and keeps the same reader/cut ownership fences.
 
 The browser has a separate Trace cache (512 history entries / 4 MiB estimated
 encoded UTF-16 size), independent from transcript and live cursors. Its flat list

@@ -5,7 +5,7 @@ import { useTranslation } from '../../locale/react';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { type TraceCache } from '../../client/trace';
 import { IconSearchOutline16 } from '../../presentation/primitives/icons';
-import { PendingWorkflowNodeInspector, TrajectoryInspector, inspectorTabs } from './TrajectoryInspector';
+import { WorkflowNodeReadInspector, TrajectoryInspector, inspectorTabs } from './TrajectoryInspector';
 import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
 import type { TrajectoryRowActions } from './TrajectoryRow';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
@@ -73,7 +73,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   const visible = useMemo(() => visibleItems(tx, allItems, records, calls, matches), [tx, allItems, records, calls, matches]);
   const workflowMap = useMemo(() => workflowCalls(records), [records]);
   const workflowRoots = useMemo(() => [...new Map([...workflowMap.values()].map(root => [root.id, root])).values()], [workflowMap]);
-  const workflowNodes = useWorkflowNodes(cache, workflowRoots, openedWorkflows);
+  const { nodes: workflowNodes, retry: retryWorkflowNodes } = useWorkflowNodes(cache, workflowRoots, openedWorkflows);
   const rows = useMemo(() => withWorkflowNodes(ledgerRows(tx, projection, visible, collapsedTurns, matches !== null), workflowMap, openedWorkflows, workflowNodes), [tx, projection, visible, collapsedTurns, matches, workflowMap, openedWorkflows, workflowNodes]);
   const selectionItems = useMemo(() => displayUniverse(allItems, [...visible, ...rows.flatMap(row => row.item ? [row.item] : [])]), [allItems, visible, rows]);
   const matchingOwners = useMemo(() => matchedRecordIds(allItems, matches), [allItems, matches]);
@@ -175,13 +175,14 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   })();
   const unresolvedWorkflow = selection?.workflow_node && !selectedItem && openedWorkflows.has(selection.owner_record_id)
     && workflowRoots.some(root => root.id === selection.owner_record_id)
-    && (!workflowNodes.has(selection.owner_record_id) || workflowNodes.get(selection.owner_record_id)?.loading)
+    && (!workflowNodes.has(selection.owner_record_id) || workflowNodes.get(selection.owner_record_id)?.loading || workflowNodes.get(selection.owner_record_id)?.error)
     ? selection.workflow_node : undefined;
   const inspector = selected && selection && selectedItem
     ? <TrajectoryInspector key={`${cache.epoch}:${selection.display_key}`} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} stale={selectedDetail?.stale} error={selectedDetail?.error}
       facet={selection.facet} onFacet={setFacet} onLoadDetail={onLoadDetail} onClose={close} location={location}
       records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={!cache.page.next_cursor} onOpen={openRecord} />
-    : unresolvedWorkflow ? <PendingWorkflowNodeInspector node={unresolvedWorkflow.instance} onClose={close} /> : null;
+    : unresolvedWorkflow ? <WorkflowNodeReadInspector node={unresolvedWorkflow.instance} error={workflowNodes.get(selection!.owner_record_id)?.error}
+      onRetry={() => retryWorkflowNodes(selection!.owner_record_id)} onClose={close} /> : null;
   const splitStyle = toolRequestOffset === null ? undefined : { '--trajectory-tool-request-width': `calc(58cqw - ${toolRequestOffset}px)` } as CSSProperties;
   const turnIds = projection.sections.flatMap(section => section.kind === 'turn' ? [section.ownerKey] : []);
   const allTurnsCollapsed = foldableTurns.size > 0 && [...foldableTurns].every(id => collapsedTurns.has(id));
@@ -215,7 +216,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
       </div>
     </div>
     {(cache.error || context.error) && <p role="alert" className={css.error}>{cache.error || context.error}</p>}
-    {[...workflowNodes.values()].filter(value => value.error).map(value => <p role="alert" className={css.error} key={value.root.id}>{value.error}</p>)}
+    {[...workflowNodes.values()].filter(value => value.error && !(unresolvedWorkflow && value.root.id === selection?.owner_record_id)).map(value => <p role="alert" className={css.error} key={value.root.id}>{value.error} <button type="button" className={css.action} onClick={() => retryWorkflowNodes(value.root.id)}>{tx('interactions:interactions.retry-details')}</button></p>)}
     {/* Epoch retires read-domain ownership; the Timeline separately fences
         coordinate interactions by its semantic projection revision. */}
     <TrajectoryTimeline key={cache.epoch} model={timelineModel} mode={mode} range={range}

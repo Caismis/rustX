@@ -127,8 +127,8 @@ function DetailPending({ error, deferred }: { error: string | undefined; deferre
     : <p role="status" className={css.noPayload}>{tx(deferred?'common:activity.loading':'trajectory:details.loading')}</p>;
 }
 
-/** Keep panel geometry and close access while a new reader admits this visit. */
-export function PendingWorkflowNodeInspector({ node, onClose }: { node: WorkflowNodeInstance; onClose: () => void }) {
+/** Keep the selected visit available while its reader is pending or failed. */
+export function WorkflowNodeReadInspector({ node, error, onRetry, onClose }: { node: WorkflowNodeInstance; error?: string; onRetry: () => void; onClose: () => void }) {
   const tx = useTranslation();
   return <>
     <div className={css.detailsHeader}>
@@ -138,7 +138,10 @@ export function PendingWorkflowNodeInspector({ node, onClose }: { node: Workflow
       </div>
       <button type="button" className={css.close} aria-label={tx('trajectory:details.close')} onClick={onClose}><span aria-hidden="true">×</span></button>
     </div>
-    <div className={css.detailBody} role="status" aria-busy="true" aria-label={tx('trajectory:details.loading')} />
+    {error ? <div className={css.detailBody}>
+      <DetailPending error={error} />
+      <Button onClick={onRetry}>{tx('interactions:interactions.retry-details')}</Button>
+    </div> : <div className={css.detailBody} role="status" aria-busy="true" aria-label={tx('trajectory:details.loading')} />}
   </>;
 }
 

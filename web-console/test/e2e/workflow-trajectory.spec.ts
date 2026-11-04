@@ -5,7 +5,8 @@ import { connectRemote, openEmptySession } from './shell-actions';
 import { translator } from '../../src/locale/translation';
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 for (const width of [1440, 390])
-  test(`cold Scheduled Workflow selection survives Load Earlier reader replacement at ${width}px`, async ({ page }, info) => {
+  for (const recover of [false, true])
+  test(`cold Scheduled Workflow selection survives ${recover ? 'failed and retried' : 'successful'} Load Earlier reader replacement at ${width}px`, async ({ page }, info) => {
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
@@ -27,8 +28,8 @@ for (const width of [1440, 390])
     // control invokes the same real cold Load Earlier path as the ledger.
     await page.getByRole('region', { name: 'Trajectory timeline', exact: true })
       .getByRole('button', { name: 'Load earlier history', exact: true }).click();
-    for (const offset of [0, 32, 64]) {
-      await expect.poll(() => page.evaluate(() => window.workflowColdTrace.requested())).toContain(offset);
+    const admit = async (offset: number) => {
+      await expect.poll(() => page.evaluate(() => window.workflowColdTrace.waiting())).toContain(offset);
       await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
       expect(await page.evaluate(() => window.workflowColdTrace.epoch())).toBe(epoch);
       await expect(ledger.locator('[data-workflow-node]')).toHaveCount(0);
@@ -37,12 +38,26 @@ for (const width of [1440, 390])
       // details while the complete replacement node set is still pending.
       await expect(page.getByRole('tabpanel').filter({ hasText: 'output-60' })).toHaveCount(0);
       await page.evaluate(offset => window.workflowColdTrace.release(offset), offset);
+    };
+    if (recover) {
+      await admit(0);
+      await expect.poll(() => page.evaluate(() => window.workflowColdTrace.waiting())).toContain(32);
+      await page.evaluate(() => window.workflowColdTrace.reject(32));
+      await expect(details.getByRole('alert')).toContainText('Replacement Workflow page rejected');
+      await expect(details.getByRole('button', { name: 'Close details', exact: true })).toBeVisible();
+      await expect(details).not.toContainText('output-60');
+      await expect(root).not.toHaveAttribute('aria-selected', 'true');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: info.outputPath(`cold-workflow-failed-${width}.png`) });
+      await details.getByRole('button', { name: 'Retry loading details', exact: true }).click();
     }
+    for (const offset of [0, 32, 64]) await admit(offset);
     await expect(ledger.locator('[data-workflow-node]')).toHaveCount(73);
     await expect(selected).toHaveAttribute('aria-selected', 'true');
     expect(await selected.getAttribute('data-display-key')).toBe(identity);
     await expect(details.getByRole('tab', { name: 'Result', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(details.getByRole('tabpanel')).toContainText('output-60');
+    await expect(page.getByRole('alert')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath(`cold-workflow-selection-${width}.png`) });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);

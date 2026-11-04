@@ -6,8 +6,9 @@ import { workflowCollection, type WorkflowNodes, type WorkflowTraceNode } from '
 
 /** All admitted visits, including loop bodies, paged at the original native cut. */
 export function useWorkflowNodes(cache: TraceCache, roots: readonly TraceRecord[], opened: ReadonlySet<string>) {
+  const [retries, setRetries] = useState<Record<string, number>>({});
   const selected = roots.filter(root => opened.has(root.id));
-  const keys = selected.map(root => [root.id, JSON.stringify([cache.epoch, root.id, cache.readCuts?.[root.id], workflowCollection(root)])] as const);
+  const keys = selected.map(root => [root.id, JSON.stringify([cache.epoch, root.id, cache.readCuts?.[root.id], workflowCollection(root), retries[root.id] ?? 0])] as const);
   const signature = JSON.stringify(keys), reader = cache.fields;
   const latest = useRef({ signature, reader }); latest.current = { signature, reader };
   const [state, setState] = useState<Record<string, { key: string; epoch: number; value: WorkflowNodes }>>({});
@@ -53,8 +54,13 @@ export function useWorkflowNodes(cache: TraceCache, roots: readonly TraceRecord[
     }
     return () => { mounted = false; };
   }, [signature, reader]);
-  return useMemo(() => new Map(selected.flatMap(root => {
+  const nodes = useMemo(() => new Map(selected.flatMap(root => {
     const value = state[root.id]?.epoch === cache.epoch ? state[root.id]?.value : undefined;
     return value && value.reader === reader ? [[root.id, value] as const] : [];
   })), [state, signature, reader]);
+  return { nodes, retry: (id: string) => {
+    // A retired error control cannot request work from a replacement reader.
+    if (latest.current.signature !== signature || latest.current.reader !== reader || !nodes.get(id)?.error) return;
+    setRetries(previous => ({ ...previous, [id]: (previous[id] ?? 0) + 1 }));
+  } };
 }

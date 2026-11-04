@@ -909,7 +909,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "bab7553d4acb7a0f3663319d2adfc2282dccd48c55dbf578cb1a526db2b70564"
+      "local_sha256": "3ae507ef81a790e0817f6f5c0f1934b525e3af789659ffc30afc712e1404eca4"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -986,7 +986,7 @@
           "treatment": "Share semantic between-Turn classification across ledger, Inspector and bilingual search. Preserve compaction/reused-history labels without treating unowned native Agent/Background/Workflow activities as between-Turn material or inventing nearby execution ownership."
         }
       ],
-      "local_sha256": "8c66cf0fef5d9854c57221a83d7ae0a78c12a983aaddea44c1e8d2605a595c51"
+      "local_sha256": "d7ae64aa53de0b7589f0b99c8ed263f1b1928efa2eacb8a59bcf1db3b69c4f09"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",

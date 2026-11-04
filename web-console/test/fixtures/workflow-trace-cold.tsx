@@ -30,7 +30,7 @@ server.handlers.set('session/traceHistory', request => {
       ? [traceRecord(2, { kind: 'user', request: null, location: {}, preview: { text: 'Earlier cold history', truncated: false } })]
       : [root], next_cursor: request.params.before ? null : 'trace:30' } };
 });
-const waiting = new Map<number, () => void>(), requested: number[] = [];
+const waiting = new Map<number, (failed?: boolean) => void>();
 let rounds = 0;
 void (async () => {
   for (let count = 1; ; count++) {
@@ -39,8 +39,12 @@ void (async () => {
     const { cut, domain, offset } = request.params;
     if (!offset) rounds++;
     if (rounds > 1) {
-      requested.push(offset);
-      await new Promise<void>(resolve => waiting.set(offset, resolve));
+      const failed = await new Promise<boolean | undefined>(resolve => waiting.set(offset, resolve));
+      if (failed) {
+        server.socket.deliver({ jsonrpc: '2.0', id: request.id,
+          error: { code: -32000, message: 'Replacement Workflow page rejected', data: { kind: 'operation_failed' } } });
+        continue;
+      }
     }
     const page = await source.reader.page(cut, domain, offset, () => true);
     server.socket.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'checkpoint_page', page } });
@@ -56,12 +60,17 @@ void (async () => {
   }
 })();
 window.workflowColdTrace = {
-  requested: () => [...requested],
+  waiting: () => [...waiting.keys()],
   epoch: () => server.client.getSnapshot().views.A.tracePreview?.cache.epoch,
   release: offset => {
     const resolve = waiting.get(offset);
     if (!resolve) throw Error('Cold Workflow page has not reached its gate');
     waiting.delete(offset); resolve();
+  },
+  reject: offset => {
+    const resolve = waiting.get(offset);
+    if (!resolve) throw Error('Cold Workflow page has not reached its gate');
+    waiting.delete(offset); resolve(true);
   },
 };
 function Fixture() {
@@ -77,4 +86,4 @@ createRoot(document.getElementById('root')!).render(<Fixture />);
 await server.connect();
 void server.client.attach('A');
 
-declare global { interface Window { workflowColdTrace: { requested(): number[]; epoch(): number | undefined; release(offset: number): void } } }
+declare global { interface Window { workflowColdTrace: { waiting(): number[]; epoch(): number | undefined; release(offset: number): void; reject(offset: number): void } } }

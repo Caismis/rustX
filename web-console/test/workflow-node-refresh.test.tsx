@@ -11,13 +11,13 @@ function controlledRefresh() {
   const fixture = workflowTraceFixture(73);
   const fresh = { ...fixture.cut, revision: '501', through: '501' };
   const nativePage = fixture.reader.page, nativeValue = fixture.reader.value;
-  const pending: { offset: number; page: CheckpointPage; resolve: (page: CheckpointPage) => void; reject: (error: Error) => void }[] = [];
+  const pending: { offset: number; page: CheckpointPage; settled: boolean; resolve: (page: CheckpointPage) => void; reject: (error: Error) => void }[] = [];
   const valueReads: { cut: CheckpointReadCut; domain: string }[] = [];
   fixture.reader.page = async (cut, domain, offset, current) => {
     const page = await nativePage(fixture.cut, domain, offset, current);
     if (cut.revision === fixture.cut.revision) return page;
     return new Promise<CheckpointPage>((resolve, reject) => {
-      pending.push({ offset, page: { ...page, cursor: cut.revision, read_cut: cut }, resolve, reject });
+      pending.push({ offset, page: { ...page, cursor: cut.revision, read_cut: cut }, settled: false, resolve, reject });
     });
   };
   fixture.reader.value = async (cut, field, offset, current) => {
@@ -33,8 +33,8 @@ function controlledRefresh() {
     ...fixture, fresh, pending, valueReads,
     refreshed: refreshTrace(fixture.cache, { records: fixture.cache.page.records, read_cut: fresh, next_cursor: null }),
     async page(offset: number) {
-      await waitFor(() => expect(pending.some(read => read.offset === offset)).toBe(true));
-      await act(async () => { const read = pending.find(read => read.offset === offset)!; read.resolve(read.page); });
+      await waitFor(() => expect(pending.some(read => read.offset === offset && !read.settled)).toBe(true));
+      await act(async () => { const read = pending.find(read => read.offset === offset && !read.settled)!; read.settled = true; read.resolve(read.page); });
     },
   };
 }
@@ -125,6 +125,36 @@ it('retains the selected complete snapshot and original body source when a repla
   await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('input-60'));
   expect(fixture.valueReads.at(-1)).toEqual({ cut: fixture.cut, domain: 'journal.input-node-0-60' });
   expect(fixture.valueReads.some(read => read.cut.revision === fixture.fresh.revision)).toBe(false);
+});
+
+it('retries a failed same-reader refresh from the top error without replacing its selected complete snapshot early', async () => {
+  const fixture = controlledRefresh(), ui = render(trajectory(fixture.cache));
+  openWorkflow(ui.container);
+  await selectLaterVisit(ui.container);
+  ui.rerender(trajectory(fixture.refreshed));
+  await fixture.page(0);
+  await waitFor(() => expect(fixture.pending.some(read => read.offset === 32)).toBe(true));
+  await act(async () => {
+    const read = fixture.pending.find(read => read.offset === 32)!;
+    read.settled = true; read.reject(Error('request_capacity_exceeded'));
+  });
+  expect(screen.getByRole('alert').textContent).toContain('request_capacity_exceeded');
+  expect(ui.container.querySelectorAll('[data-workflow-node]')).toHaveLength(73);
+  selectedVisit(ui.container);
+  expect(screen.getByRole('tabpanel').textContent).toContain('output-60');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading details' }));
+  await fixture.page(0);
+  await fixture.page(32);
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(ui.container.querySelectorAll('[data-workflow-node]')).toHaveLength(73);
+  selectedVisit(ui.container);
+  expect(screen.getByRole('tabpanel').textContent).toContain('output-60');
+  expect(fixture.valueReads.some(read => read.cut.revision === fixture.fresh.revision)).toBe(false);
+  await fixture.page(64);
+  await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('latest-60'));
+  selectedVisit(ui.container);
+  expect(screen.getByRole('tab', { name: 'Result' }).getAttribute('aria-selected')).toBe('true');
+  expect(fixture.pending.map(read => read.offset)).toEqual([0, 32, 0, 32, 64]);
 });
 
 it('does not publish a retired workflow page or expose its complete snapshot to a replacement Trace owner', async () => {
