@@ -26,10 +26,12 @@
 //! target is captured again and every watch registered again. Unchanged
 //! sources stay no-ops, so a repeated rescan records nothing.
 //!
-//! A notification names a path as the volume reports it. Where the volume
-//! folds case, a source entry, guidance file or document reported in another
-//! case is respelled with the fixed name the loaders open before it is
-//! routed, so the watcher sees exactly the sources they read.
+//! A notification names a path as the volume reports it. A resource root,
+//! source entry, guidance file or document reported in another case of the
+//! same entry (a volume that folds case) is respelled with the fixed name the
+//! loaders open before it is routed or invalidates watches, so the watcher
+//! sees exactly the sources they read. The entry decides by identity, never
+//! by probing the volume through an unrelated name.
 //!
 //! Anything else under `.agents` — Session uploads in particular — is not a
 //! configuration source and is neither watched nor routed.
@@ -67,81 +69,77 @@ fn is_guidance(name: &std::ffi::OsStr) -> bool {
         .any(|guidance| name == *guidance)
 }
 
-/// Whether the volume holding `directory` folds case: its own name with the
-/// case of its ASCII letters flipped names the same directory. A name without
-/// letters cannot be probed and counts as case-sensitive.
-fn folds_case(directory: &Path) -> bool {
+/// Whether `actual` and `fixed`, two spellings of one name in one directory,
+/// are the entry a loader opening `fixed` reaches: the same file (a volume
+/// that folds case), or both gone (a removed source, which a case-folding
+/// volume no longer tells apart; capturing it again is a no-op elsewhere).
+/// One present without the other, or two distinct files, are two entries.
+fn same_entry(actual: &Path, fixed: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
-    let Some(name) = directory.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    let flipped: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_uppercase() {
-                c.to_ascii_lowercase()
-            } else {
-                c.to_ascii_uppercase()
-            }
-        })
-        .collect();
-    if flipped == name {
-        return false;
-    }
     match (
-        std::fs::symlink_metadata(directory),
-        std::fs::symlink_metadata(directory.with_file_name(flipped)),
+        std::fs::symlink_metadata(actual),
+        std::fs::symlink_metadata(fixed),
     ) {
-        (Ok(actual), Ok(alias)) => (actual.dev(), actual.ino()) == (alias.dev(), alias.ino()),
+        (Ok(actual), Ok(fixed)) => (actual.dev(), actual.ino()) == (fixed.dev(), fixed.ino()),
+        (Err(actual), Err(fixed)) => {
+            actual.kind() == std::io::ErrorKind::NotFound
+                && fixed.kind() == std::io::ErrorKind::NotFound
+        }
         _ => false,
     }
 }
 
 /// The fixed name, among `names`, that a loader opening it in `directory`
-/// would reach at `actual`: the same spelling, or — on a volume that folds
-/// case — any case of it. The volume is probed through `directory`, which
-/// outlives a removed or renamed `actual`.
+/// reaches at `actual`: the same spelling, or another case of it that is
+/// [`same`](same_entry) entry.
 fn loader_name<'a>(
     directory: &Path,
     actual: &std::ffi::OsStr,
-    names: impl Iterator<Item = &'a str> + Clone,
-    folds: &impl Fn(&Path) -> bool,
+    mut names: impl Iterator<Item = &'a str> + Clone,
+    same: &impl Fn(&Path, &Path) -> bool,
 ) -> Option<&'a str> {
     if let Some(name) = names.clone().find(|name| actual == *name) {
         return Some(name);
     }
     let actual = actual.to_str()?;
-    let mut folded = names
-        .filter(|name| name.eq_ignore_ascii_case(actual))
-        .peekable();
-    folded.peek()?;
-    if folds(directory) {
-        folded.next()
-    } else {
-        None
-    }
+    names.find(|name| {
+        name.eq_ignore_ascii_case(actual) && same(&directory.join(actual), &directory.join(name))
+    })
 }
 
-/// `path` as the loaders spell it: a source entry, guidance file or document
-/// that a case-folding volume reports in another case is respelled with the
-/// fixed name the loaders open, so routing and watch invalidation see the
-/// source they read. Anything else is returned unchanged.
+/// `path` as the loaders spell it: each fixed component (a resource root, a
+/// source entry, a guidance file, a document) that the volume reports in
+/// another case of the same entry is respelled with the name the loaders
+/// open, so routing and watch invalidation see exactly the sources they read.
+/// Anything else is returned unchanged.
 fn loader_path(
     path: &Path,
     user: &UserSourceRoots,
     workspaces: &[PathBuf],
-    folds: &impl Fn(&Path) -> bool,
+    same: &impl Fn(&Path, &Path) -> bool,
 ) -> PathBuf {
     let guidance = || crate::runtime::resources::PROJECT_CONTEXT_FILENAMES.into_iter();
     let resource_roots = std::iter::once(user.resources.clone())
         .chain(workspaces.iter().map(|workspace| workspace.join(".agents")));
     for root in resource_roots {
-        let Ok(relative) = path.strip_prefix(&root) else {
+        let (Some(base), Some(fixed)) = (root.parent(), root.file_name().and_then(|n| n.to_str()))
+        else {
+            continue;
+        };
+        let Ok(relative) = path.strip_prefix(base) else {
             continue;
         };
         let mut components = relative.components();
+        let Some(first) = components.next() else {
+            continue;
+        };
+        let Some(root_name) = loader_name(base, first.as_os_str(), std::iter::once(fixed), same)
+        else {
+            continue;
+        };
+        let root = base.join(root_name);
         let Some(entry) = components.next() else {
-            return path.to_path_buf();
+            return root;
         };
         let rest = components.as_path();
         let names = SOURCE_ENTRIES.into_iter().chain(
@@ -151,16 +149,17 @@ fn loader_path(
                 .into_iter()
                 .flatten(),
         );
-        if let Some(name) = loader_name(&root, entry.as_os_str(), names, folds) {
-            return root.join(name).join(rest);
-        }
+        return match loader_name(&root, entry.as_os_str(), names, same) {
+            Some(name) => root.join(name).join(rest),
+            None => root.join(entry).join(rest),
+        };
     }
     let (Some(parent), Some(actual)) = (path.parent(), path.file_name()) else {
         return path.to_path_buf();
     };
     if Some(parent) == user.document.parent()
         && let Some(document) = user.document.file_name().and_then(|name| name.to_str())
-        && let Some(name) = loader_name(parent, actual, std::iter::once(document), folds)
+        && let Some(name) = loader_name(parent, actual, std::iter::once(document), same)
     {
         return parent.join(name);
     }
@@ -169,7 +168,7 @@ fn loader_path(
             parent,
             actual,
             std::iter::once("rustx.toml").chain(guidance()),
-            folds,
+            same,
         )
     {
         return parent.join(name);
@@ -381,21 +380,21 @@ impl SessionRuntimeManager {
                     // Coalesce everything already queued into one capture per
                     // owning target, in a stable order: User composes first.
                     #[cfg(test)]
-                    let folded = self
+                    let aliased = self
                         .registry
                         .0
                         .lock()
                         .expect("registry mutex")
-                        .source_watch_folds_case;
+                        .source_watch_case_aliases;
                     #[cfg(not(test))]
-                    let folded = false;
-                    let folds = |directory: &Path| folded || folds_case(directory);
+                    let aliased = false;
+                    let same = |actual: &Path, fixed: &Path| aliased || same_entry(actual, fixed);
                     let mut targets = Vec::new();
                     let mut next = Some(signal);
                     while let Some(signal) = next {
                         let owners = match signal {
                             Signal::Path(path) => {
-                                let path = loader_path(&path, &user, &workspaces, &folds);
+                                let path = loader_path(&path, &user, &workspaces, &same);
                                 invalidate(&mut active, &path);
                                 route(&path, &user, &workspaces).into_iter().collect()
                             }
@@ -551,78 +550,133 @@ mod tests {
     }
 
     /// A case-folding volume reports a source in the case it was created
-    /// in; the loaders open the fixed name and read it, so the watcher routes
-    /// and invalidates it under that name, for removals too. On a
-    /// case-sensitive volume the same spelling is not a source.
+    /// in; the loaders open the fixed names and read it, so the watcher
+    /// routes and invalidates it under those names — the resource root
+    /// included, in a Workspace of any name, for removals too. Where the
+    /// spellings are distinct entries, the variant is not a source.
     #[test]
-    fn a_case_variant_routes_only_where_the_volume_folds_case() {
+    fn a_case_variant_routes_only_as_the_entry_the_loaders_open() {
         let home = Path::new("/home/u");
         let user = roots(home);
-        let workspaces = vec![PathBuf::from("/w")];
-        let workspace = Some(SourceTarget::Workspace {
-            directory: "/w".into(),
-        });
-        let folding = |_: &Path| true;
-        let sensitive = |_: &Path| false;
-        let spelled = |path: &str, folds: &dyn Fn(&Path) -> bool| {
-            loader_path(Path::new(path), &user, &workspaces, &folds)
+        let workspaces = vec![PathBuf::from("/w"), PathBuf::from("/2026")];
+        let aliases = |_: &Path, _: &Path| true;
+        let distinct = |_: &Path, _: &Path| false;
+        let spelled = |path: &str, same: &dyn Fn(&Path, &Path) -> bool| {
+            loader_path(Path::new(path), &user, &workspaces, &same)
         };
-        for (actual, loader) in [
+        for (actual, loader, owner) in [
             (
                 "/w/.agents/Skills/guide/SKILL.md",
                 "/w/.agents/skills/guide/SKILL.md",
+                "/w",
             ),
-            ("/w/.agents/Skills", "/w/.agents/skills"),
-            ("/w/.agents/MCP.toml", "/w/.agents/mcp.toml"),
-            ("/w/.agents/claude.md", "/w/.agents/CLAUDE.md"),
-            ("/w/RustX.toml", "/w/rustx.toml"),
             (
-                "/home/u/rustx/.agents/Workflows/a.yaml",
+                "/w/.Agents/skills/guide/SKILL.md",
+                "/w/.agents/skills/guide/SKILL.md",
+                "/w",
+            ),
+            ("/w/.AGENTS/Skills", "/w/.agents/skills", "/w"),
+            ("/w/.Agents", "/w/.agents", "/w"),
+            ("/w/.agents/MCP.toml", "/w/.agents/mcp.toml", "/w"),
+            ("/w/.agents/claude.md", "/w/.agents/CLAUDE.md", "/w"),
+            ("/w/RustX.toml", "/w/rustx.toml", "/w"),
+            ("/2026/RustX.toml", "/2026/rustx.toml", "/2026"),
+            (
+                "/2026/.Agents/tools/t.toml",
+                "/2026/.agents/tools/t.toml",
+                "/2026",
+            ),
+        ] {
+            let path = spelled(actual, &aliases);
+            assert_eq!(path, Path::new(loader));
+            assert_eq!(
+                route(&path, &user, &workspaces),
+                Some(SourceTarget::Workspace {
+                    directory: owner.into()
+                }),
+                "{actual}"
+            );
+            let path = spelled(actual, &distinct);
+            assert_eq!(path, Path::new(actual));
+            assert_eq!(route(&path, &user, &workspaces), None, "{actual}");
+        }
+        for (actual, loader) in [
+            (
+                "/home/u/rustx/.Agents/Workflows/a.yaml",
                 "/home/u/rustx/.agents/workflows/a.yaml",
             ),
             ("/home/u/config/RUSTX.toml", "/home/u/config/rustx.toml"),
         ] {
-            let path = spelled(actual, &folding);
+            let path = spelled(actual, &aliases);
             assert_eq!(path, Path::new(loader));
-            assert!(route(&path, &user, &workspaces).is_some(), "{actual}");
-            let path = spelled(actual, &sensitive);
-            assert_eq!(path, Path::new(actual));
-            assert_eq!(route(&path, &user, &workspaces), None, "{actual}");
+            assert_eq!(route(&path, &user, &workspaces), Some(SourceTarget::User));
+            assert_eq!(route(&spelled(actual, &distinct), &user, &workspaces), None);
         }
-        assert_eq!(
-            route(
-                &spelled("/w/.agents/Skills/x/SKILL.md", &folding),
-                &user,
-                &workspaces
-            ),
-            workspace
-        );
         // Uploads stay unrouted in any case.
         assert_eq!(
             route(
-                &spelled("/w/.agents/Uploads/s/AGENTS.md", &folding),
+                &spelled("/w/.Agents/Uploads/s/AGENTS.md", &aliases),
                 &user,
                 &workspaces
             ),
             None
         );
         // The exact spelling wins where both exist.
-        assert_eq!(spelled("/w/AGENTS.MD", &folding), Path::new("/w/AGENTS.MD"));
-        let mut active =
-            BTreeMap::from([(PathBuf::from("/w/.agents/skills"), RecursiveMode::Recursive)]);
-        invalidate(&mut active, &spelled("/w/.agents/Skills", &folding));
-        assert!(
-            active.is_empty(),
-            "a replaced case-variant directory is re-registered"
-        );
+        assert_eq!(spelled("/w/AGENTS.MD", &aliases), Path::new("/w/AGENTS.MD"));
+        // A replaced case-variant directory re-registers the watches beneath
+        // the loaders' spelling.
+        let mut active = BTreeMap::from([
+            (PathBuf::from("/w"), RecursiveMode::NonRecursive),
+            (PathBuf::from("/w/.agents"), RecursiveMode::NonRecursive),
+            (PathBuf::from("/w/.agents/skills"), RecursiveMode::Recursive),
+        ]);
+        invalidate(&mut active, &spelled("/w/.agents/Skills", &aliases));
+        assert_eq!(active.len(), 2);
+        invalidate(&mut active, &spelled("/w/.Agents", &aliases));
+        assert_eq!(active.keys().collect::<Vec<_>>(), [Path::new("/w")]);
     }
 
+    /// On a verified case-sensitive volume, a case variant that exists apart
+    /// from the loaders' spelling, or without it, is another entry and stays
+    /// unrouted; a variant gone together with the loaders' spelling is the
+    /// removed source.
+    #[cfg(target_os = "linux")]
     #[test]
-    fn a_case_sensitive_volume_does_not_fold_case() {
+    fn distinct_case_variants_are_not_the_entry_the_loaders_open() {
         let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join(".agents");
-        std::fs::create_dir_all(&root).unwrap();
-        assert!(!folds_case(&root));
+        let workspace = directory.path().join("w");
+        std::fs::create_dir_all(workspace.join(".agents/skills/x")).unwrap();
+        assert_eq!(
+            std::fs::symlink_metadata(workspace.join(".AGENTS"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound,
+            "this test needs a case-sensitive volume"
+        );
+        std::fs::create_dir_all(workspace.join(".Agents/skills/x")).unwrap();
+        std::fs::create_dir_all(workspace.join(".agents/Skills/x")).unwrap();
+        std::fs::write(workspace.join("RustX.toml"), b"").unwrap();
+        let user = roots(directory.path());
+        let workspaces = vec![workspace.clone()];
+        for actual in [
+            ".Agents/skills/x/SKILL.md",
+            ".agents/Skills/x/SKILL.md",
+            "RustX.toml",
+        ] {
+            let actual = workspace.join(actual);
+            let path = loader_path(&actual, &user, &workspaces, &same_entry);
+            assert_eq!(path, actual);
+            assert_eq!(route(&path, &user, &workspaces), None, "{actual:?}");
+        }
+        assert_eq!(
+            loader_path(
+                &workspace.join(".agents/Tools"),
+                &user,
+                &workspaces,
+                &same_entry
+            ),
+            workspace.join(".agents/tools")
+        );
     }
 
     #[test]
@@ -690,28 +744,65 @@ mod tests {
 mod case_insensitive_tests {
     use super::*;
 
-    /// On a case-insensitive volume a notification for `.agents/Skills`,
-    /// which the loaders read through `.agents/skills`, routes to its
-    /// Workspace.
+    /// On a case-insensitive volume each source the loaders read through
+    /// their fixed spelling — under `.agents/Skills`, under a `.Agents` root,
+    /// and a `RustX.toml` in a Workspace whose name has no letters — routes to
+    /// its Workspace when notified under its own spelling; a renamed-away
+    /// root invalidates the watches beneath the loaders' spelling.
     #[test]
     fn a_case_variant_the_loaders_read_routes_to_its_workspace() {
         let volume = crate::local_runtime::case_insensitive_volume::CaseInsensitiveVolume::new();
-        let workspace = volume.path().join("w");
-        let skill = workspace.join(".agents/Skills/guide/SKILL.md");
-        std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
-        std::fs::write(&skill, b"guide").unwrap();
-        assert!(folds_case(&workspace.join(".agents")));
+        let entry = volume.path().join("entry");
+        let root = volume.path().join("root");
+        let digits = volume.path().join("2026");
+        let files = [
+            (
+                entry.join(".agents/Skills/guide/SKILL.md"),
+                entry.join(".agents/skills/guide/SKILL.md"),
+                &entry,
+            ),
+            (
+                root.join(".Agents/skills/guide/SKILL.md"),
+                root.join(".agents/skills/guide/SKILL.md"),
+                &root,
+            ),
+            (
+                digits.join("RustX.toml"),
+                digits.join("rustx.toml"),
+                &digits,
+            ),
+        ];
         let user = UserSourceRoots {
             document: volume.path().join("config/rustx.toml"),
             resources: volume.path().join("rustx/.agents"),
         };
-        let workspaces = vec![workspace.clone()];
-        let path = loader_path(&skill, &user, &workspaces, &folds_case);
-        assert_eq!(
-            route(&path, &user, &workspaces),
-            Some(SourceTarget::Workspace {
-                directory: workspace
-            })
+        let workspaces = vec![entry.clone(), root.clone(), digits.clone()];
+        for (actual, loader, workspace) in &files {
+            std::fs::create_dir_all(actual.parent().unwrap()).unwrap();
+            std::fs::write(actual, b"source").unwrap();
+            assert_eq!(
+                std::fs::read(loader).unwrap(),
+                b"source",
+                "the loaders read {actual:?}"
+            );
+            let path = loader_path(actual, &user, &workspaces, &same_entry);
+            assert_eq!(&path, loader);
+            assert_eq!(
+                route(&path, &user, &workspaces),
+                Some(SourceTarget::Workspace {
+                    directory: (*workspace).clone()
+                })
+            );
+        }
+        std::fs::rename(root.join(".Agents"), root.join("old")).unwrap();
+        let mut active = BTreeMap::from([
+            (root.join(".agents"), RecursiveMode::NonRecursive),
+            (root.join(".agents/skills"), RecursiveMode::Recursive),
+        ]);
+        invalidate(
+            &mut active,
+            &loader_path(&root.join(".Agents"), &user, &workspaces, &same_entry),
         );
+        assert!(active.is_empty());
     }
 }

@@ -2221,8 +2221,8 @@ async fn a_rescan_recaptures_sources_whose_notifications_were_lost() {
 }
 
 /// On a case-folding volume a notification names a source in the case it
-/// was created in, not the fixed name the loaders open: an ordinary edit of
-/// `.agents/Skills/guide/SKILL.md`, the only notification, still commits the
+/// was created in, not the fixed names the loaders open: an ordinary edit of
+/// `.Agents/Skills/guide/SKILL.md`, the only notification, still commits the
 /// new Skill version with exactly one fact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_case_variant_notification_commits_the_source_the_loaders_read() {
@@ -2265,7 +2265,7 @@ async fn a_case_variant_notification_commits_the_source_the_loaders_read() {
             .0
             .lock()
             .unwrap()
-            .source_watch_folds_case = true;
+            .source_watch_case_aliases = true;
         let captured = fixture
             .manager
             .registry
@@ -2279,7 +2279,7 @@ async fn a_case_variant_notification_commits_the_source_the_loaders_read() {
         let observe = async {
             let edit =
                 notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
-                    .add_path(agents.join("Skills/guide/SKILL.md"));
+                    .add_path(fixture.workspaces[0].join(".Agents/Skills/guide/SKILL.md"));
             while !fixture.manager.notify_source_watch(edit.clone()) {
                 tokio::task::yield_now().await;
             }
