@@ -2,20 +2,24 @@ import { test, expect } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
+import { translator } from '../../src/locale/translation';
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 for (const width of [1440, 390])
-  for (const theme of ['light', 'dark']) {
-    test(`workflow trace expands real paged node visits ${width} ${theme}`, async ({ page }) => {
+  for (const theme of ['light', 'dark'])
+  for (const locale of ['en', 'zh'] as const) {
+    test(`workflow trace expands real paged node visits ${width} ${theme} ${locale}`, async ({ page }) => {
+      const tx = translator(locale);
       const errors: string[] = [];
       page.on('pageerror', (error) => errors.push(error.message));
       page.on('console', (message) => {
         if (['error', 'warning'].includes(message.type())) errors.push(message.text());
       });
       await page.setViewportSize({ width, height: 844 });
+      await page.addInitScript(locale => localStorage.setItem('rustx-locale-v1', locale), locale);
       await page.goto(`${origin}/test/fixtures/trajectory.html?workflows`);
       if (theme === 'dark') await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
       await expect(page).toHaveTitle('Trajectory presentation contracts');
-      const ledger = page.getByRole('table', { name: 'Trace ledger' });
+      const ledger = page.getByRole('table', { name: tx('trajectory:trajectory.trace-ledger') });
       const first = ledger.locator('[data-workflow-entry="trace:30"]');
       await expect(ledger.locator('[data-kind="workflow"]')).toHaveCount(3);
       await expect(ledger.locator('[data-trace-id="trace:20"]')).toHaveAttribute('data-kind', 'tool');
@@ -25,33 +29,57 @@ for (const width of [1440, 390])
       await first.press('ArrowRight');
       // 121 visits exceed both the native page size (32) and virtualization threshold (100).
       await expect(ledger).toHaveAttribute('aria-rowcount', '126');
-      await expect(ledger.locator('[data-workflow-node="node-0-0"]')).toBeVisible();
+      const start = ledger.locator('[data-workflow-node="node-0-0"]');
+      await expect(start).toBeVisible();
+      // The node kind and name belong inside the parent's branch, with the
+      // same output column as the parent, ordinary tools and sibling nodes.
+      const kind = start.getByText(tx('common:workflow.kind.start'), { exact: true });
+      const parentName = (await first.getByText('test_flow', { exact: true }).boundingBox())!;
+      const kindBox = (await kind.boundingBox())!;
+      const nameBox = (await start.getByText('start', { exact: true }).boundingBox())!;
+      expect(kindBox.x).toBeGreaterThan(parentName.x);
+      expect(nameBox.x).toBeGreaterThanOrEqual(kindBox.x + kindBox.width);
+      expect((await start.boundingBox())!.height).toBe(30);
+      await expect(start.locator('[role="cell"]').first()).toHaveText('');
+      await expect(start).not.toHaveAttribute('data-workflow-last');
+      const parentArrow = (await first.getByText('→', { exact: true }).boundingBox())!;
+      for (const row of [start, ledger.locator('[data-workflow-node="node-0-1"]')]) {
+        expect(Math.abs((await row.getByText('→', { exact: true }).boundingBox())!.x - parentArrow.x)).toBeLessThan(1);
+        const branch = await row.locator('[role="cell"]').nth(1).evaluate(el => {
+          const style = getComputedStyle(el, '::before');
+          return { left: style.left, border: style.borderLeftWidth, content: style.content };
+        });
+        expect(branch).toEqual({ left: '14px', border: '1px', content: '""' });
+      }
+      await first.evaluate(el => (el as HTMLElement).blur());
+      await page.screenshot({ path: `/tmp/rustx-workflow-hierarchy-${width}-${theme}-${locale}.png`,
+        clip: { x: 0, y: (await first.boundingBox())!.y, width, height: 240 } });
       await ledger.evaluate((el) => {
         el.scrollTop = el.scrollHeight;
         el.dispatchEvent(new Event('scroll'));
       });
       await expect(ledger.locator('[data-workflow-node="node-0-120"]')).toBeVisible();
+      await expect(ledger.locator('[data-workflow-node="node-0-120"]')).toHaveAttribute('data-workflow-last', 'true');
       await ledger.evaluate((el) => {
         el.scrollTop = 0;
         el.dispatchEvent(new Event('scroll'));
       });
-      const start = ledger.locator('[data-workflow-node="node-0-0"]');
       await start.click();
-      const details = page.getByRole('complementary', { name: 'Event details' });
+      const details = page.getByRole('complementary', { name: tx('trajectory:details.event') });
       await expect(details.getByRole('tabpanel')).toContainText('18446744073709551615');
-      await details.getByRole('tab', { name: 'Result', exact: true }).click();
+      await details.getByRole('tab', { name: tx('trajectory:tab.result'), exact: true }).click();
       await expect(details.getByRole('tabpanel')).toContainText('output-0');
-      await page.screenshot({ path: `/tmp/rustx-workflow-trajectory-${width}-${theme}.png` });
-      await details.getByRole('button', { name: 'Close details', exact: true }).click();
+      await page.screenshot({ path: `/tmp/rustx-workflow-trajectory-${width}-${theme}-${locale}.png` });
+      await details.getByRole('button', { name: tx('trajectory:details.close'), exact: true }).click();
       await first.focus();
       await first.press('ArrowLeft');
       await expect(ledger.locator('[data-workflow-node]')).toHaveCount(0);
       const cancelled = ledger.locator('[data-workflow-entry="trace:31"]');
-      await cancelled.getByRole('button', { name: 'Expand workflow nodes' }).click();
+      await cancelled.getByRole('button', { name: tx('trajectory:workflow.expand') }).click();
       await expect(ledger.locator('[data-workflow-node="node-1-1"]')).toHaveAttribute('data-state', 'cancelled');
-      await cancelled.getByRole('button', { name: 'Collapse workflow nodes' }).click();
+      await cancelled.getByRole('button', { name: tx('trajectory:workflow.collapse') }).click();
       const running = ledger.locator('[data-workflow-entry="trace:32"]');
-      await running.getByRole('button', { name: 'Expand workflow nodes' }).click();
+      await running.getByRole('button', { name: tx('trajectory:workflow.expand') }).click();
       await expect(ledger.locator('[data-workflow-node="node-2-1"]')).toHaveAttribute('data-state', 'waiting');
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await expect(page.locator('vite-error-overlay')).toHaveCount(0);
@@ -83,6 +111,9 @@ for (const width of [1440, 390])
       await workflow.getByRole('button', { name: 'Expand workflow nodes', exact: true }).click();
       await expect(ledger.locator('[data-workflow-node]')).toHaveCount(4);
       await expect(trajectory.getByRole('alert')).toHaveCount(0);
+      const parentBox = (await workflow.boundingBox())!, ledgerBox = (await ledger.boundingBox())!;
+      await page.screenshot({ path: `/tmp/rustx-workflow-hierarchy-native-${width}.png`,
+        clip: { x: ledgerBox.x, y: parentBox.y, width: ledgerBox.width, height: 180 } });
       const review = ledger.locator('[data-workflow-node]').filter({ has: page.getByText('review', { exact: true }) });
       await review.click();
       const detail = page.getByRole('complementary', { name: 'Event details' });

@@ -64,6 +64,7 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
       : turn?.label;
   return <div data-display-key={row.display_key} data-owner={item?.owner_record_id} data-trace-id={record?.id}
     data-workflow-node={node?.id} data-workflow-instance={node?.instance.node} data-workflow-entry={workflow?.id}
+    data-workflow-open={workflowOpen || undefined} data-workflow-last={row.workflowLast || undefined}
     data-display-type={row.kind === 'structure' ? 'StructuralSeat' : row.kind === 'marker' ? 'MarkerSeat' : summary ? (row.callsOwner ? 'CallsSummary' : 'TurnSummary') : item?.type}
     data-kind={item ? cellKind(item) : undefined} data-state={node ? node.state.type === 'settled' ? node.state.outcome : node.state.type : record?.state} data-attempt={turn?.attempt_id}
     data-error={error || undefined} data-running={running || undefined}
@@ -95,7 +96,7 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
         <span className={css.turnLabelFull} aria-hidden="true">{turn.label}</span>
         <span className={css.turnLabelCompact} aria-hidden="true">#{turn.ordinal}</span>
       </span>}
-      {row.kind === 'semantic' && item && <KindTag kind={cellKind(item)} label={node?.kind ? tx(`common:workflow.kind.${node.kind}`) : undefined} />}
+      {row.kind === 'semantic' && item && !node && <KindTag kind={cellKind(item)} />}
     </span>
     <div role="cell" className={css.content}>
       {workflow && <button type="button" className={css.workflowToggle} aria-expanded={workflowOpen} aria-label={tx(workflowOpen ? 'trajectory:workflow.collapse' : 'trajectory:workflow.expand')}

@@ -5240,3 +5240,17 @@ so neither may render a Ready for a task invitation while content arrives.
 This is native presentation cleanup; no decision, execution, attachment
 authorization or protocol changes and no additional dependencies. Affected
 source records/dependency edges are rehashed; upstream pins and notices remain.
+
+## Workflow Trace hierarchy
+
+The sibling Harness `TrajectoryTable.module.css` indents native `subtool`
+content under its parent. The rustX workflow extension now follows that
+hierarchy: node kind labels move out of the event gutter into indented content,
+with a disclosure-aligned branch guide and aligned input/output columns.
+The last loaded native node ends the guide explicitly, including when the
+ledger is virtualized. Native execution order, 30px row heights, selection,
+keyboard folding and bounded input/output inspection remain unchanged.
+Desktop/mobile light/dark browser checks cover English and Chinese, 121 paged
+visits, and real native workflow details. Browser plugin not available; checks
+use the repository's pinned Playwright container. No dependencies or native
+protocols change; affected source hashes are updated.

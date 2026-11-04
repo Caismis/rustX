@@ -32,11 +32,11 @@ export function withWorkflowNodes(rows: TrajectoryLedgerRow[], calls: ReadonlyMa
   return rows.flatMap(row => {
     const root = row.item && calls.get(row.item.owner_record_id);
     if (!root || !opened.has(root.id)) return [row];
-    return [row, ...(loaded.get(root.id)?.nodes ?? []).map(node => {
+    return [row, ...(loaded.get(root.id)?.nodes ?? []).map((node, index, nodes) => {
       const item: InspectableDisplayItem = { type: 'WorkflowNode', record: root, owner_record_id: root.id, parent_record_id: row.item!.owner_record_id,
         display_key: JSON.stringify(['workflow-node', root.id, node.id]), label: node.instance.node, preview: node.output_preview ?? '', facet: 'overview',
         workflowNode: node, workflowSource: loaded.get(root.id)! };
-      return { display_key: item.display_key, kind: 'semantic' as const, height: 30 as const, turn: row.turn, turnStart: false, item };
+      return { display_key: item.display_key, kind: 'semantic' as const, height: 30 as const, turn: row.turn, turnStart: false, workflowLast: index === nodes.length - 1, item };
     })];
   });
 }

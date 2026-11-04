@@ -120,10 +120,14 @@ export function CellContent({ item }: { item: InspectableDisplayItem }) {
   const record = item.record;
   if (item.type === 'WorkflowNode') {
     const node = item.workflowNode, path = [...node.instance.block.definition.blocks, ...node.instance.block.invocations.map(String), node.instance.node].join(' / ');
+    const kind = node.kind ? tx(`common:workflow.kind.${node.kind}`) : cellLabel(tx, 'workflow_node');
     return <span className={css.resultPreview} title={path}>
-      <span className={css.resultRequest}><span className={css.toolCallNameTypeface}>{node.instance.node}</span>
-        {node.instance.block.invocations.length > 0 && <span className={css.workflowPath}>[{node.instance.block.invocations.join('/')}]</span>}
-        <span className={css.toolCallPayload}>{node.input_preview ?? tx(node.input_omitted ? 'trajectory:workflow.body-omitted' : 'trajectory:workflow.input-not-recorded')}</span>
+      <span className={`${css.resultRequest} ${css.workflowNodeRequest}`}>
+        <span className={css.workflowNodeKind} title={kind}>{kind}</span>
+        <span className={css.workflowNodeInput}><span className={css.toolCallNameTypeface}>{node.instance.node}</span>
+          {node.instance.block.invocations.length > 0 && <span className={css.workflowPath}>[{node.instance.block.invocations.join('/')}]</span>}
+          <span className={css.toolCallPayload}>{node.input_preview ?? tx(node.input_omitted ? 'trajectory:workflow.body-omitted' : 'trajectory:workflow.input-not-recorded')}</span>
+        </span>
       </span>
       <span className={css.inlineResult}><span className={css.arrow}>→</span><span className={css.inlineResultText}>{node.output_preview ?? (node.state.type === 'settled' ? tx(node.output_omitted ? 'trajectory:workflow.body-omitted' : 'trajectory:workflow.output-not-recorded') : workflowStatus(node.state, tx))}</span></span>
     </span>;

@@ -795,7 +795,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "26970143dc47ff90ba0bef4b1e68e00cece02ecf4c798daec2b1e73eb96a964c",
+      "local_sha256": "83a629d2a9d944d87176e36ee31e3bad029aca9e95fd079a383fe8eb41f3873c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.module.css",
@@ -1078,7 +1078,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "55d4bf4e1f40b7a4dff5968422980903c3e8abdb50e3488fe8a5cc751e792d98",
+      "local_sha256": "9ebb171c526b7f042b655d8d811ea7e393b33a1117b2a3b6cd9944640eb59c43",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -3450,7 +3450,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "a8824feec852ecc2274973133215a11ed1d1727614e2a454d7f07beada8f9f70"
+      "local_sha256": "8125249ee938a7ea6a3331dd252155018e94b9503e83022fc6f43a49ec4ae79d"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -4206,7 +4206,7 @@
           "treatment": "Event-cell turn label (full/compact) and active-turn rail adapted onto native Turn/Step/Request controls."
         }
       ],
-      "local_sha256": "8e1e9e64947953df0848ee8cfaa03f412c5ae9364f98ee8439ba0e725a85645b"
+      "local_sha256": "649046b5ce324c5708279c03afb88711ca3a0323d051303e5796e9e986f290d8"
     },
     {
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",

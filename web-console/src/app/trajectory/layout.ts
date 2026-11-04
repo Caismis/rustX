@@ -310,6 +310,8 @@ export interface TrajectoryLedgerRow {
   summary?: string;
   /** The Assistant record whose folded Tool calls a summary row expands. */
   callsOwner?: string;
+  /** End the workflow's visual branch on its last loaded node, including virtual rows. */
+  workflowLast?: boolean;
 }
 
 export function ledgerRows(tx: Translate, projection: TrajectoryProjection, items: readonly TrajectoryDisplayItem[], folded: ReadonlySet<string>, searching: boolean): TrajectoryLedgerRow[] {

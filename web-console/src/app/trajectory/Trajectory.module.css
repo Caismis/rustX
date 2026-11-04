@@ -18,9 +18,50 @@
 .workflowToggle:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .workflowToggle[aria-expanded='true'] svg { transform: rotate(90deg); }
 .workflowToggle:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); }
-.record[data-workflow-node] .event { padding-left: 18px; }
+.record[data-workflow-entry] { --trajectory-request-inset: 24px; }
+.record[data-workflow-node] { --trajectory-request-inset: 28px; }
+.record[data-workflow-open] .content,
+.record[data-workflow-node] .content { position: relative; }
+.record[data-workflow-node] .content { padding-left: 32px; }
+
+/* Keep the branch anchored to the parent's disclosure, independently of the
+   event gutter and of which rows the virtualizer has mounted. */
+.record[data-workflow-open] .content::after,
+.record[data-workflow-node] .content::before,
+.record[data-workflow-node]:not([data-workflow-last]) .content::after {
+  position: absolute;
+  left: 14px;
+  box-sizing: border-box;
+  border-left: 1px solid var(--dsw-alias-border-l2);
+  content: '';
+  pointer-events: none;
+}
+.record[data-workflow-open] .content::after { top: 23px; bottom: 0; }
+.record[data-workflow-node] .content::before {
+  top: 0;
+  width: 12px;
+  height: 50%;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom-left-radius: 4px;
+}
+.record[data-workflow-node]:not([data-workflow-last]) .content::after { top: 50%; bottom: -1px; }
+.workflowNodeRequest { display: flex; align-items: center; gap: 8px; }
+.workflowNodeKind {
+  flex: none;
+  box-sizing: border-box;
+  width: 96px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-2);
+  font: 600 10px/17px var(--dsw-font-family);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflowNodeKind:where(:lang(zh)) { width: 60px; }
+.workflowNodeInput { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .workflowPath { margin-left: 6px; color: var(--dsw-alias-label-tertiary); }
-.kindTag[data-role-kind='workflow_node'] { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
 
 .root {
   display: flex;
@@ -637,11 +678,11 @@
 .resultPreview {
   display: grid;
   grid-template-columns:
-    clamp(
+    calc(clamp(
       180px,
       var(--trajectory-tool-request-width, calc(36cqw - 56px)),
       480px
-    )
+    ) - var(--trajectory-request-inset, 0px))
     minmax(0, 1fr);
   align-items: center;
   width: 100%;
@@ -696,6 +737,9 @@
 }
 
 @container trajectory-table (max-width: 620px) {
+  .workflowNodeKind,
+  .workflowNodeKind:where(:lang(zh)) { width: 64px; }
+
   .record,
   .record:lang(zh) {
     grid-template-columns: 50px minmax(0, 1fr);
