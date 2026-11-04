@@ -1,0 +1,35 @@
+{
+  "accepted": true,
+  "archives": [
+    {
+      "name": "ordinary-fixed.tar.xz",
+      "bytes": 27967976,
+      "sha256": "846ca5c08728bf12da20bac90b60be254512f23a1f5a4668040e108c9d90b387"
+    },
+    {
+      "name": "ordinary-rotating.tar.xz",
+      "bytes": 34063644,
+      "sha256": "e445d05c02790e69c91df5bb1e4d0a3a3bd27630189101bf4b54771bd0455c04"
+    },
+    {
+      "name": "diagnostics.tar.xz",
+      "bytes": 36079456,
+      "sha256": "194d088801e43f856ec78e0d77e581bd46d3e351953475de35ae7583af7aeeec"
+    }
+  ],
+  "verified_members": 10244,
+  "native_products_reparsed": 28,
+  "native_consistent_images": 2984,
+  "functional_products": 8,
+  "matching_full_http_pairs": 11,
+  "native_owner_cohorts": 3,
+  "heap_profiles": 24,
+  "tests": {
+    "ok": 4384,
+    "ignored": 9
+  },
+  "new_pi_deepseek_products": 0,
+  "tables_sha256": "7b1526e955cac2c722c2b3a70fe41c5fecff44f18280271377c50b913fd02877",
+  "tables_reproduced": true,
+  "scope": "Every archive/member authenticated. Reparsed native PID counters/full wire histories/SQLite integrity/FKs/cancellation, exact full provider bodies, cold/warm/Inspector/Source, functional live/reopen, source/check/build maps and target Serde features, shared-host observations, actual native owner/vector census and complete heap profile denominators, all summary/table arithmetic. Only archived Python audits run: no product/compiler/git/symbolizer/network. Excluded executable/library bytes use stored prearchive proofs, not a fresh offline verification."
+}
