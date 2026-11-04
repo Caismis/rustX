@@ -20,7 +20,8 @@ use crate::runtime::identity::{CapabilityRevision, RuntimeResourceRevision};
 use crate::runtime::subagent::catalog::{AgentCatalog, SubagentName};
 use crate::runtime::workflow::WorkflowCatalog;
 
-const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
+/// The guidance files one directory may contribute, in precedence order.
+pub(crate) const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
     "AGENTS.override.md",
     "AGENTS.md",
     "AGENTS.MD",

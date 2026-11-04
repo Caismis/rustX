@@ -11,9 +11,15 @@
 //! | Source | Watched |
 //! | --- | --- |
 //! | User document | its directory, non-recursively, for that one file |
-//! | User resources | `~/rustx/.agents` for `mcp.toml`, and its `agents`, `skills`, `tools` and `workflows`, recursively (the parent until it exists) |
-//! | Workspace document and root guidance | each known Workspace root, non-recursively, for `rustx.toml` and `*.md` |
+//! | User resources and guidance | `~/rustx/.agents` for `mcp.toml` and its guidance files, and its `agents`, `skills`, `tools` and `workflows`, recursively (the parent until it exists) |
+//! | Workspace document and root guidance | each known Workspace root, non-recursively, for `rustx.toml`, the guidance files and `*.md` |
 //! | Workspace resources | each known Workspace's `.agents`, as for the User |
+//!
+//! The guidance files are exactly the loader's (`AGENTS.override.md`,
+//! `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`). A notification for a
+//! watched directory (or an ancestor) may mean it was removed or replaced at
+//! the same path, so its watches are registered again; only a watch that
+//! actually registered counts as active.
 //!
 //! Anything else under `.agents` — Session uploads in particular — is not a
 //! configuration source and is neither watched nor routed.
@@ -33,15 +39,25 @@ use crate::local_runtime::configuration::settings::SourceTarget;
 /// The entries of a resource root (`.agents`) that configuration reads.
 const RESOURCE_ENTRIES: [&str; 5] = ["agents", "mcp.toml", "skills", "tools", "workflows"];
 
-/// Whether `path` is `root` itself or lies under one of its source entries.
+/// Whether `path` is `root` itself, one of its guidance files, or lies under
+/// one of its source entries.
 fn is_resource(path: &Path, root: &Path) -> bool {
     path.strip_prefix(root).is_ok_and(|relative| {
-        relative.components().next().is_none_or(|entry| {
+        let mut components = relative.components();
+        components.next().is_none_or(|entry| {
             RESOURCE_ENTRIES
                 .iter()
                 .any(|name| entry.as_os_str() == *name)
+                || (components.next().is_none() && is_guidance(entry.as_os_str()))
         })
     })
+}
+
+/// Whether `name` is one of the guidance files the loader reads.
+fn is_guidance(name: &std::ffi::OsStr) -> bool {
+    crate::runtime::resources::PROJECT_CONTEXT_FILENAMES
+        .iter()
+        .any(|guidance| name == *guidance)
 }
 
 /// The watches of one existing resource root: the root itself, for its
@@ -78,13 +94,22 @@ pub(super) fn route(
         .filter(|workspace| {
             is_resource(path, &workspace.join(".agents"))
                 || (path.parent() == Some(workspace.as_path())
-                    && (path.file_name().is_some_and(|name| name == "rustx.toml")
+                    && (path
+                        .file_name()
+                        .is_some_and(|name| name == "rustx.toml" || is_guidance(name))
                         || path.extension().is_some_and(|extension| extension == "md")))
         })
         .max_by_key(|workspace| workspace.as_os_str().len())
         .map(|workspace| SourceTarget::Workspace {
             directory: workspace.clone(),
         })
+}
+
+/// A notification at `path` may mean that directory was removed or replaced
+/// in place, which silently ends the platform watches at or below it: those
+/// are registered again on the next pass.
+fn invalidate(active: &mut BTreeMap<PathBuf, RecursiveMode>, path: &Path) {
+    active.retain(|watched, _| !watched.starts_with(path));
 }
 
 /// The exact watch set for these roots: existing directories only.
@@ -161,19 +186,22 @@ impl SessionRuntimeManager {
             let user = self.user_source_roots();
             let workspaces = self.known_workspaces();
             let desired = desired(&user, &workspaces);
-            for path in active
-                .keys()
-                .filter(|path| !desired.contains_key(path.as_path()))
-            {
-                let _ = watcher.unwatch(path);
-            }
+            active.retain(|path, _| {
+                let retained = desired.contains_key(path);
+                if !retained {
+                    let _ = watcher.unwatch(path);
+                }
+                retained
+            });
             for (path, mode) in &desired {
                 if active.get(path) != Some(mode) {
                     let _ = watcher.unwatch(path);
-                    let _ = watcher.watch(path, *mode);
+                    active.remove(path);
+                    if watcher.watch(path, *mode).is_ok() {
+                        active.insert(path.clone(), *mode);
+                    }
                 }
             }
-            active = desired;
             tokio::select! {
                 () = stop.cancelled() => return Ok(()),
                 result = changes.changed() => if result.is_err() { return Ok(()) },
@@ -183,6 +211,7 @@ impl SessionRuntimeManager {
                     let mut targets = Vec::new();
                     let mut next = Some(path);
                     while let Some(path) = next {
+                        invalidate(&mut active, &path);
                         if let Some(target) = route(&path, &user, &workspaces)
                             && !targets.contains(&target)
                         {
@@ -271,6 +300,29 @@ mod tests {
             route(&home.join("rustx/.agents"), &user, &workspaces),
             Some(SourceTarget::User)
         );
+        // Every guidance file the loader reads, at either root.
+        for name in ["AGENTS.override.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"] {
+            assert_eq!(
+                route(&Path::new("/work/a").join(name), &user, &workspaces),
+                workspace("/work/a")
+            );
+            assert_eq!(
+                route(&home.join("rustx/.agents").join(name), &user, &workspaces),
+                Some(SourceTarget::User)
+            );
+        }
+        assert_eq!(
+            route(&home.join("rustx/.agents/notes.md"), &user, &workspaces),
+            None
+        );
+        assert_eq!(
+            route(
+                &home.join("rustx/.agents/uploads/AGENTS.md"),
+                &user,
+                &workspaces
+            ),
+            None
+        );
         // Ordinary project files never reach configuration.
         assert_eq!(
             route(Path::new("/work/a/src/main.rs"), &user, &workspaces),
@@ -284,6 +336,23 @@ mod tests {
             route(Path::new("/elsewhere/rustx.toml"), &user, &workspaces),
             None
         );
+    }
+
+    #[test]
+    fn a_notification_reregisters_the_watches_at_or_below_it() {
+        let mut active = BTreeMap::from([
+            (PathBuf::from("/w"), RecursiveMode::NonRecursive),
+            (PathBuf::from("/w/.agents"), RecursiveMode::NonRecursive),
+            (PathBuf::from("/w/.agents/skills"), RecursiveMode::Recursive),
+            (PathBuf::from("/w/.agents/tools"), RecursiveMode::Recursive),
+        ]);
+        invalidate(&mut active, Path::new("/w/.agents/skills/a/SKILL.md"));
+        assert_eq!(active.len(), 4, "a file edit replaces no watch");
+        invalidate(&mut active, Path::new("/w/.agents/skills"));
+        assert!(!active.contains_key(Path::new("/w/.agents/skills")));
+        assert!(active.contains_key(Path::new("/w/.agents/tools")));
+        invalidate(&mut active, Path::new("/w/.agents"));
+        assert_eq!(active.keys().collect::<Vec<_>>(), [Path::new("/w")]);
     }
 
     #[test]

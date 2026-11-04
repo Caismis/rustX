@@ -2344,3 +2344,57 @@ async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
         mcp.close().await;
     }
 }
+
+/// Moving a source to another server that offers byte-identical Tool
+/// declarations replaces the Tool implementation: the commit records those
+/// Tools as `changed`, never as no change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn implementation_only_tool_change_records_one_changed_fact() {
+    bounded(async {
+        let first = McpFixture::start().await;
+        let second = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("moved", &first)]);
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        fixture.manager.load(&session.id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let declarations = runtime
+            .runtime_resources()
+            .capability()
+            .tool_registry()
+            .model_definitions();
+        std::fs::write(
+            fixture.workspaces[0].join(".agents/mcp.toml"),
+            format!("[mcp_servers.moved]\nurl = {:?}\n", second.endpoint),
+        )
+        .unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: fixture.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
+        applied(&fixture, 0).await;
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .capability()
+                .tool_registry()
+                .model_definitions(),
+            declarations,
+            "the model-visible declarations are unchanged"
+        );
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert!(changes[0].tools.added.is_empty() && changes[0].tools.removed.is_empty());
+        assert_eq!(changes[0].tools.changed.total, 1, "{changes:?}");
+        fixture.close().await;
+        first.close().await;
+        second.close().await;
+    })
+    .await;
+}

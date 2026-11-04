@@ -6,6 +6,27 @@
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
 
+fn system_prompt(runtime: &crate::runtime::ConversationRuntime) -> String {
+    let resources = runtime.runtime_resources();
+    resources
+        .context_assembly()
+        .system_sections(&resources.native_system_input())
+        .map(|sections| crate::context::render_effective_system_prompt(&sections))
+        .unwrap()
+}
+
+async fn select_all_skills(fixture: &Fixture) {
+    write(
+        fixture,
+        0,
+        ConfigMutation::Skills {
+            authored: Some(crate::runtime::agent_profile::AgentSkillSelection::All),
+        },
+    )
+    .await;
+    applied(fixture, 0).await;
+}
+
 fn instructions(runtime: &crate::runtime::ConversationRuntime) -> String {
     runtime
         .runtime_resources()
@@ -162,6 +183,18 @@ async fn t04_every_resident_session_commits_and_t09_policy_and_healthy_rescan_ar
                 .unwrap()
                 .approval_mode,
             crate::runtime::ApprovalMode::FullAccess
+        );
+        // The independently published policy unit records its own fact,
+        // without rebinding the Session.
+        let changes = configuration_changes(runtime);
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        assert_eq!(
+            changes[1].domains,
+            [crate::runtime::configuration_commit::ConfigurationDomain::ApprovalMode]
+        );
+        assert_eq!(
+            changes[1].previous_binding_revision,
+            changes[1].binding_revision
         );
     }
     let revision = runtimes[1].runtime_resources().revision();
@@ -496,6 +529,216 @@ async fn t11_ready_candidate_commits_before_racing_independent_admission() {
     .await;
 }
 
+/// A complete capability candidate whose commit finds the native capability
+/// boundary held stays staged and holds back the accepted input's admission:
+/// once the boundary is released the worker commits it and resumes exactly that
+/// admission, with no further message, and the Attempt captures the successor.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn busy_capability_commit_defers_admission_until_the_boundary_releases() {
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(Some("read"), 1).await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let probe = fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id);
+        probe.before_configuration_publish.arm();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Todo {
+                authored: Some(crate::extensions::TodoExtensionDocument { enabled: true }),
+            },
+        )
+        .await;
+        probe.before_configuration_publish.entered().await;
+        // The input is accepted and its admission parked before the lock.
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let admission = gate.arm_scoped();
+        runtime.install_configuration_admission_gate(gate.clone());
+        runtime.submit_inbound(input("request-A")).unwrap();
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        // A concurrent lifecycle commit holds the capability boundary while
+        // the complete candidate is staged.
+        let (release, held) = std::sync::mpsc::channel();
+        runtime.lifecycle_for_test().hold_commit_boundary(held);
+        probe.before_configuration_publish.release();
+        let staged = settled(&fixture, 0).await;
+        assert_eq!(
+            staged.units[&ApplyUnit::Capabilities],
+            UnitApplication::Ready,
+            "{staged:?}"
+        );
+        assert!(runtime.has_staged_configuration());
+        drop(admission);
+        while !runtime.configuration_admission_deferred() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(!runtime.has_current_attempt());
+        assert!(fixture.provider.request_bodies().is_empty());
+        release.send(()).unwrap();
+        fixture.gates[0].wait_entered().await;
+        let committed = applied(&fixture, 0).await;
+        assert_eq!(
+            committed.units[&ApplyUnit::Capabilities],
+            UnitApplication::Applied
+        );
+        let requests = fixture.provider.request_bodies();
+        assert_eq!(requests.len(), 1, "admitted exactly once");
+        let request: serde_json::Value = serde_json::from_str(&requests[0]).unwrap();
+        assert!(
+            request["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["function"]["name"] == "todo"),
+            "the deferred Attempt captured the committed successor"
+        );
+        assert_eq!(configuration_changes(&runtime).len(), 1);
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        fixture.gates[0].release();
+        settlement.wait().await;
+        fixture.close().await;
+    }))
+    .await;
+}
+
+/// A runtime that drained itself in place (a failed physical reclamation)
+/// while still resident can commit nothing: its application defers to the next
+/// allocation instead of preparing again forever, and every other Session
+/// still commits the same save.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_runtime_closed_in_place_defers_its_application_and_others_still_commit() {
+    bounded(async {
+        let fixture = Fixture::new().await;
+        for session in &fixture.sessions {
+            fixture.manager.load(&session.id, None).await.unwrap();
+        }
+        let id = fixture.sessions[0].id.clone();
+        let closed = fixture.manager.configuration_runtime(&id).unwrap();
+        let live = fixture
+            .manager
+            .configuration_runtime(&fixture.sessions[1].id)
+            .unwrap();
+        let probe = fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id);
+        closed.fail_residency_settlement();
+        assert_ne!(
+            closed.lifecycle_state(),
+            crate::runtime::ConversationLifecycleState::Running
+        );
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("after close".into()),
+            },
+        )
+        .await;
+        applied(&fixture, 1).await;
+        assert_eq!(instructions(&live), "after close");
+        let mut changed = fixture.manager.configuration_changes();
+        while !fixture.manager.applications.is_deferred(id.as_ref()) {
+            changed.changed().await.unwrap();
+        }
+        let desired = fixture
+            .manager
+            .configuration_application(&id)
+            .unwrap()
+            .desired;
+        let preparations = probe
+            .configuration_preparations
+            .load(std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .desired,
+            desired,
+            "no new application identity"
+        );
+        assert_eq!(
+            probe
+                .configuration_preparations
+                .load(std::sync::atomic::Ordering::SeqCst),
+            preparations,
+            "no further preparation"
+        );
+        assert!(configuration_changes(&closed).is_empty());
+        let _ = fixture.manager.drain_all_runtimes().await;
+    })
+    .await;
+}
+
+/// A client attaching to the runtime that already holds a Ready candidate
+/// changes nothing: the candidate is neither discarded nor prepared again, and
+/// it commits once, as a Source change, at the next safe boundary.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reattaching_the_same_runtime_keeps_its_ready_candidate() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let probe = fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id);
+        runtime.submit_inbound(input("request-A")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("kept across attach".into()),
+            },
+        )
+        .await;
+        let staged = settled(&fixture, 0).await;
+        assert_eq!(
+            staged.units[&ApplyUnit::Instructions],
+            UnitApplication::Ready
+        );
+        let preparations = probe
+            .configuration_preparations
+            .load(std::sync::atomic::Ordering::SeqCst);
+        fixture.manager.load(&id, None).await.unwrap();
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .desired,
+            staged.desired
+        );
+        assert!(runtime.has_staged_configuration());
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        fixture.gates[0].release();
+        settlement.wait().await;
+        applied(&fixture, 0).await;
+        assert_eq!(instructions(&runtime), "kept across attach");
+        assert_eq!(
+            probe
+                .configuration_preparations
+                .load(std::sync::atomic::Ordering::SeqCst),
+            preparations
+        );
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert_eq!(
+            changes[0].reason,
+            crate::runtime::configuration_commit::ConfigurationChangeReason::Source
+        );
+        fixture.close().await;
+    })
+    .await;
+}
+
 /// A background executor that signals its start, parks until released, and
 /// then completes successfully; cancellation still wins while parked.
 pub(super) struct GatedBackgroundExecutor {
@@ -783,6 +1026,214 @@ async fn external_workspace_edit_commits_through_the_bounded_source_watch() {
                 .contains(&crate::runtime::configuration_commit::ConfigurationDomain::Instructions)
         );
         fixture.close().await;
+    })
+    .await;
+}
+
+/// Editing only a selected Skill's body keeps its catalog entry byte-identical
+/// but replaces its content version: the commit records it as `changed`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn body_only_skill_edit_records_one_changed_fact() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let skill = fixture.workspaces[0].join(".agents/skills/guide");
+        std::fs::create_dir_all(&skill).unwrap();
+        let frontmatter = "---\nname: guide\ndescription: Project guide\n---\n";
+        std::fs::write(skill.join("SKILL.md"), format!("{frontmatter}first body\n")).unwrap();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        select_all_skills(&fixture).await;
+        let before = configuration_changes(&runtime).len();
+        let entries = runtime
+            .runtime_resources()
+            .capability()
+            .model_skill_entries()
+            .to_vec();
+        assert!(
+            entries.iter().any(|entry| entry.name == "guide"),
+            "{entries:?}"
+        );
+        std::fs::write(
+            skill.join("SKILL.md"),
+            format!("{frontmatter}second body\n"),
+        )
+        .unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: fixture.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
+        applied(&fixture, 0).await;
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .capability()
+                .model_skill_entries(),
+            entries.as_slice()
+        );
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), before + 1, "{changes:?}");
+        assert_eq!(changes[before].skills.changed.names, ["guide"]);
+        assert!(
+            changes[before].skills.added.is_empty() && changes[before].skills.removed.is_empty()
+        );
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// Every guidance file the loader reads is watched: an external edit of the
+/// User `AGENTS.md` and of a Workspace `AGENTS.MD` each commits on its own,
+/// with no save, rescan or second edit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn external_guidance_edits_commit_through_the_source_watch() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let user = fixture
+            .manager
+            .configuration
+            .sources
+            .home_directory
+            .join("rustx/.agents");
+        std::fs::create_dir_all(&user).unwrap();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let edit = async {
+            let mut changed = fixture.manager.configuration_changes();
+            std::fs::write(user.join("AGENTS.md"), "user guidance from an editor").unwrap();
+            while !system_prompt(&runtime).contains("user guidance from an editor") {
+                changed.changed().await.unwrap();
+            }
+            std::fs::write(
+                fixture.workspaces[0].join("AGENTS.MD"),
+                "workspace guidance from an editor",
+            )
+            .unwrap();
+            while !system_prompt(&runtime).contains("workspace guidance from an editor") {
+                changed.changed().await.unwrap();
+            }
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), edit);
+        watched.unwrap();
+        assert_eq!(configuration_changes(&runtime).len(), 2);
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// Replacing a watched Skill directory at the same path re-registers its
+/// watch: a later edit inside the replacement still commits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replaced_skill_directory_keeps_feeding_the_source_watch() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let agents = fixture.workspaces[0].join(".agents");
+        let skill = |root: &std::path::Path, name: &str, body: &str| {
+            let directory = root.join(name);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: Guide {name}\n---\n{body}\n"),
+            )
+            .unwrap();
+        };
+        skill(&agents.join("skills"), "first", "first body");
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        select_all_skills(&fixture).await;
+        let skills = |runtime: &crate::runtime::ConversationRuntime| {
+            runtime
+                .runtime_resources()
+                .capability()
+                .model_skill_entries()
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(skills(&runtime), ["first"]);
+        let stop = tokio_util::sync::CancellationToken::new();
+        let edit = async {
+            let mut changed = fixture.manager.configuration_changes();
+            skill(&agents.join("skills-next"), "second", "one");
+            std::fs::rename(agents.join("skills"), agents.join("skills-old")).unwrap();
+            std::fs::rename(agents.join("skills-next"), agents.join("skills")).unwrap();
+            while skills(&runtime) != ["second"] {
+                changed.changed().await.unwrap();
+            }
+            skill(&agents.join("skills"), "second", "two");
+            while configuration_changes(&runtime)
+                .last()
+                .is_none_or(|change| change.skills.changed.names != ["second"])
+            {
+                changed.changed().await.unwrap();
+            }
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), edit);
+        watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// A commit whose change fact cannot be recorded is uncertain: the generation
+/// is already published, nothing is recorded, admission is fenced by the
+/// absorbing durability failure, and nothing is applied again or reported as
+/// the previous configuration kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unrecorded_live_commit_is_uncertain_and_fences_admission() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        runtime.fail_next_configuration_record();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("published, not recorded".into()),
+            },
+        )
+        .await;
+        let view = applied(&fixture, 0).await;
+        assert!(
+            matches!(
+                &view.units[&ApplyUnit::Instructions],
+                UnitApplication::Uncertain { diagnostic } if diagnostic.contains("fault injected")
+            ),
+            "{view:?}"
+        );
+        assert_eq!(instructions(&runtime), "published, not recorded");
+        assert!(configuration_changes(&runtime).is_empty());
+        assert!(runtime.durability_failure().is_some());
+        let desired = view.desired.clone();
+        runtime.submit_inbound(input("request-A")).ok();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(!runtime.has_current_attempt());
+        assert!(
+            fixture.provider.request_bodies().is_empty(),
+            "admission is fenced"
+        );
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .desired,
+            desired,
+            "the uncertain commit is never applied again"
+        );
+        let _ = fixture.manager.drain_all_runtimes().await;
     })
     .await;
 }
