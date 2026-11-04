@@ -347,7 +347,8 @@ fn count_conversation_store_open() {
 /// Version 87 removes redundant trailing sequence keys from rowid event indexes.
 /// Version 90 stores independent statistical contributions with sparse checkpoints.
 /// Version 91 binds shared Request Source preparation to frozen native configuration.
-pub const SQLITE_SCHEMA_VERSION: i64 = 94;
+/// Version 95 stores one fact-bound complete Statistics record per relevant event.
+pub const SQLITE_SCHEMA_VERSION: i64 = 95;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -8919,8 +8920,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 observation_members BLOB CHECK(observation_members IS NULL OR length(observation_members)<=49152),
                 event_timestamp TEXT NOT NULL,
                 observation_member_anchor INTEGER,
-                observation_statistics BLOB CHECK(observation_statistics IS NULL OR length(observation_statistics)<=49152),
-                observation_statistics_checkpoint BLOB CHECK(observation_statistics_checkpoint IS NULL OR (typeof(observation_statistics_checkpoint)='blob' AND length(observation_statistics_checkpoint)<=49152)),
+                observation_statistics BLOB CHECK(observation_statistics IS NULL OR length(observation_statistics)<=98340),
                 observation_occupancy BLOB CHECK(observation_occupancy IS NULL OR length(observation_occupancy)<=16384),
                 observation_readiness_missing INTEGER NOT NULL DEFAULT 1 CHECK(observation_readiness_missing IN (0,1)),
                 observation_statistics_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_statistics_required IN (0,1)),
@@ -9534,7 +9534,6 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "observation_kind",
                 "observation_occupancy",
                 "observation_statistics_required",
-                "observation_statistics_checkpoint",
                 "observation_members_required",
                 "observation_member_anchor",
                 "sequence",
@@ -19848,7 +19847,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 94);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 95);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19917,7 +19916,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 94);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 95);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

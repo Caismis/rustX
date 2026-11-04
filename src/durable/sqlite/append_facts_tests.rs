@@ -286,9 +286,12 @@ fn append_statistics_reads_current_contributions_and_keeps_actual_cut_and_hole_c
     let connection=store.lock().unwrap();
     let expected=observation_statistics::read(&connection,1).unwrap();assert_eq!(expected.turns,1);
     let bytes:Vec<u8>=connection.query_row("SELECT observation_statistics FROM events WHERE sequence=1",[],|row|row.get(0)).unwrap();
-    let mut changed:serde_json::Value=observation_codec::decode(&bytes).unwrap();changed[3][0]=serde_json::json!(255);
+    let (fact,state)=observation_statistics::stored_parts(1,&bytes).unwrap();
+    let mut changed:serde_json::Value=observation_codec::decode(fact).unwrap();changed[1][0]=serde_json::json!(255);
+    let fact=observation_codec::encode_admitted(&changed).unwrap();
+    let mut changed=bytes[..32].to_vec();changed.extend_from_slice(&u32::try_from(fact.len()).unwrap().to_le_bytes());changed.extend_from_slice(&fact);changed.extend_from_slice(state);
     let transaction=connection.unchecked_transaction().unwrap();
-    transaction.execute("UPDATE events SET observation_statistics=?1 WHERE sequence=1",[observation_codec::encode_admitted(&changed).unwrap()]).unwrap();
+    transaction.execute("UPDATE events SET observation_statistics=?1 WHERE sequence=1",[changed]).unwrap();
     assert!(observation_statistics::read(&transaction,1).is_err());
     assert!(matches!(observation_statistics::read(&transaction,2),Err(ConversationStoreError::InvalidReference(_))));
     transaction.rollback().unwrap();assert_eq!(observation_statistics::read(&connection,1).unwrap(),expected);
@@ -449,16 +452,19 @@ fn aggregate_fold_pending_value_does_not_survive_rollback_as_current_state() {
 }
 
 #[test]
-fn a_valid_external_checkpoint_rewrite_cannot_redefine_statistical_facts() {
+fn a_valid_external_full_state_rewrite_cannot_redefine_statistical_facts() {
     use super::observation_response_tests::{response_message,response_start,response_complete};
     let directory=tempfile::tempdir().unwrap();let path=directory.path().join("fold.sqlite");
     let store=SqliteConversationStore::open(ConversationId::generate(),&path).unwrap();store.initialize(&[]).unwrap();
     let attempt=response_start(&store,"fold-external");response_message(&store,&attempt,"fold-external-message");response_complete(&store,&attempt);
     assert_eq!(store.observation_statistics(3).unwrap().turns,1);
     let other=rusqlite::Connection::open(&path).unwrap();
-    let bytes:Vec<u8>=other.query_row("SELECT observation_statistics_checkpoint FROM events WHERE sequence=3",[],|row|row.get(0)).unwrap();
-    let mut value:serde_json::Value=observation_codec::decode(&bytes).unwrap();value[0][0]=serde_json::json!(44);
-    other.execute("UPDATE events SET observation_statistics_checkpoint=?1 WHERE sequence=3",[observation_codec::encode_admitted(&value).unwrap()]).unwrap();
+    let bytes:Vec<u8>=other.query_row("SELECT observation_statistics FROM events WHERE sequence=3",[],|row|row.get(0)).unwrap();
+    let (fact, state)=observation_statistics::stored_parts(3, &bytes).unwrap();
+    let mut value:serde_json::Value=observation_codec::decode(state).unwrap();value[0][0]=serde_json::json!(44);
+    let mut changed=bytes[..36+fact.len()].to_vec();
+    changed.extend_from_slice(&observation_codec::encode_admitted(&value).unwrap());
+    other.execute("UPDATE events SET observation_statistics=?1 WHERE sequence=3",[changed]).unwrap();
     observation_statistics::fold_work();response_start(&store,"after-external-rewrite");
     assert!(observation_statistics::fold_work().1>=1);
     assert!(store.observation_statistics(4).is_err());

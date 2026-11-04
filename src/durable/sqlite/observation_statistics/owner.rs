@@ -1,6 +1,6 @@
 //! One connection-owned fold. Provisional state stays private to the writer;
 //! only the store guard after COMMIT publishes a reusable committed certificate.
-use super::history::Frame;
+use super::record::Frame;
 use super::{Connection, ConversationStoreError, storage};
 use crate::durable::sqlite::statements::FixedStatements;
 use rusqlite::hooks::PreUpdateCase;
@@ -13,8 +13,7 @@ struct Certificate {
     frame: Frame,
     epoch: u64,
     data: u64,
-    fact: Vec<u8>,
-    checkpoint: Option<Vec<u8>>,
+    record: Vec<u8>,
 }
 #[derive(Default)]
 struct Seat {
@@ -69,7 +68,6 @@ impl FoldCache {
                 &[
                     "sequence",
                     "observation_statistics",
-                    "observation_statistics_checkpoint",
                     "observation_statistics_required",
                 ],
             )?,
@@ -127,10 +125,10 @@ impl FoldCache {
                 }
             }),
             PreUpdateCase::Insert(new) if table == "events" => {
-                selected.get(3).is_none_or(|column| {
+                selected.get(2).is_none_or(|column| {
                     !new.get_new_column_value(*column)
                         .is_ok_and(|value| value == rusqlite::types::ValueRef::Integer(0))
-                }) || selected.get(1..3).is_none_or(|columns| {
+                }) || selected.get(1..2).is_none_or(|columns| {
                     columns.iter().any(|column| {
                         !new.get_new_column_value(*column)
                             .is_ok_and(|value| value == rusqlite::types::ValueRef::Null)
@@ -246,20 +244,13 @@ impl FoldCache {
         });
         Ok((data, frame))
     }
-    pub(super) fn stage(
-        &self,
-        frame: Frame,
-        data: u64,
-        fact: Vec<u8>,
-        checkpoint: Option<Vec<u8>>,
-    ) {
+    pub(super) fn stage(&self, frame: Frame, data: u64, record: Vec<u8>) {
         if self.enabled.load(Ordering::Acquire) {
             self.seat.lock().expect("statistics fold").pending = Some(Certificate {
                 frame,
                 epoch: self.epoch.load(Ordering::Acquire),
                 data,
-                fact,
-                checkpoint,
+                record,
             });
         }
     }
@@ -267,7 +258,7 @@ impl FoldCache {
         let pending = self.seat.lock().expect("statistics fold").pending.take();
         let Some(certificate) = pending else { return };
         // Publish after COMMIT only if the actual newest statistical fact
-        // and its optional checkpoint are exactly the ones we staged. Borrow
+        // is exactly the full record we staged. Borrow
         // SQLite cells; no copy, new state row or transaction is introduced.
         let accepted = connection.is_autocommit()
             && self.enabled.load(Ordering::Acquire)
@@ -275,13 +266,8 @@ impl FoldCache {
             && connection.prepare_cached(super::super::event_heads::STATISTICS)
                 .and_then(|mut statement|statement.query_row([i64::MAX],|row|{
                     let sequence:u64=row.get(0)?;
-                    let fact=matches!(row.get_ref(1)?,rusqlite::types::ValueRef::Blob(bytes) if bytes==certificate.fact);
-                    let checkpoint=match(row.get_ref(2)?,certificate.checkpoint.as_deref()){
-                        (rusqlite::types::ValueRef::Null,None)=>true,
-                        (rusqlite::types::ValueRef::Blob(bytes),Some(expected))=>bytes==expected,
-                        _=>false,
-                    };
-                    Ok(sequence==certificate.frame.sequence&&fact&&checkpoint)
+                    let record=matches!(row.get_ref(1)?,rusqlite::types::ValueRef::Blob(bytes) if bytes==certificate.record);
+                    Ok(sequence==certificate.frame.sequence&&record)
                 })).unwrap_or(false);
         if accepted {
             self.seat.lock().expect("statistics fold").committed = Some(certificate);

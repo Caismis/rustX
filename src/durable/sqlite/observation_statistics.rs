@@ -1,4 +1,4 @@
-//! Independent statistical facts with bounded checkpoint replay in the native commit.
+//! Independent statistical facts and self-contained full historical states.
 //! They grant no execution authority and publish neither events nor cursors.
 use super::observation_codec as codec;
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
@@ -7,8 +7,8 @@ use crate::durable::response::{add_usage, timing::ActivityFold};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime_client::response::{ConversationStatistics, ConversationTurnClock};
 mod contribution;
-mod history;
 mod owner;
+mod record;
 pub(super) use owner::FoldCache;
 #[derive(Default)]
 struct StatisticsLayout {
@@ -219,7 +219,7 @@ fn layout(
     connection: &Connection,
     through: u64,
 ) -> Result<StatisticsLayout, ConversationStoreError> {
-    Ok(history::layout(connection, through)?.state)
+    Ok(record::layout(connection, through)?.state)
 }
 fn at_cut(
     connection: &Connection,
@@ -243,7 +243,7 @@ pub(super) fn read(
     Ok(at_cut(connection, through)?.statistics)
 }
 /// The native head and the supplied Journal boundary were already checked in
-/// this transaction. Verify the current checkpoint and its bounded fact suffix.
+/// this transaction. Verify the selected self-contained full record.
 pub(super) fn read_validated(
     validated: &super::observation::ValidatedCut<'_, '_>,
 ) -> Result<ConversationStatistics, ConversationStoreError> {
@@ -337,13 +337,12 @@ pub(super) fn is_trace_anchor(event: &RuntimeEvent) -> bool {
 pub(super) struct Prepared {
     pub(super) trace_total: Option<u64>,
     pub(super) statistics: Option<super::append_facts::Captured<ConversationStatistics>>,
-    pub(super) checkpoint: Option<Vec<u8>>,
-    fold: Option<(history::Frame, u64)>,
+    fold: Option<(record::Frame, u64)>,
 }
 impl Prepared {
     pub(super) fn remember(self, cache: &FoldCache) {
         if let (Some((fold, data)), Some(capture)) = (self.fold, self.statistics) {
-            cache.stage(fold, data, capture.bytes, self.checkpoint);
+            cache.stage(fold, data, capture.bytes);
         }
     }
 }
@@ -365,7 +364,6 @@ pub(super) fn prepare_cached(
     let mut prepared = Prepared {
         trace_total,
         statistics: None,
-        checkpoint: None,
         fold: None,
     };
     let Some(attempt) = &event.attempt_id else {
@@ -381,24 +379,19 @@ pub(super) fn prepare_cached(
     };
     let mut frame = match cached {
         Some(frame) => frame,
-        None => history::layout(connection, through)?,
+        None => record::layout(connection, through)?,
     };
     let contribution =
         contribution::Contribution::capture(connection, event, attempt, &frame.state)?;
     contribution.apply(event.sequence, &mut frame.state)?;
     frame.state = normalized_fold(frame.state);
-    let (record, checkpoint) =
-        history::Record::capture(&frame, event.sequence, contribution, &frame.state)?;
-    let bytes = record.encode()?;
+    let bytes = record::capture(event.sequence, &contribution, &frame.state)?;
     let value = frame.state.statistics.clone();
     frame.sequence = event.sequence;
-    frame.anchor = record.anchor;
-    frame.distance = record.distance;
     if cache.is_some() {
         prepared.fold = Some((frame, data));
     }
     prepared.statistics = Some(super::append_facts::Captured { bytes, value });
-    prepared.checkpoint = checkpoint;
     Ok(prepared)
 }
 // These are exactly the fields retained by the private tuple decoder.
@@ -673,15 +666,24 @@ mod compact_tests {
             )
             .unwrap();
         assert_eq!(read(&connection, 0).unwrap(), state.statistics);
-        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_statistics_checkpoint) VALUES(1,'wide-statistics',1,'test','time','{}',?1)", [&bytes]).unwrap();
+        let full = record::test_record(1, &bytes);
+        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_statistics) VALUES(1,'wide-statistics',1,'test','time','{}',?1)", [&full]).unwrap();
         let retained: Vec<u8> = connection
             .query_row(
-                "SELECT observation_statistics_checkpoint FROM events WHERE sequence=1",
+                "SELECT observation_statistics FROM events WHERE sequence=1",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(decode(&retained).unwrap().statistics, state.statistics);
+        connection
+            .execute(
+                "UPDATE rustx_store SET next_event_sequence=2 WHERE id=1",
+                [],
+            )
+            .unwrap();
+        let (_, retained_state) = record::parts(1, &retained).unwrap();
+        assert_eq!(decode(retained_state).unwrap().statistics, state.statistics);
+        assert_eq!(read(&connection, 1).unwrap(), state.statistics);
         connection
             .execute(
                 "UPDATE rustx_store SET observation_statistics=?1 WHERE id=1",
@@ -798,4 +800,12 @@ pub(super) fn write_work() -> (usize, usize) {
 #[cfg(test)]
 pub(super) fn fold_work() -> (usize, usize) {
     owner::work()
+}
+
+#[cfg(test)]
+pub(super) fn stored_parts(
+    sequence: u64,
+    bytes: &[u8],
+) -> Result<(&[u8], &[u8]), ConversationStoreError> {
+    record::parts(sequence, bytes)
 }
