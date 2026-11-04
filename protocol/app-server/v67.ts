@@ -1897,6 +1897,7 @@ export type WorkflowNodeDefinition =
       filter?: WorkflowListFilter | null;
       sort?: WorkflowListSort | null;
       limit?: number | null;
+      extract?: WorkflowValue | null;
       type: 'list';
     }
   | {
@@ -1920,6 +1921,7 @@ export type WorkflowNodeDefinition =
       type: 'code';
     }
   | {
+      grouped: boolean;
       groups: WorkflowAggregateGroup[];
       type: 'aggregate';
     }
@@ -2171,7 +2173,11 @@ export type WorkflowListOperator =
   | 'greater'
   | 'greater_equal'
   | 'less'
-  | 'less_equal';
+  | 'less_equal'
+  | 'empty'
+  | 'not_empty'
+  | 'in'
+  | 'not_in';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowSortOrder".
@@ -2428,6 +2434,12 @@ export type WorkflowConsumerField =
     }
   | {
       kind: 'transform_input';
+    }
+  | {
+      kind: 'list_filter_value';
+    }
+  | {
+      kind: 'list_extract';
     }
   | {
       kind: 'classifier_instruction';
@@ -9623,7 +9635,7 @@ export interface WorkflowListFilter {
    */
   path: string[];
   operator: WorkflowListOperator;
-  value: unknown;
+  value: WorkflowValue;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9662,7 +9674,7 @@ export interface WorkflowRetry {
  */
 export interface WorkflowAggregateGroup {
   name: string;
-  output_type: WorkflowVarType;
+  output_type?: WorkflowVarType | null;
   variables: string[][];
 }
 /**

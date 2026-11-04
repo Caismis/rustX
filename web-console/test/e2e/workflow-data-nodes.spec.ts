@@ -44,16 +44,16 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     await activate(card(page,'list'));
     await panel(page).getByRole('switch',{name:'Filter',exact:true}).click();
     await panel(page).getByRole('combobox',{name:'Operator',exact:true}).selectOption('greater_equal');
-    await panel(page).getByRole('combobox',{name:'Value type',exact:true}).selectOption('number');
     const comparison=panel(page).getByRole('textbox',{name:'Comparison value',exact:true});await comparison.fill('2');await comparison.blur();
     await panel(page).getByRole('switch',{name:'Sort',exact:true}).click();
-    await panel(page).getByRole('combobox',{name:'Sort order',exact:true}).selectOption('desc');
+    await panel(page).getByRole('radio',{name:'Descending',exact:true}).click();
     await panel(page).getByRole('switch',{name:'Limit',exact:true}).click();
     const limit=panel(page).getByRole('textbox',{name:'Take first N items',exact:true});await limit.fill('2');await limit.press('Enter');
     await page.screenshot({path:`/tmp/rustx-data-list-${width}.png`});
 
     // A renamed grouped output rewrites the Return's structured selector.
     await activate(card(page,'merge'));
+    await panel(page).getByRole('switch',{name:'Aggregation groups',exact:true}).click();
     const output=panel(page).getByRole('textbox',{name:'Output name',exact:true});await output.fill('answer');await output.press('Enter');
     await panel(page).getByRole('button',{name:'Choose a variable',exact:true}).first().click();
     const variables=page.getByRole('dialog',{name:'Choose a variable',exact:true});
@@ -103,8 +103,8 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     const saved=parse(readFileSync(file,'utf8'));
     expect(saved.block.nodes.left.variables.question.path).toEqual(['args','query']);
     expect(saved.block.nodes.left.template).toBe('{{ question | upper }}!');
-    expect(saved.block.nodes.list).toMatchObject({filter:{operator:'greater_equal',value:2},sort:{order:'desc'},limit:2});
-    expect(saved.block.nodes.done.outputs[0].value_selector).toEqual(['merge','answer']);
+    expect(saved.block.nodes.list).toMatchObject({filter:{operator:'greater_equal',value:{type:'literal',value:2}},sort:{order:'desc'},limit:2});
+    expect(saved.block.nodes.done.outputs[0].value_selector).toEqual(['merge','answer','output']);
     expect(saved.block.edges).toContainEqual({from:'classify',to:'right',port:'class_2'});
     const code=Object.values(saved.block.nodes).find((node:any)=>node.type==='code') as any;
     expect(code.code_language).toBe('python3');expect(code.code).toBe(script);expect(code.outputs).toEqual({result:'string'});

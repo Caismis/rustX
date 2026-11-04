@@ -21,7 +21,7 @@ function rows(tx: Translate, node: PreviewNode): Row[] {
     case 'template': return Object.entries(node.variables).map(([name,value]) => valueRow(name,value));
     case 'list': return [valueRow(tx('workflows:data.input'),node.input)];
     case 'classifier': return [valueRow(tx('workflows:data.input'),node.input)];
-    case 'aggregate': return node.groups.map(group => ({label:group.name,value:group.variables.map(path => path.join(' / ')).join(', ')}));
+    case 'aggregate': return (node.grouped?node.groups:node.groups.slice(0,1)).map(group => ({label:node.grouped?group.name:/* i18n-raw: native output identifier */ 'output',value:group.variables.map(path => path.join(' / ')).join(', ')}));
     case 'agent': return [
       { label: tx('workflows:card.profile'), value: node.profile || tx('workflows:summary.agent-unset') },
       ...(node.task.length ? [{ label: tx('workflows:card.task'), value: promptText(node.task) }] : []),

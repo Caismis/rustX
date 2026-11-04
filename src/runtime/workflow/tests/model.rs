@@ -70,9 +70,10 @@ async fn classifier_uses_one_auxiliary_call_and_only_the_validated_class_path() 
                 (
                     "merge".into(),
                     WorkflowNodeDefinition::Aggregate {
+                        grouped: false,
                         groups: vec![super::super::WorkflowAggregateGroup {
                             name: "output".into(),
-                            output_type: super::super::WorkflowVarType::String,
+                            output_type: Some(super::super::WorkflowVarType::String),
                             variables: vec![
                                 vec!["support".into(), "output".into()],
                                 vec!["other".into(), "output".into()],

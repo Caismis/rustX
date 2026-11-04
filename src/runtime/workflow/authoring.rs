@@ -46,6 +46,8 @@ pub enum WorkflowConsumerField {
         name: String,
     },
     TransformInput,
+    ListFilterValue,
+    ListExtract,
     ClassifierInstruction,
     ClassifierClass {
         index: u32,
@@ -203,9 +205,9 @@ pub fn declared_output(
         WorkflowNodeDefinition::Template { .. } => super::transform::text_schema(),
         WorkflowNodeDefinition::Code { outputs, .. } => super::code::output_schema(outputs)?,
         WorkflowNodeDefinition::Classifier { .. } => super::transform::classifier_result_schema(),
-        WorkflowNodeDefinition::Aggregate { groups } => {
-            super::transform::validate_groups(groups)?;
-            super::transform::aggregate_schema(groups)
+        WorkflowNodeDefinition::Aggregate { groups, grouped } => {
+            super::transform::validate_groups(groups, *grouped)?;
+            super::transform::aggregate_schema(groups, *grouped)?
         }
         WorkflowNodeDefinition::List { .. } => return Ok(None),
         WorkflowNodeDefinition::Model { output, .. } => {
@@ -379,6 +381,21 @@ struct ConsumerContract<'a> {
     selected: Option<&'a WorkflowValue>,
 }
 
+fn necessary_condition(
+    node: &WorkflowNodeDefinition,
+    field: &WorkflowConsumerField,
+) -> NecessaryCondition {
+    match (node, field) {
+        (WorkflowNodeDefinition::Tool { .. }, WorkflowConsumerField::Arguments) => {
+            NecessaryCondition::ToolArgumentsObject
+        }
+        (WorkflowNodeDefinition::Classifier { .. }, WorkflowConsumerField::TransformInput) => {
+            NecessaryCondition::ClassifierInput
+        }
+        _ => NecessaryCondition::None,
+    }
+}
+
 fn consumer<'a>(
     block: &'a WorkflowBlock,
     address: &WorkflowConsumerAddress,
@@ -397,25 +414,35 @@ fn consumer<'a>(
         (N::Code { variables, .. }, F::CodeVariable { name }) => {
             (Expression::Value(variables.get(name)?), None, false)
         }
-        (N::List { input, .. }, F::TransformInput) => (
+        (N::List { input, .. }, F::TransformInput)
+        | (
+            N::Iteration {
+                iterator: input, ..
+            },
+            F::IterationIterator,
+        ) => (
             Expression::Value(input),
             Some(Cow::Owned(serde_json::json!({"type":"array"}))),
             false,
         ),
+        (N::List { .. }, F::ListExtract) => (
+            Expression::Value(&UNSET_REFERENCE),
+            Some(Cow::Owned(serde_json::json!({"type":"number"}))),
+            false,
+        ),
         (N::Classifier { input, .. }, F::TransformInput) => (Expression::Value(input), None, false),
-        (N::Classifier { .. }, F::ClassifierInstruction) => {
-            (Expression::Value(&UNSET_REFERENCE), None, false)
-        }
         (N::Classifier { classes, .. }, F::ClassifierClass { index }) => {
             classes.get(*index as usize)?;
             (Expression::Value(&UNSET_REFERENCE), None, false)
         }
-        (N::Aggregate { groups }, F::AggregateVariable { group, index }) => {
+        (N::Aggregate { groups, .. }, F::AggregateVariable { group, index }) => {
             let group = groups.get(*group as usize)?;
-            group.variables.get(*index as usize)?;
+            if *index as usize > group.variables.len() {
+                return None;
+            }
             (
                 Expression::Value(&UNSET_REFERENCE),
-                Some(Cow::Owned(group.output_type.schema())),
+                group.output_type.map(|kind| Cow::Owned(kind.schema())),
                 false,
             )
         }
@@ -423,7 +450,9 @@ fn consumer<'a>(
             messages.get(*index as usize)?;
             (Expression::Value(&UNSET_REFERENCE), None, false)
         }
-        (N::Agent { .. }, F::Task)
+        (N::List { .. }, F::ListFilterValue)
+        | (N::Classifier { .. }, F::ClassifierInstruction)
+        | (N::Agent { .. }, F::Task)
         | (N::Review { .. }, F::ReviewContent)
         | (N::Return { .. }, F::ReturnOutput) => (Expression::Value(&UNSET_REFERENCE), None, false),
         (N::Tool { arguments, .. }, F::Arguments) => (Expression::Value(arguments), None, false),
@@ -450,11 +479,6 @@ fn consumer<'a>(
             None,
             true,
         ),
-        (N::Iteration { iterator, .. }, F::IterationIterator) => (
-            Expression::Value(iterator),
-            Some(Cow::Owned(serde_json::json!({"type": "array"}))),
-            false,
-        ),
         (N::Iteration { output, .. }, F::IterationOutput) => {
             (Expression::Value(output), None, true)
         }
@@ -471,16 +495,7 @@ fn consumer<'a>(
     Some(Consumer {
         expression,
         expected: expected.filter(|schema| validate_workflow_schema(schema, "expected").is_ok()),
-        necessary: if matches!((node, &address.field), (N::Tool { .. }, F::Arguments)) {
-            NecessaryCondition::ToolArgumentsObject
-        } else if matches!(
-            (node, &address.field),
-            (N::Classifier { .. }, F::TransformInput)
-        ) {
-            NecessaryCondition::ClassifierInput
-        } else {
-            NecessaryCondition::None
-        },
+        necessary: necessary_condition(node, &address.field),
         result_scope,
         arrays: Vec::new(),
     })
@@ -975,6 +990,7 @@ fn declare(block: &WorkflowBlock, declarations: &mut SchemaMap) -> BTreeMap<Stri
             filter,
             sort,
             limit,
+            ..
         } = node
         {
             let schema = super::value_schema(input, declarations, &id, 0)
@@ -1194,6 +1210,26 @@ fn analyze_query(
     {
         consumer.expected = None;
         consumer.necessary = NecessaryCondition::EqualityOperand;
+    }
+    if let Some(consumer) = &mut consumer
+        && matches!(query.consumer.field, WorkflowConsumerField::ListFilterValue)
+        && let Some(WorkflowNodeDefinition::List {
+            input: WorkflowValue::Reference { path },
+            filter: Some(filter),
+            ..
+        }) = block.nodes.get(&address.node)
+        && let Ok(array) = inference.schemas.resolve(path)
+        && let Some(mut item) = array.get("items")
+    {
+        for key in &filter.path {
+            item = item
+                .get("properties")
+                .and_then(|fields| fields.get(key))
+                .unwrap_or(&Value::Null);
+        }
+        consumer.expected = super::schema_type(item).map(|kind| {
+            Cow::Owned(serde_json::json!({"type":if kind=="integer" {"number"}else{kind}}))
+        });
     }
     let invalid_consumer = consumer.is_none();
     let expected = consumer

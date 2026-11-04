@@ -5,8 +5,8 @@ use super::{
     BTreeMap, BTreeSet, MAX_REFERENCE_COMPONENTS, MAX_VALUE_BYTES, SchemaMap, Value,
     WorkflowClassifierClass, WorkflowCompileError, WorkflowModelErrorStrategy,
     WorkflowModelMessage, WorkflowModelOutput, WorkflowModelPolicy, WorkflowModelProgram,
-    WorkflowModelRole, WorkflowRunError, WorkflowValue, WorkflowVarType, expressions,
-    is_reserved_port, schema_type, schemas_compatible, valid_local_key, value_schema,
+    WorkflowModelRole, WorkflowRunError, WorkflowValue, WorkflowVarType, is_reserved_port,
+    schema_type, schemas_compatible, valid_local_key, value_schema,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -17,7 +17,8 @@ use std::io::{self, Write};
 #[serde(deny_unknown_fields)]
 pub struct WorkflowAggregateGroup {
     pub name: String,
-    pub output_type: WorkflowVarType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_type: Option<WorkflowVarType>,
     pub variables: Vec<Vec<String>>,
 }
 
@@ -34,6 +35,10 @@ pub enum WorkflowListOperator {
     GreaterEqual,
     Less,
     LessEqual,
+    Empty,
+    NotEmpty,
+    In,
+    NotIn,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -42,7 +47,7 @@ pub struct WorkflowListFilter {
     /// Empty selects a primitive item; otherwise literal object field names.
     pub path: Vec<String>,
     pub operator: WorkflowListOperator,
-    pub value: Value,
+    pub value: WorkflowValue,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -63,12 +68,39 @@ pub(super) fn text_schema() -> Value {
     json!({"type":"object","properties":{"output":{"type":"string"}},"required":["output"],"additionalProperties":false})
 }
 
-pub(super) fn aggregate_schema(groups: &[WorkflowAggregateGroup]) -> Value {
-    json!({"type":"object", "properties":groups.iter().map(|g| (g.name.clone(), g.output_type.schema())).collect::<BTreeMap<_,_>>(), "required":groups.iter().map(|g| &g.name).collect::<Vec<_>>(), "additionalProperties":false})
+pub(super) fn active_groups(
+    groups: &[WorkflowAggregateGroup],
+    grouped: bool,
+) -> &[WorkflowAggregateGroup] {
+    if grouped {
+        groups
+    } else {
+        &groups[..groups.len().min(1)]
+    }
+}
+
+pub(super) fn aggregate_schema(
+    groups: &[WorkflowAggregateGroup],
+    grouped: bool,
+) -> Result<Value, WorkflowCompileError> {
+    let active = active_groups(groups, grouped);
+    let mut properties = BTreeMap::new();
+    for group in active {
+        let schema = group
+            .output_type
+            .ok_or_else(|| invalid("aggregate output type is not selected"))?
+            .schema();
+        properties.insert(if grouped {group.name.clone()} else {"output".into()}, if grouped { json!({"type":"object","properties":{"output":schema},"required":["output"],"additionalProperties":false}) } else {schema});
+    }
+    let required = properties.keys().cloned().collect::<Vec<_>>();
+    Ok(
+        json!({"type":"object", "properties":properties,"required":required,"additionalProperties":false}),
+    )
 }
 
 pub(super) fn validate_groups(
     groups: &[WorkflowAggregateGroup],
+    grouped: bool,
 ) -> Result<(), WorkflowCompileError> {
     let mut names = BTreeSet::new();
     if groups.is_empty() || groups.len() > 32 {
@@ -79,7 +111,7 @@ pub(super) fn validate_groups(
             return Err(invalid("output group names must be unique local keys")
                 .at(format!("groups.{index}.name")));
         }
-        if group.variables.is_empty() || group.variables.len() > 32 {
+        if ((grouped || index == 0) && group.variables.is_empty()) || group.variables.len() > 32 {
             return Err(
                 invalid("group requires 1..=32 sources").at(format!("groups.{index}.variables"))
             );
@@ -194,6 +226,59 @@ fn field_schema<'a>(
     Ok(schema)
 }
 
+pub(super) fn validate_list_values(
+    input: &Value,
+    filter: Option<&WorkflowListFilter>,
+    extract: Option<&WorkflowValue>,
+    scope: &SchemaMap,
+    node: &str,
+) -> Result<(), WorkflowCompileError> {
+    if let Some(filter) = filter
+        && !matches!(filter.operator, O::Empty | O::NotEmpty)
+    {
+        let item = input
+            .get("items")
+            .ok_or_else(|| invalid("list input requires items"))?;
+        let target = field_schema(item, &filter.path)?;
+        let actual = value_schema(&filter.value, scope, node, 0)?;
+        let valid = schemas_compatible(&actual, target)
+            || matches!(
+                (schema_type(&actual), schema_type(target)),
+                (Some("number" | "integer"), Some("number" | "integer"))
+            )
+            || matches!(schema_type(target), Some("number" | "integer"))
+                && schema_type(&actual) == Some("string");
+        if !valid {
+            return Err(
+                invalid("list comparison value does not match the item type").at("filter.value"),
+            );
+        }
+        if matches!(schema_type(target), Some("number" | "integer"))
+            && let WorkflowValue::Literal {
+                value: Value::String(text),
+            } = &filter.value
+            && !serde_json::from_str::<Value>(text).is_ok_and(|v| v.is_number())
+        {
+            return Err(invalid("list comparison requires a number").at("filter.value"));
+        }
+    }
+    if let Some(extract) = extract {
+        let schema = value_schema(extract, scope, node, 0)?;
+        if !matches!(schema_type(&schema), Some("number" | "integer" | "string")) {
+            return Err(invalid("list serial requires a number").at("extract"));
+        }
+        if let WorkflowValue::Literal { value } = extract
+            && value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                .is_none_or(|value| value == 0)
+        {
+            return Err(invalid("list serial must be a positive integer").at("extract"));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn list_schema(
     input: &Value,
     filter: Option<&WorkflowListFilter>,
@@ -209,27 +294,22 @@ pub(super) fn list_schema(
         let kind = schema_type(target);
         let valid = match filter.operator {
             O::Equal | O::NotEqual => {
-                let operand = expressions::intrinsic_value_type(&WorkflowValue::Literal {
-                    value: filter.value.clone(),
-                });
                 matches!(kind, Some("string" | "number" | "integer" | "boolean"))
-                    && (kind == operand
-                        || matches!(
-                            (kind, operand),
-                            (Some("number" | "integer"), Some("number" | "integer"))
-                        ))
             }
-            O::Contains | O::NotContains | O::StartsWith | O::EndsWith => {
-                kind == Some("string") && filter.value.is_string()
-            }
+            O::Contains
+            | O::NotContains
+            | O::StartsWith
+            | O::EndsWith
+            | O::Empty
+            | O::NotEmpty
+            | O::In
+            | O::NotIn => kind == Some("string"),
             O::Greater | O::GreaterEqual | O::Less | O::LessEqual => {
-                matches!(kind, Some("integer" | "number")) && filter.value.is_number()
+                matches!(kind, Some("integer" | "number"))
             }
         };
         if !valid {
-            return Err(
-                invalid("list comparison operand does not match the item field").at("filter"),
-            );
+            return Err(invalid("list operator does not match the item field").at("filter"));
         }
     }
     if let Some(sort) = sort {
@@ -241,11 +321,11 @@ pub(super) fn list_schema(
             return Err(invalid("list sort requires a scalar field").at("sort"));
         }
     }
-    if limit.is_some_and(|limit| limit == 0 || limit > 65_536) {
-        return Err(invalid("list limit must be 1..=65536").at("limit"));
+    if limit.is_some_and(|limit| limit == 0 || limit > 20) {
+        return Err(invalid("list limit must be 1..=20").at("limit"));
     }
     Ok(
-        json!({"type":"object","properties":{"result":{"type":"array","items":item},"first_record":item,"last_record":item},"required":["result"],"additionalProperties":false}),
+        json!({"type":"object","properties":{"result":{"type":"array","items":item},"first_record":{"anyOf":[item,{"type":"null"}]},"last_record":{"anyOf":[item,{"type":"null"}]}},"required":["result","first_record","last_record"],"additionalProperties":false}),
     )
 }
 
@@ -275,12 +355,20 @@ fn compare(left: &Value, right: &Value) -> Option<Ordering> {
         _ => None,
     }
 }
-fn matches(item: &Value, filter: &WorkflowListFilter) -> bool {
+fn matches(item: &Value, filter: &WorkflowListFilter, expected: &Value) -> bool {
     let Some(actual) = field(item, &filter.path) else {
         return false;
     };
-    let expected = &filter.value;
     match filter.operator {
+        O::Empty => actual.as_str().is_some_and(str::is_empty),
+        O::NotEmpty => actual.as_str().is_some_and(|value| !value.is_empty()),
+        O::In | O::NotIn => {
+            actual
+                .as_str()
+                .zip(expected.as_str())
+                .is_some_and(|(actual, expected)| expected.contains(actual))
+                == (filter.operator == O::In)
+        }
         O::Equal => compare(actual, expected) == Some(Ordering::Equal),
         O::NotEqual => compare(actual, expected).is_some_and(|v| v != Ordering::Equal),
         O::Contains => actual
@@ -325,9 +413,7 @@ fn compare_integer_float(integer: i128, float: f64) -> Ordering {
 #[derive(Serialize)]
 struct Projection<'a> {
     result: &'a [Value],
-    #[serde(skip_serializing_if = "Option::is_none")]
     first_record: Option<&'a Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     last_record: Option<&'a Value>,
 }
 struct Budget(usize);
@@ -349,12 +435,46 @@ pub(super) fn list(
     filter: Option<&WorkflowListFilter>,
     sort: Option<&WorkflowListSort>,
     limit: Option<u32>,
+    extract: Option<&WorkflowValue>,
+    mut resolve: impl FnMut(&WorkflowValue) -> Result<Value, WorkflowRunError>,
 ) -> Result<Value, WorkflowRunError> {
     let Value::Array(mut items) = input else {
         return Err(runtime("List input must be an array"));
     };
-    if let Some(filter) = filter {
-        items.retain(|item| matches(item, filter));
+    // Dify returns an empty input directly, including null endpoint records.
+    if !items.is_empty() {
+        if let Some(filter) = filter {
+            let mut expected = if matches!(filter.operator, O::Empty | O::NotEmpty) {
+                Value::Null
+            } else {
+                resolve(&filter.value)?
+            };
+            let numeric = items
+                .iter()
+                .find_map(|item| field(item, &filter.path))
+                .is_some_and(Value::is_number);
+            if numeric && let Some(text) = expected.as_str() {
+                expected = serde_json::from_str(text)
+                    .ok()
+                    .filter(Value::is_number)
+                    .ok_or_else(|| runtime("list comparison requires a number"))?;
+            }
+            items.retain(|item| matches(item, filter, &expected));
+        }
+        // Serial extraction is 1-based, after filtering and before sorting.
+        if let Some(extract) = extract {
+            let value = resolve(extract)?;
+            let serial = value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+                .ok_or_else(|| runtime("list serial must be a positive integer"))?;
+            let index = serial
+                .checked_sub(1)
+                .and_then(|index| usize::try_from(index).ok())
+                .filter(|index| *index < items.len())
+                .ok_or_else(|| runtime("list serial is out of range"))?;
+            items = vec![items.swap_remove(index)];
+        }
     }
     if let Some(sort) = sort {
         items.sort_by(|a, b| {
@@ -381,7 +501,10 @@ pub(super) fn list(
         },
     )
     .map_err(|e| runtime(e.to_string()))?;
-    let mut result = serde_json::Map::new();
+    let mut result = serde_json::Map::from_iter([
+        ("first_record".into(), Value::Null),
+        ("last_record".into(), Value::Null),
+    ]);
     if let Some(first) = items.first() {
         result.insert("first_record".into(), first.clone());
     }

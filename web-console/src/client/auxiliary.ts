@@ -1,5 +1,5 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import type { AttachmentTarget, AuxiliarySegment, AuxiliarySubmissionReceipt, AuxiliaryResult } from '../../../protocol/app-server/v66';
+import type { AttachmentTarget, AuxiliarySegment, AuxiliarySubmissionReceipt, AuxiliaryResult } from '../../../protocol/app-server/v67';
 import type { AppServerClient } from './app-server';
 import { isOutcomeUncertain, RpcFailure } from './errors';
 function diagnostic(error: unknown): string {

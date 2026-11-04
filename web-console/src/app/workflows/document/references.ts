@@ -40,7 +40,7 @@ function node(input: NodeDefinition, rewrite: PathRewrite): NodeDefinition {
   switch (input.type) {
     case 'start': case 'loop_end': return input;
     case 'code': case 'template': return { ...input, variables: Object.fromEntries(Object.entries(input.variables).map(([name,item]) => [name,value(item,rewrite)])) };
-    case 'list': return { ...input, input: value(input.input,rewrite) };
+    case 'list': return { ...input, input: value(input.input,rewrite), ...(input.filter?{filter:{...input.filter,value:value(input.filter.value,rewrite)}}:{}), ...(input.extract?{extract:value(input.extract,rewrite)}:{}) };
     case 'classifier': return { ...input, input: value(input.input,rewrite), instruction: input.instruction?.map(part => value(part,rewrite)), classes: input.classes.map(item => ({...item,description:item.description.map(part => value(part,rewrite))})) };
     case 'aggregate': return { ...input, groups: input.groups.map(group => ({ ...group, variables: group.variables.map(path => rewrite(path) ?? path) })) };
     case 'agent': return { ...input, task: input.task.map(part => value(part, rewrite)) };

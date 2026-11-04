@@ -325,16 +325,26 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             }
             WorkflowNodeProgram::List {
                 input,
+                filter,
+                extract,
                 output_schema,
                 ..
             } => {
                 view.kind = "list".into();
                 view.output_schema = Some(schema(output_schema));
                 view.bindings.insert("input".into(), binding(input));
+                if let Some(filter) = filter {
+                    view.bindings
+                        .insert("filter.value".into(), binding(&filter.value));
+                }
+                if let Some(extract) = extract {
+                    view.bindings.insert("extract".into(), binding(extract));
+                }
             }
             WorkflowNodeProgram::Aggregate {
                 groups,
                 output_schema,
+                ..
             } => {
                 view.kind = "aggregate".into();
                 view.output_schema = Some(schema(output_schema));

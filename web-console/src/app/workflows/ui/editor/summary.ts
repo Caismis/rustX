@@ -45,7 +45,7 @@ export function previewRowCount(node: NodeDefinition): number {
     case 'code': return 1 + Math.min(Object.keys(node.variables).length,2);
     case 'template': return Object.keys(node.variables).length;
     case 'list': case 'classifier': return 1;
-    case 'aggregate': return node.groups.length;
+    case 'aggregate': return node.grouped?node.groups.length:1;
     case 'agent': return node.task.length ? 2 : 1;
     case 'model': return 1;
     case 'tool': return 1 + (node.arguments.type === 'object' ? Math.min(Object.keys(node.arguments.fields).length, 2) : 1);

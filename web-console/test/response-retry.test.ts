@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { CompletedResponseView, ContentBinding, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v66';
+import type { CompletedResponseView, ContentBinding, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v67';
 import { responseRetry, responseRetryReady } from '../src/app/agent/response-retry';
 import { deferredToolDescriptors } from '../src/bindings/deferred-tools';
 import { snapshot } from './fixture';

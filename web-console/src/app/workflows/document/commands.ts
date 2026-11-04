@@ -55,7 +55,7 @@ export function nodeTemplate(kind: NodeKind, id: string = kind): NodeDefinition 
     case 'template': return { type: 'template', variables: { arg1: { type: 'reference', path: [] } }, template: '{{ arg1 }}' };
     case 'list': return { type: 'list', input: { type: 'reference', path: [] } };
     case 'classifier': return { type: 'classifier', model: { mode: 'session' }, input: { type: 'reference', path: [] }, instruction: [], classes: [{ id: 'class_1', label: /* i18n-raw: authored classifier default label stored in the document */ 'CLASS 1', description: [] }, { id: 'class_2', label: /* i18n-raw: authored classifier default label stored in the document */ 'CLASS 2', description: [] }] };
-    case 'aggregate': return { type: 'aggregate', groups: [{ name: 'output', output_type: 'string', variables: [[]] }] };
+    case 'aggregate': return { type: 'aggregate', grouped:false, groups: [{ name: 'Group1', variables: [] }] };
     // As Dify's Agent: the final reply is its `text` until outputs are declared.
     case 'agent': return { type: 'agent', profile: '', task: [], output: { type: 'text' } };
     // As Dify's LLM node: an empty system prompt, then an empty user turn.

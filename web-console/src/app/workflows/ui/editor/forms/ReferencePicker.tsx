@@ -2,13 +2,13 @@ import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react
 import { createPortal } from 'react-dom';
 import { useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useSelector } from '@xstate/react';
-import type { WorkflowAnalysisQuery, WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v66';
+import type { WorkflowAnalysisQuery, WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v67';
 import { useTranslation } from '../../../../../locale/react';
 import { consumerAddress } from '../../../document/analysis';
 import { encodeField, setField, type FieldAddress } from '../../../document/fields';
 import { nodePresentation } from '../../../document/geometry';
 import { blockAt, nodeAt, startOf, type BlockPath, type WorkflowDocument } from '../../../document/model';
-import { IconEntry, KindIcon } from '../../icons';
+import { IconEntry, IconPlus, KindIcon } from '../../icons';
 import { DraftOwner } from './drafts';
 import { useCandidateAnalysis } from './analysis';
 import css from '../Editor.module.css';
@@ -17,9 +17,9 @@ import css from '../Editor.module.css';
  * decide availability, compatibility or lexical reference paths. `token`
  * shows Dify's variable token and floating popup, listing only usable
  * choices; a condition's token asks for the condition-variable scope. */
-export function ReferencePicker({ address, path, edit, initiallyOpen = false, onChoose, onClose, placeholder, token = false, anchor }: {
+export function ReferencePicker({ address, path, edit, initiallyOpen = false, onChoose, onClose, placeholder, token = false, anchor, addLabel, disabled }: {
   address: FieldAddress; path: readonly string[]; edit: (apply: (document: WorkflowDocument) => WorkflowDocument) => void;
-  token?: boolean; initiallyOpen?: boolean; onChoose?: (choice: WorkflowReferenceChoice) => void; onClose?: (restoreFocus: boolean) => void; placeholder?: string; anchor?: DOMRect;
+  token?: boolean; initiallyOpen?: boolean; onChoose?: (choice: WorkflowReferenceChoice) => void; onClose?: (restoreFocus: boolean) => void; placeholder?: string; anchor?: DOMRect; addLabel?:string; disabled?:boolean;
 }) {
   const tx = useTranslation(), owner = useContext(DraftOwner)!;
   const document = useSelector(owner.editor, snapshot => snapshot.context.document);
@@ -72,8 +72,8 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx('workflows:value.whole');
   const present = (content: import('react').ReactNode) => token ? createPortal(content, window.document.body) : content;
   return <div ref={root} className={css.referencePicker}>
-    <button style={anchor?{display:'none'}:undefined} hidden={!!anchor} ref={element => { trigger.current = element; if(!anchor)refs.setReference(element); }} data-workflow-field={field} type="button" className={token ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => { returnFocus.current = open; setOpen(value => !value); }}>
-      {token && path.length ? <span className={css.branchVariableToken}>
+    <button style={anchor?{display:'none'}:undefined} hidden={!!anchor} ref={element => { trigger.current = element; if(!anchor)refs.setReference(element); }} data-workflow-field={field} type="button" disabled={disabled} className={addLabel ? css.iconButton : token ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={addLabel??tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => { returnFocus.current = open; setOpen(value => !value); }}>
+      {addLabel?<IconPlus size={14}/>:token && path.length ? <span className={css.branchVariableToken}>
         {producer === 'args' ? <IconEntry size={13} /> : currentNode ? <KindIcon kind={currentNode.type} size={13} /> : null}
         <span className={css.branchVariableSource}>{currentTitle}</span><span className={css.branchVariableSlash}>/</span><b><span aria-hidden>{'{x}'}</span> {currentValue}</b>
       </span> : <span>{currentTitle || placeholder || tx('workflows:value.pick')}{path.length > 1 ? ` / ${path.slice(1).join(' / ')}` : ''}</span>}

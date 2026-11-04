@@ -149,9 +149,9 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | Agent | Profile picked from the scope's profiles, task in the prompt editor with variables, structured output fields |
 | Tool | Exact selector, arguments and text/JSON result projection |
 | Template | Inline reference bindings, numbered Jinja editor with `/` / `{` insertion, binding reuse and generated-token renames, copy/resize/expand, folded `output:string`; native bounded rendering |
-| List Operator | Array input, optional typed filter, stable sort and limit, with literal field paths |
+| List Operator | Array input, type-directed conditions with variable tokens, 1-based extraction, 1–20 limit slider, sort cards, required JSON field selectors and nullable endpoint outputs |
 | Question Classifier | Session/registered model, text/numeric input variable, variable-aware topic cards with separate labels and stable exits, sortable classes and folded instructions; `class_name`, `class_label`, `usage` outputs |
-| Variable Aggregator | Named typed groups with alternative source pickers; renaming a group updates downstream references |
+| Variable Aggregator | Empty ungrouped default, inferred type badges, same-type source pickers, optional retained groups with group.output paths, first-available selection, and confirmed reference cleanup |
 | Code Execution | Named input selectors, Python3/JavaScript defaults, main-parameter synchronization, a language-aware editor with line numbers/copy/expand, typed output rows, retry and error handling; one native workspace Bash invocation |
 | Branch | Compact IF/ELIF/ELSE card, ordered cases, searchable variable conditions, AND/OR and multiple successors per exit |
 | Loop | Loop variables (name, type, variable or constant value), termination conditions as IF/ELSE builds them, and a 1–100 maximum loop count slider |

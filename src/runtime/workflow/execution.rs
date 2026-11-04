@@ -1048,23 +1048,25 @@ impl WorkflowRuntime {
                     values.insert(node_id.to_owned(),value);
                     Ok(None)
                 }
-                WorkflowNodeProgram::List {input:source,filter,sort,limit,output_schema} => {
-                    let value = super::transform::list(evaluate_value(source,input,&values)?,filter.as_ref(),sort.as_ref(),*limit)?;
+                WorkflowNodeProgram::List {input:source,filter,sort,limit,extract,output_schema} => {
+                    let value = super::transform::list(evaluate_value(source,input,&values)?,filter.as_ref(),sort.as_ref(),*limit,extract.as_ref(),|part|evaluate_value(part,input,&values))?;
                     validate_commit(output_schema,&value)?;
                     reservation.retain(&value)?;
                     values.insert(node_id.to_owned(),value);
                     Ok(None)
                 }
-                WorkflowNodeProgram::Aggregate {groups,output_schema} => {
+                WorkflowNodeProgram::Aggregate {groups,grouped,output_schema} => {
                     let mut fields = std::collections::BTreeMap::new();
                     for group in groups {
                         let mut chosen = None;
                         for path in &group.variables {
                             let Some(producer) = path.first() else { return Err(WorkflowRunError::InvalidValue("empty aggregate selector".into())); };
                             if producer != "args" && !values.contains_key(producer) { continue; }
-                            if chosen.replace(path.clone()).is_some() { return Err(WorkflowRunError::InvalidValue("multiple aggregate sources executed".into())); }
+                            chosen = Some(path.clone());
+                            break;
                         }
-                        fields.insert(group.name.clone(),super::WorkflowValue::Reference {path:chosen.ok_or_else(|| WorkflowRunError::InvalidValue("aggregate source is missing".into()))?});
+                        let source = super::WorkflowValue::Reference {path:chosen.ok_or_else(|| WorkflowRunError::InvalidValue("aggregate source is missing".into()))?};
+                        fields.insert(if *grouped {group.name.clone()}else{"output".into()},if *grouped {super::WorkflowValue::Object {fields:std::collections::BTreeMap::from([("output".into(),source)])}} else {source});
                     }
                     let value = evaluate_value(&super::WorkflowValue::Object {fields},input,&values)?;
                     validate_commit(output_schema,&value)?;

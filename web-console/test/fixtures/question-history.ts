@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution, RuntimeClientSnapshot } from '../../../protocol/app-server/v66';
+import type { ForegroundToolExecution, RuntimeClientSnapshot } from '../../../protocol/app-server/v67';
 import { interaction, type Server } from '../fixture';
 import { workflowReviewHistoryFixture } from './workflow-review-history';
 

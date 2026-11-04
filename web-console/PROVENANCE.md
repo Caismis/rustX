@@ -1,3 +1,35 @@
+## List Operator and Variable Aggregator alignment (2026-11-04)
+
+Read-only study uses sibling Dify `ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0`:
+`workflow/nodes/list-operator/{panel.tsx,types.ts,default.ts,use-config.ts,
+use-config.helpers.ts}`, its filter-condition/extract-input/limit-config
+components; and the aggregator's actual `variable-assigner/` directory,
+including panel, config helpers, var-group-item and var-list. Runtime study
+uses Graphon `4fa22141774dff80e90e4dfa98ea3e6fbf0421bb`'s
+`nodes/list_operator/{node,entities}.py` and
+`nodes/variable_aggregator/{variable_aggregator_node,entities}.py`.
+
+| Reference behavior | Native implementation |
+| --- | --- |
+| List input, type-directed conditions and value inputs | Existing correlated native scope/schema analysis; string, numeric and boolean operators; typed text/variable inputs instead of a user-selected operand type |
+| Filter, serial extract, limit and sort panel sections | 1-based serial extraction with numeric variables; 1–20 slider/input; ascending/descending cards and keyboard selection |
+| Actual operation order | Filter, extract, stable sort, limit; an empty original input returns immediately; invalid serials fail |
+| Empty output records | Explicit null first_record/last_record and nullable schemas, with folded output documentation |
+| Aggregator initial Any and no selected variables | Native optional output_type and empty list; first selection infers the type; duplicate paths are refused and removing all variables clears the badge |
+| Root output versus grouped outputs | Explicit grouped flag; output in root mode, group.output when enabled; disabling retains group configuration and uses only the first group's sources |
+| Rename, removal and grouping changes | Atomic structured reference rewrites; confirm removal of referenced outputs; clear affected readers; Undo restores both configuration and references |
+| First available source | Authored selector order, including multiple completed parallel sources; no obsolete exactly-one rejection |
+| Native distinctions | Definite-reference coverage, exact integer comparison and 64 KiB node values remain; required JSON object field selectors remain, without inventing Dify File metadata |
+
+Original composition; no Dify stores, code, styling or assets are copied.
+App Server is v67 and Runtime Client remains v80. The changed list operand and
+grouped-output contracts replace the old format without compatibility readers
+or migrations. Earlier sections below record their implementation baselines.
+Vision and AI generation remain excluded. Browser plugin is not available;
+the repository's pinned Playwright container validates desktop and touch/mobile
+editing, typed variable selection, grouping, reference cleanup, Undo and file
+save/reopen, and records screenshots outside the repository.
+
 ## Template Transform alignment (2026-11-04)
 
 Read-only study uses sibling Dify `ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0`:

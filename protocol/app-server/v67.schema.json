@@ -11989,6 +11989,16 @@
               "minimum": 0,
               "maximum": 4294967295
             },
+            "extract": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowValue"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "type": "string",
               "const": "list"
@@ -12091,9 +12101,12 @@
           ]
         },
         {
-          "description": "Converge exactly one available source per named output group.",
+          "description": "Select the first available source per output, optionally grouped.",
           "type": "object",
           "properties": {
+            "grouped": {
+              "type": "boolean"
+            },
             "groups": {
               "type": "array",
               "items": {
@@ -12108,6 +12121,7 @@
           "additionalProperties": false,
           "required": [
             "type",
+            "grouped",
             "groups"
           ]
         },
@@ -12562,7 +12576,9 @@
         "operator": {
           "$ref": "#/$defs/WorkflowListOperator"
         },
-        "value": true
+        "value": {
+          "$ref": "#/$defs/WorkflowValue"
+        }
       },
       "additionalProperties": false,
       "required": [
@@ -12583,7 +12599,11 @@
         "greater",
         "greater_equal",
         "less",
-        "less_equal"
+        "less_equal",
+        "empty",
+        "not_empty",
+        "in",
+        "not_in"
       ]
     },
     "WorkflowListSort": {
@@ -12790,7 +12810,14 @@
           "type": "string"
         },
         "output_type": {
-          "$ref": "#/$defs/WorkflowVarType"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowVarType"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "variables": {
           "type": "array",
@@ -12805,7 +12832,6 @@
       "additionalProperties": false,
       "required": [
         "name",
-        "output_type",
         "variables"
       ]
     },
@@ -13923,6 +13949,32 @@
             "kind": {
               "type": "string",
               "const": "transform_input"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "list_filter_value"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "list_extract"
             }
           },
           "required": [

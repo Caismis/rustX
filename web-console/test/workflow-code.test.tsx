@@ -9,7 +9,7 @@ import { viewId } from '../src/app/workflows/ui/editor/selection';
 import { codeDocument } from './workflow-code-document';
 import { statusSource } from './workflow-fixtures';
 import { WorkflowAnalysisSession } from '../src/app/workflows/document/analysis';
-import type { WorkflowAnalysisReport } from '../../protocol/app-server/v66';
+import type { WorkflowAnalysisReport } from '../../protocol/app-server/v67';
 
 vi.mock('../src/app/workflows/ui/editor/forms/WorkflowCodeView',()=>({default:({label,value,onChange,onBlur}:{label:string;value:string;onChange:(value:string)=>void;onBlur:()=>void})=><textarea aria-label={label} value={value} onChange={event=>onChange(event.target.value)} onBlur={onBlur}/>}));
 beforeEach(()=>{vi.stubGlobal('ResizeObserver',class{observe(){}unobserve(){}disconnect(){}});vi.stubGlobal('DOMMatrixReadOnly',class{m22=1;});});

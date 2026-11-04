@@ -362,14 +362,6 @@ impl ActivationScopes {
                 Bdd::binary_op_with_limit(MAX_ACTIVATION_NODES, active, &present, op_function::and)
                     .ok_or_else(too_complex)?
             };
-            let overlap =
-                Bdd::binary_op_with_limit(MAX_ACTIVATION_NODES, &union, &present, op_function::and)
-                    .ok_or_else(too_complex)?;
-            if !overlap.is_false() {
-                return Err(WorkflowCompileError::InvalidReference(
-                    "aggregate sources must be mutually exclusive".into(),
-                ));
-            }
             union =
                 Bdd::binary_op_with_limit(MAX_ACTIVATION_NODES, &union, &present, op_function::or)
                     .ok_or_else(too_complex)?;

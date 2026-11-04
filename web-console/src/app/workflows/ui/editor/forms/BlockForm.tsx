@@ -1,4 +1,4 @@
-import type { WorkflowToolChoice } from '../../../../../../../protocol/app-server/v66';
+import type { WorkflowToolChoice } from '../../../../../../../protocol/app-server/v67';
 import type { ArrayEdit } from '../../../document/fields';
 import { useTranslation } from '../../../../../locale/react';
 import { setWorkflow } from '../../../document/commands';

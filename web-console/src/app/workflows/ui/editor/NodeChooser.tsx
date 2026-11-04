@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode, type RefObject } from 'react';
 import clsx from 'clsx';
-import type { WorkflowToolChoice, WorkflowToolSource } from '../../../../../../protocol/app-server/v66';
+import type { WorkflowToolChoice, WorkflowToolSource } from '../../../../../../protocol/app-server/v67';
 import { useTranslation } from '../../../../locale/react';
 import type { Translate } from '../../../../locale/translation';
 import { IconChevronRightOutline14, IconSearchOutline16 } from '../../../../presentation/primitives/icons';

@@ -1,4 +1,4 @@
-import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v66';
+import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v67';
 import { readJson } from '../../../../shared/json-numbers';
 import { boundedDocument, CommandRejected, freshNodeId, validLocalKey, validNodeId } from './commands';
 import { blockAt, deepNodeCount, edgesOf, sameBlockPath, sameDocument, updateBlock, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from './model';
@@ -107,9 +107,10 @@ function node(input: unknown): void {
       keys(record,['type','variables','template']); text(record.template);
       for (const item of Object.values(object(record.variables))) value(item); return;
     case 'list': {
-      keys(record,['type','input','filter','sort','limit']); value(record.input);
-      if (record.filter != null) { const filter=keys(record.filter,['path','operator','value']); array(filter.path).forEach(text); if (!['equal','not_equal','contains','not_contains','starts_with','ends_with','greater','greater_equal','less','less_equal'].includes(filter.operator as string) || !Object.hasOwn(filter,'value')) fail(); }
+      keys(record,['type','input','filter','sort','limit','extract']); value(record.input);
+      if (record.filter != null) { const filter=keys(record.filter,['path','operator','value']); array(filter.path).forEach(text); if (!['equal','not_equal','contains','not_contains','starts_with','ends_with','greater','greater_equal','less','less_equal','empty','not_empty','in','not_in'].includes(filter.operator as string) || !Object.hasOwn(filter,'value')) fail(); value(filter.value); }
       if (record.sort != null) { const sort=keys(record.sort,['path','order']); array(sort.path).forEach(text); if (sort.order!=='asc' && sort.order!=='desc') fail(); }
+      if(record.extract!=null)value(record.extract);
       if (record.limit != null) unsigned(record.limit); return;
     }
     case 'classifier':
@@ -122,8 +123,8 @@ function node(input: unknown): void {
       for(const kind of Object.values(object(record.outputs)))if(!VAR_TYPES.includes(kind as string))fail();
       retry(record.retry); valueStrategy(record.on_error); return;
     case 'aggregate':
-      keys(record,['type','groups']); for (const item of array(record.groups)) {
-        const group=keys(item,['name','output_type','variables']); text(group.name); if (!VAR_TYPES.includes(group.output_type as string)) fail();
+      keys(record,['type','groups','grouped']);if(typeof record.grouped!=='boolean')fail(); for (const item of array(record.groups)) {
+        const group=keys(item,['name','output_type','variables']); text(group.name); if (group.output_type!=null&&!VAR_TYPES.includes(group.output_type as string)) fail();
         for (const path of array(group.variables)) array(path).forEach(text);
       } return;
     case 'agent':

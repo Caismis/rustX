@@ -8,7 +8,7 @@ export function dataNodesDocument():WorkflowDocument {
       classify:{type:'classifier',model:{mode:'session'},input:{type:'reference',path:['args','query']},instruction:[literal('Choose the best class.')],classes:[{id:'class_1',label:'CLASS 1',description:[literal('Support requests')]},{id:'class_2',label:'CLASS 2',description:[literal('Other questions')]}]},
       left:{type:'template',variables:{arg1:{type:'reference',path:['args','query']}},template:'{{ arg1 | upper }}'},
       right:{type:'template',variables:{arg1:{type:'reference',path:['args','query']}},template:'{{ arg1 | lower }}'},
-      merge:{type:'aggregate',groups:[{name:'output',output_type:'string',variables:[['left','output'],['right','output']]}]},
+      merge:{type:'aggregate',grouped:false,groups:[{name:'Group1',output_type:'string',variables:[['left','output'],['right','output']]}]},
       list:{type:'list',input:{type:'reference',path:['args','numbers']}},
       repeat:{type:'loop',loop_count:1,loop_variables:[{label:'count',var_type:'number',value:{type:'literal',value:0}}],body:{nodes:{inner_start:{type:'start'}},edges:[]}},
       done:{type:'return',outputs:[{variable:'answer',value_selector:['merge','output']},{variable:'numbers',value_selector:['list','result']}]},

@@ -1,6 +1,6 @@
 import { branchGeometry } from '../../document/branch';
 import type { Node, Edge } from '@xyflow/react';
-import type { WorkflowNote } from '../../../../../../protocol/app-server/v66';
+import type { WorkflowNote } from '../../../../../../protocol/app-server/v67';
 import { nodePresentation, START_POSITION } from '../../document/geometry';
 import { edgesOf, isContainer, nodeAt, startOf, sameBlockPath, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../../document/model';
 import { edgePort } from '../../document/ports';

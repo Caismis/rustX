@@ -516,30 +516,43 @@ by default. No AI authoring controls are included.
 
 ### List Operator (`list`)
 
-`input` must have an array schema with declared items. Operations run in the
-fixed order **filter, stable sort, limit**; each operation is optional:
+`input` must have an array schema with declared items. Each operation is
+optional, and execution follows Dify's order: **filter → serial extraction →
+stable sort → limit**. The panel arranges Filter, Extract, Limit and Sort as in
+Dify; source type determines the operators and comparison control.
 
 ```yaml
 rank:
   type: list
   input: {type: reference, path: [args, records]}
-  filter: {path: [score], operator: greater_equal, value: 0.5}
+  filter:
+    path: [score]
+    operator: greater_equal
+    value: {type: literal, value: 0.5}
+  extract: {type: reference, path: [args, serial]}
   sort: {path: [score], order: desc}
   limit: 10
 ```
 
-A `path` is a list of literal required object fields; `[]` selects a primitive
-item itself. Equality accepts strings, numbers and booleans; text supports
-`contains`, `not_contains`, `starts_with` and `ends_with`; numbers support
-`greater`, `greater_equal`, `less` and `less_equal`. There is no type coercion.
-Sorting accepts scalar fields and `asc` or `desc`, preserving source order for
-ties. An enabled limit is 1–65,536.
+A `path` is a list of literal required JSON object fields; `[]` selects a
+primitive item itself. Strings support equality, contains/not-contains,
+starts/ends-with, empty/not-empty and in/not-in. Numeric inputs support the
+six comparisons, and booleans support equality/inequality. Comparison values
+and serials are native typed values; the panel supports variable tokens.
+Rendered numeric text is parsed for numeric comparisons. Integers retain the
+native exact-order comparison rather than being rounded to binary64.
+
+Serials are positive 1-based integers, applied to the filtered list before
+sorting; an out-of-range serial fails. An originally empty input returns an
+empty list directly. Limits are 1–20, initially 10, with a slider and numeric
+input. Stable ascending/descending sorting keeps source order on ties.
 
 Outputs are `result` (the resulting typed array), `first_record` and
-`last_record`. On an empty result the latter two are absent, so ordinary direct
-references to these optional fields are rejected. A Template may bind the
-whole List output and guard access with Jinja. The complete output, including
-first/last copies, must fit 64 KiB.
+`last_record`. Empty lists explicitly produce null for both endpoint records;
+their schemas are nullable. The complete output, including first/last copies,
+must fit 64 KiB. JSON object arrays retain rustX's required-field selectors;
+Dify-specific File/transfer metadata is not represented as fabricated JSON
+file controls.
 
 ### Question Classifier (`classifier`)
 
@@ -577,26 +590,42 @@ Standalone Workflows have no Dify Chatflow memory setting.
 
 ### Variable Aggregator (`aggregate`)
 
-Each named output group specifies one type and the alternative source selectors
-that feed it:
+The initial node has `grouped: false`, an empty variable list and no selected
+output type. Selecting the first variable infers the type; subsequent choices
+must match it. Removing every source clears the type. Duplicate selectors are
+not added. The ungrouped result is `{output: <first available value>}`.
 
 ```yaml
 merge:
   type: aggregate
+  grouped: true
   groups:
     - name: answer
       output_type: string
       variables: [[support_answer, output], [other_answer, output]]
 ```
 
-The result here is `{answer: <selected value>}`. Groups and sources each have a
-1–32 limit. Output types are the same scalar/object/typed-array vocabulary as
-Loop variables. The compiler proves that the sources are mutually exclusive,
-that exactly one is available whenever the Aggregator activates, and that
-every source matches the declared type. This allows values from conditional
-paths to join without making optional producers readable by ordinary nodes.
-Concurrent sources or incomplete path coverage are errors. Native candidate
-analysis exposes possible ancestor outputs specifically to these selectors.
+The grouped result is `{answer: {output: <selected value>}}`, with selectors
+such as `[merge, answer, output]`. Groups and sources each have a 1–32 active
+limit. The panel provides group naming, automatic type badges, same-type
+source selection, empty-state guidance and an output disclosure. Disabling
+groups uses the first group's sources and retains the other configurations
+for reenabling, as Dify does. Inactive sources do not create execution reads,
+type checks or activation requirements.
+
+Enabling/disabling grouping and renaming a group rewrite structured downstream
+references. Removing a referenced group or disabling additional referenced
+groups requires confirmation before clearing those references. Undo restores
+configuration and references together. Group configuration is retained when
+disabled, while its removed output references are cleared after confirmation.
+
+Execution scans each active group's selectors in authored order and selects
+the first available source, including when several parallel producers have
+completed. Native analysis exposes possible ancestors for these selectors.
+The compiler still requires matching types and proves at least one source on
+every activation, preserving rustX's definite-reference contract; ordinary
+nodes do not gain access to optional branch producers. The old flat named
+group output format is removed; App Server v67 requires the grouping flag.
 
 ### Code Execution and Variable Assigner
 

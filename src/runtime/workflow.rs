@@ -440,6 +440,8 @@ pub enum WorkflowNodeDefinition {
         sort: Option<WorkflowListSort>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extract: Option<WorkflowValue>,
     },
     /// One tool-free classification Call with an exit per class.
     Classifier {
@@ -461,8 +463,11 @@ pub enum WorkflowNodeDefinition {
         #[serde(default)]
         on_error: WorkflowValueErrorStrategy,
     },
-    /// Converge exactly one available source per named output group.
-    Aggregate { groups: Vec<WorkflowAggregateGroup> },
+    /// Select the first available source per output, optionally grouped.
+    Aggregate {
+        grouped: bool,
+        groups: Vec<WorkflowAggregateGroup>,
+    },
     /// One tool-free logical Auxiliary Call using the invoking Attempt's authority.
     Model {
         #[serde(default)]
@@ -1306,9 +1311,11 @@ pub enum WorkflowNodeProgram {
         filter: Option<WorkflowListFilter>,
         sort: Option<WorkflowListSort>,
         limit: Option<u32>,
+        extract: Option<WorkflowValue>,
         output_schema: Value,
     },
     Aggregate {
+        grouped: bool,
         groups: Vec<WorkflowAggregateGroup>,
         output_schema: Value,
     },
@@ -1901,11 +1908,12 @@ fn compile_block(
                 available_after.insert(node_id.clone(), available_before.with_prefix(&node_id,&transform::text_schema()));
                 WorkflowNodeProgram::Template { variables:variables.clone(), template:template.clone() }
             }
-            WorkflowNodeDefinition::List { input, filter, sort, limit } => {
+            WorkflowNodeDefinition::List { input, filter, sort, limit, extract } => {
                 let array = value_schema(input,&available_before,&node_id,0).map_err(|e| e.at("input"))?;
+                transform::validate_list_values(&array, filter.as_ref(), extract.as_ref(), &available_before, &node_id)?;
                 let output_schema = transform::list_schema(&array,filter.as_ref(),sort.as_ref(),*limit)?;
                 available_after.insert(node_id.clone(),available_before.with_prefix(&node_id,&output_schema));
-                WorkflowNodeProgram::List { input:input.clone(),filter:filter.clone(),sort:sort.clone(),limit:*limit,output_schema }
+                WorkflowNodeProgram::List { input:input.clone(),filter:filter.clone(),sort:sort.clone(),limit:*limit,extract:extract.clone(),output_schema }
             }
             WorkflowNodeDefinition::Classifier { model,input,instruction,classes } => {
                 let model = transform::classifier(model,input,instruction,classes,&available_before,&node_id)?;
@@ -1929,18 +1937,19 @@ fn compile_block(
                     result: tool::WorkflowToolProjection::Code { schema }, retry: *retry, on_error: on_error.clone(),
                 }
             }
-            WorkflowNodeDefinition::Aggregate { groups } => {
-                transform::validate_groups(groups)?;
-                for (index,group) in groups.iter().enumerate() {
+            WorkflowNodeDefinition::Aggregate { groups, grouped } => {
+                transform::validate_groups(groups,*grouped)?;
+                let active=transform::active_groups(groups,*grouped);
+                for (index,group) in active.iter().enumerate() {
                     scopes.validate_aggregate(&node_id,&group.variables,&base).map_err(|e| e.at(format!("groups.{index}.variables")))?;
                     for (position,path) in group.variables.iter().enumerate() {
                         let actual = value_schema(&WorkflowValue::Reference {path:path.clone()},&available_before,&node_id,0).map_err(|e| e.at(format!("groups.{index}.variables.{position}")))?;
-                        if !schemas_compatible(&actual,&group.output_type.schema()) { return Err(WorkflowCompileError::IncompatibleReference("aggregate source type does not match the output group".into()).at(format!("groups.{index}.variables.{position}"))); }
+                        if !schemas_compatible(&actual,&group.output_type.ok_or_else(|| WorkflowCompileError::InvalidField("aggregate type is not selected".into()))?.schema()) { return Err(WorkflowCompileError::IncompatibleReference("aggregate source type does not match the output group".into()).at(format!("groups.{index}.variables.{position}"))); }
                     }
                 }
-                let output_schema = transform::aggregate_schema(groups);
+                let output_schema = transform::aggregate_schema(groups,*grouped)?;
                 available_after.insert(node_id.clone(),available_before.with_prefix(&node_id,&output_schema));
-                WorkflowNodeProgram::Aggregate {groups:groups.clone(),output_schema}
+                WorkflowNodeProgram::Aggregate {groups:active.to_vec(),grouped:*grouped,output_schema}
             }
             WorkflowNodeDefinition::Model { model, messages, output, retry, on_error } => {
                 let model = model.lower().map_err(|error| error.at("model"))?;

@@ -5,6 +5,18 @@ fn document(value: Value) -> WorkflowDefinition {
     serde_json::from_value(value).unwrap()
 }
 
+fn run_list(
+    input: Value,
+    filter: Option<&super::super::WorkflowListFilter>,
+    sort: Option<&super::super::WorkflowListSort>,
+    limit: Option<u32>,
+) -> Result<Value, WorkflowRunError> {
+    transform::list(input, filter, sort, limit, None, |value| match value {
+        WorkflowValue::Literal { value } => Ok(value.clone()),
+        _ => panic!("literal expected in this fixture"),
+    })
+}
+
 #[test]
 fn template_compilation_checks_bindings_and_rendering_is_bounded() {
     let variables = BTreeMap::from([("items".into(), reference("args.items"))]);
@@ -96,11 +108,12 @@ fn template_matches_dify_undefined_whitespace_and_common_jinja_operations() {
 
 #[test]
 fn list_operations_are_ordered_stable_and_keep_exact_integer_order() {
-    let filter =
-        serde_json::from_value(json!({"path":["score"],"operator":"greater_equal","value":2}))
-            .unwrap();
+    let filter = serde_json::from_value(
+        json!({"path":["score"],"operator":"greater_equal","value":{"type":"literal","value":2}}),
+    )
+    .unwrap();
     let sort = serde_json::from_value(json!({"path":["score"],"order":"desc"})).unwrap();
-    let output = transform::list(json!([{"name":"a","score":1},{"name":"b","score":3},{"name":"c","score":3},{"name":"d","score":2}]),Some(&filter),Some(&sort),Some(2)).unwrap();
+    let output = run_list(json!([{"name":"a","score":1},{"name":"b","score":3},{"name":"c","score":3},{"name":"d","score":2}]),Some(&filter),Some(&sort),Some(2)).unwrap();
     assert_eq!(
         output["result"],
         json!([{"name":"b","score":3},{"name":"c","score":3}])
@@ -109,7 +122,7 @@ fn list_operations_are_ordered_stable_and_keep_exact_integer_order() {
     assert_eq!(output["last_record"]["name"], "c");
     let sort = serde_json::from_value(json!({"path":[],"order":"asc"})).unwrap();
     assert_eq!(
-        transform::list(
+        run_list(
             json!([9_007_199_254_740_993_u64, 9_007_199_254_740_992_u64]),
             None,
             Some(&sort),
@@ -119,11 +132,11 @@ fn list_operations_are_ordered_stable_and_keep_exact_integer_order() {
         json!([9_007_199_254_740_992_u64, 9_007_199_254_740_993_u64])
     );
     assert_eq!(
-        transform::list(json!([]), None, None, None).unwrap(),
-        json!({"result":[]})
+        run_list(json!([]), None, None, None).unwrap(),
+        json!({"result":[],"first_record":null,"last_record":null})
     );
     assert_eq!(
-        transform::list(
+        run_list(
             json!([9_007_199_254_740_993_u64, 9_007_199_254_740_992.0]),
             None,
             Some(&sort),
@@ -132,7 +145,7 @@ fn list_operations_are_ordered_stable_and_keep_exact_integer_order() {
         .unwrap()["result"],
         json!([9_007_199_254_740_992.0, 9_007_199_254_740_993_u64])
     );
-    assert!(transform::list(json!(["x".repeat(MAX_VALUE_BYTES / 2)]), None, None, None).is_err());
+    assert!(run_list(json!(["x".repeat(MAX_VALUE_BYTES / 2)]), None, None, None).is_err());
 }
 
 fn aggregate_document() -> WorkflowDefinition {
@@ -143,7 +156,7 @@ fn aggregate_document() -> WorkflowDefinition {
             "choose":{"type":"branch","cases":[{"id":"true","condition":{"type":"boolean","value":{"type":"reference","path":["args","flag"]}}}]},
             "left":{"type":"template","variables":{},"template":"Left"},
             "right":{"type":"template","variables":{},"template":"Right"},
-            "merge":{"type":"aggregate","groups":[{"name":"output","output_type":"string","variables":[["left","output"],["right","output"]]}]},
+            "merge":{"type":"aggregate","grouped":false,"groups":[{"name":"output","output_type":"string","variables":[["left","output"],["right","output"]]}]},
             "format":{"type":"template","variables":{"answer":{"type":"reference","path":["merge","output"]}},"template":"{{ answer | upper }}!"},
             "done":{"type":"return","outputs":[{"variable":"answer","value_selector":["format","output"]}]}
         },"edges":[{"from":"start","to":"choose"},{"from":"choose","to":"left","port":"true"},{"from":"choose","to":"right","port":"false"},{"from":"left","to":"merge"},{"from":"right","to":"merge"},{"from":"merge","to":"format"},{"from":"format","to":"done"}]
@@ -172,7 +185,7 @@ async fn both_exclusive_paths_converge_and_feed_one_native_template() {
 }
 
 #[test]
-fn aggregator_rejects_incomplete_coverage_concurrent_sources_and_wrong_types() {
+fn aggregator_validates_coverage_and_types_but_accepts_ordered_parallel_sources() {
     let original = aggregate_document();
     let mut missing = serde_json::to_value(&original).unwrap();
     missing["block"]["nodes"]["merge"]["groups"][0]["variables"] = json!([["left", "output"]]);
@@ -192,12 +205,7 @@ fn aggregator_rejects_incomplete_coverage_concurrent_sources_and_wrong_types() {
         .block
         .edges
         .extend([edge("start", "left"), edge("start", "right")]);
-    assert!(
-        compile_test(parallel)
-            .unwrap_err()
-            .to_string()
-            .contains("mutually exclusive")
-    );
+    assert!(compile_test(parallel).is_ok());
     let mut wrong = serde_json::to_value(&original).unwrap();
     wrong["block"]["nodes"]["merge"]["groups"][0]["output_type"] = json!("number");
     assert!(compile_test(document(wrong)).is_err());
@@ -291,7 +299,7 @@ fn classifier_has_finite_model_demand_and_class_specific_exits() {
 async fn filtered_list_schema_and_values_reach_a_template_through_the_native_runtime() {
     let definition = document(json!({"description":"Format top scores","block":{
         "input":{"type":"object","properties":{"scores":{"type":"array","items":{"type":"integer"}}},"required":["scores"],"additionalProperties":false},
-        "nodes":{"start":{"type":"start"},"select":{"type":"list","input":{"type":"reference","path":["args","scores"]},"filter":{"path":[],"operator":"greater","value":1},"sort":{"path":[],"order":"desc"},"limit":2},"format":{"type":"template","variables":{"scores":{"type":"reference","path":["select","result"]}},"template":"{{ scores | join(', ') }}"},"done":{"type":"return","outputs":[{"variable":"scores","value_selector":["format","output"]}]}},
+        "nodes":{"start":{"type":"start"},"select":{"type":"list","input":{"type":"reference","path":["args","scores"]},"filter":{"path":[],"operator":"greater","value":{"type":"literal","value":1}},"sort":{"path":[],"order":"desc"},"limit":2},"format":{"type":"template","variables":{"scores":{"type":"reference","path":["select","result"]}},"template":"{{ scores | join(', ') }}"},"done":{"type":"return","outputs":[{"variable":"scores","value_selector":["format","output"]}]}},
         "edges":[{"from":"start","to":"select"},{"from":"select","to":"format"},{"from":"format","to":"done"}]}}));
     let plane = workflow_test_plane(1);
     let runtime = workflow_runtime(&plane);
@@ -307,4 +315,170 @@ async fn filtered_list_schema_and_values_reach_a_template_through_the_native_run
         .await
         .unwrap();
     assert_eq!(result, json!({"scores":"4, 3"}));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn aggregator_selects_first_available_source_and_emits_real_group_output_paths() {
+    for grouped in [false, true] {
+        for reverse in [false, true] {
+            let mut definition = aggregate_document();
+            definition.block.nodes.remove("choose");
+            definition
+                .block
+                .edges
+                .retain(|edge| edge.from != "choose" && edge.to != "choose");
+            definition
+                .block
+                .edges
+                .extend([edge("start", "left"), edge("start", "right")]);
+            if let WorkflowNodeDefinition::Aggregate {
+                groups,
+                grouped: setting,
+            } = definition.block.nodes.get_mut("merge").unwrap()
+            {
+                *setting = grouped;
+                if grouped {
+                    groups[0].name = "Group1".into();
+                }
+                if reverse {
+                    groups[0].variables.reverse();
+                }
+            }
+            if grouped
+                && let WorkflowNodeDefinition::Template { variables, .. } =
+                    definition.block.nodes.get_mut("format").unwrap()
+            {
+                variables.insert("answer".into(), reference("merge.Group1.output"));
+            }
+            let plane = workflow_test_plane(2);
+            let runtime = workflow_runtime(&plane);
+            let (_, cancellation) = workflow_cancellation();
+            let result = runtime
+                .run_test_foreground(
+                    Arc::new(compile_test(definition).unwrap()),
+                    ToolCallId::new("ordered-aggregation"),
+                    workflow_test_context(&plane),
+                    json!({"flag":true}),
+                    cancellation,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result, json!({"answer":if reverse {"RIGHT!"}else{"LEFT!"}}));
+        }
+    }
+}
+
+#[test]
+fn list_filters_then_extracts_one_based_serial_before_sort_and_limit() {
+    let filter:super::super::WorkflowListFilter=serde_json::from_value(json!({"path":[],"operator":"greater","value":{"type":"reference","path":["args","threshold"]}})).unwrap();
+    let sort = serde_json::from_value(json!({"path":[],"order":"desc"})).unwrap();
+    let extract = reference("args.serial");
+    let result = transform::list(
+        json!([5, 1, 2, 4]),
+        Some(&filter),
+        Some(&sort),
+        Some(1),
+        Some(&extract),
+        |value| match value {
+            WorkflowValue::Reference { path } => Ok(if path.last().unwrap() == "threshold" {
+                json!(1)
+            } else {
+                json!(2)
+            }),
+            _ => unreachable!(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        result,
+        json!({"result":[2],"first_record":2,"last_record":2})
+    );
+    for serial in [json!(0), json!(5), json!(1.5), json!("bad")] {
+        assert!(
+            transform::list(
+                json!([1, 2]),
+                None,
+                None,
+                None,
+                Some(&WorkflowValue::Literal { value: serial }),
+                |v| if let WorkflowValue::Literal { value } = v {
+                    Ok(value.clone())
+                } else {
+                    unreachable!()
+                }
+            )
+            .is_err()
+        );
+    }
+    let result = transform::list(
+        json!([]),
+        None,
+        None,
+        None,
+        Some(&WorkflowValue::Literal { value: json!(0) }),
+        |_| panic!("empty input must not evaluate operations"),
+    )
+    .unwrap();
+    assert_eq!(
+        result,
+        json!({"result":[],"first_record":null,"last_record":null})
+    );
+    for (operator, expected) in [
+        ("empty", json!([""])),
+        ("not_empty", json!(["a", "b"])),
+        ("in", json!(["", "a"])),
+        ("not_in", json!(["b"])),
+    ] {
+        let filter = serde_json::from_value(
+            json!({"path":[],"operator":operator,"value":{"type":"literal","value":"a"}}),
+        )
+        .unwrap();
+        assert_eq!(
+            run_list(json!(["", "a", "b"]), Some(&filter), None, None).unwrap()["result"],
+            expected
+        );
+    }
+}
+
+#[test]
+fn integer_list_comparisons_admit_numeric_references_without_rounding_the_items() {
+    use crate::runtime::workflow::authoring::*;
+    let definition = document(
+        json!({"description":"typed list","block":{"input":{"type":"object","properties":{"items":{"type":"array","items":{"type":"integer"}},"threshold":{"type":"number"}},"required":["items","threshold"],"additionalProperties":false},"nodes":{"start":{"type":"start"},"select":{"type":"list","input":{"type":"reference","path":["args","items"]},"filter":{"path":[],"operator":"greater","value":{"type":"reference","path":["args","threshold"]}}},"done":{"type":"return","outputs":[{"variable":"result","value_selector":["select","result"]}]}},"edges":[{"from":"start","to":"select"},{"from":"select","to":"done"}]}}),
+    );
+    compile_test(definition.clone()).unwrap();
+    let query=serde_json::from_value(json!({"consumer":{"address":{"block":[],"node":"select"},"field":{"kind":"list_filter_value"}},"reference":["args","threshold"],"limit":32})).unwrap();
+    let analysis = analyze(&definition, Some(&query), &BTreeSet::new()).unwrap();
+    assert_eq!(
+        analysis.selected.unwrap().compatibility,
+        WorkflowReferenceCompatibility::Compatible
+    );
+    let WorkflowNodeDefinition::List { filter, .. } = &definition.block.nodes["select"] else {
+        unreachable!()
+    };
+    let result = transform::list(json!([1, 2]), filter.as_ref(), None, None, None, |_| {
+        Ok(json!(1.5))
+    })
+    .unwrap();
+    assert_eq!(result["result"], json!([2]));
+}
+
+#[test]
+fn disabled_aggregation_retains_but_does_not_read_or_validate_inactive_groups() {
+    let mut definition = aggregate_document();
+    let WorkflowNodeDefinition::Aggregate { groups, .. } =
+        definition.block.nodes.get_mut("merge").unwrap()
+    else {
+        unreachable!()
+    };
+    groups[0].name = "Retained".into();
+    groups.push(super::super::WorkflowAggregateGroup {
+        name: "Inactive".into(),
+        output_type: None,
+        variables: vec![],
+    });
+    let program = compile_test(definition).unwrap();
+    let view = program.inspect();
+    assert!(view.blocks["block"].nodes["merge"].output_schema.is_some());
 }
