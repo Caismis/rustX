@@ -1652,6 +1652,174 @@ async fn model_facts_follow_the_invocations_that_run() {
     .await;
 }
 
+/// A direct Model node of an enabled Workflow is a model that runs: a
+/// parameter change of the model only it names is one Model fact through
+/// the commit path, while adding a model nothing selects records nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_workflow_model_node_is_a_model_that_runs() {
+    bounded(async {
+        use crate::local_runtime::configuration::settings::SourceTarget;
+        use crate::runtime::configuration_commit::ConfigurationDomain;
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let workspace = fixture.workspaces[0].clone();
+        let workflow = workspace.join(".agents/workflows/generate.yaml");
+        std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+        let schema = serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
+        std::fs::write(&workflow, serde_json::to_string(&serde_json::json!({
+            "description": "Generate",
+            "block": {"input": schema, "nodes": {"workflow_start": {"type": "start"},
+                "generate": {"type": "model", "model": {"mode": "explicit", "model": "local/b"},
+                    "messages": [{"role": "system", "content": [{"type": "literal", "value": "Return done"}]}, {"role": "user", "content": [{"type": "literal", "value": "Go."}]}],
+                    "output": {"type": "text"}},
+                "done": {"type": "return", "outputs": []}},
+                "edges": [{"from": "workflow_start", "to": "generate"}, {"from": "generate", "to": "done"}]}
+        })).unwrap()).unwrap();
+        std::fs::write(workspace.join("rustx.toml"), "[agent]\nworkflows=['generate']\n").unwrap();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        assert!(
+            runtime
+                .runtime_resources()
+                .capability()
+                .tool_registry()
+                .definitions()
+                .iter()
+                .any(|tool| tool.name == "generate"),
+            "the Workflow is enabled"
+        );
+        let view = runtime.model_view();
+        let models = fixture
+            .manager
+            .source_settings(&SourceTarget::User)
+            .await
+            .unwrap()
+            .user
+            .authored
+            .unwrap()
+            .models
+            .unwrap();
+        let facts = configuration_changes(&runtime).len();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Model {
+                id: "local/c".into(),
+                authored: Some(models["local/a"].clone()),
+            },
+        )
+        .await;
+        applied(&fixture, 0).await;
+        assert_eq!(configuration_changes(&runtime).len(), facts, "nothing selects local/c");
+        let mut tuned = models["local/b"].clone();
+        tuned.request_params = Some(crate::toml_authoring::AuthoredRequestParams(
+            serde_json::from_value(serde_json::json!({"temperature": 0.25})).unwrap(),
+        ));
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Model {
+                id: "local/b".into(),
+                authored: Some(tuned),
+            },
+        )
+        .await;
+        applied(&fixture, 0).await;
+        assert_eq!(runtime.model_view(), view, "the Session view is unchanged");
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 1, "{changes:?}");
+        assert_eq!(changes[facts].domains, [ConfigurationDomain::Model]);
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// The authorized Tool environment is part of what runs: changing one value
+/// changes the `subagent` Tool whose child inherits it and the Session's
+/// execution policy, and the retained catalog names the variable, never its
+/// value.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_environment_value_change_is_recorded_without_its_value() {
+    bounded(async {
+        use crate::runtime::configuration_commit::ConfigurationDomain;
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let workspace = fixture.workspaces[0].clone();
+        let agents = workspace.join(".agents/agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("reviewer.toml"),
+            "description='Review'\ninstructions='Review'\n[tools]\nbuiltin=['bash']\n",
+        )
+        .unwrap();
+        let config = |mode: &str| {
+            std::fs::write(
+                workspace.join("rustx.toml"),
+                format!("[agent]\nagents=['reviewer']\n[environment]\nMODE = \"{mode}\"\n"),
+            )
+            .unwrap();
+        };
+        config("value-alpha");
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let declarations = runtime
+            .runtime_resources()
+            .capability()
+            .tool_registry()
+            .model_definitions();
+        let facts = configuration_changes(&runtime).len();
+        config("value-bravo");
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: workspace.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        applied(&fixture, 0).await;
+        let resources = runtime.runtime_resources();
+        assert_eq!(
+            resources
+                .capability()
+                .effective_environment()
+                .authorized_entries(),
+            [("MODE".to_owned(), "value-bravo".to_owned())],
+            "the child inherits the new value"
+        );
+        assert_eq!(
+            resources.capability().tool_registry().model_definitions(),
+            declarations
+        );
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 1, "{changes:?}");
+        assert_eq!(changes[facts].tools.changed.names, ["subagent"]);
+        assert!(
+            changes[facts]
+                .domains
+                .contains(&ConfigurationDomain::ExecutionPolicy),
+            "{changes:?}"
+        );
+        let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
+            .pop()
+            .unwrap();
+        let tool = &catalog["tools"][0];
+        assert_eq!(tool["name"], "subagent");
+        assert_eq!(
+            tool["after"]["agents"]["reviewer"]["environment"],
+            serde_json::json!(["MODE"])
+        );
+        let text = catalog.to_string();
+        assert!(
+            !text.contains("value-alpha") && !text.contains("value-bravo"),
+            "{text}"
+        );
+        fixture.close().await;
+    })
+    .await;
+}
+
 /// A removal keeps what it removed: 17 Skills present since bootstrap, with
 /// no request and no earlier fact, all removed at once, stay readable in full
 /// from that one fact after the runtime is gone and the files changed.
@@ -1904,6 +2072,91 @@ async fn a_published_policy_after_an_unrecorded_commit_survives_reload() {
         assert!(changed.has_changed().unwrap());
         assert!(*changed.borrow_and_update() >= view.version, "{view:?}");
         fixture.manager.drain_all_runtimes().await;
+    })
+    .await;
+}
+
+/// Loading is one state switch: while the publication of a healthy
+/// replacement is parked before it attaches to the Session's application,
+/// `load()` has not returned; once it returns, the application already
+/// belongs to the replacement and observers were notified.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_load_returns_only_after_its_runtime_owns_the_application() {
+    // A parked publication blocks a worker thread: release it however this
+    // test ends.
+    struct Release(std::sync::Arc<AsyncGate>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let loaded = fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        runtime.fail_next_configuration_record();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("published, not recorded".into()),
+            },
+        )
+        .await;
+        let uncertain = |fixture: &Fixture| {
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .units
+                .values()
+                .any(|unit| matches!(unit, UnitApplication::Uncertain { .. }))
+        };
+        applied(&fixture, 0).await;
+        assert!(uncertain(&fixture));
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        drop(runtime);
+        let _ = fixture.manager.unload(&loaded.conversation).await;
+        let gate = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .resident_attach
+            .clone();
+        gate.arm();
+        let _release = Release(gate.clone());
+        let mut changed = fixture.manager.configuration_changes();
+        changed.mark_unchanged();
+        let manager = fixture.manager.clone();
+        let reload = {
+            let id = id.clone();
+            tokio::spawn(async move { manager.load(&id, None).await.map(|_| ()) })
+        };
+        gate.entered().await;
+        // Parked before the attach: the resident is not reported loaded.
+        tokio::task::yield_now().await;
+        assert!(
+            !reload.is_finished(),
+            "load() reported a resident it had not attached"
+        );
+        assert!(uncertain(&fixture));
+        gate.release();
+        reload.await.unwrap().unwrap();
+        // No wait: the returned load already owns the application.
+        assert!(
+            !uncertain(&fixture),
+            "{:?}",
+            fixture.manager.configuration_application(&id)
+        );
+        assert!(changed.has_changed().unwrap());
+        let view = fixture.manager.configuration_application(&id).unwrap();
+        assert!(*changed.borrow_and_update() >= view.version, "{view:?}");
+        let _ = fixture.manager.drain_all_runtimes().await;
     })
     .await;
 }

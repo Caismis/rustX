@@ -1931,14 +1931,18 @@ with `before` for a change or removal and `after` for an addition or change. A
 Tool state is `{ definition, model_input_schema, server_binding_digest,
 workflow, runs, agents }`. `runs` is `{ tools, sources }`: the leaf Tool
 definitions a Workflow's direct Tool nodes call, by Tool id, and the binding
-digest of every Tool source beneath them (`null` without a binding). `agents`
-holds each Named Agent a Workflow froze or `subagent` admits as
-`{ definition, runs, skills, project_instructions }`: its definition digest,
-its Tools and sources (sources it has not prepared yet included), the version
-of each Skill it selects, and a digest of its project instructions. `model`
-changes when an invocation that runs resolves differently — the Session's
-selections or a Named Agent's explicit model, including provider binding,
-wire model, compat and parameters. A Skill state is `{ entry, version_id }`. The server
+digest of every Tool source beneath them (`null` without a binding); the
+commit itself compares each whole captured binding, credentials included.
+`agents` holds each Named Agent a Workflow froze or `subagent` admits as
+`{ definition, runs, skills, project_instructions, environment }`: its
+definition digest, its Tools and sources (sources it has not prepared yet
+included), the version of each Skill it selects, a digest of its project
+instructions, and the names of the authorized environment variables it
+inherits (compared by value, never retained). `model` changes when an
+invocation that runs resolves differently — the Session's selections, a Named
+Agent's explicit model or a direct Workflow Model node's, including provider
+binding, wire model, compat and parameters. `execution_policy` also changes
+with an authorized environment value. A Skill state is `{ entry, version_id }`. The server
 binding appears only as a digest of its transport and policy, never its
 credentials. Both are
 retained with the fact and read through `conversation/contentRead` (or the
@@ -1962,8 +1966,8 @@ Invariants:
   no unit reads `applied`, whatever later edit, late settlement or earlier
   durable failure. Units keep their real outcome, so a published unit is
   retained across reload either way; a healthy replacement allocation recovers
-  the view and notifies its observers, whichever entry (client load or
-  Scheduler) published it.
+  the view and notifies its observers, whichever entry (client load,
+  Scheduler or recovery) published it, before that entry reports it loaded.
 - The fact never enters model context. Web Chat shows only Tool additions and
   removals from it; instruction, context, Skill and same-name Tool changes stay
   in Trace and inspection.

@@ -476,6 +476,8 @@ struct RegistryState {
     #[cfg(test)]
     configuration_settlement: Arc<tests::AsyncGate>,
     #[cfg(test)]
+    resident_attach: Arc<tests::AsyncGate>,
+    #[cfg(test)]
     schedule_activation_started: watch::Sender<Option<ConversationId>>,
     #[cfg(test)]
     schedule_waiting: Option<watch::Sender<u64>>,
@@ -764,6 +766,8 @@ impl SessionRuntimeManager {
                 source_watch_captured: Arc::default(),
                 #[cfg(test)]
                 configuration_settlement: Arc::default(),
+                #[cfg(test)]
+                resident_attach: Arc::default(),
                 #[cfg(test)]
                 schedule_activation_started: watch::channel(None).0,
                 #[cfg(test)]

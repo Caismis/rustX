@@ -60,15 +60,21 @@ Server protocol/connection layer.
   compares by definition and implementation: its server binding, or the
   enabled Workflow program digest with the leaf Tools its direct Tool nodes
   call, or each Named Agent a Workflow froze or `subagent` admits — its
-  definition digest, Tools, Skill versions and project instructions. Every
-  Tool source beneath it contributes its binding digest, prepared yet or not,
-  so a source a child prepares on demand hides neither its own move nor the
-  rest of the Agent. A Skill compares by content version; an Agent or source
+  definition digest, Tools, Skill versions, project instructions and the
+  authorized environment it inherits. Every Tool source beneath it compares
+  its whole captured binding, credentials included, prepared yet or not, so a
+  source a child prepares on demand hides neither its own move nor the rest
+  of the Agent; the catalog keeps only the transport-and-policy digest and the
+  environment's variable names. A Skill compares by content version; an Agent or source
   nothing runs changes nothing. The Model domain compares the invocations that
-  run (the Session's selections and each explicit Named Agent model), over
+  run (the Session's selections, each explicit Named Agent model and each
+  direct Workflow Model node at any depth), over
   their provider binding, wire model, compat and parameters, never the client
-  view or catalog entries nothing selects. Preparation compares the binding
-  of every source an admitted Agent selects too, so moving one is adopted.
+  view or catalog entries nothing selects; preparation uses the same set, so
+  such a change is never published as catalog-only. An authorized
+  environment value change is also `execution_policy`, since every Tool runs
+  in it. Preparation compares the binding of every source an admitted Agent
+  selects too, so moving one is adopted.
   The independently
   published execution-policy unit (approval mode, model timeout, Tool
   deadline, MCP startup) records its own `execution_policy` fact (equal
@@ -90,8 +96,8 @@ Server protocol/connection layer.
   durable failure came first. Units keep their real outcome, so a published
   unit is still retained for reload; a healthy replacement allocation
   recovers the view and notifies its observers. Every entry that publishes a
-  resident (a client load or a Scheduler cold start) attaches it at that one
-  publication.
+  resident (a client load, a Scheduler cold start, recovery) attaches it at
+  that one publication, before reporting it loaded.
 - **External edits.** A bounded `notify` watcher routes changed paths to their
   owning source target and feeds `observe_source_change`, the same capture,
   fence and validation path as a native write. Coverage: User document
@@ -140,6 +146,10 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | Moving the MCP source beneath a Workflow Agent node or direct Tool node changes that Workflow once; moving a source nothing runs changes nothing | `mcp_readiness::a_moved_source_beneath_a_workflow_agent_changes_the_workflow`, `mcp_readiness::a_moved_source_beneath_a_workflow_tool_node_changes_the_workflow` |
 | A child-only model parameter change and a provider endpoint move under an unchanged Session view are each one Model fact; adding an unselected model records nothing | `automatic_commit::model_facts_follow_the_invocations_that_run` |
 | A runtime only the Scheduler starts cold recovers the uncertain view and notifies observers | `schedule::workflow::a_scheduler_cold_start_recovers_the_configuration_application` |
+| `load()` returns only after its runtime owns the application; parked before the attach, it has not returned | `automatic_commit::a_load_returns_only_after_its_runtime_owns_the_application` |
+| A parameter change of a model only a direct Workflow Model node names is one Model fact; an unselected model records nothing | `automatic_commit::a_workflow_model_node_is_a_model_that_runs` |
+| An environment value change changes `subagent` and execution policy; the catalog names the variable, never its value | `automatic_commit::an_environment_value_change_is_recorded_without_its_value` |
+| A credential reference switch on a source only a lazy child runs on changes `subagent`; no credential reaches the catalog | `mcp_readiness::a_hidden_source_credential_switch_changes_the_tool_that_runs_it` |
 | A removal of 17 bootstrap Skills (no request, no earlier fact) keeps every removed definition, readable after the runtime and files are gone | `automatic_commit::a_removal_retains_every_removed_definition` |
 | Oversized/escaped names stay within the header; Trace total counts configuration (alone and mixed) | `configuration_commit::tests::name_lists_are_bounded_by_encoded_bytes`, `trace::tests::header_tests::configuration_records_are_counted_and_unbounded_names_stay_readable` |
 | Real background owner defers; its settlement alone commits | `automatic_commit::t11_background_ownership_defers_commit_until_it_settles` |

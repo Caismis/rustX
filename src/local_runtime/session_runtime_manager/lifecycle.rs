@@ -407,7 +407,7 @@ impl SessionRuntimeManager {
         }
     }
 
-    pub(super) fn rebind_configuration_runtime(&self, session: &SessionId) {
+    fn rebind_configuration_runtime(&self, session: &SessionId) {
         if let Some(runtime) = self.configuration_runtime(session)
             && self.applications.rebind_runtime(session.as_ref(), &runtime)
         {
@@ -1102,25 +1102,41 @@ impl TerminalGuard {
             registry
                 .entries
                 .insert(self.id.clone(), Entry::Loaded(runtime.clone()));
-            self.flight
-                .result
-                .send_replace(Some(Outcome::Resident(runtime.identity.clone())));
             drop(control);
+            #[cfg(test)]
+            let attach = registry.resident_attach.clone();
             drop(registry);
             if let Some(observer) = catalog_observer {
                 tokio::spawn(observer);
             }
-            // Every entry that publishes a resident (client load, Scheduler
-            // activation) attaches it to its configuration application here.
-            if let Some((session, _)) = self.flight.target.get() {
-                self.owner.rebind_configuration_runtime(session);
-            }
+            #[cfg(test)]
+            attach.park_blocking();
+            self.report_resident(runtime);
             self.finished = true;
             return;
         }
         self.publish(result.map(|_| ()));
         self.finished = true;
     }
+    /// Every entry that publishes a resident (client load, Scheduler
+    /// activation, recovery) attaches it to its configuration application
+    /// before reporting it loaded, outside the registry lock: whoever learns
+    /// of the resident reads its application.
+    fn report_resident(&self, runtime: &Arc<ResidentRuntime>) {
+        if let (Some((session, _)), Some(conversation)) =
+            (self.flight.target.get(), runtime.shutdown_runtime())
+            && self
+                .owner
+                .applications
+                .rebind_runtime(session.as_ref(), &conversation)
+        {
+            self.owner.applications.run(self.owner.clone());
+        }
+        self.flight
+            .result
+            .send_replace(Some(Outcome::Resident(runtime.identity.clone())));
+    }
+
     fn publish(&self, result: Result<(), RuntimeManagerError>) {
         if result.is_err() {
             self.flight.startup.release_preparation();

@@ -353,7 +353,11 @@ impl ConfigurationChange {
         if old_model.view() != new_model.view() || !same_invocations(before, after) {
             domains.push(ConfigurationDomain::Model);
         }
-        if old_configuration.map(|c| c.1) != new_configuration.map(|c| c.1) {
+        // Every Tool runs in the authorized environment, so its values are
+        // execution policy; the fact never carries them.
+        if old_configuration.map(|c| c.1) != new_configuration.map(|c| c.1)
+            || Environment::of(old) != Environment::of(new)
+        {
             domains.push(ConfigurationDomain::ExecutionPolicy);
         }
         let instructions = instructions.unwrap_or_default();
@@ -396,13 +400,24 @@ struct ToolEntry {
 }
 
 /// The Tools something runs beneath a Tool, as the generation resolves them:
-/// each leaf definition by Tool id, and the binding digest of every Tool
-/// source it selects, prepared yet or not (`None` when the source has no
-/// binding), so a source still waiting to be prepared hides nothing else.
+/// each leaf definition by Tool id, and the binding of every Tool source it
+/// selects, prepared yet or not, so a source still waiting to be prepared
+/// hides nothing else.
 #[derive(Debug, Default, PartialEq, serde::Serialize)]
 struct Dependencies {
     tools: BTreeMap<String, crate::tools::types::ToolDefinition>,
-    sources: BTreeMap<String, Option<String>>,
+    sources: BTreeMap<String, SourceEntry>,
+}
+
+/// One Tool source as a commit compares it: its whole captured binding,
+/// credentials included, as a Root Tool's own binding compares. The catalog
+/// retains only its transport-and-policy digest (`null` without a binding).
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+struct SourceEntry {
+    #[serde(skip)]
+    binding: Option<crate::tools::mcp::McpServerBinding>,
+    binding_digest: Option<String>,
 }
 
 impl Dependencies {
@@ -441,7 +456,14 @@ impl Dependencies {
                         crate::tools::python::python_server_id(package)
                     }
                 };
-                (source.to_string(), servers.get(&server).map(binding_digest))
+                let binding = servers.get(&server).cloned();
+                (
+                    source.to_string(),
+                    SourceEntry {
+                        binding_digest: binding.as_ref().map(binding_digest),
+                        binding,
+                    },
+                )
             })
             .collect();
         Self { tools, sources }
@@ -458,6 +480,31 @@ struct AgentEntry {
     runs: Dependencies,
     skills: BTreeMap<String, Option<crate::runtime::identity::SkillVersionId>>,
     project_instructions: String,
+    environment: Environment,
+}
+
+/// The authorized Tool environment a child inherits, compared by its exact
+/// entries. The catalog retains only the variable names, never a value.
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+struct Environment {
+    #[serde(skip)]
+    entries: Vec<(String, String)>,
+    names: Vec<String>,
+}
+
+impl Environment {
+    fn of(snapshot: &RuntimeResourceSnapshot) -> Self {
+        let entries = snapshot
+            .capability()
+            .effective_environment()
+            .authorized_entries()
+            .to_vec();
+        Self {
+            names: entries.iter().map(|(name, _)| name.clone()).collect(),
+            entries,
+        }
+    }
 }
 
 impl AgentEntry {
@@ -482,6 +529,7 @@ impl AgentEntry {
             runs,
             skills,
             project_instructions: format!("sha256:{:x}", hasher.finalize()),
+            environment: Environment::of(snapshot),
         }
     }
 
@@ -645,10 +693,10 @@ fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntr
 
 /// Whether every model invocation the generation runs resolves to the same
 /// execution — provider binding, wire model, compat and effective parameters
-/// — on both sides: the Session's own selections and the explicit model of
-/// each Named Agent a Tool runs. Catalog entries nothing selects are not
-/// compared; a selection that resolves on neither side is the Session view's
-/// to report.
+/// — on both sides: the Session's own selections, the explicit model of
+/// each Named Agent a Tool runs and of each direct Workflow Model node.
+/// Catalog entries nothing selects are not compared; a selection that
+/// resolves on neither side is the Session view's to report.
 fn same_invocations(
     (old, old_model): (&RuntimeResourceSnapshot, &SessionModelState),
     (new, new_model): (&RuntimeResourceSnapshot, &SessionModelState),
@@ -685,13 +733,42 @@ fn same_invocations(
             })
             .collect::<BTreeMap<_, _>>()
     };
+    // Each explicit model a direct Model node of an enabled Workflow names,
+    // at any depth, by its Workflow and authored path.
+    let workflow_models = |snapshot: &RuntimeResourceSnapshot| {
+        enabled_programs(snapshot)
+            .into_iter()
+            .flat_map(|(tool, program)| {
+                program
+                    .model_policy_nodes()
+                    .into_iter()
+                    .filter_map(|node| Some(((tool.clone(), node.path), node.policy.selection()?)))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    let resolves = |catalog: &crate::model::catalog::ModelCatalog,
+                    selection: &crate::model::ModelSelection| {
+        catalog.same_invocation(selection, catalog, selection, SESSION_LAYER)
+    };
     let before = agent_models(old);
+    let before_workflows = workflow_models(old);
     same(old_model.config(), new_model.config())
         && agent_models(new).iter().all(|(name, after)| {
             // An Agent newly run or newly naming a model changes its Tool.
             before.get(name).is_none_or(|before| same(before, after))
         })
+        && workflow_models(new).iter().all(|(node, after)| {
+            // A node newly naming a model changes its Workflow program.
+            before_workflows.get(node).is_none_or(|before| {
+                left.same_invocation(before, right, after, SESSION_LAYER)
+                    || (!resolves(left, before) && !resolves(right, after))
+            })
+        })
 }
+
+const SESSION_LAYER: crate::model::invocation::RequestParamsLayer =
+    crate::model::invocation::RequestParamsLayer::SessionOverrides;
 
 /// A Skill is its catalog entry and its content-derived version, so a body or
 /// script edit under unchanged frontmatter is `changed`.

@@ -2665,3 +2665,52 @@ async fn a_moved_source_beneath_a_workflow_tool_node_changes_the_workflow() {
     )
     .await;
 }
+
+/// A hidden source compares its whole binding, credentials included, as a
+/// Root Tool's binding does: switching only the credential reference of the
+/// source a lazy child runs on changes `subagent`, and the catalog carries no
+/// credential.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hidden_source_credential_switch_changes_the_tool_that_runs_it() {
+    bounded(async {
+        let server = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        let workspace = fixture.workspaces[0].clone();
+        let credential = |reference: &str| {
+            std::fs::create_dir_all(workspace.join(".agents")).unwrap();
+            std::fs::write(
+                workspace.join(".agents/mcp.toml"),
+                format!(
+                    "[mcp_servers.moved]\nurl = {:?}\n[mcp_servers.moved.sensitive_headers]\nAuthorization = '{reference}'\n",
+                    server.endpoint
+                ),
+            )
+            .unwrap();
+        };
+        credential("$TOKEN_ALPHA");
+        reviewer(&fixture, "[]");
+        std::fs::write(workspace.join("rustx.toml"), "[agent]\nagents=['reviewer']\n").unwrap();
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        fixture.manager.load(&session.id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let facts = configuration_changes(&runtime).len();
+        credential("$TOKEN_BRAVO");
+        reconcile_workspace(&fixture).await;
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 1, "{changes:?}");
+        assert_eq!(changes[facts].tools.changed.names, ["subagent"]);
+        let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
+            .pop()
+            .unwrap();
+        let tool = &catalog["tools"][0];
+        let digest = |state: &str| tool[state]["agents"]["reviewer"]["runs"]["sources"]["moved"].clone();
+        assert!(digest("after").as_str().is_some(), "{tool}");
+        assert_eq!(digest("before"), digest("after"), "the digest never covers credentials");
+        let text = catalog.to_string();
+        assert!(!text.contains("TOKEN_ALPHA") && !text.contains("TOKEN_BRAVO"), "{text}");
+        fixture.close().await;
+        server.close().await;
+    })
+    .await;
+}
