@@ -8,6 +8,14 @@ import { BackgroundJobItem } from '../../src/app/agent/BackgroundJobItem';
 import { CompactionCheckpoint } from '../../src/app/agent/CompactionCheckpoint';
 import { Interactions } from '../../src/app/agent/Interactions';
 import { Content } from '../../src/app/agent/Message';
+import { Tool } from '../../src/app/agent/Tool';
+import { InboundMessage } from '../../src/app/agent/InboundMessage';
+import { SubagentContext } from '../../src/app/agent/subagent-context';
+import { Artifact, ArtifactContext } from '../../src/app/components/Artifact';
+import { ArtifactResources } from '../../src/client/artifacts';
+import { PreviewContext, type PreviewIntents } from '../../src/app/components/ArtifactPreview';
+import { nativeTool } from '../native-tool-cases';
+import { incrementalAgent } from '../incremental-agent-fixture';
 import { GoalDock } from '../../src/app/composer/GoalDock';
 import { goalDock } from '../../src/bindings/composer-context';
 import { applyTheme, readTheme } from '../../src/app/appearance';
@@ -18,6 +26,8 @@ import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';
 
 applyTheme(readTheme());
+const controls = new URLSearchParams(location.search).has('controls');
+if (controls) document.title = 'Message controls audit';
 const server = new Server();
 const goal: RuntimeClientGoalSnapshot = { reference: { id: 'goal', revision: '1' }, objective: 'Complete Goal objective', objective_deferred: false, phase: 'active', blocked_reason_deferred: false, autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' }, last_round_message_id_deferred: false, fields: [] };
 const run = workflowRun();
@@ -26,7 +36,7 @@ const job: RuntimeClientJob = { job_id: 'refresh-job', tool_id: 'tool-bash', too
 const nextJob = { ...job, result: { ...job.result!, content: [{ type: 'text' as const, text: 'Updated job output\nThe complete result arrived.' }] } };
 const head = { ...projectionHead('Visible summary preview'), summary_preview: { text: 'Visible summary preview', truncated: true } };
 const approval = { ...interaction('approval'), body: null, body_complete: false, approval: { tool_name: 'bash', reason: 'Developer approval required', mode: 'foreground' as const, deferred_fields: [['arguments']] } };
-server.snapshots.set('A', { ...snapshot(), goal: { current: goal }, workflows: { revision: '1', runs: [run], omitted_runs: 0 }, jobs: [job], pending_interactions: [approval] });
+server.snapshots.set('A', { ...snapshot(), goal: { current: goal }, workflows: { revision: '1', runs: [run], omitted_runs: 0 }, jobs: [job], pending_interactions: [controls ? { ...interaction('questionnaire'), body: null, body_complete: false } : approval] });
 server.handlers.set('session/checkpoint', () => {
   const value = checkpoint(server.snapshots.get('A')!); value.read_cut.domain_revisions.pending_interactions = '1';
   return { type: 'checkpoint', checkpoint: value };
@@ -44,6 +54,8 @@ server.handlers.set('conversation/checkpointValueRead', request => {
 });
 server.handlers.set('session/projectionDetail', () => ({ type: 'projection_detail', detail: { read_cut: checkpoint(server.snapshots.get('A')!).read_cut, checkpoint: { ...head, summary_preview: { text: 'Complete summary ready', truncated: false } }, items: [], next_item: null } }));
 await server.attached('A');
+if (controls) server.held.add('conversation/checkpointPage');
+server.handlers.set('artifact/read', () => ({ type: 'artifact_bytes', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZ1sAAAAASUVORK5CYII=' }));
 server.held.add('session/projectionDetail');
 let refreshStart = 0;
 Object.assign(window, { refreshAudit: {
@@ -80,4 +92,24 @@ function Audit() {
     <Interactions client={server.client} view={view} state={state}/>
   </main>;
 }
-createRoot(document.getElementById('root')!).render(<Audit/>);
+const events = { previews: [] as string[], downloads: [] as string[] };
+const intents: PreviewIntents = { openPreview: artifact => { events.previews.push(artifact.name); }, download: artifact => { events.downloads.push(artifact.name); } };
+Object.assign(window, { controlsAudit: { events, reads: () => server.requests.filter(row => row.request.method === 'artifact/read').length } });
+const artifacts = controls ? new ArtifactResources(server.client, 'A') : undefined;
+function ControlsAudit() {
+  const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot), agent = incrementalAgent();
+  const launch = nativeTool('tool-bash', 'bash', { command: 'sleep 5', execution_mode: 'background' }, [{ type: 'json', value: { job_id: 'job-controls', tool: 'bash', state: 'starting', output_path: '/workspace/output.txt' } }]);
+  return <SubagentContext.Provider value={{ client: server.client, agents: [agent], metrics: {}, metricErrors: {}, opened: [], open: () => {}, close: () => {} }}>
+    <ArtifactContext.Provider value={artifacts}><PreviewContext.Provider value={intents}>
+      <main data-controls-audit style={{ width: 'min(740px, 100%)', margin: '24px auto', padding: '0 16px', boxSizing: 'border-box', display: 'grid', gap: 16 }}>
+        <WorkflowRunPanel run={run}/>
+        <Tool tool={launch}/>
+        <InboundMessage message={{ role: 'user', id: 'agent-controls', source: { agent: { agent_id: agent.agent_id } }, content: [{ type: 'text', text: 'Recorded child result' }] }}/>
+        <Artifact id="file-controls" name="report.txt" mimeType="text/plain"/>
+        <Artifact id="image-controls" name="preview.png" image mimeType="image/png"/>
+        <Interactions client={server.client} state={state} view={state.views.A}/>
+      </main>
+    </PreviewContext.Provider></ArtifactContext.Provider>
+  </SubagentContext.Provider>;
+}
+createRoot(document.getElementById('root')!).render(controls ? <ControlsAudit/> : <Audit/>);

@@ -5204,3 +5204,39 @@ standalone Cancel interaction action beneath the card. Removed rustX's extra
 button from both complete and bounded approval cards. Approval rejection still
 uses its typed response; questionnaire/review dismissal keeps its own native
 operation. No native cancellation endpoint or decision semantics change.
+
+## Message-flow control and hint audit
+
+Compared sibling Harness `ce7073d51254c26cd63b22a60835b8f948deb447`:
+`ui-tool/src/client/tool/components/ToolRow.tsx`,
+`ui-chat/src/client/chat/{ContextInjectionRow,TurnTriggerNodeView,MessageIconActions}.tsx`,
+`ui-attachment/src/{MessageImage,FileCard}.tsx`,
+`ui-deliverables/src/client/PresentedFileCard.tsx`, and the approval/question
+components referenced above (paths under `packages/client/`).
+
+Removed the remaining generic Cancel interaction control and internal kind
+name from an unread pending request. Its actual read failure keeps a scoped
+Retry loading details action; a loaded question/review keeps its own dismissal.
+Removed the extra View agent button inside inbound context, the standalone Job
+ID footer, the Finite background Tool placeholder, and the workflow budget footer.
+Native source attribution, node outcomes, execution data, errors, truncation,
+history continuation, Inspect, copying, retry/branch and question navigation
+remain available through their existing native owners.
+
+Managed files/images now open through their card body, independently of inline
+bytes; images also load/retry through the thumbnail and open through the owning
+preview callback (or the standalone image lightbox). Download is a separate compact icon with the original-source
+intent. The extra text Load attachment and external Preview buttons are removed.
+Unlike Harness's automatic authorized-image loader, rustX still reads bounded
+managed image bytes only after the thumbnail gesture, preserving its native
+resource limits, cancellation and URL lifetime. Non-image preview no longer
+offers an unused inline-byte load. Local draft download URLs keep their owner.
+
+The empty-task invitation also follows
+`ui-conversation/src/client/skeleton/ConversationMainPanel.tsx`: loading history
+or a positive native message descriptor is not proof of an empty conversation,
+so neither may render a Ready for a task invitation while content arrives.
+
+This is native presentation cleanup; no decision, execution, attachment
+authorization or protocol changes and no additional dependencies. Affected
+source records/dependency edges are rehashed; upstream pins and notices remain.

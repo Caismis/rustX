@@ -82,7 +82,7 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
       expect(await panel.locator('pre').evaluate(element => ({ font: getComputedStyle(element).fontSize, margin: getComputedStyle(element).margin }))).toEqual({ font: '13px', margin: '0px' });
       await expect(panel.getByRole('button', { name: tx('interactions:approval-takeover.allow-once'), exact: true })).toBeEnabled();
       await expect(panel.getByRole('button', { name: tx('interactions:approval-takeover.deny'), exact: true })).toBeEnabled();
-      await expect(page.getByRole('button', { name: tx('interactions:interactions.cancel-interaction'), exact: true })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: locale === 'zh' ? '取消交互' : 'Cancel interaction', exact: true })).toHaveCount(0);
       await panel.locator('..').screenshot({ path: `/tmp/rustx-approval-actions-${width}-${theme}.png` });
     }
     expect(await page.evaluate(() => Number(document.documentElement.dataset.interactionResponses ?? 0))).toBe(0);

@@ -95,7 +95,7 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await expect(run).toContainText(copy('completed', '已完成'));
     await expect(run.getByRole('button').first()).toHaveAttribute('aria-expanded', 'false');
     await run.getByRole('button').first().click();
-    await expect(run).toContainText(copy('Steps used', '已执行'));
+    await expect(run).not.toContainText(copy('Steps used', '已执行'));
     await expect(run).not.toContainText('/ 10');
     await expect(run.locator('[data-workflow-node="' + (locale === 'zh' ? 'success' : 'failure') + '"]')).toHaveCount(0);
     await expect.poll(() => run.locator('[data-workflow-node]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-workflow-node')))).toEqual(['workflow_start', 'review', 'gate', locale === 'zh' ? 'failure' : 'success']);

@@ -1656,7 +1656,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "cdbd2759e513e035655e653aa3d8c68b21b2c62e4f1b6072644f1e2062f07100",
+      "local_sha256": "88a78ba5bf6baf80c8b74387cc8cc95e05a382d2553afb335ab32a600b505978",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
@@ -1710,7 +1710,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "96f26c83e5939bd3a4b14acb510dbe2f2f5ba98af4ba8509ac802b381c8c9ff4"
+      "local_sha256": "cd8917ae0b4523acd63ea428696fbea8bb989d0bdf11a92e9291547e001bf1f5"
     },
     {
       "upstream": "packages/client/ui-attachment/src/MessageImage.tsx",
@@ -1719,8 +1719,9 @@
       "upstream_sha256": "5deb09445813e6b612465cb00aea8e7b400eba0f55b783a57c867d2dfa51500b",
       "retained_dependencies": [
         "../../locale/react",
-        "../primitives/Button",
         "../primitives/Modal",
+        "../primitives/StateDot",
+        "../primitives/icons",
         "./AttachmentCard.module.css",
         "react"
       ],
@@ -1738,7 +1739,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1d4228e3bcccffda3bceba5aa76fcb1b16368c3d6983a1e8f49a8fc556419301"
+      "local_sha256": "a950cf38227b5f5676969d619fa7105dbf13e769a0d6d8865c71e6dac0982ce3"
     },
     {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
@@ -3960,7 +3961,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "5c23f5789e5cd7662daf57bc313b503c37bc23796a200f95def9bef584059eff"
+      "local_sha256": "4e79e4774df19e57de93a0b03a36911ca82165ea4992448f23f3c26f382da847"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4038,7 +4039,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "45861410bae038120c2813708cf7ec198a01b8a27691dbb8fb484aed303cc057"
+      "local_sha256": "91a17583365a40622c88976e1e09da92ebd47d461db5ea5b41338acd7de3aa74"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6904,7 +6905,7 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "7b83cc0a7bfade210dd8bdfdf37180dd3d11e6a9638731cc9759fedfa1c4e376",
+      "local_sha256": "61fd39bdc2e08ed153fe4eb69b2812664e552dcd1f8f3f1a35a37990b33e51ea",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workflow-run/src/client/WorkflowRunPanel.tsx",

@@ -7,6 +7,9 @@ import { backgroundNotice } from '../src/bindings/jobs';
 import { toolCard } from '../src/bindings/tools';
 import { BackgroundJobMenu } from '../src/app/agent/BackgroundJobs';
 import { traceRecord } from './trace-fixture';
+import { SubagentContext } from '../src/app/agent/subagent-context';
+import { incrementalAgent } from './incremental-agent-fixture';
+import { Server } from './fixture';
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 const receipt = { job_id: 'job-one', state: 'starting', tool: 'bash', output_path: '/workspace/output.txt', note: 'Native execution continuation instructions' };
@@ -27,6 +30,19 @@ it('renders a successful background launch as a static command receipt, without 
   expect(ui.container.textContent).toContain('sleep 5');
   expect(ui.container.textContent).not.toContain(receipt.note);
   expect(ui.getByRole('button', { name: 'Copy' })).toBeTruthy();
+  expect(ui.container.textContent).not.toContain('Job · job-one');
+});
+
+it('agent messages disclose their recorded content without a separate View agent button', () => {
+  const agent = incrementalAgent(), open = vi.fn(), server = new Server();
+  const ui = render(<SubagentContext.Provider value={{ client: server.client, agents: [agent], metrics: {}, metricErrors: {}, opened: [], open, close: () => {} }}>
+    <InboundMessage message={{ role: 'user', id: 'agent-message', source: { agent: { agent_id: agent.agent_id } }, content: [{ type: 'text', text: 'Original agent result' }] }}/>
+  </SubagentContext.Provider>);
+  fireEvent.click(ui.getByRole('button', { expanded: false }));
+  expect(ui.getByText('Original agent result', { selector: 'p' })).toBeTruthy();
+  expect(ui.queryByRole('button', { name: 'View agent' })).toBeNull();
+  expect(ui.getAllByRole('button')).toHaveLength(1);
+  expect(open).not.toHaveBeenCalled();
 });
 
 it('keeps a refused or failed launch on the ordinary diagnostic path', () => {

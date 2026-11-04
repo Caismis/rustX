@@ -15,6 +15,7 @@ export function Interactions({ client, state, view }: {
   const ownership=useRef({live:true,generation:0});
   const [failure, setFailure] = useState<{ key: string; message: string }>();
   const [loading,setLoading]=useState(false);
+  const [bodyRetry,setBodyRetry]=useState(0);
   const pending=client.pendingInteractions(view.id);
   const selected=pending===view.interactionPage?.rows?view.interactionPage:undefined;
   const cut=selected?.page.read_cut??view.checkpoint?.read_cut;
@@ -49,7 +50,7 @@ export function Interactions({ client, state, view }: {
     const key=interactionKey(pending[missingBody].interaction);
     void client.loadInteractionBody(view.id,missingBody,current).catch(error=>{if(current())setFailure({key,message:String(error).slice(0,512)});});
     return()=>{active=false;};
-  },[client,view.id,identity,missingBody]);
+  },[client,view.id,identity,missingBody,bodyRetry]);
   return <>{pending.map((item,index) => {
     const key = interactionKey(item.interaction);
     const operation = state.interactionOperations[key]?.status;
@@ -68,10 +69,8 @@ export function Interactions({ client, state, view }: {
       </div>;
     }
     if(!body)return <section key={key} className="interaction">
-      <p role="status">{tx('common:activity.loading')} · {item.kind}</p>
-      {failure?.key===key&&<p role="alert">{failure.message}</p>}
-
-      <Button disabled={disabled} onClick={()=>run(key,()=>client.answer(view.id,item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>
+      {failure?.key===key ? <><p role="alert">{failure.message}</p><Button disabled={disabled} onClick={()=>{setFailure(undefined);setBodyRetry(value=>value+1);}}>{tx('interactions:interactions.retry-details')}</Button></>
+        : <p role="status">{tx('common:activity.loading')}</p>}
     </section>;
     const kind = body.request.kind;
     const panelKeys = [questionPanelKey(item.interaction.conversation_id, 'interaction', item.interaction.interaction_id)];

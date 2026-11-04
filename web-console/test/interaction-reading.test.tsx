@@ -90,6 +90,23 @@ async function pendingFixture(){
   return {current,publish};
 }
 
+it('pending details have no generic cancel/kind controls and recover through a scoped read retry', async () => {
+  const { current } = await pendingFixture();
+  expect(screen.getByRole('status').textContent).toBe('Loading…');
+  expect(screen.queryByRole('button', { name: 'Cancel interaction' })).toBeNull();
+  const page = await current.waitFor('conversation/checkpointPage', 1);
+  await act(async () => current.socket.deliver({ jsonrpc: '2.0', id: page.id, error: { code: -32000, message: 'Details temporarily unavailable' } }));
+  expect(screen.getByRole('alert').textContent).toContain('Details temporarily unavailable');
+  expect(screen.queryByRole('status')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading details' }));
+  const retry = await current.waitFor('conversation/checkpointPage', 2);
+  await act(async () => current.reply(retry));
+  const value = await current.waitFor('conversation/checkpointValueRead', 1);
+  await act(async () => current.reply(value));
+  expect(await screen.findByRole('region', { name: 'Questionnaire' })).toBeTruthy();
+  expect(current.requests.some(row => row.request.method === 'interaction/cancel')).toBe(false);
+});
+
 it('an unrelated checkpoint preserves the selected pending read and its original Page/Value cut',async()=>{
   const {current,publish}=await pendingFixture();
   const page=await current.waitFor('conversation/checkpointPage',1);

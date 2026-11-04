@@ -48,6 +48,6 @@ export function DomainActivity({ tool }: { tool: ForegroundToolExecution }) {
   }
   return <div data-activity-domain={domain.domain}><ToolCard inspect={inspect} onOpenAgent={id => scope?.open(id)} tool={{ ...view,
     icon: domain.domain === 'job' ? <IconChecklistOutline14/> : <IconAgentPresetOutline16 size={14}/>,
-    title: tx(domain.title), details, summary: details?.summary ?? details?.empty ?? (view.state === 'failure' || view.state === 'uncertain' || view.state === 'cancelled' ? view.summary : result.task ?? result.target ?? target ?? tx('common:activity.finite-tool')),
+    title: tx(domain.title), details, summary: details?.summary ?? details?.empty ?? (view.state === 'failure' || view.state === 'uncertain' || view.state === 'cancelled' ? view.summary : result.task ?? result.target ?? target ?? ''),
   }}/></div>;
 }
