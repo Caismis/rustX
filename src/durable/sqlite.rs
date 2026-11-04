@@ -348,7 +348,8 @@ fn count_conversation_store_open() {
 /// Version 90 stores independent statistical contributions with sparse checkpoints.
 /// Version 91 binds shared Request Source preparation to frozen native configuration.
 /// Version 95 stores one fact-bound complete Statistics record per relevant event.
-pub const SQLITE_SCHEMA_VERSION: i64 = 95;
+/// Version 96 stores bounded full-key binary Request Source navigation pages.
+pub const SQLITE_SCHEMA_VERSION: i64 = 96;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -19847,7 +19848,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 95);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 96);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19916,7 +19917,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 95);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 96);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
