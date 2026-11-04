@@ -72,6 +72,8 @@
 
 .controlsLeft, .controlsRight { display: flex; align-items: center; gap: 13px; min-width: 0; }
 .controlsRight { margin-inline-start: auto; }
+.globalControls { min-height: 0; padding-block: 16px; }
+.globalControls .context { margin: 0; }
 .subtle { font-size: 12px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
 
 .chooserWrap { position: relative; }
@@ -359,6 +361,7 @@
   .library { padding: 24px 16px; }
   .search { min-width: 0; flex: 1; }
   .controlsRight { flex: 1; }
+  .globalControls .context, .globalControls .controlsRight { flex-basis: 100%; }
   .chooser { min-width: 0; }
   .table th:nth-child(3), .table td:nth-child(3) { display: none; }
 }
