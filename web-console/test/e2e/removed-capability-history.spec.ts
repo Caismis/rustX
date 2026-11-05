@@ -119,9 +119,8 @@ for (const width of [1440, 390]) {
       const workspace = (await fixture.workspaceHost.host.listWorkspaces()).workspaces.find(workspace => workspace.displayName === 'Workspace A')!;
       await fixture.workspaceHost.host.configureWorkspace(workspace.id, fixture.endpoint, { kind: 'reconcile' });
       await page.getByRole('tab', { name: 'Chat', exact: true }).click();
-      const adopt = page.getByRole('button', { name: 'Adopt configuration', exact: true });
-      await expect(adopt).toBeEnabled();
-      await adopt.click();
+      // Native commits the prepared configuration itself at the idle
+      // Session's safe boundary; nothing in the browser adopts it.
       await expect.poll(async () => {
         const current = await effective();
         return { tools: current.root_agent.tools?.builtin, workflows: current.root_agent.workflows };

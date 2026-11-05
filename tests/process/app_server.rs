@@ -1114,11 +1114,14 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             let notification = client.next_notification().await.notification;
             // Session metadata invalidation is not a Conversation event and is
             // not routed by attachment target (Issue #386); nor is a
-            // source-scoped repair level (Issue #464).
+            // source-scoped repair level (Issue #464), nor a Session's
+            // configuration application, which the source watch may publish
+            // when the Session's Workspace becomes known (Issue #518).
             if matches!(
                 notification,
                 NotificationMethod::SummaryInvalidated { .. }
                     | NotificationMethod::SourceRepairChanged { .. }
+                    | NotificationMethod::ConfigurationChanged { .. }
             ) {
                 continue;
             }
