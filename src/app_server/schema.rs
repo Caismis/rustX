@@ -769,7 +769,49 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     }
     workflow_fixtures(&mut fixtures);
     schedule_fixtures(&mut fixtures);
+    reasoning_order_fixtures(&mut fixtures);
     fixtures
+}
+
+fn reasoning_order_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
+    use crate::local_runtime::configuration::settings::{
+        ConfigMutation, SourceMutation, SourceTarget,
+    };
+    for order in [None, Some(vec!["z-low", "a-high"])] {
+        let mut model: crate::model::authoring::Model = serde_json::from_value(serde_json::json!({
+            "provider": "fixture", "id": "wire-model", "protocol": "openai_responses",
+            "context_window": 128_000, "max_output_tokens": 4096,
+            "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"]},
+            "default_profile": "a-high", "profiles": {"a-high": {}, "z-low": {}}
+        }))
+        .expect("typed Model fixture");
+        model.reasoning_profile_order = order.map(|ids| {
+            ids.into_iter()
+                .map(crate::model::catalog::ModelProfileId::new)
+                .collect()
+        });
+        fixtures.push(ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String(
+                if model.reasoning_profile_order.is_some() {
+                    "ordered-model"
+                } else {
+                    "unconfigured-model"
+                }
+                .into(),
+            ),
+            call: Method::SourcesWrite {
+                target: SourceTarget::User,
+                expected_revision: "source-cut".into(),
+                mutation: SourceMutation::Config {
+                    mutation: ConfigMutation::Model {
+                        id: "fixture/model".into(),
+                        authored: Some(model),
+                    },
+                },
+            },
+        })));
+    }
 }
 
 /// The six native Workflow examples as exact scoped authoring messages
@@ -1494,9 +1536,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v70.schema.json", "v70.ts"]);
+        assert_eq!(generations, ["v71.schema.json", "v71.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v70.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v71.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

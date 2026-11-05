@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { InteractionSettlement, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v70';
+import type { InteractionSettlement, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v71';
 import { InteractionAudit } from '../src/app/agent/InteractionAudit';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { workflowReview } from './workflow-data';

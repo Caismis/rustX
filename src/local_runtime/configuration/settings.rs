@@ -320,7 +320,7 @@ pub enum ConfigMutation {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // Finite wire command; parsed and consumed once per CAS operation.
 pub enum SourceMutation {
-    /// Explicit repair of an unparseable configuration document. Never used
+    /// Explicit repair of a configuration document violating its source contract. Never used
     /// for ordinary semantic-unit editing and never accepts an invalid source.
     RepairConfig {
         document: String,
@@ -411,7 +411,12 @@ fn view(path: PathBuf, bytes: Option<&[u8]>, workspace: bool) -> SourceView<Sour
             // A document violating its source contract is not editable either:
             // ordinary writes refuse it and manual repair accepts it.
             Ok(document) => {
-                match super::capture::source_restrictions(&path, &document, workspace) {
+                match super::capture::source_restrictions(&path, &document, workspace).and_then(
+                    |()| {
+                        super::semantics::source_semantics(&document)
+                            .map_err(|failure| failure.launch(Some(path.clone())))
+                    },
+                ) {
                     Ok(()) => (Some(redact(document)), None),
                     Err(failure) => (
                         None,
@@ -737,6 +742,10 @@ fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
         base_url: String,
         api_key: String,
     }
+    // Every managed configuration candidate, including manual source repair,
+    // satisfies the same source-intrinsic constraints used for source health.
+    // References and defaults supplied by another scope are not required here.
+    super::semantics::source_semantics(&document).map_err(|_| SettingsError::Invalid)?;
     // Encoding stays inside native authority, so the authored environment keeps
     // its literal values here; only the wire projection redacts them.
     let document = document.project(
@@ -1278,7 +1287,7 @@ impl UserConfigManager {
                         original.as_deref().unwrap_or(b""),
                         scope == SourceScope::Workspace,
                     )
-                    .is_ok()
+                    .is_ok_and(|layer| super::semantics::source_semantics(&layer).is_ok())
                     {
                         return Err(SettingsError::Invalid);
                     }
@@ -1307,6 +1316,8 @@ impl UserConfigManager {
                         scope == SourceScope::Workspace,
                     )
                     .map_err(|_| SettingsError::Invalid)?;
+                    super::semantics::source_semantics(&document)
+                        .map_err(|_| SettingsError::Invalid)?;
                     apply(&mut document, mutation)?;
                     Some(encode(document)?)
                 }

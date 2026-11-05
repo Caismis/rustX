@@ -1041,6 +1041,9 @@ impl ModelCatalogReadSource {
         }
         let profiles_deferred = profiles.len() != total;
         model.profiles = super::catalog::ProfilesReadView::Header(profiles);
+        // This bounded selection header carries no complete reasoning metadata.
+        // The ordinary full catalog and source documents expose the order.
+        model.reasoning_profile_order = None;
         Some(super::catalog::NativeCatalogModelHeader {
             model,
             profile_count: total as u64,

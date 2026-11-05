@@ -153,6 +153,76 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
             );
         };
 
+        // Reasoning metadata publishes normally, with no preparation or
+        // invocation change. The retained Attempt snapshot stays identical.
+        for order in [
+            Some(["fast", "balanced", "creative"]),
+            Some(["creative", "fast", "balanced"]),
+            None,
+        ] {
+            let before = runtime.runtime_resources().revision();
+            let binding =
+                crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                    &runtime,
+                )
+                .unwrap()
+                .adopted_binding;
+            let catalog = runtime.model_read_source().catalog_source();
+            let model_position = (0..catalog.model_count() as u64)
+                .find(|position| catalog.model_at(*position).unwrap().model.as_str() == "local/a")
+                .unwrap();
+            let mut mutation = model(
+                "balanced",
+                &[balanced.clone(), fast.clone(), creative.clone()],
+            );
+            let ConfigMutation::Model {
+                authored: Some(definition),
+                ..
+            } = &mut mutation
+            else {
+                unreachable!()
+            };
+            definition.reasoning_profile_order =
+                order.map(|ids| ids.map(ModelProfileId::new).into());
+            write(&fixture, 0, mutation).await;
+            applied(settled(&fixture, 0).await);
+            published((
+                Some("balanced"),
+                &[("balanced", None), ("creative", None), ("fast", Some(64))],
+            ));
+            assert_eq!(runtime.runtime_resources().revision(), before.next());
+            assert!(matches!(
+                fixture
+                    .manager
+                    .select_catalog_model(
+                        &id,
+                        crate::model::session::CatalogModelSelection {
+                            binding_revision: binding,
+                            model_position,
+                            profile_position: Some(0),
+                        }
+                    )
+                    .await,
+                Err(ModelSelectionError::Model(
+                    crate::runtime::conversation_runtime::ModelUpdateError::Conflict
+                ))
+            ));
+            let catalog = runtime.model_read_source().catalog_source();
+            assert_eq!(
+                catalog.profile_at(model_position, 0).unwrap().id.as_str(),
+                "balanced"
+            );
+            let full = runtime.model_catalog();
+            assert_eq!(
+                full.models
+                    .iter()
+                    .find(|row| row.model.to_string() == "local/a")
+                    .unwrap()
+                    .reasoning_profile_order,
+                order.map(|ids| ids.map(ModelProfileId::new).to_vec())
+            );
+        }
+
         // An edited unselected Profile is published.
         let fast_edited: Authored = ("fast", Some(32), json!({"temperature": 1.5, "top_p": 0.9}));
         write(

@@ -1915,6 +1915,8 @@ struct NativeCatalogModelHeader {
     effective_capabilities: rustx::model::catalog::ModelCapabilities,
     profiles: Vec<rustx::model::catalog::ModelProfileView>,
     default_profile: Option<rustx::model::catalog::ModelProfileId>,
+    #[serde(default)]
+    reasoning_profile_order: Option<Vec<rustx::model::catalog::ModelProfileId>>,
     credential_source: rustx::model::catalog::CredentialSourceView,
     profile_count: u64,
     profiles_deferred: bool,
@@ -1972,6 +1974,7 @@ pub fn native_catalog_page(
                 effective_capabilities: header.effective_capabilities,
                 profiles: header.profiles,
                 default_profile: header.default_profile,
+                reasoning_profile_order: header.reasoning_profile_order,
                 credential_source: header.credential_source,
             }
         })

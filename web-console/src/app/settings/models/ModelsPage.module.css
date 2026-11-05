@@ -78,3 +78,11 @@
 
 .section .detail h3 { font-size: 16px; line-height: 24px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .section .detail .back { padding: 0; height: auto; align-self: flex-start; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+
+.reasoningOrder { margin-top: 16px; min-width: 0; }
+.reasoningHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
+.reasoningList { padding-left: 24px; margin: 8px 0; }
+.reasoningList li { padding: 4px 0; }
+.reasoningList li > span { display: inline-block; max-width: calc(100% - 80px); overflow-wrap: anywhere; vertical-align: middle; margin-right: 8px; }
+.reasoningList button { padding: 0; width: 28px; margin-left: 4px; }
+.reasoningList button[aria-disabled=true] { opacity: 0.4; cursor: default; }

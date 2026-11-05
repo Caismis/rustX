@@ -748,6 +748,8 @@ pub struct ModelDefinition {
     /// The profile selected when an invocation does not choose one; present
     /// exactly when `profiles` is nonempty.
     pub default_profile: Option<ModelProfileId>,
+    /// Optional complete Profile order, lowest declared reasoning strength first.
+    pub reasoning_profile_order: Option<Vec<ModelProfileId>>,
     /// The declared profiles; empty when the Model declares none.
     pub profiles: BTreeMap<ModelProfileId, ModelProfile>,
     /// The bounded structural translation metadata.
@@ -821,6 +823,7 @@ impl ModelCatalog {
                     })
                     .collect(),
                 default_profile: model.default_profile.clone(),
+                reasoning_profile_order: model.reasoning_profile_order.clone(),
                 credential_source: provider.api_key.view(),
             });
         }
@@ -1249,6 +1252,9 @@ pub struct ModelDocument {
     /// The profile selected when an invocation does not choose one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<ModelProfileId>,
+    /// Optional complete Profile order, lowest declared reasoning strength first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_profile_order: Option<Vec<ModelProfileId>>,
     /// The declared profiles. Presence is tracked: a declared collection
     /// must be nonempty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1370,6 +1376,7 @@ fn validate_model(
     validate_compat(&reference, document.protocol, document.compat)?;
 
     let (default_profile, profiles) = validate_profiles(&reference, &document)?;
+    validate_reasoning_profile_order(&reference, &document, &profiles)?;
     let request_params = document.request_params.unwrap_or_default();
     validate_request_params_layer(
         &request_params,
@@ -1397,6 +1404,7 @@ fn validate_model(
         capabilities: document.capabilities,
         request_params,
         default_profile,
+        reasoning_profile_order: document.reasoning_profile_order,
         profiles,
         compat: document.compat,
     })
@@ -1487,6 +1495,54 @@ fn validate_profiles(
         );
     }
     Ok((Some(default), profiles))
+}
+
+/// A declaration is a complete permutation, independent of default selection
+/// and of the catalog's lexical ordinal indexes. Never infer or repair it.
+fn validate_reasoning_profile_order(
+    reference: &ModelRef,
+    document: &ModelDocument,
+    profiles: &BTreeMap<ModelProfileId, ModelProfile>,
+) -> Result<(), ModelCatalogError> {
+    let Some(order) = &document.reasoning_profile_order else {
+        return Ok(());
+    };
+    let invalid = |detail| ModelCatalogError::InvalidReasoningProfileOrder {
+        model: reference.clone(),
+        detail,
+    };
+    if order.is_empty() || profiles.is_empty() {
+        return Err(invalid(
+            "reasoning_profile_order requires Profiles and a nonempty complete order".to_owned(),
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for id in order {
+        ModelProfileId::parse(id.as_str())?;
+        if !profiles.contains_key(id) {
+            return Err(invalid(format!(
+                "reasoning_profile_order names unknown Profile {:?}; use only this Model's Profiles",
+                id.as_str()
+            )));
+        }
+        if !seen.insert(id) {
+            return Err(invalid(format!(
+                "reasoning_profile_order repeats Profile {:?}; list each Profile exactly once",
+                id.as_str()
+            )));
+        }
+    }
+    let missing: Vec<_> = profiles
+        .keys()
+        .filter(|id| !seen.contains(id))
+        .map(ModelProfileId::as_str)
+        .collect();
+    if !missing.is_empty() {
+        return Err(invalid(format!(
+            "reasoning_profile_order is missing Profiles {missing:?}; list every Profile"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_compat(
@@ -1616,6 +1672,13 @@ pub enum ModelCatalogError {
         /// The failure detail.
         detail: String,
     },
+    /// A Model declares an invalid complete reasoning order.
+    InvalidReasoningProfileOrder {
+        /// The Model.
+        model: ModelRef,
+        /// The authorized diagnostic detail, which may quote identities.
+        detail: String,
+    },
     /// A model declares bounded compatibility fields for a foreign protocol.
     InvalidCompat {
         /// The model.
@@ -1701,6 +1764,10 @@ impl ModelCatalogError {
                 ("models.*.capabilities", "unusable Model capabilities")
             }
             Self::InvalidProfiles { .. } => ("models.*.profiles", "invalid Model Profiles"),
+            Self::InvalidReasoningProfileOrder { .. } => (
+                "models.*.reasoning_profile_order",
+                "invalid Model reasoning Profile order",
+            ),
             Self::InvalidCompat { .. } => ("models.*.compat", "invalid Model compatibility fields"),
             Self::ProtectedKey { .. } => (
                 "models.*.request_params",
@@ -1763,6 +1830,12 @@ impl fmt::Display for ModelCatalogError {
             Self::InvalidProfiles { model, detail } => {
                 write!(f, "model {model} declares invalid profiles: {detail}")
             }
+            Self::InvalidReasoningProfileOrder { model, detail } => {
+                write!(
+                    f,
+                    "model {model} declares invalid reasoning_profile_order: {detail}"
+                )
+            }
             Self::InvalidCompat { model, detail } => {
                 write!(f, "model {model} declares invalid compat: {detail}")
             }
@@ -1812,6 +1885,7 @@ impl ModelCatalog {
             ),
             profiles: ProfilesReadView::Native(&model.profiles),
             default_profile: model.default_profile.as_ref(),
+            reasoning_profile_order: model.reasoning_profile_order.as_deref(),
             credential_source: provider.api_key.read_view(),
         })
     }
@@ -1908,6 +1982,8 @@ pub(crate) struct CatalogModelReadView<'a> {
     pub profiles: ProfilesReadView<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<&'a ModelProfileId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_profile_order: Option<&'a [ModelProfileId]>,
     pub credential_source: CredentialReadView<'a>,
 }
 /// Finite native collection header. Deferred profiles are explicitly identified.
@@ -1956,6 +2032,7 @@ impl Serialize for ModelCatalogReadView<'_> {
                         ),
                         profiles: ProfilesReadView::Native(&model.profiles),
                         default_profile: model.default_profile.as_ref(),
+                        reasoning_profile_order: model.reasoning_profile_order.as_deref(),
                         credential_source: provider.api_key.read_view(),
                     })?;
                 }
@@ -2006,6 +2083,9 @@ pub struct CatalogModelView {
     /// The profile selected when an invocation does not choose one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<ModelProfileId>,
+    /// Optional complete Profile order, lowest declared reasoning strength first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_profile_order: Option<Vec<ModelProfileId>>,
     /// The redacted credential source of the model's provider.
     pub credential_source: CredentialSourceView,
 }
@@ -2566,6 +2646,112 @@ mod tests {
             Err(ModelCatalogError::InvalidProfiles { detail, .. }) => detail,
             other => panic!("expected InvalidProfiles, got {other:?}"),
         }
+    }
+    #[test]
+    #[allow(clippy::too_many_lines)] // complete accepted/rejected permutation matrix
+    fn reasoning_order_is_optional_or_a_complete_model_local_permutation() {
+        for value in [document(), profiled(true), profiled(false)] {
+            let catalog = catalog(value).unwrap();
+            assert!(
+                catalog
+                    .model(&selected())
+                    .unwrap()
+                    .reasoning_profile_order
+                    .is_none()
+            );
+            assert!(
+                serde_json::to_value(catalog.view()).unwrap()["models"][0]
+                    .get("reasoningProfileOrder")
+                    .is_none()
+            );
+        }
+        for order in [
+            json!(["off", "fast", "balanced"]),
+            json!(["balanced", "off", "fast"]),
+        ] {
+            let mut value = profiled(true);
+            value["models"]["chosen"]["reasoningProfileOrder"] = order.clone();
+            let catalog = catalog(value).unwrap();
+            assert_eq!(
+                serde_json::to_value(catalog.view()).unwrap()["models"][0]["reasoningProfileOrder"],
+                order
+            );
+            assert_eq!(
+                serde_json::to_value(catalog.read_view()).unwrap(),
+                serde_json::to_value(catalog.view()).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(catalog.model_at(0).unwrap()).unwrap(),
+                serde_json::to_value(&catalog.view().models[0]).unwrap()
+            );
+            assert_eq!(
+                (0..3)
+                    .map(|i| catalog.profile_at(0, i).unwrap().id.as_str())
+                    .collect::<Vec<_>>(),
+                ["balanced", "fast", "off"]
+            );
+            assert_eq!(
+                catalog
+                    .model(&selected())
+                    .unwrap()
+                    .default_profile
+                    .as_ref()
+                    .unwrap()
+                    .as_str(),
+                "balanced"
+            );
+        }
+        let mut singleton = profiled(true);
+        singleton["models"]["chosen"]["profiles"] = json!({"balanced": {}});
+        singleton["models"]["chosen"]["reasoningProfileOrder"] = json!(["balanced"]);
+        assert!(catalog(singleton).is_ok());
+        for (order, expected) in [
+            (json!([]), "nonempty"),
+            (json!(["off", "fast"]), "missing Profiles [\"balanced\"]"),
+            (json!(["off", "off", "balanced"]), "repeats Profile \"off\""),
+            (
+                json!(["off", "foreign", "balanced"]),
+                "unknown Profile \"foreign\"",
+            ),
+        ] {
+            let mut value = profiled(true);
+            // An identity in a different Model does not belong to this one.
+            let mut other = value["models"]["chosen"].clone();
+            other["profiles"] = json!({"foreign": {}});
+            other["defaultProfile"] = json!("foreign");
+            value["models"]["other"] = other;
+            value["models"]["chosen"]["reasoningProfileOrder"] = order;
+            let error = catalog(value).unwrap_err();
+            assert!(matches!(
+                error,
+                ModelCatalogError::InvalidReasoningProfileOrder { .. }
+            ));
+            assert!(error.to_string().contains(expected), "{error}");
+            assert_eq!(
+                error.classification(),
+                (
+                    "models.*.reasoning_profile_order",
+                    "invalid Model reasoning Profile order"
+                )
+            );
+        }
+        for order in [json!([]), json!(["off"])] {
+            let mut value = document();
+            value["models"]["chosen"]["reasoningProfileOrder"] = order;
+            assert!(matches!(
+                catalog(value),
+                Err(ModelCatalogError::InvalidReasoningProfileOrder { .. })
+            ));
+        }
+        let mut doc: ModelCatalogDocument = serde_json::from_value(profiled(true)).unwrap();
+        doc.models
+            .get_mut("chosen")
+            .unwrap()
+            .reasoning_profile_order = Some(vec![ModelProfileId::new("bad/id")]);
+        assert!(matches!(
+            ModelCatalog::from_document(doc),
+            Err(ModelCatalogError::InvalidIdentity { .. })
+        ));
     }
     #[test]
     fn profiles_are_validated_complete_presets() {

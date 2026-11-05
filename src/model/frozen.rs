@@ -190,6 +190,7 @@ impl FrozenModelInvocation {
                 })
                 .unwrap_or_default(),
             default_profile: self.profile.clone(),
+            reasoning_profile_order: None,
             credential_source: self.binding.credential.view(),
         }
     }
@@ -350,6 +351,7 @@ impl FrozenModelSpec {
             effective_capabilities: model.capabilities.clone(),
             profiles: crate::model::catalog::ProfilesReadView::Frozen(model.profile.as_ref()),
             default_profile: model.profile.as_ref(),
+            reasoning_profile_order: None,
             credential_source: model.binding.credential.read_view(),
         })
     }
@@ -382,6 +384,7 @@ impl Serialize for FrozenCatalogReadView<'_> {
                             model.profile.as_ref(),
                         ),
                         default_profile: model.profile.as_ref(),
+                        reasoning_profile_order: None,
                         credential_source: model.binding.credential.read_view(),
                     })?;
                 }
@@ -607,6 +610,7 @@ protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 default_profile = "fast"
+reasoning_profile_order = ["fast", "deep"]
 
 [models."local/m".capabilities]
 input_modalities = ["text"]
@@ -651,6 +655,18 @@ request_params = '{"reasoning_effort":"high"}'
             serde_json::json!({"reasoning_effort": "none", "stop": [null]})
         );
         let view = decoded.catalog_view();
+        assert!(view.models[0].reasoning_profile_order.is_none());
+        assert!(
+            decoded
+                .catalog_model_at(0)
+                .unwrap()
+                .reasoning_profile_order
+                .is_none()
+        );
+        assert_eq!(
+            serde_json::to_value(decoded.read_catalog_view()).unwrap(),
+            serde_json::to_value(&view).unwrap()
+        );
         assert_eq!(view.models[0].default_profile, configured.profile);
         assert_eq!(view.models[0].profiles.len(), 1);
         assert!(view.models[0].effective_capabilities.json_schema_output);
