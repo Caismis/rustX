@@ -15,14 +15,14 @@ test('approximately 200 MB STEP first model, original geometry and interaction b
   await observeGeometryLatency(page);
   await page.getByRole('button', { name: 'Preview cube.step in sidebar', exact: true }).click();
   const body = page.locator('[data-geometry-format="step"]');
-  await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.coarseFirst || (window as any).geometryLatency.first),{timeout:70_000}).toBeGreaterThan(0);
+  await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.coarseFirst || (window as any).geometryLatency.partialFirst || (window as any).geometryLatency.first),{timeout:70_000}).toBeGreaterThan(0);
   const coarseFirst=await page.evaluate(()=>(window as any).geometryLatency.coarseFirst as number),coarseInteractions:number[]=[];
   if(coarseFirst){const rough=page.locator('svg[data-geometry-rough]'),box=(await rough.boundingBox())!;await rough.screenshot({path:info.outputPath('step-200mb-rough.png')});
     for(const button of ['left','right'] as const)for(let action=0;action<5;action++){const x=box.x+box.width/2,y=box.y+box.height/2;await page.mouse.move(x,y);await page.mouse.down({button});await page.mouse.move(x+32,y+12,{steps:10});await page.mouse.up({button});}
     await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.coarsePending)).toBe(0);coarseInteractions.push(...await page.evaluate(()=>(window as any).geometryLatency.coarseSamples as number[]));
   }
   await expect.poll(async()=>await page.evaluate(()=>(window as any).geometryLatency.first>0)?'ready':await body.getByRole('alert').count()?'error':'loading',{timeout:70_000}).not.toBe('loading');
-  const fineFirst=await page.evaluate(()=>(window as any).geometryLatency.first as number),first=coarseFirst||fineFirst,outcome=fineFirst>0?'ready':'error';
+  const fineFirst=await page.evaluate(()=>(window as any).geometryLatency.first as number),partialFirst=await page.evaluate(()=>(window as any).geometryLatency.partialFirst as number),first=Math.min(...[coarseFirst,partialFirst,fineFirst].filter(value=>value>0)),outcome=fineFirst>0?'ready':'error';
   const interactions: number[] = [];
   if (outcome === 'ready') {
     const canvas = body.locator('canvas'), box = (await canvas.boundingBox())!;
@@ -42,7 +42,7 @@ test('approximately 200 MB STEP first model, original geometry and interaction b
     expect(await page.evaluate(()=>(window as any).geometryDrawCalls.lastModelTriangles)).toBe(triangles);
     await body.screenshot({path:info.outputPath('step-200mb-complete.png')});
   }
-  const result={workload:'step-200mb',source:{bytes:size,sha256:digest.digest('hex')},outcome,firstModelOpportunityMs:first||null,firstFineModelOpportunityMs:fineFirst||null,coarseFirstModelOpportunityMs:coarseFirst||null,coarseInteractions,maximumCoarseInteractionMs:coarseInteractions.length?Math.max(...coarseInteractions):null,
+  const result={workload:'step-200mb',source:{bytes:size,sha256:digest.digest('hex')},outcome,firstModelOpportunityMs:Number.isFinite(first)?first:null,firstFineModelOpportunityMs:fineFirst||null,partialFirstModelOpportunityMs:partialFirst||null,coarseFirstModelOpportunityMs:coarseFirst||null,coarseInteractions,maximumCoarseInteractionMs:coarseInteractions.length?Math.max(...coarseInteractions):null,
     error:await body.getByRole('alert').count()?await body.getByRole('alert').textContent():null,interactions,maximumInteractionMs:interactions.length?Math.max(...interactions):null,
     imports:await page.evaluate(()=>(window as any).geometryImports),phases:await page.evaluate(()=>performance.getEntriesByType('measure').filter(entry=>entry.name.startsWith('geometry:')).map(entry=>({name:entry.name,ms:entry.duration}))),
     beforeClose:await resources(page),method:'Original STEP; source preloaded before demand, authorized range sampling and complete assembly occur inside demand. Coarse coordinate envelope: DOM update then two rAF turns. Fine mesh: actual model submission -> GPU fence -> next rAF. Both clocks retained; neither certifies physical presentation or native source transport.'};

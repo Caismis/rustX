@@ -8764,7 +8764,7 @@ WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
-===== occt-import-js 0.0.23-rustx.1 =====
+===== occt-import-js 0.0.23-rustx.2 =====
 GNU LESSER GENERAL PUBLIC LICENSE
                        Version 2.1, February 1999
 
@@ -9270,7 +9270,7 @@ necessary.  Here is a sample; alter the names:
 
 That's all there is to it!
 
-===== occt-import-js 0.0.23-rustx.1 (dist/license.occt-import-js.txt) =====
+===== occt-import-js 0.0.23-rustx.2 (dist/license.occt-import-js.txt) =====
 GNU LESSER GENERAL PUBLIC LICENSE
                        Version 2.1, February 1999
 
@@ -9776,7 +9776,7 @@ necessary.  Here is a sample; alter the names:
 
 That's all there is to it!
 
-===== occt-import-js 0.0.23-rustx.1 (dist/license.occt.txt) =====
+===== occt-import-js 0.0.23-rustx.2 (dist/license.occt.txt) =====
 GNU LESSER GENERAL PUBLIC LICENSE
 		       Version 2.1, February 1999
 

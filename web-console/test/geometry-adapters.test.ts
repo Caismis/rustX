@@ -13,6 +13,23 @@ import { viewersForPath, loadsBytes } from '../src/app/components/workbench-docu
 
 const cadModule = await WebAssembly.compile(readFileSync(new URL('../node_modules/occt-import-js/dist/occt-import-js.wasm', import.meta.url)));
 const fixture = (name: string) => new Uint8Array(readFileSync(fileURLToPath(new URL(`./fixtures/geometry/${name}`, import.meta.url))));
+it('publishes completed CAD meshes before the final result without reducing their precision', async () => {
+  const partials: ReturnType<typeof convertCadResult>[] = [];
+  let complete = false;
+  const result = await importCad(fixture('bracket-array.step'), 'step', cadModule, undefined, false, partial => {
+    expect(complete).toBe(false); partials.push(partial);
+  });
+  complete = true;
+  expect(partials.length).toBeGreaterThan(0); expect(partials.length).toBeLessThanOrEqual(16);
+  partials.forEach((partial,index) => expect(partial.meshes[0]).toEqual(result.meshes[index]));
+});
+it('keeps the final CAD result independent of mutations to a displayed fragment', async () => {
+  const source=fixture('bracket-array.step'),expected=await importCad(source,'step',cadModule);
+  const actual=await importCad(source,'step',cadModule,undefined,false,partial=>{
+    const mesh=partial.meshes[0];mesh.positions.fill(999);mesh.color?.fill(0);mesh.groups.forEach(group=>group.color.fill(0));partial.root.meshes.length=0;
+  });
+  expect(actual).toEqual(expected);
+});
 it.each([['cube.step','step'],['cube.iges','iges'],['cube.brep','brep']] as const)('relinquishes exclusively owned %s bytes only after native copy, preserving exact geometry', async (file,format) => {
   const source=fixture(file),owned=source.slice();
   const expected=await importCad(source,format,cadModule),actual=await importCad(owned,format,cadModule,undefined,true);

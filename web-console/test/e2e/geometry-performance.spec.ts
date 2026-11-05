@@ -89,7 +89,8 @@ for (const workload of [
   await page.getByRole('button', { name: `Close preview ${workload.name}`, exact: true }).click();
   await page.getByRole('button', { name: 'Close preview cube.glb', exact: true }).click();
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
-  const result = { workload, samplesPerAction: 5, firstDisplayMs, remount, orbit, pan, picking, twoModelDisplayMs, twoModelResources, afterRetirement: await resources(page) };
+  const result = { workload, samplesPerAction: 5, firstDisplayMs, remount, orbit, pan, picking, twoModelDisplayMs, twoModelResources, afterRetirement: await resources(page),
+    progressive: await page.evaluate(()=>({availableMeshes:(window as any).geometryPartials,imports:(window as any).geometryImportTimings,submittedPartialFrames:(window as any).geometryModelFrames.filter((frame:any)=>frame.completeness==='partial')})) };
   writeFileSync(info.outputPath(`${workload.id}.json`), JSON.stringify(result, null, 2));
   await info.attach(workload.id, { body: JSON.stringify(result, null, 2), contentType: 'application/json' });
 });

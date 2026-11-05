@@ -5,9 +5,10 @@ export async function instrument(page: Page) {
     const counts = { workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 };
     const drawing = { calls: 0, modelCalls: 0, scheduled: false, frameTriangles: 0, lastModelTriangles: 0 };
     const imports: { vertices: number; triangles: number }[][] = [];
-    const importTimings: { elapsedMs: number; profile: unknown }[] = [];
+    const importTimings: { startedAt: number; completedAt: number; elapsedMs: number; profile: unknown }[] = [];
     const previews: {elapsedMs:number;meshes:{triangles:number;error:number;bytes:number}[]}[]=[];
-    const modelFrames:{ms:number;triangles:number;width:number;height:number}[]=[];
+    const partials:{sequence:number;meshIndex:number;triangles:number;ms:number;at:number}[]=[];
+    const modelFrames:{ms:number;triangles:number;width:number;height:number;completeness:string|undefined}[]=[];
     for (const method of ['drawArrays', 'drawElements'] as const) {
       const original = WebGL2RenderingContext.prototype[method];
       Object.defineProperty(WebGL2RenderingContext.prototype, method, { value: function (this: WebGL2RenderingContext, ...args: unknown[]) {
@@ -15,7 +16,7 @@ export async function instrument(page: Page) {
         if (args[0] === this.TRIANGLES) {
           drawing.modelCalls++;
           drawing.frameTriangles += Number(args[method === 'drawArrays' ? 2 : 1]) / 3;
-          if (!drawing.scheduled) { drawing.scheduled = true; queueMicrotask(() => { drawing.scheduled = false; drawing.lastModelTriangles = drawing.frameTriangles; drawing.frameTriangles = 0; if(modelFrames.length<1024)modelFrames.push({ms:performance.now(),triangles:drawing.lastModelTriangles,width:this.canvas.width,height:this.canvas.height}); document.dispatchEvent(new CustomEvent('geometry-test-model-submitted', { detail: this.canvas })); }); }
+          if (!drawing.scheduled) { drawing.scheduled = true; queueMicrotask(() => { drawing.scheduled = false; drawing.lastModelTriangles = drawing.frameTriangles; drawing.frameTriangles = 0; if(modelFrames.length<1024)modelFrames.push({ms:performance.now(),triangles:drawing.lastModelTriangles,width:this.canvas.width,height:this.canvas.height,completeness:this.canvas instanceof HTMLCanvasElement?this.canvas.dataset.geometryCompleteness:undefined}); document.dispatchEvent(new CustomEvent('geometry-test-model-submitted', { detail: this.canvas })); }); }
         }
         return result;
       } });
@@ -25,9 +26,10 @@ export async function instrument(page: Page) {
     window.Worker = class extends NativeWorker {
       private live = true;
       constructor(url: string | URL, options?: WorkerOptions) { const start = performance.now(); super(url, options); counts.workers++;
+        this.addEventListener('message',event=>{if(event.data?.kind==='partial'&&partials.length<32)partials.push({sequence:event.data.sequence,meshIndex:event.data.meshIndex,triangles:event.data.model.meshes.reduce((sum:number,mesh:any)=>sum+(mesh.indices?.length??mesh.positions.length/3)/3,0),ms:performance.now()-start,at:performance.now()});});
         this.addEventListener('message', event => { if (event.data?.ok && Array.isArray(event.data.model?.meshes)) {
           imports.push(event.data.model.meshes.map((mesh: any) => ({ vertices: mesh.positions.length / 3, triangles: (mesh.indices?.length ?? mesh.positions.length / 3) / 3 })));
-          importTimings.push({ elapsedMs: performance.now() - start, profile: event.data.profile });
+          importTimings.push({ startedAt:start, completedAt:performance.now(), elapsedMs: performance.now() - start, profile: event.data.profile });
         } });
         this.addEventListener('message',event=>{if(event.data?.kind==='preview'&&Array.isArray(event.data.previews))previews.push({elapsedMs:performance.now()-start,meshes:event.data.previews.map((value:any)=>({triangles:value.data.positions.length/9,error:value.data.error,bytes:value.data.positions.byteLength+value.data.normals.byteLength+value.data.sourceVertices.byteLength+value.data.normalVertices.byteLength}))});});
       }
@@ -57,7 +59,7 @@ export async function instrument(page: Page) {
     const createUrl = URL.createObjectURL, revokeUrl = URL.revokeObjectURL, urls = new Set<string>();
     URL.createObjectURL = value => { const url = createUrl(value); urls.add(url); counts.urls++; return url; };
     URL.revokeObjectURL = url => { if (urls.delete(url)) counts.urls--; revokeUrl(url); };
-    Object.assign(window, { geometryResources: counts, geometryDrawCalls: drawing, geometryImports: imports, geometryImportTimings: importTimings, geometryPreviewTimings:previews, geometryModelFrames:modelFrames });
+    Object.assign(window, { geometryResources: counts, geometryDrawCalls: drawing, geometryImports: imports, geometryImportTimings: importTimings, geometryPreviewTimings:previews, geometryModelFrames:modelFrames,geometryPartials:partials });
   });
 }
 export const resources = (page: Page) => page.evaluate(() => ({ ...(window as any).geometryResources }));
@@ -65,8 +67,8 @@ export const resources = (page: Page) => page.evaluate(() => ({ ...(window as an
 /** One capture per page; first-frame proxy and trusted input diagnostics. */
 export async function observeGeometryLatency(page: Page, startSelector = 'button[aria-label^="Preview "]') {
   await page.evaluate(startSelector => {
-    const state = { start: 0, first: 0, firstGpuReady: 0, coarseFirst:0, coarsePending:0, coarseSamples:[] as number[], pending: 0, cancelled: 0, samples: [] as number[], gpuSamples: [] as number[], stages: [] as { dispatch: number; submission: number; gpu: number; renderOpportunity: number }[] };
-    const waiting: { start: number; received: number }[] = [];
+    const state = { start: 0, first: 0, firstGpuReady: 0, partialFirst:0, partialGpuReady:0, partialSamples:[] as number[], coarseFirst:0, coarsePending:0, coarseSamples:[] as number[], pending: 0, cancelled: 0, samples: [] as number[], gpuSamples: [] as number[], stages: [] as { dispatch: number; submission: number; gpu: number; renderOpportunity: number }[] };
+    const waiting: { start: number; received: number; partial: boolean }[] = [];
     const coarseWaiting:number[]=[];let coarseScheduled=false;
     const coarseObserver=new MutationObserver(records=>{
       const svg=document.querySelector<SVGSVGElement>('svg[data-geometry-rough]');
@@ -75,16 +77,17 @@ export async function observeGeometryLatency(page: Page, startSelector = 'button
       if(records.some(record=>record.target===svg&&record.attributeName==='data-geometry-rough-render')&&coarseWaiting.length){const inputs=coarseWaiting.splice(0);requestAnimationFrame(()=>requestAnimationFrame(()=>{if(svg.isConnected)for(const start of inputs)state.coarseSamples.push(performance.now()-start);else state.cancelled+=inputs.length;state.coarsePending-=inputs.length;}));}
     });
     coarseObserver.observe(document,{childList:true,subtree:true,attributes:true,attributeFilter:['data-geometry-rough-render']});
-    let firstSubmitted = false;
+    let firstSubmitted = false, partialSubmitted = false;
     // This test-only event runs at the microtask checkpoint AFTER the actual
     // model-render callback, including all parts and axes. A busy renderer's
     // skipped rAF cannot count as the response to a newer camera event.
     document.addEventListener('geometry-test-model-submitted', event => {
       const canvas = (event as CustomEvent).detail;
       if (!(canvas instanceof HTMLCanvasElement) || canvas !== document.querySelector('[data-geometry-format] canvas')) return;
-      const submitted = performance.now(), inputs = waiting.splice(0), first = !firstSubmitted && state.start > 0;
-      if (!first && !inputs.length) return;
+      const submitted = performance.now(), inputs = waiting.splice(0), provisional=canvas.dataset.geometryCompleteness==='partial',first = !provisional && !firstSubmitted && state.start > 0, firstPartial=provisional&&!partialSubmitted&&state.start>0;
+      if (!first && !firstPartial && !inputs.length) return;
       if (first) firstSubmitted = true;
+      if (firstPartial) partialSubmitted=true;
       const gl = canvas.getContext('webgl2')!;
       const fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)!; gl.flush();
       // A few non-clamped event-loop turns avoid adding an entire Windows timer
@@ -102,13 +105,15 @@ export async function observeGeometryLatency(page: Page, startSelector = 'button
         channel.port1.close(); channel.port2.close();
         const completed = performance.now();
         if (first) state.firstGpuReady = completed - state.start;
+        if (firstPartial) state.partialGpuReady = completed - state.start;
         for (const input of inputs) state.gpuSamples.push(completed - input.start);
         gl.deleteSync(fence);
         requestAnimationFrame(() => {
           const frameReady = performance.now();
           if (first) state.first = frameReady - state.start;
+          if (firstPartial) state.partialFirst=frameReady-state.start;
           for (const input of inputs) {
-            state.samples.push(frameReady - input.start);
+            if(input.partial)state.partialSamples.push(frameReady-input.start);else state.samples.push(frameReady - input.start);
             state.stages.push({ dispatch: input.received - input.start, submission: submitted - input.received, gpu: completed - submitted, renderOpportunity: frameReady - completed });
           }
           state.pending -= inputs.length;
@@ -123,7 +128,7 @@ export async function observeGeometryLatency(page: Page, startSelector = 'button
       if(event.isTrusted&&event.buttons&&event.target instanceof SVGElement&&event.target.closest('svg[data-geometry-rough]')){state.coarsePending++;coarseWaiting.push(event.timeStamp);return;}
       if (!event.isTrusted || !event.buttons || !(event.target instanceof HTMLCanvasElement)) return;
       state.pending++;
-      waiting.push({ start: event.timeStamp, received: performance.now() });
+      waiting.push({ start: event.timeStamp, received: performance.now(),partial:event.target.dataset.geometryCompleteness==='partial' });
     }, { capture: true });
     Object.assign(window, { geometryLatency: state });
   }, startSelector);

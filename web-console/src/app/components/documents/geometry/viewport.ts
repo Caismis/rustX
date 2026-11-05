@@ -50,9 +50,10 @@ export function prepareGeometryGraphics(generated: boolean, lost: () => void) {
 }
 
 /** Mounted view owns every graphics resource. Source bytes belong to the content owner. */
-export function mountGeometry(container: HTMLElement, object: Object3D, bounds: Box3, saved: Saved | undefined, labels: AxisLabels & { canvas: string }, change: (state: Omit<Saved, 'copyId'>) => void, lost: () => void, options?: { generated: boolean; pendingPreview?: boolean; onFirstGpuReady?: () => void; graphics?:ReturnType<typeof prepareGeometryGraphics> }) {
+export function mountGeometry(container: HTMLElement, object: Object3D, bounds: Box3, saved: Saved | undefined, labels: AxisLabels & { canvas: string }, change: (state: Omit<Saved, 'copyId'>) => void, lost: () => void, options?: { generated: boolean; pendingPreview?: boolean; provisional?: boolean; onInteraction?: (active: boolean) => void; onFirstGpuReady?: () => void; graphics?:ReturnType<typeof prepareGeometryGraphics> }) {
   const graphics = options?.graphics ?? prepareGeometryGraphics(options?.generated === true, lost), renderer = graphics.renderer, gl = graphics.gl;
   const canvas = renderer.domElement; canvas.tabIndex = 0; canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', labels.canvas);
+  canvas.dataset.geometryCompleteness = options?.provisional ? 'partial' : 'complete';
   let pendingDraw: WebGLSync | null = null;
   let presentationFrame = 0, firstSubmitted = false, firstReady = false;
   let outlines: ReturnType<typeof createOutlines> | undefined, outlineRequest = 0, outlinesWanted = saved?.outlines !== false;
@@ -77,7 +78,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const axisPositions = axes.geometry.getAttribute('position');
   axisPositions.setXYZ(0, -1, 0, 0); axisPositions.setXYZ(2, 0, -1, 0); axisPositions.setXYZ(4, 0, 0, -1);
   axisScene.add(axes); canvas.setAttribute('aria-description', labels.axes);
-  const navigation = createAxisNavigation(container, labels, view => fit(view));
+  const navigation = createAxisNavigation(container, labels, view => { options?.onInteraction?.(false); fit(view); });
   const highlight = new BoxHelper(object, new Color(0xffbd45)); highlight.visible = false; scene.add(highlight);
   const structure = createStructure(object, center, saved);
   const quality = createDisplayQuality(object);
@@ -114,7 +115,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     }
     renderer.setViewport(0, 0, width, height); renderer.autoClear = true;
     quality.draw(scene, moving, camera, height, () => batches.draw(() => renderer.render(scene, camera)));
-    canvas.dataset.geometryQuality = moving ? 'interactive' : 'complete';
+    canvas.dataset.geometryQuality = options?.provisional ? 'partial' : moving ? 'interactive' : 'complete';
     renderer.autoClear = false; renderer.clearDepth();
     axisCamera.position.copy(camera.position).sub(controls.target).normalize().multiplyScalar(3.5); axisCamera.up.copy(camera.up); axisCamera.lookAt(0, 0, 0);
     const side = Math.min(112, width, height); renderer.setViewport(8, 8, side, side); renderer.render(axisScene, axisCamera);
@@ -140,7 +141,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     refinement = setTimeout(() => { refinement = undefined; if (!disposed) { moving = false; render(); } }, L.refineDelayMs);
   };
   const renderMoving = (urgent = false) => {
-    moving = true; canvas.dataset.geometryQuality = 'interactive'; refine();
+    moving = true; canvas.dataset.geometryQuality = options?.provisional ? 'partial' : 'interactive'; refine();
     if (!urgent) { render(); return; }
     if (inputDrawQueued) return; inputDrawQueued = true;
     queueMicrotask(() => { inputDrawQueued = false; if (disposed) return; cancelAnimationFrame(frame); frame = 0; draw(); });
@@ -152,6 +153,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     if (item && highlight.visible) highlight.setFromObject(item);
   };
   const select = (id?: string) => {
+    if (options?.provisional) return;
     if (!structure.select(id)) return;
     updateHighlight(); renderMoving(); emit();
   };
@@ -196,6 +198,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   };
   const structureAction = (action: () => boolean) => { if (action()) { outlines?.sync(); updateHighlight(); renderMoving(); emit(); } };
   const setOutlines = async (enabled: boolean): Promise<OutlineStatus> => {
+    if (options?.provisional) return 'off';
     const request = ++outlineRequest;
     if (disposed) return 'off'; outlinesWanted = enabled; emit();
     try {
@@ -264,9 +267,9 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   // OrbitControls' change event uses an absolute world-distance threshold.
   // Its public input events still update smaller models. Read the final pose
   // after their handlers, without scheduling any work while the view is idle.
-  const inputFinished = () => { queueMicrotask(observePose); };
-  const started = () => { interacting = true; clearTimeout(refinement); refinement = undefined; observePose(); clearTimeout(publication); publication = undefined; };
-  const ended = () => { observePose(); interacting = false; refine(); flush(); };
+  const inputFinished = () => { if (!interacting) options?.onInteraction?.(false); queueMicrotask(observePose); };
+  const started = () => { interacting = true; options?.onInteraction?.(true); clearTimeout(refinement); refinement = undefined; observePose(); clearTimeout(publication); publication = undefined; };
+  const ended = () => { observePose(); interacting = false; options?.onInteraction?.(false); refine(); flush(); };
   const inputMoved = () => { if (interacting) inputFinished(); };
   canvas.ownerDocument.addEventListener('pointermove', inputMoved, true);
   canvas.addEventListener('keydown', inputFinished, true);
@@ -305,6 +308,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const raycaster = new Raycaster(); let down: [number, number] | undefined;
   const pointerDown = (event: PointerEvent) => { down = [event.clientX, event.clientY]; };
   const pointerUp = (event: PointerEvent) => {
+    if (options?.provisional) return;
     if (!down || Math.hypot(event.clientX - down[0], event.clientY - down[1]) > 4) return; down = undefined;
     const rect = canvas.getBoundingClientRect(); raycaster.setFromCamera(new Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
     const candidates: Mesh[] = [];
@@ -314,7 +318,8 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   };
   const contextLost = (event: Event) => { event.preventDefault(); dispose(); lost(); };
   canvas.addEventListener('pointerdown', pointerDown); canvas.addEventListener('pointerup', pointerUp); canvas.addEventListener('webglcontextlost', contextLost);
-  function dispose() {
+  function dispose() { retire(false); }
+  function retire(keepGraphics: boolean) {
     if (disposed) return; flush(); if (disposed) return;
     disposed = true; outlineRequest++; releaseBackground?.(); releaseBackground = undefined; outlines?.dispose(); quality.dispose(); batches.dispose(); clearTimeout(refinement); clearTimeout(publication); cancelAnimationFrame(frame); cancelAnimationFrame(presentationFrame); observer.disconnect(); themeObserver.disconnect(); resolution.removeEventListener('change', resolutionChanged);
     canvas.removeEventListener('pointerdown', pointerDown); canvas.removeEventListener('pointerup', pointerUp); canvas.removeEventListener('webglcontextlost', contextLost);
@@ -323,7 +328,8 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     highlight.geometry.dispose(); highlight.material.dispose(); axes.geometry.dispose();
     for (const material of Array.isArray(axes.material) ? axes.material : [axes.material]) material.dispose();
     if (pendingDraw) { gl.deleteSync(pendingDraw); pendingDraw = null; }
-    navigation.dispose(); graphics.dispose(); canvas.remove(); centered.remove(object);
+    navigation.dispose(); if (!keepGraphics) graphics.dispose(); canvas.remove(); centered.remove(object);
+    return keepGraphics ? graphics : undefined;
   }
   try {
     graphics.adopt(scene,camera);
@@ -334,5 +340,9 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   return { parts: structure.parts, fit, reset, focus, select, visibility, inspect: structure.inspect,
     setOutlines, setProjection, refreshPreview: () => { backgroundPending=false;releaseBackground?.();releaseBackground=undefined;quality.refresh();if(moving){refine();render();} }, get projection() { return projection(); },
     isolate: () => structureAction(structure.isolate), restore: () => structureAction(structure.restore), showAll: () => structureAction(structure.showAll),
-    relabel: (value: AxisLabels & { canvas: string }) => { canvas.setAttribute('aria-label', value.canvas); canvas.setAttribute('aria-description', value.axes); navigation.relabel(value); }, flush, dispose };
+    relabel: (value: AxisLabels & { canvas: string }) => { canvas.setAttribute('aria-label', value.canvas); canvas.setAttribute('aria-description', value.axes); navigation.relabel(value); },
+    refreshContent: () => { if (!disposed && options?.provisional) { object.updateMatrixWorld(true); renderMoving(); } },
+    // A completed model may replace a provisional graph without allocating a
+    // second renderer/context. The receiver of this handoff owns its disposal.
+    handoff: () => retire(true), flush, dispose };
 }

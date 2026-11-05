@@ -4,33 +4,36 @@ import { modelScene, disposeScene } from './scene-resources';
 import type { GeometryFormat } from './format';
 import { geometryStageObserver, type GeometryImportStage } from './stages';
 import { cadCode } from './cad-code';
+import { partialBudget } from './partial-data';
 
 let active = 0;
 export type PreparedGeometry = ReturnType<typeof modelScene> & { prepareStart: number; pendingPreview: boolean; ready: Promise<void>; startPreview(): void; dispose(): void };
+export type GeometryPartial = Pick<ReturnType<typeof modelScene>, 'scene' | 'bounds'> & { dispose(): void };
 /** One disposable import Worker per body. Only the content owner can relinquish
  * a large copy that cannot fit its inactive cache; other input is copied. */
-export function parseGeometry(bytes: Uint8Array<ArrayBuffer>, format: Exclude<GeometryFormat, 'glb'>, signal: AbortSignal, onStage?: (stage: GeometryImportStage) => void, takeBytes?: () => Uint8Array<ArrayBuffer> | undefined): Promise<PreparedGeometry> {
+export function parseGeometry(bytes: Uint8Array<ArrayBuffer>, format: Exclude<GeometryFormat, 'glb'>, signal: AbortSignal, onStage?: (stage: GeometryImportStage) => void, takeBytes?: () => Uint8Array<ArrayBuffer> | undefined, onPartial?: (partial: GeometryPartial) => void): Promise<PreparedGeometry> {
   signal.throwIfAborted();
   if (bytes.length > L.sourceBytes) return Promise.reject(new GeometryError('limit'));
   if (active >= L.owners) return Promise.reject(new GeometryError('capacity'));
   active++;
-  return admittedGeometry(bytes, format, signal, performance.now() + (format === 'stl' ? L.timeoutMs : L.cadTimeoutMs), onStage, takeBytes);
+  return admittedGeometry(bytes, format, signal, performance.now() + (format === 'stl' ? L.timeoutMs : L.cadTimeoutMs), onStage, takeBytes, onPartial);
 }
 
 // This mutable input is the continuation's only source reference. Cancellation
 // clears it while immutable code compilation may continue for another body.
-function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Exclude<GeometryFormat, 'glb'>, signal: AbortSignal | undefined, deadline: number, onStage?: (stage: GeometryImportStage) => void, takeBytes?: () => Uint8Array<ArrayBuffer> | undefined): Promise<PreparedGeometry> {
+function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Exclude<GeometryFormat, 'glb'>, signal: AbortSignal | undefined, deadline: number, onStage?: (stage: GeometryImportStage) => void, takeBytes?: () => Uint8Array<ArrayBuffer> | undefined, onPartial?: (partial: GeometryPartial) => void): Promise<PreparedGeometry> {
   return new Promise((resolve, reject) => {
     let worker: Worker | undefined, dispatched = false, delivered = false, prepared: ReturnType<typeof modelScene> | undefined;
     let previewTimer: ReturnType<typeof setTimeout> | undefined, settleReady!: () => void;
     const ready = new Promise<void>(resolve => { settleReady = resolve; });
     const stage = geometryStageObserver(format, value => onStage?.(value));
     let finished = false;
+    const prefix = partialBudget(); let partialSequence = 0, lastMesh = -1;
     const finish = () => {
       if (finished) return; finished = true;
       clearTimeout(timer); clearTimeout(previewTimer); signal?.removeEventListener('abort', abort);
       prepared?.finishPreviews(); settleReady();
-      input = undefined; signal = undefined; onStage = undefined; takeBytes = undefined;
+      input = undefined; signal = undefined; onStage = undefined; takeBytes = undefined; onPartial = undefined;
       if (worker) { worker.onmessage = worker.onerror = worker.onmessageerror = null; worker.terminate(); worker = undefined; }
       active--;
     };
@@ -58,6 +61,18 @@ function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Ex
         finish(); return;
       }
       if (delivered) return;
+      if (event.data?.kind === 'partial') {
+        try {
+          const { sequence, meshIndex } = event.data;
+          if (!onPartial || format === 'stl' || sequence !== partialSequence + 1 || !Number.isSafeInteger(meshIndex) || meshIndex <= lastMesh || meshIndex >= L.parts) throw new GeometryError('invalid');
+          const result = modelScene(prefix.admit(event.data.model));
+          let closed = false;
+          const partial = { scene: result.scene, bounds: result.bounds, dispose: () => { if (!closed) { closed = true; disposeScene([result.scene]); } } };
+          try { onPartial(partial); } catch (error) { partial.dispose(); throw error; }
+          partialSequence = sequence; lastMesh = meshIndex;
+        } catch (error) { fail(error instanceof GeometryError ? error.code : 'invalid'); }
+        return;
+      }
       if (event.data?.kind === 'stage') {
         // Unknown, duplicate and out-of-order observations cannot become a
         // result, prolong admission or change the original deadline.
@@ -93,7 +108,7 @@ function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Ex
     const start = (module?: WebAssembly.Module) => {
       if (finished || signal?.aborted || !input || !worker) return;
       if (performance.now() > deadline) { fail('timeout'); return; }
-      try { const copy = takeBytes?.() ?? input.slice(); input = undefined; takeBytes = undefined; dispatched = true; worker.postMessage({ bytes: copy, format, deadline: performance.timeOrigin + deadline, preparePreview: true, ...(module ? { module } : {}) }, [copy.buffer]); }
+      try { const copy = takeBytes?.() ?? input.slice(); input = undefined; takeBytes = undefined; dispatched = true; worker.postMessage({ bytes: copy, format, deadline: performance.timeOrigin + deadline, preparePreview: true, progressive: !!onPartial, ...(module ? { module } : {}) }, [copy.buffer]); }
       catch { fail('worker'); }
     };
     if (format === 'stl') start();

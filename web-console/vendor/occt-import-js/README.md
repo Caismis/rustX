@@ -1,4 +1,4 @@
-# Bounded OCCT transfer build
+# Bounded OCCT transfer and completed-mesh streaming
 
 This package derives from occt-import-js 0.0.23 at importer commit
 `c2148e54b456b571238d35cac037d304053d64b2` and its OCCT submodule
@@ -11,6 +11,13 @@ typed-memory views / Array push. This removes per-number Embind property calls
 without allocating another mesh-sized native output buffer. Array order,
 numeric precision, names, colors and hierarchy stay intact. No private glue
 symbols, new geometry algorithm, allocator or tessellation setting is used.
+
+An optional `onMesh(index, mesh)` callback exposes each completed mesh during
+hierarchy export. The normal final result remains complete. The client copies
+a bounded prefix into independently owned typed streams, preserving its original
+positions, normals, indices and colors; the final result does not borrow those
+display buffers. This overlaps remaining export/conversion, not arbitrary STEP
+parser state. Document transfer and root triangulation still precede export.
 
 `onInputCopied`, an optional import-parameter callback, runs after native input
 ownership is established. The disposable CAD Worker uses it to release its

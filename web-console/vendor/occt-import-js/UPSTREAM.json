@@ -4,6 +4,6 @@
   "occtCommit": "d2abb6d844231cb8f29be6894440874a4700e4a5",
   "emscripten": "3.1.69",
   "modifiedSource": "occt-import-js/src/js-interface.cpp",
-  "changes": ["Use convertJSArrayToNumberVector for typed input", "Write numeric output in fixed 4096-double chunks through public Embind APIs", "Allow explicit owned-input release after native copy and free native input before mesh extraction"],
+  "changes": ["Use convertJSArrayToNumberVector for typed input", "Write numeric output in fixed 4096-double chunks through public Embind APIs", "Allow explicit owned-input release after native copy and free native input before mesh extraction", "Optionally notify completed meshes during hierarchy export without changing the final result"],
   "wasmMaximumBytes": 2147483648
 }

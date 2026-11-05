@@ -2,7 +2,9 @@
 
 Geometry previews admit up to 200 MiB through authorized, single-version byte
 ranges. STEP can first show a labeled, source-version-bound coordinate envelope
-while full source reading and CAD import continue. Full-model moving pictures
+while full source reading and CAD import continue. Already computed CAD meshes
+can then progressively replace that envelope before the complete model is
+available, retaining their final precision and one renderer/context. Full-model moving pictures
 preserve original shading and use bounded surface approximations where eligible; a
 settled view restores every admitted triangle, original shading and full pixel
 quality, then stops drawing. The current acceptance requirement is a usable

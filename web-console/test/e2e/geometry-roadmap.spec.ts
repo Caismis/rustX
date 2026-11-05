@@ -8,7 +8,7 @@ import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview';
 
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 test.use({ connectOptions: { wsEndpoint: process.env.RUSTX_BROWSER_WS_ENDPOINT ?? '', exposeNetwork: '<loopback>' } });
-const ready = (page: Page) => expect(page.locator('[data-geometry-format] canvas')).toBeVisible();
+const ready = (page: Page) => expect(page.locator('[data-geometry-format] canvas[data-geometry-completeness="complete"]')).toBeVisible();
 const pose = (page: Page) => page.evaluate(() => (window as any).geometryContract.snapshot().find((tab: any) => tab.name === 'cube.glb').state);
 const reads = (page: Page) => page.evaluate(() => (window as any).geometryContract.reads.filter((read: any) => !read.probe).length);
 const painted = (page: Page) => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));

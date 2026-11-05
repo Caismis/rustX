@@ -1,20 +1,20 @@
 {
-  "importer": "occt-import-js@0.0.23-rustx.1",
+  "importer": "occt-import-js@0.0.23-rustx.2",
   "renderer": "three@0.187.0",
   "importerCommit": "c2148e54b456b571238d35cac037d304053d64b2",
   "occtCommit": "d2abb6d844231cb8f29be6894440874a4700e4a5",
-  "modifiedSourceSha256": "af51bd4c9349041f882368e118ca1528d0535baaabd818711302ebd40dd3491f",
+  "modifiedSourceSha256": "48b5b1696ca6363d336c427c1078876d47179faf7fc947c6da8c328df2e364b7",
   "wasmMaximumBytes": 2147483648,
   "assets": {
     "occt-import-js.js": {
       "bytes": 97149,
       "gzipBytes": 26939,
-      "sha256": "7b4714f1b9898447b45ea88d25cb9b6db7bfaa5010fd824728c4551e1f65f22c"
+      "sha256": "8daed673a72087a86ec30b91790ed3eb75ddbcbedd4d51f6a37cebae03aa335e"
     },
     "occt-import-js.wasm": {
-      "bytes": 7605527,
-      "gzipBytes": 3114296,
-      "sha256": "6dc31d22c799b302c5d5fb3fffefc6b4bccb718da1880686e1f0e6e8a01d5c76"
+      "bytes": 7606314,
+      "gzipBytes": 3114580,
+      "sha256": "63dfd5c09b6a0fa26dd2e40dceb17092f73ab54d26467e7638b8435029c0231e"
     },
     "license.occt-import-js.txt": {
       "bytes": 26526,

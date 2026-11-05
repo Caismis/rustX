@@ -47,8 +47,10 @@ private:
 class HierarchyWriter
 {
 public:
-    HierarchyWriter (emscripten::val& meshesArr) :
+    HierarchyWriter (emscripten::val& meshesArr, const emscripten::val& onMesh) :
         mMeshesArr (meshesArr),
+        mOnMesh (onMesh),
+        mReportMeshes (onMesh.typeOf ().as<std::string> () == "function"),
         mMeshCount (0)
     {
     }
@@ -164,6 +166,12 @@ private:
 
             meshObj.set ("brep_faces", brepFaceArr);
 
+            // A completed mesh is already part of the final result. Optional
+            // consumers may display it while remaining meshes are exported.
+            if (mReportMeshes) {
+                mOnMesh (mMeshCount, meshObj);
+            }
+
             mMeshesArr.set (mMeshCount, meshObj);
             nodeMeshesArr.set (nodeMeshCount, mMeshCount);
             mMeshCount += 1;
@@ -172,6 +180,8 @@ private:
     }
 
     emscripten::val& mMeshesArr;
+    emscripten::val mOnMesh;
+    bool mReportMeshes;
     int mMeshCount;
 };
 
@@ -213,7 +223,11 @@ static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val& 
     emscripten::val meshesArr (emscripten::val::array ());
     NodePtr rootNode = importer->GetRootNode ();
 
-    HierarchyWriter hierarchyWriter (meshesArr);
+    emscripten::val onMesh (emscripten::val::undefined ());
+    if (!options.isNull () && !options.isUndefined () && options.hasOwnProperty ("onMesh")) {
+        onMesh = options["onMesh"];
+    }
+    HierarchyWriter hierarchyWriter (meshesArr, onMesh);
     hierarchyWriter.WriteNode (rootNode, rootNodeObj);
 
     resultObj.set ("root", rootNodeObj);

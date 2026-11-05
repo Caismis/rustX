@@ -5,6 +5,7 @@ declare module 'occt-import-js' {
     linearDeflection: number;
     angularDeflection: number;
     onInputCopied?: () => void;
+    onMesh?: (index: number, mesh: unknown) => void;
   }
   interface Occt {
     ReadStepFile(bytes: Uint8Array, options: ImportOptions): unknown;

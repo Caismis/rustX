@@ -2,6 +2,7 @@ import createOcct from 'occt-import-js';
 import { GEOMETRY_LIMITS as L, requireGeometry as check } from './limits';
 import { validateModelStructure, type GeometryModel, type GeometryNode, type GeometryMesh } from './model';
 import type { GeometryImportStage } from './stages';
+import { partialBudget } from './partial-data';
 
 export const CAD_TRIANGULATION = Object.freeze({ linearUnit: 'millimeter', linearDeflectionType: 'bounding_box_ratio', linearDeflection: 0.001, angularDeflection: 0.5 });
 function record(value: unknown): Record<string, unknown> { check(value && typeof value === 'object' && !Array.isArray(value)); return value as Record<string, unknown>; }
@@ -61,7 +62,7 @@ export function convertCadResult(value: unknown): GeometryModel {
   const model = { meshes, root: node(result.root, 0) }; validateModelStructure(model); return model;
 }
 
-export async function importCad(bytes: Uint8Array<ArrayBuffer>, format: 'step' | 'iges' | 'brep', module: WebAssembly.Module, stage?: (stage: GeometryImportStage) => void, ownsInput = false): Promise<GeometryModel> {
+export async function importCad(bytes: Uint8Array<ArrayBuffer>, format: 'step' | 'iges' | 'brep', module: WebAssembly.Module, stage?: (stage: GeometryImportStage) => void, ownsInput = false, onPartial?: (model: GeometryModel, meshIndex: number) => void): Promise<GeometryModel> {
   check(bytes.length <= L.sourceBytes, 'limit');
   stage?.('initializing');
   performance.mark('geometry:cad-initialize');
@@ -81,7 +82,25 @@ export async function importCad(bytes: Uint8Array<ArrayBuffer>, format: 'step' |
   const read = format === 'step' ? occt.ReadStepFile : format === 'iges' ? occt.ReadIgesFile : occt.ReadBrepFile;
   stage?.('importing');
   performance.mark('geometry:cad-read');
-  const result = read(bytes, { ...CAD_TRIANGULATION, ...(ownsInput ? { onInputCopied: () => {
+  const budget = partialBudget();
+  const onMesh = onPartial ? (meshIndex: number, raw: unknown) => {
+    if (!onPartial || budget.remaining.updates === 0) return;
+    try {
+      const mesh = record(raw), position = record(record(mesh.attributes).position).array, index = record(mesh.index).array;
+      // Avoid allocating a typed preview for a mesh that cannot fit. The final
+      // conversion still validates every mesh independently at full precision.
+      if (!Array.isArray(position) || !Array.isArray(index) || index.length / 3 > budget.remaining.triangles
+        || position.length * 8 + index.length * 4 > budget.remaining.bytes) return;
+      const model = budget.admit(convertCadResult({ success: true, meshes: [mesh], root: { name: '', meshes: [0], children: [] } }));
+      // Only exposed prefix colors need another owner. Copy after coalescing,
+      // avoiding a new tuple for every redundant same-color CAD face.
+      const fragment = model.meshes[0];
+      if (fragment.color) fragment.color = [...fragment.color];
+      for (const group of fragment.groups) group.color = [...group.color];
+      onPartial(model, meshIndex);
+    } catch { onPartial = undefined; }
+  } : undefined;
+  const result = read(bytes, { ...CAD_TRIANGULATION, ...(onMesh ? { onMesh } : {}), ...(ownsInput ? { onInputCopied: () => {
     const buffer = bytes.buffer;
     if ('transfer' in buffer && typeof buffer.transfer === 'function') buffer.transfer(0);
   } } : {}) });

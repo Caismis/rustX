@@ -8,11 +8,13 @@ observed interaction below 50 ms, and restore complete admitted geometry when
 quiet. Temporary quality loss is allowed. Original source bytes and configured
 CAD import precision remain unchanged; resource ownership stays bounded.
 
-The 200,761,968-byte STEP reference passes three independent native Host runs
+Computed partial results from the full CAD calculation are displayed as they
+become available, then the complete model takes over without changing its
+precision. The 200,761,968-byte STEP reference passes three independent native Host runs
 and three production-fixture runs. Native first picture is
-**61.9–62.5 ms**; observed coarse/fine maxima are
-**35.8 / 33.9 ms**.
-The complete native-path mesh arrives in 33.3–34.8 s.
+**62.2–62.8 ms**; observed coarse/fine maxima are
+**42.0 / 33.7 ms**.
+The complete native-path mesh arrives in 34.0–36.1 s.
 These are separate clocks. The initial picture is a labeled coordinate
 envelope, not the admitted CAD mesh. General STEP assemblies and the broader
 format/model matrix remain uncertified; PR #517 stays draft.
@@ -33,7 +35,7 @@ The machine is AMD Ryzen 7 9800X3D / Windows with WSL2, using the repository's
 pinned Playwright 1.63.0 Chromium 153 / SwiftShader image, 1440×1000, DPR 1,
 without an explicit CPU or memory quota. Runs are sequential with no concurrent
 builds/tests. Browser contexts are fresh; OS filesystem/code caches are not
-explicitly flushed. Test-machine/image details and 78 matching source/build metadata hashes
+explicitly flushed. Test-machine/image details and 86 matching tested source hashes
 are in [the environment record](step-200mb-environment.json).
 
 The native lane opens an actual committed delivery in the production application
@@ -47,8 +49,8 @@ opportunity. Neither endpoint observes compositor/physical display presentation.
 
 | Lane, three fresh contexts | First rough picture | First fine mesh | Maximum rough input | Maximum fine input |
 | --- | --- | --- | --- | --- |
-| Native Host / production application | 61.9–62.5 ms | 33.3–34.8 s | 35.8 ms | 33.9 ms |
-| Production component fixture | 30.4–36.0 ms | 23.5–23.8 s | 33.5 ms | 35.5 ms |
+| Native Host / production application | 62.2–62.8 ms | 34.0–36.1 s | 42.0 ms | 33.7 ms |
+| Production component fixture | 32.0–36.8 ms | 23.7–23.9 s | 33.4 ms | 41.9 ms |
 
 Each run contains 100 trusted coarse and 100 trusted fine pointer-move samples.
 The native gestures alternate direction to retain a visible model; the fixture
@@ -87,15 +89,16 @@ The full-view bootstrap starts after source completion and 120 ms without rough
 input. This avoids CAD download/compilation competing with first probes and
 initial engine setup interrupting an active rough gesture. Once admitted, CAD
 continues in its disposable Worker. Rough camera gestures seed normalized
-direction, target and zoom. The envelope remains until the full mesh's first
-GPU-ready draw, then retires. Full CAD has a 60-second parent deadline; STL and
+direction, target and zoom. The envelope yields to the first GPU-ready computed
+fragment when one is available; the complete model later replaces that
+provisional graph. Full CAD has a 60-second parent deadline; STL and
 immutable code fetch retain 15 seconds. These import deadlines do not relax the
 200-ms first-picture or below-50-ms input gate.
 
-The local occt-import-js 0.0.23-rustx.1 build changes only its Embind interface:
+The local occt-import-js 0.0.23-rustx.2 build changes only its Embind interface:
 bulk numeric input, fixed 4096-double output chunks, release of exclusively owned
-JS input after native copy, and release of the native input vector before mesh
-extraction. It keeps upstream -Oz, allocator, geometry algorithms, numeric order,
+JS input after native copy, release of the native input vector before mesh
+extraction, and optional completed-mesh notifications during export. It keeps upstream -Oz, allocator, geometry algorithms, numeric order,
 CAD tolerances, exceptions and 2-GiB WASM maximum. Complete modified C++, pinned
 revisions, licenses and rebuild instructions ship alongside the binary in
 `cad-runtime-source/`. Asset/source hashes are checked during builds.
@@ -107,6 +110,47 @@ coalesce, and gaps/alternating colors preserve the separate 512-draw limit.
 Manual outlines now share the surface/import retirement barrier and retain the
 latest Off preference. If optional surface preparation times out, moving views
 keep their bounded shaded bridge; settled draws and picking use original geometry.
+
+### Computed partial results
+
+Completed CAD meshes are forwarded during native hierarchy export while remaining
+export and final typed conversion are pending, with final positions, normals,
+indices and colors.
+The producer and receiver independently bound the whole prefix to 16 messages,
+65,536 triangles, 8 MiB including generated normals, and the existing aggregate
+material/draw limits. Sequence and mesh-index ordering are checked. Partial
+streams and coalesced color tuples have separate ownership; a native regression
+mutates the displayed fragment and proves the final result remains identical.
+
+Fragments accumulate in a labeled provisional graph, with picking, occurrence
+metadata and outlines disabled until the complete model is admitted. Quiet
+handoff preserves normalized pan, direction, zoom, projection and up axis,
+including narrow viewport framing. One renderer/context is reused; old controls,
+callbacks and GPU fences retire, and old materials are released after the full
+graph's shaders are adopted. An already-ready final result skips an unpainted
+prefix. Cancellation fences late fragments and a final result held in transit.
+
+The 96-part assembly lifecycle demonstration grows from 444 triangles to
+17,824 complete triangles, with original shading/holes rather than a coordinate
+envelope. Its message delivery/final result is deliberately held to inspect
+each stage; it is not a cold-performance result. Raw native availability and
+trusted partial input samples are in
+[the progressive capture](step-progressive-samples.json): 69 trusted partial
+input samples have a 33.5-ms maximum and one created context. The
+[ordinary CAD capture](step-progressive-natural.json) separately records an
+unheld 113.4-ms window from first mesh availability to terminal import and one
+actual partial draw submission in that window. Later partial submissions are
+also retained; these submission observations are not physical presentation.
+
+Document transfer and root triangulation still precede mesh export. The large
+single-face reference has no separately observed calculated-prefix picture in
+these runs; its rapid source envelope remains until the full mesh. This mechanism
+does not invent progress during atomic parser/tessellator work or replace the
+need to certify a complex approximately 200-MB assembly.
+
+![First completed part](cad-partial-first.png)
+
+![More computed geometry](cad-partial-more.png)
 
 ## Fidelity and resource evidence
 
@@ -122,48 +166,41 @@ Six small independent STEP/inch/IGES/BREP/assembly fixtures also retain complete
 JSON and rendered-stream digests in the native differential harness.
 
 One isolated sequential full-completion Node Worker comparison, with the same
-source and a diagnostic 60-second deadline, records:
+source, no display-prefix callback and a diagnostic 60-second deadline, records:
 
 | Native diagnostic | Upstream SDK | Bounded-transfer SDK |
 | --- | --- | --- |
-| Read/import call | 40.88 s | 21.60 s |
-| Process peak RSS | 1,412,984 KiB | 1,292,024 KiB |
+| Read/import call | 40.88 s | 21.12 s |
+| Process peak RSS | 1,412,984 KiB | 1,263,040 KiB |
 
-That pair reduces import time by 47.2% and process RSS by
-8.6%.
+That pair reduces import time by 48.3% and process RSS by
+10.6%.
 It is one diagnostic pair, not a statistical confidence interval or a UI clock.
 Process RSS includes Worker and input allocations, not per-Worker attribution.
 WASM exported memory remains 1,053,491,200 bytes; freeing buffers does not shrink its
 grown linear memory. Worker retirement releases the instance.
 
 The dedicated completed three-context fixture browser container peaks at
-1,919,152,128 bytes, with no OOM/kill. This includes fixture storage,
+2,325,893,120 bytes, with no OOM/kill. This includes fixture storage,
 network forwarding, browser/renderer/cache, and excludes Node/native Host and
-external driver storage. It is not a memory-reduction comparison to an old
-15-second timeout or a hard RSS budget.
+external driver storage. It includes test tracing/forwarding, is not a
+before/after browser-memory reduction claim or a hard RSS budget, and cannot be
+compared to an old 15-second timeout as a completed-model memory reduction.
+The progressive feature trades bounded extra allocation (up to 8 MiB of prefix
+streams per body during full adoption) for earlier calculated detail.
 
 ## Regression and remaining limits
 
-- Full Web/Host suite: 4,205 passed, four platform skips. Type checking, both
+- Full Web/Host suite: 4,220 passed, four platform skips. Type checking, both
   production builds, localization, 336 provenance records, 346 production
   notices, pinned runtime assets and production source offer pass.
-- Native and fixture strict STEP gates each pass three contexts. All 43
-  production-fixture functional cases pass. Five development/native-source
-  regressions pass, including the three previously failing CI scenarios and
-  both original production sidebar/Workbench cases. Rust formatting and
-  whitespace checks pass. Current-head CI is tracked separately after push.
+- Native and fixture strict STEP gates each pass three contexts. All 45 production
+  functional browser cases and seven development/native-source regressions pass,
+  including both progressive lifecycle cases. Current-head CI is separate.
 - Source/version races, physical cancellation, provisional retirement, deferred
   watch setup, quiet bootstrap through sampling/drag/keyboard input, normalized
   handoff, CAD buffer ownership, face-color batching and pending-outline
   serialization have deterministic regressions.
-
-The validation install changed from the registry SDK to the local build. Its
-old Vite cache still pointed at registry 0.0.23 glue while the URL import served
-the new WASM, producing a development-only LinkError. Rebuilding that development
-cache with Vite's force option made the cancellation/reopen case pass. This is
-an environment repair, not a measured production speedup or an independent
-explanation of the previous immutable CI failure. Both exact assets remain
-checked by the runtime manifest.
 
 [Before-runtime samples](step-200mb-before-samples.json) retain three
 15-second failures with the stock SDK and the new typed adapter; that variant

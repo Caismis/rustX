@@ -20,7 +20,7 @@ async function observeCode(page: Page) {
   });
 }
 const counts = (page: Page) => page.evaluate(() => ({ ...(window as any).geometryCode }));
-const ready = (page: Page, count = 1) => expect(page.locator('[data-geometry-format] canvas')).toHaveCount(count, { timeout: 20_000 });
+const ready = (page: Page, count = 1) => expect(page.locator('[data-geometry-format] canvas[data-geometry-completeness="complete"]')).toHaveCount(count, { timeout: 20_000 });
 const settledOutlines = (page: Page) => expect.poll(async () => page.getByRole('button', { name: 'Model outlines', exact: true }).evaluateAll(buttons => buttons.every(button => button.getAttribute('aria-pressed') === 'true' && button.getAttribute('aria-busy') === 'false'))).toBe(true);
 
 test('cancelled CAD code wait retires its idle Worker and the retained copy reuses only compiled code', async ({ page }, info) => {

@@ -7,7 +7,7 @@ import { GEOMETRY_LIMITS } from '../src/app/components/documents/geometry/limits
 const root = new URL('../', import.meta.url), cad = new URL('./', import.meta.resolve('occt-import-js'));
 const importer = JSON.parse(readFileSync(new URL('../package.json', cad), 'utf8'));
 const renderer = JSON.parse(readFileSync(new URL('../package.json', import.meta.resolve('three')), 'utf8'));
-if (importer.version !== '0.0.23-rustx.1' || renderer.version !== '0.187.0') throw new Error('Unreviewed geometry dependency version');
+if (importer.version !== '0.0.23-rustx.2' || renderer.version !== '0.187.0') throw new Error('Unreviewed geometry dependency version');
 const assets = Object.fromEntries(['occt-import-js.js', 'occt-import-js.wasm', 'license.occt-import-js.txt', 'license.occt.txt'].map(name => {
   const bytes = readFileSync(new URL(name, cad));
   return [name, { bytes: bytes.length, gzipBytes: gzipSync(bytes).length, sha256: createHash('sha256').update(bytes).digest('hex') }];

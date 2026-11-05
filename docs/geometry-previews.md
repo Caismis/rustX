@@ -45,10 +45,31 @@ The complete single-version source continues loading in the background. CAD
 runtime loading starts after that copy is ready and 120 ms without coarse
 input, so its large download and compilation do not compete with the first
 small probes or an active rough gesture. This quiet gate applies only to the
-initial full-view bootstrap; admitted imports continue in their Worker. The full admitted mesh
-replaces the rough envelope only after its first GPU-ready draw. Gestures in
-the rough view seed normalized direction, target and zoom in the full viewer.
-The rough data never enters the model graph or the final geometry streams.
+initial full-view bootstrap; admitted imports continue in their Worker.
+The first independently admitted computed mesh can replace the rough envelope
+after its GPU-ready draw. Already computed CAD pieces then accumulate with their
+final positions, normals, colors and indices while remaining export/conversion
+continues. A localized Refining model label identifies this incomplete graph;
+picking, final occurrence metadata and outlines wait for the complete model.
+The kernel still finishes document transfer and root triangulation before mesh
+export. A large single face may have no useful earlier calculated fragment.
+
+The optional prefix is bounded across the whole job: 16 messages, 65,536
+triangles, 8 MiB of attribute/index streams including generated-normal storage,
+and the existing draw/material bounds. Native and receiver admission remain
+independent. Each message has a strictly ordered sequence and source mesh index;
+it cannot extend the import deadline or substitute for the final result.
+Display buffers and color tuples are owned independently of final conversion.
+
+The complete model takes over through the same renderer/context. An active
+partial-view gesture and its 120-ms quiet interval finish before handoff; old
+controls, callbacks, fences and temporary graph resources retire. New shaders
+are adopted before old materials are released. A final result arriving before
+the queued partial paint skips that provisional view. Rough/partial gestures
+seed normalized direction, pan, zoom, projection and up axis for the final
+model, with viewport aspect included in framing. Provisional graphs never
+overwrite authoritative occurrence metadata. No rough data enters the final
+geometry streams.
 
 A fresh geometry range read authorizes itself; watch registration follows the
 complete copy instead of blocking first display. The existing reauthorization
@@ -248,9 +269,11 @@ every admitted triangle, authored material/normal/color/texture, mesh outline
 and the original full-resolution pixel policy. New actions cancel/coalesce that
 refinement. A gesture with no pose/selection change schedules no extra work.
 An idle view has no quality loop. All bridge and surface buffers are disposed
-with the visible body. `data-geometry-quality` distinguishes pending
-interactive pictures from a submitted complete picture for diagnostics; it is
-not a GPU-completion or presentation timestamp.
+with the visible body. `data-geometry-quality` uses `partial` for a computed
+prefix, `interactive` for a full model at moving pixel/geometry quality, and
+`complete` for a settled full-model draw. `data-geometry-completeness` separately
+marks partial versus full admitted content before pixel refinement. These are
+diagnostic states, not GPU-completion or presentation timestamps.
 
 The acceptance workload is approximately 200 MiB of source geometry on the
 project's fixed browser/test machine. First demand to a usable model picture
@@ -358,6 +381,7 @@ The following are per visible body unless stated otherwise:
 | Materials / draw groups, including CAD face ranges | 256 / 512 |
 | CAD BREP-face metadata | 1,000,000 faces total; separate from material draw ranges. Adjacent equal-color ranges merge, and base-color faces require no override |
 | Decoded vertex/index/attribute buffers | 512 MiB |
+| Optional computed CAD prefix | 16 messages / 65,536 triangles / 8 MiB across the whole job, including generated normals; existing aggregate material/draw bounds still apply |
 | Textures / dimension / aggregate source-image pixels | 8 / 2,048 per side / 8,388,608 pixels |
 | Coordinate / matrix magnitude | Finite, absolute value at most 1e12; resulting world bounds are checked too |
 | Canvas backing pixels / CSS dimension / pixel ratio | 4,194,304 / 4,096 per side / at most 2, reduced to fit the pixel budget |
@@ -426,9 +450,11 @@ LoadingManager also owns generated image URLs through settlement: successful
 loads use the loader's revocation path, decode failures revoke through the
 manager's error callback, and retired work cannot start another image load.
 
-For two panes, admitted attribute buffers are at most 1 GiB and admitted image
+For two panes, full-model admitted attribute buffers are at most 1 GiB and admitted image
 pixels at most 16,777,216. RGBA image storage is approximately 32 MiB per body
-before mipmaps/driver overhead. Each raw input buffer is independently bounded
+before mipmaps/driver overhead. Computed prefixes add at most 16 MiB of streams
+during full-model adoption, then retire before optional surface refinement.
+Each raw input buffer is independently bounded
 by the 200-MiB geometry source limit. Large STL/CAD transfer ownership instead
 of retaining a second copy; two such sources total at most 400 MiB. GLB may
 retain source and loader copies until admission, reaching 800 MiB for two bodies,
@@ -461,7 +487,7 @@ follow physical settlement independently of browser cancellation.
 
 Three.js is pinned to 0.187.0 (MIT). The exact orientation predicate is supplied
 by robust-predicates 3.0.3 (Unlicense). The local occt-import-js build is pinned
-to 0.0.23-rustx.1 (LGPL-2.1), derived from importer commit
+to 0.0.23-rustx.2 (LGPL-2.1), derived from importer commit
 `c2148e54b456b571238d35cac037d304053d64b2`, with
 OCCT submodule commit `d2abb6d844231cb8f29be6894440874a4700e4a5` from
 `https://git.dev.opencascade.org/repos/occt.git`.
@@ -477,7 +503,10 @@ including the pinned OCCT submodule and Emscripten build scripts. rustX ships
 a bounded-transfer build. Only the Embind interface changes: typed input copies
 in bulk, numeric output uses fixed 4096-double chunks, exclusively owned Worker
 input can be released after native copy, and native input is freed before mesh
-extraction. Geometry algorithms, CAD tolerances, allocator and the 2-GiB memory
+extraction. Optional completed-mesh callbacks expose a bounded display prefix
+during hierarchy export. Displayed streams and coalesced color tuples have
+separate ownership; mutating a prefix cannot change the final result.
+Geometry algorithms, CAD tolerances, allocator and the 2-GiB memory
 maximum remain intact. The complete modified C++ source, pinned revisions,
 licenses and rebuild script ship at `cad-runtime-source/` in the production
 artifact; the repository copy is `web-console/vendor/occt-import-js/`.

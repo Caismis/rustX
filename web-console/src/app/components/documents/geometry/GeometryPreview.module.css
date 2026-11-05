@@ -11,6 +11,7 @@
 .axisControl:hover .axisLabel, .axisControl:focus-visible .axisLabel { fill: white; text-decoration: underline; }
 .axisControl:focus-visible { outline: none; }
 .outlineStatus { position: absolute; bottom: 8px; inset-inline: 132px 8px; margin: 0; padding: 6px 8px; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-secondary); font-size: 11px; pointer-events: none; }
+.partialStatus { composes: outlineStatus; z-index: 1; }
 .footer { display: flex; flex: none; align-items: center; gap: 12px; min-width: 0; min-height: 30px; padding-inline: 12px; border-top: .5px solid var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-base); }
 .rail { composes: rail from '../../../../presentation/primitives/CanvasTools.module.css'; top: 16px; inset-inline-start: 16px; }
 .control { composes: tool from '../../../../presentation/primitives/CanvasTools.module.css'; }

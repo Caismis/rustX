@@ -17,6 +17,7 @@ verification are recorded in [the large STEP report](step-200mb-validation.md).
 
 | Item | Status |
 | --- | --- |
+| Progressive computed CAD geometry | Implemented from completed-mesh callbacks without changing final tessellation. Up to 16 messages / 65,536 triangles / 8 MiB accumulate through one renderer/context, then hand off after quiet input. Native/receiver admission, data isolation, metadata gating and retirement are covered. Natural CAD output exposes a measured availability window; the controlled visual demonstration is separate from large-model latency acceptance. |
 | Orthographic/perspective switch | Implemented on the existing renderer/context, preserving target-plane scale, direction and target. Effective orthographic zoom, picking, resize, standard views and same-copy restoration have regression coverage. |
 | Observable loading-stage labels | Implemented from actual reading, CAD initialization, import and display-preparation events. Worker observations are a finite ordered enum sequence, independent of terminal result validation and the original deadline. No guessed parser/tessellation milestones, percentages or ETA. |
 | Full per-Worker memory attribution | [Phase samples](review-performance-samples.json) now separate JS heap, backing storage and exported WASM memory, including two genuinely overlapping CAD Workers. These are sampled checkpoints, not peak allocation or GPU/driver attribution; the full peak comparison remains open. |

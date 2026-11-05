@@ -83,6 +83,21 @@ server's `--force` option). An old optimized JS glue module must not be paired
 with a different WASM asset. Production assets and source hashes are checked
 independently by `scripts/geometry-runtime.ts`.
 
+To inspect actual calculated CAD fragments, progressive drawing, quiet handoff
+and retirement with the same production fixture:
+
+```sh
+RUSTX_BROWSER_WS_ENDPOINT=ws://127.0.0.1:5277/ RUSTX_GEOMETRY_BUDGET=1 \
+  bash web-console/scripts/geometry-performance.sh geometry-progressive.spec.ts --repeat-each 1
+```
+
+This deliberately holds real Worker messages/final delivery so each visible
+stage can be inspected. It verifies exact computed fragments, one shared
+renderer/context, bounded input samples, final triangles and stale-result
+fences; it is not a cold 200-MB timing result. The ordinary `cad-96-parts`
+performance attachment separately records natural availability messages,
+terminal import times and partial draw submissions without a hold.
+
 To include the STL lazy-loading regression, first serve the ordinary production
 application with `pnpm preview --port 5173 --strictPort` in another terminal,
 then run all three request-boundary cases through the production fixtures:
