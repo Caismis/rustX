@@ -128,11 +128,11 @@ fn tool_result(message_id: &str, call_id: &str, body: &str) -> MessageBlock {
             artifacts: Vec::new(),
             truncation: None,
             workflow: None,
-            managed_output: Some(Box::new(rustx::tools::types::ManagedOutputContinuation::Complete {
-                locator:
-                    "/private/tool-output/results/result_01900000-0000-7000-8000-000000000001.txt"
-                        .into(),
-            })),
+            managed_output: Some(Box::new(
+                rustx::tools::types::ManagedOutputContinuation::Complete {
+                    locator: "/tmp/rx-0000000000000001/r-0000000000000001.txt".into(),
+                },
+            )),
         },
     })
 }
@@ -588,10 +588,8 @@ async fn seed_composed_store(paths: &mut LaunchFixture, messages: &[MessageBlock
     runtime.shutdown().await.unwrap();
     let database = runtime
         .tool_runtime()
-        .tool_output()
+        .artifacts()
         .root()
-        .parent()
-        .unwrap()
         .join("conversation.sqlite");
     let store =
         SqliteConversationStore::open(runtime.runtime().conversation_id().clone(), &database)

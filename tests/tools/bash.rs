@@ -62,8 +62,13 @@ fn json_content(result: &ToolExecutionResult) -> serde_json::Value {
 /// tool-output root (the `results/` directory; `tasks/` holds background
 /// live output, a deliberately separate lifecycle).
 fn spill_count(fixture: &crate::common::NativeFixture) -> usize {
-    std::fs::read_dir(fixture.runtime.tool_output().root().join("results"))
+    std::fs::read_dir(fixture.runtime.tool_output().root().unwrap())
         .expect("managed tool-output results root")
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-"))
+        })
         .count()
 }
 
@@ -731,7 +736,8 @@ async fn bash_large_output_spills_to_managed_output() {
     let full_output = full_output.as_str();
     assert!(std::path::Path::new(full_output).is_absolute());
     assert!(
-        std::path::Path::new(full_output).starts_with(fixture.runtime.tool_output().root()),
+        std::path::Path::new(full_output)
+            .starts_with(fixture.runtime.tool_output().root().unwrap()),
         "the spill lives in the managed tool-output root: {full_output}"
     );
     // The canonical result projection presents the locator plus the
@@ -810,7 +816,7 @@ async fn bash_large_output_spills_to_managed_output() {
         "grep",
         serde_json::json!({
             "pattern": "spill-boundary-marker",
-            "path": fixture.runtime.tool_output().root().to_str().expect("utf8"),
+            "path": fixture.runtime.tool_output().root().unwrap().to_str().expect("utf8"),
         }),
     )
     .await;

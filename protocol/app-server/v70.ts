@@ -4295,10 +4295,10 @@ export type ToolResultContent =
  * root — it is a locator, never filesystem authority.
  *
  * The two managed-output lifecycles both use this type: a foreground
- * result references its lazy result spill (`results/result_N.txt`) only
+ * result references its lazy result spill (`r-<16 hex>.txt`) only
  * when the complete representation crossed the shared preview threshold,
  * while a background result references its dispatch-allocated live-output
- * file (`tasks/exec_N.output`). A size-only cutoff is never a semantic tool
+ * file (`e-<16 hex>.output`). A size-only cutoff is never a semantic tool
  * failure; `Partial`/`Unavailable` make output-storage failure explicit.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -19468,12 +19468,12 @@ export interface TraceToolTruncation {
  */
 export interface TraceManagedOutput {
   /**
-   * Whether the store holds this result's complete textual output, so the
-   * bounded result content is a preview rather than the whole record.
+   * Whether capture retained complete output at settlement. Later temporary
+   * cleanup does not change this fact or reconstruct full output from preview.
    */
   complete: boolean;
   /**
-   * Whether any managed output file exists at all.
+   * Whether capture allocated an output file; current OS retention is not probed.
    */
   available: boolean;
   /**

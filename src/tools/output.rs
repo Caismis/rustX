@@ -494,8 +494,11 @@ mod tests {
         assert!(!settled.truncated);
         assert!(settled.output_locator.is_none());
         assert_eq!(
-            std::fs::read_dir(root.join("results"))
+            std::fs::read_dir(managed.root().unwrap())
                 .expect("results")
+                .filter(|entry| entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
                 .count(),
             0
         );
@@ -514,8 +517,11 @@ mod tests {
         assert!(settled.truncated);
         assert_eq!(std::fs::read_to_string(locator).expect("spill"), complete);
         assert_eq!(
-            std::fs::read_dir(root.join("results"))
+            std::fs::read_dir(managed.root().unwrap())
                 .expect("results")
+                .filter(|entry| entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
                 .count(),
             1
         );

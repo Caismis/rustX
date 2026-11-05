@@ -1136,7 +1136,8 @@ mod tests {
         for leaf in [
             "artifacts",
             "artifacts/conversation.sqlite",
-            "artifacts/tool-output",
+            "artifacts/output-namespaces.json",
+            "artifacts/output-namespaces.lock",
         ] {
             let directory = tempfile::tempdir().unwrap();
             let product = ProductRoot::create(&directory.path().join("product")).unwrap();

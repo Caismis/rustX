@@ -120,7 +120,7 @@
 //!   to the model exactly once.
 //!   Foreground output at or below the bound creates no file at all, and
 //!   a spill write failure is an explicit invocation failure.
-//! - **Background**: the live-output file (`tasks/exec_N.output`) is
+//! - **Background**: the live-output file (`e-<16 hex>.output`) is
 //!   allocated by the background registry at the dispatch commit point and
 //!   advertised in the accepted result; this executor appends every
 //!   decoded fragment to it from the first byte on, so the model can

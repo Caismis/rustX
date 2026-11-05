@@ -774,8 +774,11 @@ mod tests {
             text.as_bytes()
         );
         assert_eq!(
-            std::fs::read_dir(locator.parent().expect("results directory"))
-                .expect("results directory")
+            std::fs::read_dir(locator.parent().expect("output namespace"))
+                .expect("output namespace")
+                .filter(|entry| entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
                 .count(),
             1
         );
@@ -1046,8 +1049,11 @@ mod tests {
             b""
         );
         assert_eq!(
-            std::fs::read_dir(runtime.tool_output().root().join("results"))
+            std::fs::read_dir(runtime.tool_output().root().unwrap())
                 .expect("results directory")
+                .filter(|entry| entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
                 .count(),
             0
         );
@@ -1150,8 +1156,11 @@ mod tests {
         assert_eq!(locator, &advertised);
         assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
         assert_eq!(
-            std::fs::read_dir(runtime.tool_output().root().join("results"))
+            std::fs::read_dir(runtime.tool_output().root().unwrap())
                 .expect("results directory")
+                .filter(|entry| entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
                 .count(),
             0
         );

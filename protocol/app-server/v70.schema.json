@@ -2676,11 +2676,11 @@
       "type": "object",
       "properties": {
         "complete": {
-          "description": "Whether the store holds this result's complete textual output, so the\nbounded result content is a preview rather than the whole record.",
+          "description": "Whether capture retained complete output at settlement. Later temporary\ncleanup does not change this fact or reconstruct full output from preview.",
           "type": "boolean"
         },
         "available": {
-          "description": "Whether any managed output file exists at all.",
+          "description": "Whether capture allocated an output file; current OS retention is not probed.",
           "type": "boolean"
         },
         "locator": {
@@ -22984,10 +22984,10 @@
       ]
     },
     "ManagedOutputContinuation": {
-      "description": "Runtime-owned managed textual-output continuation metadata of one tool\nresult (Issue #86): where the complete — or honestly partial — textual\noutput of the execution lives in the conversation's managed tool-output\nstore.\n\nThis is rustX runtime metadata, explicitly typed and separate from\narbitrary tool-owned structured content (`ToolResultContent::Json`). It\nis not a semantic artifact, not a `FileReference`, and not a File\nmodality: textual output stays textual. The locator is an advisory\nmodel-facing absolute path inside the read-only managed tool-output\nroot — it is a locator, never filesystem authority.\n\nThe two managed-output lifecycles both use this type: a foreground\nresult references its lazy result spill (`results/result_N.txt`) only\nwhen the complete representation crossed the shared preview threshold,\nwhile a background result references its dispatch-allocated live-output\nfile (`tasks/exec_N.output`). A size-only cutoff is never a semantic tool\nfailure; `Partial`/`Unavailable` make output-storage failure explicit.",
+      "description": "Runtime-owned managed textual-output continuation metadata of one tool\nresult (Issue #86): where the complete — or honestly partial — textual\noutput of the execution lives in the conversation's managed tool-output\nstore.\n\nThis is rustX runtime metadata, explicitly typed and separate from\narbitrary tool-owned structured content (`ToolResultContent::Json`). It\nis not a semantic artifact, not a `FileReference`, and not a File\nmodality: textual output stays textual. The locator is an advisory\nmodel-facing absolute path inside the read-only managed tool-output\nroot — it is a locator, never filesystem authority.\n\nThe two managed-output lifecycles both use this type: a foreground\nresult references its lazy result spill (`r-<16 hex>.txt`) only\nwhen the complete representation crossed the shared preview threshold,\nwhile a background result references its dispatch-allocated live-output\nfile (`e-<16 hex>.output`). A size-only cutoff is never a semantic tool\nfailure; `Partial`/`Unavailable` make output-storage failure explicit.",
       "oneOf": [
         {
-          "description": "The complete textual output of the result is retained at the\nabsolute managed-output locator; the bounded result content is a\npreview of it.",
+          "description": "Capture retained complete output at this absolute temporary locator.\nThe bounded result content is a preview. Later OS removal does not\nrewrite this capture-time fact or guarantee full-output reconstruction.",
           "type": "object",
           "properties": {
             "locator": {
