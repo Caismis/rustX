@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Request } from '../../protocol/app-server/v71';
+import type { Request } from '../../protocol/app-server/v72';
 import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
 import { Server, snapshot } from './fixture';

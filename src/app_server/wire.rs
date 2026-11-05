@@ -294,6 +294,14 @@ const REQUEST_PARAMS: [&str; 2] = ["request_params", "requestParams"];
 /// [`crate::model::invocation::exact_json_number`]); free-form JSON elsewhere,
 /// even under a key of the same name, keeps its own semantics.
 pub(super) fn request_params_numbers_are_exact(json: &str) -> bool {
+    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    let schema = SCHEMA.get_or_init(|| {
+        serde_json::to_value(schemars::schema_for!(super::protocol::Request)).expect("Rust schema")
+    });
+    request_params_numbers_are_exact_in(json, schema)
+}
+
+fn request_params_numbers_are_exact_in(json: &str, schema: &Value) -> bool {
     enum Frame {
         /// The byte span of the current key token, quotes included.
         Object {
@@ -304,10 +312,6 @@ pub(super) fn request_params_numbers_are_exact(json: &str) -> bool {
             index: usize,
         },
     }
-    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-    let schema = SCHEMA.get_or_init(|| {
-        serde_json::to_value(schemars::schema_for!(super::protocol::Request)).expect("Rust schema")
-    });
     let bytes = json.as_bytes();
     let mut stack = Vec::new();
     let mut at = 0;
@@ -420,6 +424,76 @@ fn declares_request_params(schema: &Value, root: &Value, path: &[Segment]) -> bo
     }
 }
 
+fn workflow_document_schema() -> &'static Value {
+    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        serde_json::to_value(schemars::schema_for!(
+            crate::workflow_file::WorkflowFileDocument
+        ))
+        .expect("Workflow schema")
+    })
+}
+
+/// Content references carry the same numeric domains and duplicate-field rules
+/// as ordinary DTOs, without requiring the content to fit a control record.
+pub(crate) fn workflow_document_to_bytes(
+    document: &crate::workflow_file::WorkflowFileDocument,
+) -> Result<Vec<u8>, String> {
+    document.validate().map_err(|error| error.reason)?;
+    let mut value = serde_json::to_value(document).map_err(|error| error.to_string())?;
+    let schema = workflow_document_schema();
+    convert(&mut value, schema, schema, true)?;
+    let mut output = crate::bounded_file::LimitedWriter::new(
+        Vec::new(),
+        super::workflow_documents::MAX_TRANSFER_BYTES,
+    );
+    serde_json::to_writer(&mut output, &value).map_err(|error| error.to_string())?;
+    Ok(output.inner)
+}
+
+pub(crate) fn workflow_document_from_json(
+    json: &str,
+) -> Result<crate::workflow_file::WorkflowFileDocument, String> {
+    let StrictValue(mut value) = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let schema = workflow_document_schema();
+    if !request_params_numbers_are_exact_in(json, schema) {
+        return Err("Workflow request parameter number is not binary64-exact".into());
+    }
+    convert(&mut value, schema, schema, false)?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+/// Reports use the same schema-directed numeric codec, outside control frames.
+/// The JSON writer goes directly to native scratch, without a whole byte buffer.
+pub(crate) fn write_workflow_check_report(
+    report: &crate::local_runtime::workflow_authoring::WorkflowCheckReport,
+    writer: impl std::io::Write,
+) -> Result<(), String> {
+    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    let schema = SCHEMA.get_or_init(|| {
+        serde_json::to_value(schemars::schema_for!(
+            crate::local_runtime::workflow_authoring::WorkflowCheckReport
+        ))
+        .expect("Workflow report schema")
+    });
+    let mut value = serde_json::to_value(report).map_err(|error| error.to_string())?;
+    convert(&mut value, schema, schema, true)?;
+    serde_json::to_writer(writer, &value).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+pub(crate) fn workflow_check_report_from_json(
+    json: &str,
+) -> Result<crate::local_runtime::workflow_authoring::WorkflowCheckReport, String> {
+    let StrictValue(mut value) = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let schema = serde_json::to_value(schemars::schema_for!(
+        crate::local_runtime::workflow_authoring::WorkflowCheckReport
+    ))
+    .map_err(|error| error.to_string())?;
+    convert(&mut value, &schema, &schema, false)?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
 macro_rules! envelope {
     ($ty:ty) => {
         impl Serialize for $ty {
@@ -493,11 +567,16 @@ pub(super) fn protocol_schema() -> Value {
     // DomainPage.value carries bounded display DTOs without an unbounded RPC
     // result variant. Export their Rust-owned shapes for generated consumers.
     let mut generator = schemars::SchemaGenerator::default();
+    let _ = generator.subschema_for::<crate::workflow_file::WorkflowFileDocument>();
     let _ = generator.subschema_for::<crate::observation::trace::TraceDetail>();
     let _ = generator.subschema_for::<crate::runtime_client::trace::TraceInspectionHead>();
     let _ = generator.subschema_for::<crate::durable::observation::WorkflowTraceNode>();
     let _ = generator.subschema_for::<crate::runtime_client::RuntimeClientModelName>();
     let _ = generator.subschema_for::<crate::runtime::interaction::RoutedInteraction>();
+    // Assign envelope-owned names first; the chunked report shares domain type names.
+    let _ = generator.root_schema_for::<super::protocol::ProtocolMessage>();
+    let _ =
+        generator.subschema_for::<crate::local_runtime::workflow_authoring::WorkflowCheckReport>();
     schema(
         serde_json::to_value(generator.into_root_schema_for::<super::protocol::ProtocolMessage>())
             .expect("Rust schema"),
@@ -620,7 +699,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v71.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v72.ts"),
         )
         .unwrap();
         for domain in [

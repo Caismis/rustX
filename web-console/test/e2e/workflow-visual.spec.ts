@@ -60,6 +60,14 @@ async function openLibrary(page: Page, fixture: Awaited<ReturnType<typeof startD
   await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
 }
 
+async function saveFile(page: Page) {
+  const save = page.getByRole('button', { name: 'Save File', exact: true });
+  await save.click();
+  // Observe commit/reread completion before asserting its resulting dirty state.
+  await save.waitFor({ state: 'visible' });
+  await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+}
+
 async function dragConnector(page: Page, source: Locator, target: Locator, valid: boolean) {
   // Fit view animates. Wait for the actual SVG handle to stop moving before
   // pressing it, then exercise the library's pointer reconnection gesture.
@@ -120,7 +128,7 @@ test('adds parallel next nodes from the inspector and keeps every existing conne
     await page.getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: /^args \/ flag ·/ }).click();
     await chooseExistingNext(page, 'done', 'IF'); await chooseExistingNext(page, 'done', 'ELSE');
     await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    await saveFile(page);
     const saved = parse(readFileSync(file, 'utf8'));
     expect(saved.block).not.toHaveProperty('entry'); expect(saved.block.nodes.start.type).toBe('start');
     expect(Object.values(saved.block.nodes).some((node: any) => node.type === 'parallel')).toBe(false);
@@ -183,7 +191,7 @@ test('renames input fields and edits optional array items through the field dial
     await input.getByRole('button', { name: 'Edit before', exact: true }).first().click();
     await edit.getByLabel('Variable name', { exact: true }).fill('after'); await edit.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    await saveFile(page);
     expect(parse(readFileSync(file, 'utf8')).block.input).toEqual(renameCases[0].after);
     await activate(page, 'Workflow Start');
     await input.getByRole('button', { name: 'Add input field', exact: true }).click();
@@ -191,12 +199,12 @@ test('renames input fields and edits optional array items through the field dial
     await chooseFieldType(page, add, 'array'); await add.getByLabel('Variable name', { exact: true }).fill('list');
     await add.getByLabel('Item type', { exact: true }).selectOption('');
     await add.getByRole('button', { name: 'Save', exact: true }).click();
-    await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    await saveFile(page);
     expect(parse(readFileSync(file, 'utf8')).block.input.properties.list).toEqual({ type: 'array' });
     expect(parse(readFileSync(file, 'utf8')).block.input.required).toContain('list');
     await input.getByRole('button', { name: 'Edit list', exact: true }).first().click();
     await edit.getByLabel('Item type', { exact: true }).selectOption('boolean'); await edit.getByRole('button', { name: 'Save', exact: true }).click();
-    await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    await saveFile(page);
     expect(parse(readFileSync(file, 'utf8')).block.input.properties.list).toEqual({ type: 'array', items: { type: 'boolean' } });
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally { await fixture.stop(false); }
@@ -350,7 +358,7 @@ test('authors structured required output, nested contracts and repeated downstre
       await expect(choice).toBeEnabled(); await choice.click();
     }
     await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    await saveFile(page);
     const file = join(fixture.workspaceA, '.agents/workflows/structured_authoring.yaml'), saved = parse(readFileSync(file, 'utf8'));
     expect(saved.block.nodes.model.output.schema).toMatchObject({ type: 'object', required: ['risk', 'tags', 'details'], properties: { risk: { type: 'string', enum: ['low', 'high'], description: 'Risk classification.' }, tags: { type: 'array', items: { type: 'string' } }, details: { required: ['accepted'], properties: { accepted: { type: 'boolean' } } } } });
     expect(saved.block.nodes.model_2.messages[1].content).toEqual([{ type: 'reference', path: ['model', 'structured_output', 'risk'] }, { type: 'reference', path: ['model', 'structured_output', 'risk'] }]);
@@ -387,7 +395,7 @@ test('measures the native 256-node nested fixture and one metadata-only organize
     await expect(organize).toBeEnabled({ timeout: budgetMs }); await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible({ timeout: budgetMs });
     const layoutMs = await page.evaluate(before => performance.now() - before, before); expect(layoutMs).toBeLessThan(budgetMs);
     await canvas(page).focus(); await page.keyboard.press('Control+z'); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
-    await page.keyboard.press('Control+Shift+z'); await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    await page.keyboard.press('Control+Shift+z'); await saveFile(page);
     const saved = parse(readFileSync(file, 'utf8')); expect(saved.block).toEqual(original.block); expect(saved.editor.notes).toEqual(original.editor?.notes);
     const measurement = { fixture: 'test/fixtures/workflow-scale.ts', executableNodes: 256, blocks: 2, viewport: '1440x1000', renderMs, layoutMs, thresholdsMs: { render: budgetMs, layout: budgetMs } };
     const measurements = info.outputPath('bounded-scene-measurements.json'); writeFileSync(measurements, JSON.stringify(measurement, null, 2) + '\n');

@@ -988,6 +988,19 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         },
     ));
     for (id, definition, revision, _) in &examples {
+        use base64::Engine;
+        let document_bytes =
+            super::wire::workflow_document_to_bytes(definition).expect("document fixture");
+        fixtures.push(success(
+            &format!("workflow-document-{id}"),
+            MethodResult::WorkflowDocumentChunk {
+                chunk: super::workflow_documents::WorkflowDocumentChunk {
+                    offset: 0,
+                    data: base64::engine::general_purpose::STANDARD.encode(document_bytes),
+                    next_offset: None,
+                },
+            },
+        ));
         fixtures.push(success(
             &format!("workflow-source-{id}"),
             MethodResult::WorkflowSource {
@@ -999,7 +1012,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
                     revision: revision.clone(),
                     present: true,
                     modified_ms: Some(1_790_000_000_000),
-                    document: Some(Box::new(definition.clone())),
+                    document: Some(Box::new(document_reference(definition))),
                     diagnostic: None,
                     vocabulary: WorkflowVocabulary {
                         profiles: vec![
@@ -1020,7 +1033,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         Method::WorkflowCheck {
             target: target.clone(),
             id: id.clone(),
-            document: Box::new(definition.clone()),
+            document: Box::new(document_reference(definition)),
             context: None,
             explain: true,
         },
@@ -1030,7 +1043,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         Method::WorkflowAnalyze {
             target: target.clone(),
             id: id.clone(),
-            document: Box::new(definition.clone()),
+            document: Box::new(document_reference(definition)),
             generation: "7".into(),
             query: None,
         },
@@ -1079,7 +1092,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         Method::WorkflowAnalyze {
             target: target.clone(),
             id: incomplete_id.clone(),
-            document: Box::new(incomplete.clone()),
+            document: Box::new(document_reference(&incomplete)),
             generation: "8".into(),
             query: None,
         },
@@ -1118,7 +1131,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     fixtures.push(success(
         "workflow-check",
         MethodResult::WorkflowCheck {
-            report: Box::new(WorkflowCheckReport {
+            report: report_reference(&WorkflowCheckReport {
                 revision: Some(revision.clone()),
                 presentation: Vec::new(),
                 structure: WorkflowStructure::Valid {
@@ -1139,7 +1152,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             mutation: SourceMutation::Workflow {
                 id: id.clone(),
                 edit: WorkflowEdit::Replace {
-                    document: Box::new(definition.clone()),
+                    document: Box::new(document_reference(definition)),
                 },
             },
         },
@@ -1331,6 +1344,31 @@ fn schedule_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         jsonrpc: JsonRpcVersion::V2,
         notification: NotificationMethod::ScheduleChanged {},
     }));
+}
+
+fn document_reference(
+    document: &crate::workflow_file::WorkflowFileDocument,
+) -> super::workflow_documents::WorkflowDocumentRef {
+    use sha2::Digest;
+    let bytes = super::wire::workflow_document_to_bytes(document).expect("document fixture");
+    super::workflow_documents::WorkflowDocumentRef {
+        id: "document-fixture".into(),
+        byte_length: u32::try_from(bytes.len()).expect("fixture document below 16 MiB"),
+        sha256: format!("{:x}", sha2::Sha256::digest(bytes)),
+    }
+}
+
+fn report_reference(
+    report: &crate::local_runtime::workflow_authoring::WorkflowCheckReport,
+) -> super::workflow_documents::WorkflowCheckReportRef {
+    use sha2::Digest;
+    let mut bytes = Vec::new();
+    super::wire::write_workflow_check_report(report, &mut bytes).expect("report fixture");
+    super::workflow_documents::WorkflowCheckReportRef {
+        report_id: "report-fixture".into(),
+        byte_length: bytes.len() as u64,
+        sha256: format!("{:x}", sha2::Sha256::digest(bytes)),
+    }
 }
 
 #[cfg(test)]
@@ -1536,9 +1574,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v71.schema.json", "v71.ts"]);
+        assert_eq!(generations, ["v72.schema.json", "v72.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v71.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v72.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

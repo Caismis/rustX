@@ -202,6 +202,7 @@ pub(super) fn read_document(path: &Path) -> Result<Option<Vec<u8>>, RuntimeClien
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
             .open(path),
+        crate::bounded_file::MAX_RESOURCE_BYTES,
     )
 }
 
@@ -335,7 +336,10 @@ impl AdmittedSource {
 /// and without blocking: absent is `None`; a symlink, FIFO, directory or
 /// other non-regular file is refused. Everything is checked and read on the
 /// opened descriptor itself.
-fn read_opened(opened: std::io::Result<File>) -> Result<Option<Vec<u8>>, RuntimeClientError> {
+fn read_opened(
+    opened: std::io::Result<File>,
+    limit: u64,
+) -> Result<Option<Vec<u8>>, RuntimeClientError> {
     let not_regular = || failure("authored source must be a regular file, not a symlink");
     let file = match opened {
         Ok(file) => file,
@@ -351,13 +355,13 @@ fn read_opened(opened: std::io::Result<File>) -> Result<Option<Vec<u8>>, Runtime
         return Err(not_regular());
     }
     let mut bytes = Vec::new();
-    std::io::Read::read_to_end(
-        &mut std::io::Read::take(file, crate::bounded_file::MAX_RESOURCE_BYTES + 1),
-        &mut bytes,
-    )
-    .map_err(|error| io_failure(&error))?;
-    if !crate::bounded_file::within_bound(&bytes) {
-        return Err(failure("authored source exceeds 1 MiB"));
+    std::io::Read::read_to_end(&mut std::io::Read::take(file, limit + 1), &mut bytes)
+        .map_err(|error| io_failure(&error))?;
+    if bytes.len() as u64 > limit {
+        return Err(failure(&format!(
+            "authored source exceeds {} MiB ({limit} bytes)",
+            limit / (1024 * 1024)
+        )));
     }
     Ok(Some(bytes))
 }
@@ -410,9 +414,18 @@ pub(super) struct SourceDirectory {
     path: std::path::PathBuf,
     directory: std::os::fd::OwnedFd,
     identity: (u64, u64),
+    byte_limit: u64,
 }
 
 impl SourceDirectory {
+    pub(super) fn with_byte_limit(mut self, limit: u64) -> Self {
+        self.byte_limit = limit;
+        self
+    }
+    pub(super) fn byte_limit(&self) -> u64 {
+        self.byte_limit
+    }
+
     /// Observe the parent directory of `document`: `None` when missing. Any
     /// symlink, non-directory or noncanonical component fails: the pathname
     /// no longer names the directory it would be admitted as.
@@ -453,6 +466,7 @@ impl SourceDirectory {
             path: self.path.join(name),
             identity: identity(&directory)?,
             directory,
+            byte_limit: crate::bounded_file::MAX_RESOURCE_BYTES,
         })
     }
 
@@ -465,6 +479,7 @@ impl SourceDirectory {
             path: path.into(),
             directory,
             identity,
+            byte_limit: crate::bounded_file::MAX_RESOURCE_BYTES,
         }))
     }
 
@@ -508,6 +523,7 @@ impl SourceDirectory {
                 Mode::empty(),
             )
             .map_err(std::io::Error::from),
+            self.byte_limit,
         )
     }
 

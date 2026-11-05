@@ -1,6 +1,7 @@
-import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v71.ts';
-import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v71.ts';
-import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowEdit, WorkflowLibrary, WorkflowSource, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../protocol/app-server/v71.ts';
+import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v72.ts';
+import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v72.ts';
+import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../protocol/app-server/v72.ts';
+import type { WorkflowEdit, WorkflowSource } from '../../../protocol/app-server/workflow-documents.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 import type { FileBytes, FileReadOptions } from '../../shared/file-preview.ts';
 export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number; read?: FileReadOptions }

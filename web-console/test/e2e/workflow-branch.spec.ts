@@ -7,7 +7,7 @@ import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
 import { rootBlock } from '../workflow-root';
-import type { WorkflowCheckReport } from '../../../protocol/app-server/v71';
+import type { WorkflowCheckReport } from '../../../protocol/app-server/v72';
 import { setNodePresentation } from '../../src/app/workflows/document/geometry';
 import type { WorkflowDocument } from '../../src/app/workflows/document/model';
 
@@ -16,6 +16,44 @@ const canvas = (page: Page) => page.getByRole('region', { name: 'Workflow canvas
 async function activate(page: Page) {
   const node = canvas(page).getByLabel('Branch node choose', { exact: true }); await node.focus(); await node.press('Enter');
 }
+
+test('six concurrent reference conditions retain numeric operators during edits in both scopes', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    const document: WorkflowDocument = { description: 'Concurrent reference conditions', block: rootBlock() };
+    const names = Array.from({ length: 6 }, (_, index) => `number_${index}`);
+    document.block.input = { type: 'object', properties: Object.fromEntries(names.map(name => [name, { type: 'number' }])), required: names, additionalProperties: false };
+    document.block.nodes.choose = { type: 'branch', cases: [{ id: 'true', condition: { type: 'and', predicates: names.map((name, index) => ({ type: 'equal', left: { type: 'reference', path: ['args', name] }, right: { type: 'reference', path: ['args', names[(index + 1) % names.length]] } })) } }] };
+    document.block.edges = [{ from: 'start', to: 'choose' }, { from: 'choose', to: 'done', port: 'true' }, { from: 'choose', to: 'done', port: 'false' }];
+    const global = join(fixture.directory, 'home/rustx/.agents/workflows');
+    const workspace = join(fixture.workspaceA, '.agents/workflows');
+    for (const directory of [global, workspace]) {
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'concurrent_conditions.yaml'), JSON.stringify(document));
+    }
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    for (const scope of ['Global', 'Workspace']) {
+      await page.getByRole('tab', { name: scope, exact: true }).click();
+      await page.getByRole('button', { name: 'concurrent_conditions', exact: true }).click(); await activate(page);
+      const title = inspector(page).getByRole('textbox', { name: 'Node title', exact: true });
+      await title.fill('Overlapping candidate one'); await title.press('Enter');
+      await title.fill('Overlapping candidate two'); await title.press('Enter');
+      // A reference right operand cannot infer the numeric type locally. Each
+      // row must receive its native schema, including the fifth and sixth.
+      await expect(inspector(page).getByRole('button', { name: 'Operator', exact: true })).toHaveText(Array(6).fill('='));
+      await page.getByRole('button', { name: 'Save File', exact: true }).click();
+      await page.getByRole('button', { name: 'Save File', exact: true }).waitFor({ state: 'visible' });
+      await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'Back to Workflows', exact: true }).first().click();
+    }
+    expect(errors).toEqual([]);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
 
 for (const width of [1440, 390]) test(`single integer token retains string template semantics after save at ${width}px`, async ({ page }, info) => {
   const fixture = await startDogfood('web_console_dogfood');

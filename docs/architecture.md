@@ -4326,7 +4326,10 @@ exactly `MANAGED_FASTMCP_VERSION` and the MCP protocol peer's identity is
 never workspace-declared). Every `@mcp.tool` function in the server becomes
 one tool; FastMCP derives name, description, and input schema from the
 function's name, docstring, and type hints, so those are the schema authority.
-Candidate preparation freezes the package bytes in memory and computes one
+Candidate capture freezes the package bytes in one anonymous disk file and retains
+only sorted file coordinates, permissions, parsed declarations and their content digest.
+Clones share that file; its last descriptor closes and the kernel reclaims it.
+Fixed-buffer copying never returns to the mutable source path. Preparation computes one
 fingerprint over the material inputs: the package identity (the
 synthesized `python:<folder>` MCP server identity), every package file
 (path and bytes, including `requirements.txt`), the probed Python
@@ -4895,7 +4898,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v71
+       App Server protocol v72
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4916,14 +4919,14 @@ carry optional Model-owned reasoning Profile order; selection ordinals and froze
 invocation snapshots are unchanged. It also distinguishes incomplete historical
 Workflow nodes from proven current activity. It retains Workflow
 data-node observation kinds and the removal of speculative cached-Connecting
-source state; App Server v71 records first-submission intent
+source state; App Server v72 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v71, the only external product control protocol, and
+console speak App Server v72, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -7461,7 +7464,7 @@ See [Model contracts and examples](workflow-programs.md#direct-model-nodes-issue
 
 ## Scheduler product projection
 
-App Server v71 provides a bounded, read-only task catalog over the existing
+App Server v72 provides a bounded, read-only task catalog over the existing
 Session catalog and exact-node schedule readers. Keyset traversal, instruction
 search and unavailable-source reporting stay native; the browser does not walk
 Session trees or load runtimes to discover tasks. A coalesced native watch hint
@@ -7520,3 +7523,70 @@ Unconfirmed retirement validation and no-replace restoration are shared by live
 cleanup and restart. Failed validation of any captured directory entry restores
 its public location when free; a later public occupant preserves both entries
 and pending authority. No deletion or successful cleanup follows failed proof.
+
+
+## Local resource byte policies (Issue #527)
+
+Skill discovery streams complete package bytes, retaining only `SKILL.md`
+frontmatter for standard metadata/dependency validation. Supporting assets and
+Markdown bodies have no fixed byte admission ceiling. Native Read remains the
+progressive-disclosure path. The v2 Skill digest length-frames raw relative OS
+path bytes, lengths and verified full-file SHA-256 digests, preserving binary
+and non-UTF-8 filename identity without timestamps or host locations. Two
+matching complete reads, metadata on the opened regular descriptor and the
+reopened anchored name detect changed reads.
+This is content evidence for those reads, not an atomic snapshot of a mutable
+external directory.
+
+Managed Python captures use an anonymous file with per-file offsets rather than
+retaining package bodies. The source object is immutable outside its owner;
+requirements are parsed from the same captured bytes. Environment preparation
+copies from that object, verifies the private source, prepares dependencies,
+verifies the whole staged state again and atomically renames it into the existing
+Python store. The build owner awaits copying, subprocesses, verification and
+cleanup before publishing its terminal result. The store retains failed staging
+cleanup and retries it at its next preparation; anonymous capture has kernel
+cleanup ownership. Child Skill copies likewise remain private until their frozen
+digest is verified, with the existing child runtime lifecycle owning any residue.
+
+The Workflow owner admits serialized source bytes and normalized JSON document
+bytes independently at 16 MiB, inclusive. Its executable definition no longer has
+a smaller 512 KiB byte ceiling. Graph, value, presentation and run protections
+remain separate. Counting/bounded serialization stops before oversized encoded
+buffers grow; an expanded-JSON-footprint preflight protects typed YAML allocation.
+
+App Server v72 carries Workflow document references, not inline documents.
+Connection-owned anonymous scratch receives/serves 64 KiB chunks and verifies
+length, SHA-256 and the native document before use. Content uses the same
+lossless numeric/unique-field codec; a 32 MiB encoded allowance preserves the
+independent 16 MiB normalized-document boundary. Reads, checks, analysis and
+source replacement share that carrier. A document reference does not authorize a
+source write: target validation, expected revision, persistent writer lock and
+atomic source publication remain with the original native source owner. Web and
+Product Host share the carrier; TUI uses the same generated protocol. Ordinary
+1 MiB App Server records and child IPC frames are unchanged.
+
+Complete Workflow check reports use separate read-only scratch references, the
+same lossless content codec, and 64 KiB reads, including output schemas and Explain.
+Derived report bytes do not inherit source/document or candidate wire byte caps.
+Reports share the connection's four-entry capacity and idle lease with candidates;
+their reference kind cannot be used for candidate resolution or source writes.
+The shared client queue admits analysis only while its generation/query owner
+remains current, before encoding or scratch allocation. Workspace transactions
+use this admission before Host HTTP dispatch; started operations keep cleanup
+ownership. Tool catalog Python cache verification inherits resource cancellation
+and retains detached request ownership and the listing permit through physical
+worker exit, including transport EOF. Missing Python entrypoint/requirements
+membership is rejected before any asset capture.
+
+Raw directory observations retain a 64 MiB logical-byte work budget and the
+accepted package depth/count traversal envelope. Overflow is explicitly
+incomplete and cannot prove equality. An independent bounded discovery-domain
+fence then covers candidate/collection states, scoped instructions and complete
+accepted content identities without a package byte ceiling, including same-size
+edits beyond the raw observation budget. Model-choice paging uses the same
+admitted configuration documents, strict overlay and revision fence, without
+rescanning unrelated package bytes. Process drain cancels the shared native
+resource-I/O authority; child and Python preparation retain their existing
+physical settlement authorities. See [the limit inventory](resource-limits.md)
+for exact ownership, costs and recovery paths.

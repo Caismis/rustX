@@ -1,4 +1,4 @@
-import type { WorkflowVocabulary } from '../../../../../../../protocol/app-server/v71';
+import type { WorkflowVocabulary } from '../../../../../../../protocol/app-server/v72';
 import { CommandRejected, replaceNode } from '../../../document/commands';
 import { encodeField, nodeField, type ArrayEdit, type FieldAddress, type FieldStep } from '../../../document/fields';
 import { blockAt, nodeAt, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../../../document/model';

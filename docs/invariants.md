@@ -8031,7 +8031,7 @@ invented wire ID. Nullable `wire_id` distinguishes absence from explicit correla
 transmitted stored results use actual accepted native IDs. Stateless/full replay IDs
 match the adapter's relevant wire segment, independent of covered historical occurrences.
 Ambiguous duplicate unresolved wire IDs are rejected before detached wire mutation.
-This required observation change is carried by App Server v50 and Runtime Client v71.
+This required observation change is carried by App Server v50 and Runtime Client v72.
 
 ## PR #477 bounded activation header integrity
 
@@ -8335,3 +8335,49 @@ Original admission scope, current controller and result reservation precede nati
   reference counting, compatibility path, or full-output reconstruction exists.
 
 See [the storage and lifecycle contract](issue-520/README.md).
+
+
+## Large local resources (Issue #527)
+
+- Skill package, supporting-file and `SKILL.md` admission has no fixed byte
+  ceiling. Discovery retains frontmatter/catalog metadata, never the Markdown
+  body. Complete accepted bytes, binary assets and raw relative filenames affect
+  identity. Existing source precedence, invalid-Workspace shadowing and exact
+  traversal/count policies remain authoritative.
+- A package read validates the opened regular descriptor, actual consumed length
+  and its anchored name. Truncation, growth, replacement or detectable in-place
+  mutation fails the read. No atomic snapshot of mutable external paths is
+  claimed. A materialized child copy must reproduce the frozen full digest.
+- Managed Python authorization freezes disk-backed bytes, declarations and
+  identity together. Later path edits cannot alter that source object. Capture
+  and installation use fixed byte buffers, with no eager whole-package vector.
+- Source capture uses complete content revisions. A length/mtime marker is never
+  proof that accepted large resources are unchanged. Incomplete inspection is
+  explicit and cannot certify equality or publish a silently unverified capture.
+- Workflow serialized source and normalized expanded document must each fit
+  16,777,216 bytes, inclusive. Either dimension can independently reject a
+  document. Graph/node/depth, editor, value, context and decoder safeguards
+  remain independent; source admission does not promise arbitrary execution
+  payload or model-context capacity.
+- Workflow file data crosses v72 control records through native-owned document
+  scratch and 65,536-byte chunks. A ready scratch document is neither a partial
+  source file nor a source commit. Only the existing revision-fenced source
+  transaction publishes the complete canonical file with one atomic replacement.
+- Full Workflow check reports use read-only native content references and bounded
+  chunks, preserving complete schemas and Explain without a source/candidate byte
+  cap. Report and candidate capabilities are distinct; they share connection
+  capacity/expiry and close ownership, never source-write authority.
+- Queued analysis rechecks generation/query ownership before encoding and scratch
+  admission, including before Workspace Host dispatch. Superseded waiters perform
+  no upload; started work settles before admission returns. Tool catalog cache
+  verification retains request ownership and listing capacity until physical exit.
+- Missing required Python package members reject before backing-file capture or
+  asset reads, while preserving invalid winning-candidate identity and shadowing.
+- Package hashing/copying observes cancellation between bounded chunks. Async
+  owners await blocking I/O and subprocess settlement. A cancelled preparation
+  cannot become a usable Ready candidate. Pre-publication failures clean private
+  staging; cleanup failure is reported with the existing storage owner retaining
+  responsibility. No dropped waiter is a physical completion proof.
+- File-byte admission is independent of model projection, preview, complete-read,
+  archive expansion and transport budgets. The retained policies are enumerated
+  in [the resource-limit inventory](resource-limits.md).

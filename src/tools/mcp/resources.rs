@@ -384,8 +384,22 @@ fn validate_resource_contents(
         }
         let blob = blob
             .map(|blob| {
+                // Check both independent policies before allocating decoded
+                // bytes. A valid small blob may still exceed the remainder.
                 if blob.len() > MAX_BLOB_BYTES.div_ceil(3) * 4 {
                     return Err("MCP resource blob exceeds the decoded byte limit".into());
+                }
+                let padding = if blob.ends_with("==") {
+                    2
+                } else {
+                    usize::from(blob.ends_with('='))
+                };
+                let decoded_length = (blob.len() / 4 * 3).saturating_sub(padding);
+                if decoded_length > MAX_BLOB_BYTES {
+                    return Err("MCP resource blob exceeds the decoded byte limit".into());
+                }
+                if decoded_length > remaining {
+                    return Err("MCP resource contents exceed the aggregate byte limit".into());
                 }
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(blob)

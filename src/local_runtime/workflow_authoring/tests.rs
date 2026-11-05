@@ -1044,9 +1044,9 @@ fn redirected_and_oversized_workflow_files_are_refused_without_outside_writes() 
     assert!(
         matches!(
             roots.manager.workflow_source(&b, &id("huge")),
-            Err(SettingsError::Io)
+            Err(SettingsError::InvalidWorkflow(diagnostic)) if diagnostic.category == "source_size"
         ),
-        "the common finite file reader rejects files above 1 MiB before parsing"
+        "the Workflow source reader rejects files above 16 MiB before parsing"
     );
 }
 
@@ -2456,5 +2456,129 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     assert!(
         analyze(synthetic).analysis.references.is_empty(),
         "args is not a real titled producer"
+    );
+}
+
+#[test]
+fn issue527_model_choice_pages_do_not_rescan_unrelated_large_package_assets() {
+    let roots = Roots::new();
+    let skill = roots.home.join("rustx/.agents/skills/large");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: large\ndescription: Large local resource\n---\n",
+    )
+    .unwrap();
+    std::fs::File::create(skill.join("asset.bin"))
+        .unwrap()
+        .set_len(256 * 1024 * 1024)
+        .unwrap();
+    for target in [
+        SourceTarget::User,
+        SourceTarget::Workspace {
+            directory: roots.a.clone(),
+        },
+    ] {
+        crate::package_io::STREAMED_FILE_BYTES.with(|count| count.set(0));
+        let choices = roots
+            .manager
+            .workflow_model_choices(
+                &target,
+                WorkflowModelChoicesQuery::Models { offset: 0 },
+                None,
+            )
+            .unwrap();
+        assert!(
+            matches!(choices, WorkflowModelChoices::Models { models, .. } if !models.is_empty())
+        );
+        assert_eq!(
+            crate::package_io::STREAMED_FILE_BYTES.with(std::cell::Cell::get),
+            0,
+            "Model choices depend only on the authored configuration documents"
+        );
+    }
+}
+
+#[test]
+fn issue527_incomplete_unused_tree_keeps_startup_and_settings_usable_with_complete_domain_fences() {
+    use crate::local_runtime::SessionConfigInput;
+    use crate::local_runtime::resource_directory::{capture_token, same_capture};
+    use std::io::{Seek, SeekFrom, Write};
+    let roots = Roots::new();
+    let target = workspace(&roots.a);
+    let unused = roots.a.join(".agents/tools/unused");
+    std::fs::create_dir_all(&unused).unwrap();
+    for index in 0..4097 {
+        std::fs::write(unused.join(format!("entry-{index}")), []).unwrap();
+    }
+    let skill = roots.a.join(".agents/skills/accepted");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: accepted\ndescription: Accepted bytes\n---\n",
+    )
+    .unwrap();
+    let mut asset = std::fs::File::create(skill.join("asset.bin")).unwrap();
+    asset.set_len(2 * 1024 * 1024).unwrap();
+    let agent = roots.a.join(".agents/agents/named.toml");
+    std::fs::create_dir_all(agent.parent().unwrap()).unwrap();
+    std::fs::write(&agent, "description = \"Named agent\"\ninstructions = \"Review\"\n[agents_md]\nfiles = [\"notes.md\"]\n").unwrap();
+    std::fs::write(roots.a.join("notes.md"), "first").unwrap();
+    let root = roots.a.join(".agents");
+    std::fs::write(root.join("AGENTS.md"), "instructions").unwrap();
+    let first = roots.manager.capture_source_settings(&target).unwrap();
+    let second = roots.manager.capture_source_settings(&target).unwrap();
+    let before = &first.0.resource_revisions[&root];
+    let after = &second.0.resource_revisions[&root];
+    assert!(before.starts_with("incomplete:"));
+    assert_ne!(
+        before, after,
+        "incomplete tree observations never prove equality"
+    );
+    assert!(
+        same_capture(before, after),
+        "a complete domain fence is independent evidence"
+    );
+    assert_eq!(first.1, second.1, "the finite authored manifest is stable");
+    assert!(capture_token(before).unwrap().starts_with("accepted-"));
+    roots
+        .manager
+        .resolve_session(&SessionConfigInput::new(roots.a.clone()))
+        .unwrap();
+    roots.create(&target, "repairable", "Settings remain usable");
+    let baseline = roots.manager.capture_source_settings(&target).unwrap();
+    asset.seek(SeekFrom::End(-1)).unwrap();
+    asset.write_all(b"x").unwrap();
+    let changed = roots.manager.capture_source_settings(&target).unwrap();
+    assert!(!same_capture(
+        &baseline.0.resource_revisions[&root],
+        &changed.0.resource_revisions[&root]
+    ));
+    assert_ne!(baseline.1, changed.1);
+    std::fs::write(roots.a.join("notes.md"), "other").unwrap();
+    let instructions = roots.manager.capture_source_settings(&target).unwrap();
+    assert!(!same_capture(
+        &changed.0.resource_revisions[&root],
+        &instructions.0.resource_revisions[&root]
+    ));
+    std::fs::write(root.join("AGENTS.md"), "new instructions").unwrap();
+    let direct = roots.manager.capture_source_settings(&target).unwrap();
+    assert!(!same_capture(
+        &instructions.0.resource_revisions[&root],
+        &direct.0.resource_revisions[&root]
+    ));
+    std::fs::create_dir_all(roots.a.join(".agents/skills/new-invalid")).unwrap();
+    std::fs::write(
+        roots.a.join(".agents/skills/new-invalid/SKILL.md"),
+        "malformed",
+    )
+    .unwrap();
+    let added = roots.manager.capture_source_settings(&target).unwrap();
+    assert!(
+        !same_capture(
+            &changed.0.resource_revisions[&root],
+            &added.0.resource_revisions[&root]
+        ),
+        "candidate membership includes invalid identities"
     );
 }

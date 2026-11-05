@@ -18,6 +18,7 @@
 //! `repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_cancellation`.
 //! Parent history and subagent state prove terminal uniqueness here.
 
+use std::io::Write;
 use std::sync::Arc;
 
 use crate::parent::{Parent, ParentBindings};
@@ -91,7 +92,13 @@ builtin = ["read"]
 
 /// Writes the named child definition and Skill, then launches the real App
 /// Server parent over a new Session in `<root>/workspace`.
-async fn spawn_parent(root: &std::path::Path, models: &str, session: &str, key: &str) -> Parent {
+async fn spawn_parent(
+    root: &std::path::Path,
+    models: &str,
+    session: &str,
+    key: &str,
+    large_skill: bool,
+) -> Parent {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(workspace.join(".agents/agents/conformance"))
         .expect("subagent resources");
@@ -107,6 +114,26 @@ async fn spawn_parent(root: &std::path::Path, models: &str, session: &str, key: 
         "---\nname: conformance\ndescription: Issue 138 conformance skill.\n---\n\nUse the ordinary child runtime.\n",
     )
     .expect("skill manifest");
+    if large_skill {
+        let mut body = std::fs::OpenOptions::new()
+            .append(true)
+            .open(skill.join("SKILL.md"))
+            .unwrap();
+        body.write_all(b"LARGE_SKILL_BODY_NOT_PROMPT\n").unwrap();
+        let mut chunk = vec![b'x'; 65_536];
+        for offset in (63..chunk.len()).step_by(64) {
+            chunk[offset] = b'\n';
+        }
+        for _ in 0..17 * 16 {
+            body.write_all(&chunk).unwrap();
+        }
+        drop(body);
+
+        std::fs::File::create(skill.join("large-asset.bin"))
+            .unwrap()
+            .set_len(17 * 1024 * 1024)
+            .unwrap();
+    }
     let mut document: serde_json::Value = rustx::toml_authoring::parse(session.as_bytes()).unwrap();
     crate::launch_fixture::write_roles(&workspace, &mut document["subagents"]);
     std::fs::write(
@@ -161,6 +188,60 @@ async fn a_real_child_inherits_the_frozen_timeout_policy_and_retries_locally() {
     );
 }
 
+/// Large-resource work has its own process contract; its I/O must not consume
+/// the timeout-inheritance test's deliberately sub-default 27-second guard.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_real_child_materializes_large_skill_without_injecting_its_body() {
+    tokio::time::timeout(std::time::Duration::from_secs(90), async {
+        let gate = crate::common::HeaderGate::new();
+        gate.release();
+        let routing = Arc::clone(&gate);
+        let server = crate::common::FixtureServer::start_with_body(move |_attempt, _head, body| {
+            route(body, &routing)
+        })
+        .await;
+        let root = tempfile::tempdir().unwrap();
+        let session = SESSION_TOML.replace("timeout_ms = 300", "timeout_ms = 30000");
+        let mut process = spawn_parent(
+            root.path(),
+            &models_json(&server.url("/v1")),
+            &session,
+            "subagent-secret",
+            true,
+        )
+        .await;
+        process.attach().await;
+        process.start_turn("please delegate").await;
+        loop {
+            let snapshot = process.snapshot().await;
+            if snapshot.agents.iter().any(|agent| {
+                agent.activation_state == rustx::runtime::subagent::SubagentState::Succeeded
+            }) {
+                break;
+            }
+            assert!(!snapshot.agents.iter().any(|agent| matches!(
+                agent.activation_state,
+                rustx::runtime::subagent::SubagentState::Failed
+                    | rustx::runtime::subagent::SubagentState::Interrupted
+            )));
+            tokio::task::yield_now().await;
+        }
+        let bodies = server.request_bodies();
+        let child = bodies
+            .iter()
+            .find(|body| {
+                body.contains("count the workspace files") && !body.contains("please delegate")
+            })
+            .expect("real child provider invocation");
+        assert!(child.contains("<name>conformance</name>"));
+        assert!(!child.contains("LARGE_SKILL_BODY_NOT_PROMPT"));
+        let (status, stderr) = process.shutdown().await;
+        assert!(status.success(), "{stderr}");
+    })
+    .await
+    .expect("large Skill child materialization physically settles");
+}
+
 #[allow(clippy::too_many_lines)]
 async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally() {
     let gate = crate::common::HeaderGate::new();
@@ -175,6 +256,7 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
         &models_json(&server.url("/v1")),
         SESSION_TOML,
         "subagent-secret",
+        false,
     )
     .await;
 

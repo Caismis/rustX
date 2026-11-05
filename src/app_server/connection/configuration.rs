@@ -8,6 +8,18 @@ use crate::app_server::rpc_error::{
 };
 
 impl AppServerConnection {
+    async fn resolve_workflow_document(
+        &self,
+        target: &crate::local_runtime::configuration::settings::SourceTarget,
+        reference: crate::app_server::workflow_documents::WorkflowDocumentRef,
+    ) -> Result<Box<crate::workflow_file::WorkflowFileDocument>, RpcError> {
+        let target = target.clone();
+        let documents = self.workflow_documents.clone();
+        tokio::task::spawn_blocking(move || documents.resolve(&target, &reference))
+            .await
+            .map_err(|_| domain(ErrorData::OperationFailed))?
+    }
+
     /// Serve one admitted configuration request.
     #[allow(clippy::too_many_lines)] // One arm per configuration method.
     pub(super) async fn configuration(&self, method: Method) -> Result<MethodResult, RpcError> {
@@ -148,6 +160,61 @@ impl AppServerConnection {
                     .map_err(source_error)?;
                 Ok(MethodResult::McpProbe { result })
             }
+            Method::WorkflowDocumentBegin {
+                target,
+                byte_length,
+                sha256,
+            } => {
+                let documents = self.workflow_documents.clone();
+                let reference = tokio::task::spawn_blocking(move || {
+                    documents.begin(target, byte_length, sha256)
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))??;
+                Ok(MethodResult::WorkflowDocument { reference })
+            }
+            Method::WorkflowDocumentWrite {
+                target,
+                reference,
+                offset,
+                data,
+            } => {
+                let documents = self.workflow_documents.clone();
+                tokio::task::spawn_blocking(move || {
+                    documents.write(&target, &reference, offset, &data)
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))??;
+                Ok(MethodResult::WorkflowDocumentAccepted {})
+            }
+            Method::WorkflowDocumentFinish { target, reference } => {
+                let documents = self.workflow_documents.clone();
+                tokio::task::spawn_blocking(move || documents.finish(&target, &reference))
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))??;
+                Ok(MethodResult::WorkflowDocumentAccepted {})
+            }
+            Method::WorkflowDocumentRead {
+                target,
+                reference,
+                offset,
+                max_bytes,
+            } => {
+                let documents = self.workflow_documents.clone();
+                let chunk = tokio::task::spawn_blocking(move || {
+                    documents.read(&target, &reference, offset, max_bytes)
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))??;
+                Ok(MethodResult::WorkflowDocumentChunk { chunk })
+            }
+            Method::WorkflowDocumentRelease { target, reference } => {
+                let documents = self.workflow_documents.clone();
+                tokio::task::spawn_blocking(move || documents.release(&target, &reference))
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))??;
+                Ok(MethodResult::WorkflowDocumentAccepted {})
+            }
             Method::WorkflowList { target } => {
                 let library = self
                     .host
@@ -164,10 +231,34 @@ impl AppServerConnection {
                     .workflow_source(target, id)
                     .await
                     .map_err(source_settings_error)?;
+                let documents = self.workflow_documents.clone();
+                let source = tokio::task::spawn_blocking(move || {
+                    use crate::local_runtime::workflow_authoring::WorkflowSource;
+                    let document = source
+                        .document
+                        .as_deref()
+                        .map(|document| documents.capture(&source.target, document).map(Box::new))
+                        .transpose()?;
+                    Ok::<_, RpcError>(WorkflowSource {
+                        target: source.target,
+                        id: source.id,
+                        path: source.path,
+                        relative_path: source.relative_path,
+                        revision: source.revision,
+                        present: source.present,
+                        modified_ms: source.modified_ms,
+                        document,
+                        diagnostic: source.diagnostic,
+                        vocabulary: source.vocabulary,
+                    })
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))??;
                 Ok(MethodResult::WorkflowSource {
                     source: Box::new(source),
                 })
             }
+
             Method::WorkflowModelChoices {
                 target,
                 query,
@@ -201,6 +292,7 @@ impl AppServerConnection {
                 generation,
                 query,
             } => {
+                let document = self.resolve_workflow_document(&target, *document).await?;
                 let report = self
                     .host
                     .manager()
@@ -218,21 +310,83 @@ impl AppServerConnection {
                 context,
                 explain,
             } => {
+                let document = self.resolve_workflow_document(&target, *document).await?;
                 let report = self
                     .host
                     .manager()
-                    .check_workflow(target, id, *document, context, explain)
+                    .check_workflow(target.clone(), id, *document, context, explain)
                     .await
                     .map_err(source_settings_error)?;
-                Ok(MethodResult::WorkflowCheck {
-                    report: Box::new(report),
+                let documents = self.workflow_documents.clone();
+                let report =
+                    tokio::task::spawn_blocking(move || documents.capture_report(target, &report))
+                        .await
+                        .map_err(|_| domain(ErrorData::OperationFailed))??;
+                Ok(MethodResult::WorkflowCheck { report })
+            }
+            Method::WorkflowCheckReportRead {
+                target,
+                reference,
+                offset,
+                max_bytes,
+            } => {
+                let documents = self.workflow_documents.clone();
+                let chunk = tokio::task::spawn_blocking(move || {
+                    documents.read_report(&target, &reference, offset, max_bytes)
                 })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))??;
+                Ok(MethodResult::WorkflowCheckReportChunk { chunk })
+            }
+            Method::WorkflowCheckReportRelease { target, reference } => {
+                let documents = self.workflow_documents.clone();
+                tokio::task::spawn_blocking(move || documents.release_report(&target, &reference))
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))??;
+                Ok(MethodResult::WorkflowCheckReportReleased {})
             }
             Method::SourcesWrite {
                 target,
                 expected_revision,
                 mutation,
             } => {
+                use crate::local_runtime::configuration::settings::SourceMutation;
+                use crate::local_runtime::workflow_authoring::WorkflowEdit;
+                let mutation = match mutation {
+                    SourceMutation::RepairConfig { document } => {
+                        SourceMutation::RepairConfig { document }
+                    }
+                    SourceMutation::Mcp { id, authored } => SourceMutation::Mcp { id, authored },
+                    SourceMutation::Config { mutation } => SourceMutation::Config { mutation },
+                    SourceMutation::Agent { name, authored } => {
+                        SourceMutation::Agent { name, authored }
+                    }
+                    SourceMutation::Workflow { id, edit } => SourceMutation::Workflow {
+                        id,
+                        edit: match edit {
+                            WorkflowEdit::Create {
+                                description,
+                                display,
+                            } => WorkflowEdit::Create {
+                                description,
+                                display,
+                            },
+                            WorkflowEdit::Replace { document } => WorkflowEdit::Replace {
+                                document: self
+                                    .resolve_workflow_document(&target, *document)
+                                    .await?,
+                            },
+                            WorkflowEdit::Copy {
+                                source,
+                                source_revision,
+                            } => WorkflowEdit::Copy {
+                                source,
+                                source_revision,
+                            },
+                            WorkflowEdit::Delete => WorkflowEdit::Delete,
+                        },
+                    },
+                };
                 let receipt = self
                     .host
                     .manager()

@@ -1,4 +1,4 @@
-import type { MessageBlock } from '../../../protocol/app-server/v71';
+import type { MessageBlock } from '../../../protocol/app-server/v72';
 import { childConversation, type Server } from '../fixture';
 import { cfg3Effective } from '../cfg3-data';
 

@@ -313,10 +313,11 @@ impl SupervisedProcessRunner for DelayedPythonRunner {
 
 async fn python_row(sources: usize) -> TimingRow {
     let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().canonicalize().unwrap();
     let mut packages = BTreeMap::new();
     for index in 0..sources {
         let name = format!("package-{index:02}");
-        let root = dir.path().join("workspace/.agents/tools").join(&name);
+        let root = base.join("workspace/.agents/tools").join(&name);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             root.join("server.py"),
@@ -326,7 +327,7 @@ async fn python_row(sources: usize) -> TimingRow {
         std::fs::write(root.join("requirements.txt"), "# empty\n").unwrap();
         packages.insert(
             ToolSourceId::ManagedPython(name.clone()),
-            discover_package(&root, &name),
+            discover_package(&root, &name, &crate::runtime::CancellationSignal::new()),
         );
     }
     let coordinator = coordinator(

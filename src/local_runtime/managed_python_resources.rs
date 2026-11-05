@@ -18,6 +18,20 @@ pub fn discover(
     workspace: Option<&Path>,
     user_root: &Path,
 ) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
+    discover_controlled(
+        workspace,
+        user_root,
+        &crate::runtime::CancellationSignal::new(),
+    )
+}
+
+pub(crate) fn discover_controlled(
+    workspace: Option<&Path>,
+    user_root: &Path,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
+    crate::package_io::check_cancelled(cancellation)
+        .map_err(|error| RuntimeResourceLoadError::new(error.to_string()).at(user_root, "tools"))?;
     let mut candidates = BTreeMap::new();
     let mut locations = BTreeMap::new();
     let mut diagnostics = Vec::new();
@@ -95,13 +109,15 @@ pub fn discover(
                 .map_err(|error| {
                     crate::tools::python::PythonToolError::InvalidPackage(error.to_string())
                 })
-                .and_then(|()| crate::tools::python::discover_package(&path, &name));
+                .and_then(|()| crate::tools::python::discover_package(&path, &name, cancellation));
             (ToolSourceId::ManagedPython(name), package)
         })
         .collect();
     let mut catalog = ManagedPythonCatalog::new(packages);
     catalog.locations = locations;
     catalog.discovery_diagnostics = diagnostics;
+    crate::package_io::check_cancelled(cancellation)
+        .map_err(|error| RuntimeResourceLoadError::new(error.to_string()).at(user_root, "tools"))?;
     Ok(catalog)
 }
 

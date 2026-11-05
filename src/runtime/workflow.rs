@@ -258,7 +258,7 @@ pub(crate) fn test_body(block: &Value) -> Value {
 }
 
 /// The maximum serialized executable definition, excluding file presentation.
-pub const MAX_WORKFLOW_BYTES: usize = 512 * 1024;
+pub const MAX_WORKFLOW_BYTES: usize = 16 * 1024 * 1024;
 /// The maximum number of nodes in one workflow program.
 pub const MAX_WORKFLOW_NODES: usize = 256;
 /// Admitted node and iteration steps across the entire run.
@@ -1753,7 +1753,7 @@ fn compile_program(
         ))
         .at("description"));
     }
-    if serde_json::to_vec(&definition).map_or(true, |bytes| bytes.len() > MAX_WORKFLOW_BYTES) {
+    if !crate::bounded_file::json_fits(&definition, MAX_WORKFLOW_BYTES) {
         return Err(WorkflowCompileError::InvalidField(
             "aggregate program size exceeded".into(),
         ));

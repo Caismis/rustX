@@ -90,7 +90,8 @@ fn python_discovery_is_sorted_and_tracks_current_package_bytes() {
         .expect("alpha package")
         .clone();
     assert_ne!(
-        original.files, changed.files,
+        original.source_digest(),
+        changed.source_digest(),
         "the frozen package snapshot tracks the current package bytes"
     );
 }

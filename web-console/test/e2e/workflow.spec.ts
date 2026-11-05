@@ -1,7 +1,7 @@
 import { connectRemote } from './shell-actions';
 import { openEmptySession, closeSettings, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { expect, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
@@ -11,7 +11,11 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const workflowPath = join(fixture.workspaceA, '.agents/workflows/review_pr.yaml');
   const agentPath = join(fixture.workspaceA, '.agents/agents/reviewer.toml');
-  const workflow = readFileSync(workflowPath, 'utf8'), agent = readFileSync(agentPath, 'utf8');
+  const original = readFileSync(workflowPath, 'utf8');
+  const prefix = `${original}\n#`;
+  const workflow = prefix + 'x'.repeat(16_777_216 - Buffer.byteLength(prefix));
+  writeFileSync(workflowPath, workflow);
+  const agent = readFileSync(agentPath, 'utf8');
   const connect = async () => {
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.getByLabel('Transport token')).toHaveCount(0);

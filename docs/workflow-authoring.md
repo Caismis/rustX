@@ -143,9 +143,9 @@ are never file metadata. See the [visual authoring guide and acceptance record](
 
 | Boundary | Limit |
 | --- | --- |
-| Complete serialized file | 1 MiB, also enforced by the common finite source reader |
-| Expanded authoring document in JSON | 768 KiB, leaving space in the existing 1 MiB transport envelope |
-| Executable definition | 512 KiB; existing 256-node, depth-8 Block and value/run budgets remain separate |
+| Complete serialized file | 16 MiB inclusive, owned by the Workflow source reader/writer |
+| Expanded authoring document in JSON | 16 MiB inclusive, measured independently of source bytes |
+| Executable definition | 16 MiB; existing 256-node, depth-8 Block and value/run budgets remain separate |
 | Editor metadata | 256 KiB and 1024 total collection entries; at most 128 notes |
 | Node title / author description / note editor state | 256 / 4096 / 65536 UTF-8 bytes per entry |
 | Coordinates / dimensions | finite x/y in ±1000000; finite width/height in 16..8192 |
@@ -313,8 +313,9 @@ applied, so no rounded, retyped or re-signed value is ever sent.
 
 ### Checking
 
-`workflow/check` validates a candidate document without writing it. Its
-`revision` is the one a `replace` with this candidate commits as (the revision of
+`workflow/check` validates a candidate document without writing it. The response
+contains a read-only native report reference, hydrated using `checkReportRead`
+chunks and retired by `checkReportRelease`. The complete report’s `revision` is the one a `replace` with this candidate commits as (the revision of
 its canonical serialization), absent only when the file could not hold it. The
 report keeps two facts apart:
 
@@ -759,3 +760,38 @@ no sleep or live provider serves as correctness evidence.
 Workflow Agent children
 own their Conversations and run in the shared Session workspace; a Workflow owns
 no workspace resource and contributes no Session deletion blocker. See [capability identity and Session ownership](subagent-resources.md#capability-identity-and-session-ownership).
+
+
+### Large source transport
+
+App Server v72 uses `workflow/documentBegin`, `documentWrite`, `documentFinish`,
+`documentRead` and `documentRelease` for the same Workflow read/check/analyze/
+replace operations. Each document has connection- and scope-bound content
+identity, complete byte length and SHA-256. Chunks are at most 64 KiB.
+Scratch uses the same lossless numeric domains and unique-field codec as normal
+DTOs. Encoded scratch JSON may use 32 MiB for exact-u64 string overhead; the
+normalized native document must still fit 16 MiB independently. Source
+reads return a reference; checks, analysis and replacement consume that reference
+under their original target authority. Native configuration files retain their
+own 1 MiB reader; they do not inherit the Workflow or package policies.
+
+Check reports use separate read-only `report_id` references and
+`workflow/checkReportRead` / `checkReportRelease`. Full output schemas and Explain
+remain available even when one schema exceeds the 1 MiB control-record limit.
+Report serialization uses the same numeric codec, anonymous native storage and
+64 KiB chunk reads. Derived reports do not inherit a source/document or candidate
+transfer byte cap; reports and candidates share the four-entry scratch capacity
+and idle lease. A report reference cannot authorize candidate use or source writes.
+
+An unfinished upload cannot be checked or published. Finalizing scratch verifies
+its full bytes and native document; saving still performs the original source CAS
+transaction and atomic canonical replacement. Releasing, expiry at a later
+operation, or connection close retires scratch. Four documents per connection
+and a 60-second idle lease bound temporary ownership. The Web client refuses
+chunks after an App Server authority change. Product Host authorization still
+selects the exact registered Workspace; the browser does not name server paths.
+
+The two 16 MiB limits are independent: escaping or YAML alias expansion can make
+an expanded document larger than its source, while canonical YAML formatting can
+make its source larger than compact JSON. Errors identify the failing source,
+expanded-document or decoder dimension. See [resource limits](resource-limits.md).
