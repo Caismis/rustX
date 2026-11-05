@@ -619,9 +619,11 @@ test('large Workflow documents and oversized check schemas load, edit and save i
     expect(Buffer.byteLength(documentBytes)).toBeGreaterThan(3 * 1024 * 1024);
     const globalFile = join(fixture.directory, 'home/rustx/.agents/workflows/large_global.yaml');
     const workspaceFile = join(fixture.workspaceA, '.agents/workflows/large_workspace.yaml');
-    writeFileSync(globalFile, documentBytes); writeFileSync(workspaceFile, documentBytes);
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    // Session navigation is a prerequisite, not part of large Workflow authoring.
+    // Install the large inventory after its settings capture has completed.
+    writeFileSync(globalFile, documentBytes); writeFileSync(workspaceFile, documentBytes);
     await expect(page).toHaveTitle(/rustX/i);
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     for (const [scope, id, file] of [['Workspace', 'large_workspace', workspaceFile], ['Global', 'large_global', globalFile]]) {

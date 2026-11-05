@@ -346,6 +346,25 @@ references.
 | User interaction | Pass: edit node title → native check → Save File → authoritative reread |
 | Complete output schema and record bounds | Pass in both scopes; no schema truncation |
 
+## CI browser fixture follow-up
+
+At commit `365042568`, CI run `42050953656` passed Linux contracts and
+boundaries, protocol, lint, TUI, Web/Host and browser shard 1. Browser shard 2
+passed 339 cases and failed the large-authoring case during its unrelated empty
+Session navigation prerequisite: `session/settings` was still capturing the
+already-installed large resource inventory when the shared 5-second route
+assertion expired. The trace had not sent `session/attach` or `workflow/check`.
+The HTTP 400 followed fixture shutdown and is not evidence of a product failure.
+
+The test now finishes empty-Session navigation before installing the two large
+Workflow files, then opens the Workflow library and executes the unchanged
+Global/Workspace load, check/save, complete source/schema reread and control-frame
+assertions. No timeout, retry or product code changed. Independent review approved
+the actual diff; strict WebUI typecheck and all **10 cases** in
+`workflow-editor.spec.ts` passed in the same fixed browser image. The large case
+completed in 42.0 seconds. This case covers large Workflow authoring rather than
+imposing a five-second first-open Session inventory latency contract.
+
 ## Remaining limits and assumptions
 
 External multi-file trees remain mutable: there is no claim of an atomic
