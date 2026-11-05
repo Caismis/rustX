@@ -18,6 +18,7 @@ enum RoutedDelivery {
 #[derive(Default)]
 pub(super) struct ConfigurationInterest {
     versions: std::collections::BTreeMap<String, u64>,
+    read_version: u64,
     reading: Option<
         tokio::task::JoinHandle<
             Option<crate::local_runtime::configuration::application::ConfigurationApplication>,
@@ -218,16 +219,27 @@ impl AppServerConnection {
         // Source capture holds the application owner while reading authored
         // bytes. Waiting for that owner must not occupy a transport worker.
         // Advance the connection cursor only after this cancellable read returns.
-        if interest.reading.is_none() {
-            let versions = interest.versions.clone();
-            let manager = self.host.manager().clone();
-            interest.reading = Some(tokio::task::spawn_blocking(move || {
-                manager.next_configuration_application(&versions)
-            }));
-        }
-        let result = interest.reading.as_mut().expect("application read").await;
-        interest.reading = None;
-        let application = result.ok()??;
+        let application = loop {
+            if interest.reading.is_none() {
+                let versions = interest.versions.clone();
+                let manager = self.host.manager().clone();
+                interest.read_version = *manager.configuration_changes().borrow();
+                interest.reading = Some(tokio::task::spawn_blocking(move || {
+                    manager.next_configuration_application(&versions)
+                }));
+            }
+            let result = interest.reading.as_mut().expect("application read").await;
+            interest.reading = None;
+            if let Some(application) = result.ok()? {
+                break application;
+            }
+            // A cancelled poll can leave a completed empty read behind.
+            // Recheck it against publications predating this reader's watch
+            // subscription before allowing the reader to park again.
+            if interest.read_version == *self.host.manager().configuration_changes().borrow() {
+                return None;
+            }
+        };
         let projection =
             crate::local_runtime::configuration::observation::session_application(&application)
                 .ok()?;
