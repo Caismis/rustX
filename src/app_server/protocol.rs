@@ -884,6 +884,19 @@ pub enum Method {
         target: crate::local_runtime::configuration::settings::SourceTarget,
         reference: super::workflow_documents::WorkflowDocumentRef,
     },
+    #[serde(rename = "workflow/checkReportRead")]
+    WorkflowCheckReportRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowCheckReportRef,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        max_bytes: u32,
+    },
+    #[serde(rename = "workflow/checkReportRelease")]
+    WorkflowCheckReportRelease {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowCheckReportRef,
+    },
     /// The Workflow files physically owned by exactly one source scope
     /// (Issue #491); never the merged effective catalog.
     #[serde(rename = "workflow/list")]
@@ -1066,6 +1079,8 @@ impl Method {
             | Self::WorkflowDocumentFinish { .. }
             | Self::WorkflowDocumentRead { .. }
             | Self::WorkflowDocumentRelease { .. }
+            | Self::WorkflowCheckReportRead { .. }
+            | Self::WorkflowCheckReportRelease { .. }
             | Self::WorkflowModelChoices { .. }
             | Self::WorkflowToolCatalog { .. }
             | Self::WorkflowCheck { .. }
@@ -1523,9 +1538,9 @@ pub enum MethodResult {
     WorkflowToolCatalog {
         catalog: crate::local_runtime::workflow_tools::WorkflowToolCatalog,
     },
-    WorkflowCheck {
-        report: Box<crate::local_runtime::workflow_authoring::WorkflowCheckReport>,
-    },
+    WorkflowCheck { report: super::workflow_documents::WorkflowCheckReportRef },
+    WorkflowCheckReportChunk { chunk: super::workflow_documents::WorkflowCheckReportChunk },
+    WorkflowCheckReportReleased {},
     WorkflowAnalysis {
         report: Box<crate::local_runtime::workflow_authoring::WorkflowAnalysisReport>,
     },

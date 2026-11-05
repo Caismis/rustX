@@ -8364,6 +8364,16 @@ See [the storage and lifecycle contract](issue-520/README.md).
   scratch and 65,536-byte chunks. A ready scratch document is neither a partial
   source file nor a source commit. Only the existing revision-fenced source
   transaction publishes the complete canonical file with one atomic replacement.
+- Full Workflow check reports use read-only native content references and bounded
+  chunks, preserving complete schemas and Explain without a source/candidate byte
+  cap. Report and candidate capabilities are distinct; they share connection
+  capacity/expiry and close ownership, never source-write authority.
+- Queued analysis rechecks generation/query ownership before encoding and scratch
+  admission, including before Workspace Host dispatch. Superseded waiters perform
+  no upload; started work settles before admission returns. Tool catalog cache
+  verification retains request ownership and listing capacity until physical exit.
+- Missing required Python package members reject before backing-file capture or
+  asset reads, while preserving invalid winning-candidate identity and shadowing.
 - Package hashing/copying observes cancellation between bounded chunks. Async
   owners await blocking I/O and subprocess settlement. A cancelled preparation
   cannot become a usable Ready candidate. Pre-publication failures clean private

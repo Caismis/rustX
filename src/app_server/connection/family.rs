@@ -153,6 +153,8 @@ impl Family<'_> {
             | Method::WorkflowDocumentFinish { .. }
             | Method::WorkflowDocumentRead { .. }
             | Method::WorkflowDocumentRelease { .. }
+            | Method::WorkflowCheckReportRead { .. }
+            | Method::WorkflowCheckReportRelease { .. }
             | Method::WorkflowModelChoices { .. }
             | Method::WorkflowToolCatalog { .. }
             | Method::WorkflowCheck { .. }

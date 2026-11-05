@@ -250,6 +250,102 @@ target. Ignored-case categories remain those listed above. Final dev typecheck
 and all 42 tests passed again. Final formatting, staged/unstaged whitespace and
 protocol generated-artifact drift checks passed.
 
+## Follow-up review repairs after 5404876
+
+The second review identified four remaining P2 contracts. The follow-up uses the
+same architecture and keeps App Server v71 (this PR is unmerged):
+
+- `workflow/toolCatalog` now keeps the detached request owner through cached
+  Python verification, holds its `LISTINGS` permit until physical exit, and
+  inherits Host resource cancellation. The real Stdio EOF regression gates
+  `read_prepared_state` **after** manifest identity validation and **before**
+  source hashing in an already prepared environment. It observes request count
+  one, no available listing permits and pending drain, then releases the worker.
+- Complete check reports are anonymous, read-only native scratch content. Both
+  full output schemas and Explain use report references and 64 KiB reads, rather
+  than inline control responses. Report references cannot serve as candidate or
+  source-write capabilities; they share connection capacity/TTL and preserve the
+  ordinary numeric codec. No source/candidate transfer byte cap applies to these
+  derived reports. A carrier unit regression reads and hashes more than 32 MiB;
+  real Stdio checks a three-node Workflow with 300 optional string properties,
+  each with a 4,096-byte description, with Explain off and on, and compares the
+  **complete** output schema. Requests and responses include 1 KiB of envelope
+  allowance in the below-1-MiB assertion. Sibling analysis reports retain their
+  existing 512 KiB native/256 KiB core bounds; Tool catalogs retain 256 KiB pages.
+- Missing `server.py`, missing `requirements.txt`, and both missing are rejected
+  before asset capture. Three 1 TiB sparse-file cases assert zero streamed bytes
+  through direct discovery, winning-candidate discovery (including invalid
+  higher-priority shadowing) and accepted-domain evidence fallback.
+- Analysis generation/query ownership reaches whole-operation queue admission.
+  Deterministic tests use the production Session, port and document helper with
+  a controlled endpoint: block the first analysis, enqueue/cancel 12 large
+  generations, then Save. Only the active analysis and Save upload. Separate
+  latest-query and authority-fence variants cover both Global and Workspace;
+  another port sharing the client saves through the same queue. Workspace
+  admission occurs before Host HTTP encoding and dispatch. Started work retains
+  physical cleanup; superseded waiters never begin scratch.
+
+The two failures in CI run 42034903967 were treated as failed validation, not
+passes. Large Skill materialization now has a separate real-child process test
+with ordinary provider timeouts, leaving the timeout-inheritance test's original
+27-second guard and 300-ms inherited policy intact. The classification-history
+case isolates primary-worker admission and waits for physical auxiliary
+admission settlement after each retained result, as its neighboring capacity
+case already does. Retained result publication precedes permit release and the
+admission generation change; the old CI log did not retain the detailed Busy
+cause, so this is a verified lifecycle race correction, not a claim of precise
+log-level forensic attribution. Production admission behavior and deadlines are
+unchanged.
+
+Independent read-only review approved all four repairs, including the Workspace
+admission/authority fence. The final command
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1 RUST_TEST_THREADS=4 cargo test --all-targets --all-features`
+passed **all 21 harnesses: 5,911 tests passed, zero failed, 20 intentionally ignored**.
+The library contributed **5,204 passed, 10 ignored**; all **45 subagent** tests
+passed, including the unchanged 27-second timeout guard and the separate large
+Skill materialization case. Ignored categories remain those listed above. No
+pending CI job is counted as passed. The final strict-emulator WebUI run passed **4,061 tests, four skipped**;
+serial TUI passed **1,316 tests, one skipped**, with the additional exact-u64 report
+assertion also passing in a focused two-case real-stdio recheck. Protocol, WebUI,
+TUI and dev strict typechecks, native/fixture builds, formatting, all-target/all-
+feature Clippy, generated-protocol drift, WebUI build/i18n/provenance and all
+**42 dev tests** passed. The six final generation/query/authority admission cases
+also passed through the production port/helper in both scopes. Linux CI lane
+coverage checks passed for both `rust-contracts` and `rust-boundaries`; the real
+Python cached-verification scenario is selected by the boundary lane, whose
+prerequisites install Python/uv, rather than the deterministic lane.
+
+The first follow-up Rust attempt was interrupted: its two scratch TTL fixtures
+had used an operation helper that refreshed the lease, and rebuilding the test
+executable while other self-exec fixtures were running invalidated that attempt.
+The fixtures now adjust the test clock state directly. All compilation finished
+before the final uninterrupted complete command above, which passed. The initial
+Clippy pass also reported two test-only narrowing casts and a large test future;
+those were corrected and final all-target/all-feature Clippy passed. No product
+limit or existing deadline was relaxed.
+
+The fixed-image browser recheck passed all 31 selected cases. Environment:
+`http://127.0.0.1:5193/` plus the fixture server on 5194; Chromium in the same
+immutable Playwright v1.63.0 image recorded above. Browser plugin not available;
+regular repository Playwright was used. The browser and fixture processes were
+retired after the run. The large-source test now additionally carries a complete
+Tool schema larger than 1 MiB in **both** Global and Workspace, checks/saves via
+the actual native/Host paths, rereads equal persisted schemas, and observes every
+native WebSocket control frame within 1 MiB. The separate real-stdio test covers
+Explain off/on and asserts exact-u64 report fields remain wire strings. Existing
+mobile cases in the selected catalog passed; the new large-schema save case uses
+1440×1000. Screenshots remain external temporary QA artifacts, not repository
+references.
+
+| Rendered QA check | Result |
+| --- | --- |
+| Page identity and meaningful app content | Pass: rustX Workflow editor in the selected scope |
+| Framework overlay | Pass: none |
+| Console/page errors | Pass: zero relevant errors |
+| Screenshot inspection | Pass: saved notice and no-unsaved-changes state inspected |
+| User interaction | Pass: edit node title → native check → Save File → authoritative reread |
+| Complete output schema and record bounds | Pass in both scopes; no schema truncation |
+
 ## Remaining limits and assumptions
 
 External multi-file trees remain mutable: there is no claim of an atomic

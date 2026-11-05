@@ -847,6 +847,9 @@ impl AppServerConnection {
                 | Method::WorkflowDocumentRelease { .. }
                 | Method::WorkflowCheck { .. }
                 | Method::WorkflowAnalyze { .. }
+                | Method::WorkflowToolCatalog { .. }
+                | Method::WorkflowCheckReportRead { .. }
+                | Method::WorkflowCheckReportRelease { .. }
                 | Method::SettingsRead { .. }
                 | Method::SettingsValueRead { .. }
                 | Method::SessionApplicationValueRead { .. }

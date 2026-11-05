@@ -1072,6 +1072,22 @@ export type Request1 =
       };
     }
   | {
+      method: 'workflow/checkReportRead';
+      params: {
+        target: SourceTarget;
+        reference: WorkflowCheckReportRef;
+        offset: number;
+        max_bytes: number;
+      };
+    }
+  | {
+      method: 'workflow/checkReportRelease';
+      params: {
+        target: SourceTarget;
+        reference: WorkflowCheckReportRef;
+      };
+    }
+  | {
       method: 'workflow/list';
       params: {
         target: SourceTarget;
@@ -2810,8 +2826,15 @@ export type MethodResult =
       type: 'workflow_tool_catalog';
     }
   | {
-      report: WorkflowCheckReport;
+      report: WorkflowCheckReportRef;
       type: 'workflow_check';
+    }
+  | {
+      chunk: WorkflowCheckReportChunk;
+      type: 'workflow_check_report_chunk';
+    }
+  | {
+      type: 'workflow_check_report_released';
     }
   | {
       report: WorkflowAnalysisReport;
@@ -6133,67 +6156,6 @@ export type WorkflowToolSourceState =
     )
   | 'pending';
 /**
- * Whether the native compiler admits the candidate's structure.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowStructure".
- */
-export type WorkflowStructure =
-  | {
-      outputs: {
-        [k: string]: unknown;
-      };
-      status: 'valid';
-    }
-  | {
-      diagnostic: WorkflowDiagnostic;
-      status: 'invalid';
-    };
-/**
- * Dependency admission of a structurally valid candidate in one explicit
- * Workspace composition.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowDependencies".
- */
-export type WorkflowDependencies =
-  | {
-      status: 'not_checked';
-    }
-  | {
-      context: string;
-      status: 'admitted';
-    }
-  | {
-      context: string;
-      model_nodes: string[];
-      status: 'requires_attempt';
-    }
-  | {
-      context: string;
-      diagnostics: WorkflowAdmissionDiagnostic[];
-      status: 'blocked';
-    }
-  | {
-      context: string;
-      reason: string;
-      status: 'unavailable';
-    };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ModelPolicyInspection".
- */
-export type ModelPolicyInspection =
-  | {
-      mode: 'session';
-    }
-  | {
-      model: ModelRef;
-      profile?: ModelProfileId | null;
-      max_output_tokens?: number | null;
-      mode: 'explicit';
-    };
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowReferenceAvailability".
  */
@@ -8950,6 +8912,67 @@ export type InteractionOutcome =
         | 'subagent_execution_deadline_exceeded';
       type: 'cancelled';
     };
+/**
+ * Whether the native compiler admits the candidate's structure.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowStructure".
+ */
+export type WorkflowStructure =
+  | {
+      outputs: {
+        [k: string]: unknown;
+      };
+      status: 'valid';
+    }
+  | {
+      diagnostic: WorkflowDiagnostic;
+      status: 'invalid';
+    };
+/**
+ * Dependency admission of a structurally valid candidate in one explicit
+ * Workspace composition.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDependencies".
+ */
+export type WorkflowDependencies =
+  | {
+      status: 'not_checked';
+    }
+  | {
+      context: string;
+      status: 'admitted';
+    }
+  | {
+      context: string;
+      model_nodes: string[];
+      status: 'requires_attempt';
+    }
+  | {
+      context: string;
+      diagnostics: WorkflowAdmissionDiagnostic[];
+      status: 'blocked';
+    }
+  | {
+      context: string;
+      reason: string;
+      status: 'unavailable';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ModelPolicyInspection".
+ */
+export type ModelPolicyInspection =
+  | {
+      mode: 'session';
+    }
+  | {
+      model: ModelRef;
+      profile?: ModelProfileId | null;
+      max_output_tokens?: number | null;
+      mode: 'explicit';
+    };
 
 export interface ProtocolTypes {
   message: ProtocolMessage;
@@ -9679,6 +9702,17 @@ export interface SourceFieldRef {
  */
 export interface WorkflowDocumentRef {
   id: string;
+  byte_length: number;
+  sha256: string;
+}
+/**
+ * Read-only derived report; it is never a candidate/source capability.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowCheckReportRef".
+ */
+export interface WorkflowCheckReportRef {
+  report_id: string;
   byte_length: number;
   sha256: string;
 }
@@ -18577,94 +18611,13 @@ export interface WorkflowToolSource {
   tools: WorkflowToolChoice[];
 }
 /**
- * One offline check of one exact candidate document.
- *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowCheckReport".
+ * via the `definition` "WorkflowCheckReportChunk".
  */
-export interface WorkflowCheckReport {
-  /**
-   * The file revision a `replace` with this candidate commits: the native
-   * identity of its canonical serialization, so a client recognizes its
-   * own normalized commit on reread. Absent when the file cannot hold it.
-   */
-  revision?: string | null;
-  structure: WorkflowStructure;
-  dependencies: WorkflowDependencies;
-  /**
-   * The redacted static explanation, when requested of a valid candidate.
-   */
-  explanation?: WorkflowInspection2 | null;
-  /**
-   * Retained orphaned presentation references; executable validity is separate.
-   */
-  presentation?: WorkflowPresentationDiagnostic[];
-}
-/**
- * Static program facts. Literals and task text are deliberately not exported.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowInspection2".
- */
-export interface WorkflowInspection2 {
-  identity: WorkflowToolIdentity;
-  stage: string;
-  input_schema: unknown;
-  output_schema: unknown;
-  configured_timeout_ms: string;
-  conservative_steps: number;
-  conservative_agent_runs: number;
-  conservative_model_calls: number;
-  conservative_retained_bytes: number;
-  caps: {
-    [k: string]: number;
-  };
-  blocks: {
-    [k: string]: BlockInspection;
-  };
-  tools: ExactToolSelector[];
-  profiles: SubagentName[];
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "BlockInspection".
- */
-export interface BlockInspection {
-  entry: string;
-  input_schema: unknown;
-  output_schema: unknown;
-  nodes: {
-    [k: string]: NodeInspection;
-  };
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "NodeInspection".
- */
-export interface NodeInspection {
-  kind: string;
-  edges: [unknown, unknown][];
-  bindings: {
-    [k: string]: unknown;
-  };
-  profile?: SubagentName | null;
-  /**
-   * Selector identities only; provider parameters may contain secrets.
-   */
-  model?: ModelPolicyInspection | null;
-  selector?: ExactToolSelector | null;
-  output_schema?: unknown;
-  result_kind?: string | null;
-  loop_count?: number | null;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowPresentationDiagnostic".
- */
-export interface WorkflowPresentationDiagnostic {
-  path: string;
-  category: string;
-  reason: string;
+export interface WorkflowCheckReportChunk {
+  offset: number;
+  data: string;
+  next_offset?: number | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -18730,6 +18683,15 @@ export interface WorkflowReferenceChoice {
   availability: WorkflowReferenceAvailability;
   compatibility: WorkflowReferenceCompatibility;
   diagnostic?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowPresentationDiagnostic".
+ */
+export interface WorkflowPresentationDiagnostic {
+  path: string;
+  category: string;
+  reason: string;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -20335,4 +20297,85 @@ export interface RuntimeClientToolCall2 {
   name: string;
   arguments?: unknown;
   metadata_ref?: ContentRef | null;
+}
+/**
+ * One offline check of one exact candidate document.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowCheckReport".
+ */
+export interface WorkflowCheckReport {
+  /**
+   * The file revision a `replace` with this candidate commits: the native
+   * identity of its canonical serialization, so a client recognizes its
+   * own normalized commit on reread. Absent when the file cannot hold it.
+   */
+  revision?: string | null;
+  structure: WorkflowStructure;
+  dependencies: WorkflowDependencies;
+  /**
+   * The redacted static explanation, when requested of a valid candidate.
+   */
+  explanation?: WorkflowInspection2 | null;
+  /**
+   * Retained orphaned presentation references; executable validity is separate.
+   */
+  presentation?: WorkflowPresentationDiagnostic[];
+}
+/**
+ * Static program facts. Literals and task text are deliberately not exported.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowInspection2".
+ */
+export interface WorkflowInspection2 {
+  identity: WorkflowToolIdentity;
+  stage: string;
+  input_schema: unknown;
+  output_schema: unknown;
+  configured_timeout_ms: string;
+  conservative_steps: number;
+  conservative_agent_runs: number;
+  conservative_model_calls: number;
+  conservative_retained_bytes: number;
+  caps: {
+    [k: string]: number;
+  };
+  blocks: {
+    [k: string]: BlockInspection;
+  };
+  tools: ExactToolSelector[];
+  profiles: SubagentName[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "BlockInspection".
+ */
+export interface BlockInspection {
+  entry: string;
+  input_schema: unknown;
+  output_schema: unknown;
+  nodes: {
+    [k: string]: NodeInspection;
+  };
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "NodeInspection".
+ */
+export interface NodeInspection {
+  kind: string;
+  edges: [unknown, unknown][];
+  bindings: {
+    [k: string]: unknown;
+  };
+  profile?: SubagentName | null;
+  /**
+   * Selector identities only; provider parameters may contain secrets.
+   */
+  model?: ModelPolicyInspection | null;
+  selector?: ExactToolSelector | null;
+  output_schema?: unknown;
+  result_kind?: string | null;
+  loop_count?: number | null;
 }

@@ -1,4 +1,4 @@
-import { readWorkflowSource, withWorkflowDocument, type WorkflowRequest } from '../../protocol/app-server/workflow-documents.ts';
+import { checkWorkflowDocument, readWorkflowSource, withWorkflowDocument, type WorkflowRequest } from '../../protocol/app-server/workflow-documents.ts';
 import { materializeSource } from '../../protocol/app-server/source-observation.ts';
 import { analysisMatches } from '../../protocol/app-server/workflow-analysis.ts';
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
@@ -561,7 +561,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'analyze', report };
         }
         case 'check': {
-          const { report } = await withWorkflowDocument(client, request, target, operation.document, reference => client.call('workflow/check', { target, id: operation.id, document: reference, explain: false }, 'workflow_check'));
+          const report = await checkWorkflowDocument(client, request, target, operation.id, operation.document);
           await unchanged();
           return { kind: 'check', report };
         }

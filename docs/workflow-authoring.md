@@ -313,8 +313,9 @@ applied, so no rounded, retyped or re-signed value is ever sent.
 
 ### Checking
 
-`workflow/check` validates a candidate document without writing it. Its
-`revision` is the one a `replace` with this candidate commits as (the revision of
+`workflow/check` validates a candidate document without writing it. The response
+contains a read-only native report reference, hydrated using `checkReportRead`
+chunks and retired by `checkReportRelease`. The complete report’s `revision` is the one a `replace` with this candidate commits as (the revision of
 its canonical serialization), absent only when the file could not hold it. The
 report keeps two facts apart:
 
@@ -773,6 +774,14 @@ normalized native document must still fit 16 MiB independently. Source
 reads return a reference; checks, analysis and replacement consume that reference
 under their original target authority. Native configuration files retain their
 own 1 MiB reader; they do not inherit the Workflow or package policies.
+
+Check reports use separate read-only `report_id` references and
+`workflow/checkReportRead` / `checkReportRelease`. Full output schemas and Explain
+remain available even when one schema exceeds the 1 MiB control-record limit.
+Report serialization uses the same numeric codec, anonymous native storage and
+64 KiB chunk reads. Derived reports do not inherit a source/document or candidate
+transfer byte cap; reports and candidates share the four-entry scratch capacity
+and idle lease. A report reference cannot authorize candidate use or source writes.
 
 An unfinished upload cannot be checked or published. Finalizing scratch verifies
 its full bytes and native document; saving still performs the original source CAS

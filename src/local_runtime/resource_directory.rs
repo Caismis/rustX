@@ -288,6 +288,63 @@ mod revision_tests {
     use std::io::{Seek, SeekFrom, Write};
 
     #[test]
+    fn issue527_missing_required_files_skip_huge_assets_in_discovery_and_evidence() {
+        use crate::capabilities::ToolSourceId;
+        use crate::runtime::resources::SourceScope;
+        for (server, requirements) in [(false, true), (true, false), (false, false)] {
+            let temporary = tempfile::tempdir().unwrap();
+            let workspace = temporary.path().canonicalize().unwrap();
+            let user = workspace.join("user/.agents");
+            let lower = user.join("tools/demo");
+            let higher = workspace.join(".agents/tools/demo");
+            std::fs::create_dir_all(&lower).unwrap();
+            std::fs::create_dir_all(&higher).unwrap();
+            std::fs::write(lower.join("server.py"), "# valid lower candidate\n").unwrap();
+            std::fs::write(lower.join("requirements.txt"), "").unwrap();
+            if server {
+                std::fs::write(higher.join("server.py"), "# server\n").unwrap();
+            }
+            if requirements {
+                std::fs::write(higher.join("requirements.txt"), "").unwrap();
+            }
+            std::fs::File::create(higher.join("asset.bin"))
+                .unwrap()
+                .set_len(1_u64 << 40)
+                .unwrap();
+            crate::package_io::STREAMED_FILE_BYTES.with(|count| count.set(0));
+            assert!(
+                crate::tools::python::discover_package(
+                    &higher,
+                    "demo",
+                    &crate::runtime::CancellationSignal::new()
+                )
+                .is_err()
+            );
+            let catalog =
+                crate::local_runtime::managed_python_resources::discover(Some(&workspace), &user)
+                    .unwrap();
+            let identity = ToolSourceId::ManagedPython("demo".into());
+            assert!(catalog.packages()[&identity].is_err());
+            assert_eq!(catalog.locations[&identity].shadowed.as_ref(), Some(&lower));
+            crate::package_io::STREAMED_FILE_BYTES.with(|count| assert_eq!(count.get(), 0));
+            let observation = revision_with_cancellation(
+                &workspace.join(".agents"),
+                SourceScope::Workspace,
+                &crate::runtime::CancellationSignal::new(),
+            );
+            assert!(observation.starts_with("incomplete:"));
+            assert!(capture_token(&observation).is_some());
+            crate::package_io::STREAMED_FILE_BYTES.with(|count| count.set(0));
+            evidence::capture(
+                &workspace.join(".agents"),
+                SourceScope::Workspace,
+                &crate::runtime::CancellationSignal::new(),
+            )
+            .unwrap();
+            crate::package_io::STREAMED_FILE_BYTES.with(|count| assert_eq!(count.get(), 0));
+        }
+    }
+    #[test]
     fn issue527_invalid_collections_and_absent_collections_have_distinct_domain_fences() {
         use crate::runtime::{CancellationSignal, resources::SourceScope};
         let temporary = tempfile::tempdir().unwrap();

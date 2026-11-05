@@ -7561,6 +7561,19 @@ atomic source publication remain with the original native source owner. Web and
 Product Host share the carrier; TUI uses the same generated protocol. Ordinary
 1 MiB App Server records and child IPC frames are unchanged.
 
+Complete Workflow check reports use separate read-only scratch references, the
+same lossless content codec, and 64 KiB reads, including output schemas and Explain.
+Derived report bytes do not inherit source/document or candidate wire byte caps.
+Reports share the connection's four-entry capacity and idle lease with candidates;
+their reference kind cannot be used for candidate resolution or source writes.
+The shared client queue admits analysis only while its generation/query owner
+remains current, before encoding or scratch allocation. Workspace transactions
+use this admission before Host HTTP dispatch; started operations keep cleanup
+ownership. Tool catalog Python cache verification inherits resource cancellation
+and retains detached request ownership and the listing permit through physical
+worker exit, including transport EOF. Missing Python entrypoint/requirements
+membership is rejected before any asset capture.
+
 Raw directory observations retain a 64 MiB logical-byte work budget and the
 accepted package depth/count traversal envelope. Overflow is explicitly
 incomplete and cannot prove equality. An independent bounded discovery-domain

@@ -463,6 +463,37 @@ pub(crate) fn workflow_document_from_json(
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
+/// Reports use the same schema-directed numeric codec, outside control frames.
+/// The JSON writer goes directly to native scratch, without a whole byte buffer.
+pub(crate) fn write_workflow_check_report(
+    report: &crate::local_runtime::workflow_authoring::WorkflowCheckReport,
+    writer: impl std::io::Write,
+) -> Result<(), String> {
+    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    let schema = SCHEMA.get_or_init(|| {
+        serde_json::to_value(schemars::schema_for!(
+            crate::local_runtime::workflow_authoring::WorkflowCheckReport
+        ))
+        .expect("Workflow report schema")
+    });
+    let mut value = serde_json::to_value(report).map_err(|error| error.to_string())?;
+    convert(&mut value, schema, schema, true)?;
+    serde_json::to_writer(writer, &value).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+pub(crate) fn workflow_check_report_from_json(
+    json: &str,
+) -> Result<crate::local_runtime::workflow_authoring::WorkflowCheckReport, String> {
+    let StrictValue(mut value) = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let schema = serde_json::to_value(schemars::schema_for!(
+        crate::local_runtime::workflow_authoring::WorkflowCheckReport
+    ))
+    .map_err(|error| error.to_string())?;
+    convert(&mut value, &schema, &schema, false)?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
 macro_rules! envelope {
     ($ty:ty) => {
         impl Serialize for $ty {
@@ -542,6 +573,10 @@ pub(super) fn protocol_schema() -> Value {
     let _ = generator.subschema_for::<crate::durable::observation::WorkflowTraceNode>();
     let _ = generator.subschema_for::<crate::runtime_client::RuntimeClientModelName>();
     let _ = generator.subschema_for::<crate::runtime::interaction::RoutedInteraction>();
+    // Assign envelope-owned names first; the chunked report shares domain type names.
+    let _ = generator.root_schema_for::<super::protocol::ProtocolMessage>();
+    let _ =
+        generator.subschema_for::<crate::local_runtime::workflow_authoring::WorkflowCheckReport>();
     schema(
         serde_json::to_value(generator.into_root_schema_for::<super::protocol::ProtocolMessage>())
             .expect("Rust schema"),

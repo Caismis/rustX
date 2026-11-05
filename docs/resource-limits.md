@@ -18,6 +18,7 @@ extraction, execution-payload or model-context capacity.
 | Workflow YAML / JSON parser | Existing serde recursion/repetition guards; YAML expanded-representation preflight ≤32 MiB | Preflight expanded JSON scalars, collection delimiters and keys without retaining their copies, before typed alias expansion. The extra document share covers normalized/default/omitted-field differences; it does not increase either 16 MiB admission bound. JSON scratch is bounded before decode and uses buffered reads. | Decoder/structural failure identifies expansion or parse failure. Reduce aliases/nesting or repair syntax. Ordinary graphs, values and presentation limits still apply. |
 | Workflow graph / execution / presentation owners | 256 nodes, Block depth 8; 64 discovered effective definitions; 4,096 steps; 64 KiB values; 4 MiB retained locals; editor metadata 256 KiB / 1,024 entries / 128 notes | Existing compile, presentation and runtime checks remain. See `runtime/workflow.rs`, `workflow_file/editor.rs` and the Workflow language docs for per-node/model/run bounds. | Return the native graph, presentation, value or run diagnostic. Split or simplify that actual dimension. Source admission does not promise arbitrary child/process/model payloads. |
 | Workflow document carrier | 64 KiB raw chunks; encoded JSON ≤32 MiB; 4 scratch documents per connection; 60-second idle lease | Native anonymous scratch validates declared length, SHA-256, completion and document before use. It reuses the exact-u64/duplicate-field/raw-number codec. The 32 MiB wire allowance accommodates exact-u64 string encoding without shrinking the independent 16 MiB normalized-document policy. Scope and connection bind references. Expired entries retire on the next operation; close retires the map while admitted work retains its descriptor until settlement. | Refuse incomplete/forged/stale/other-scope references, oversized chunks or full capacity. Release unused documents or reconnect. Source CAS is a separate atomic commit, never a series of chunk writes. |
+| Workflow check-report carrier | 64 KiB raw chunks; shares the connection’s four scratch entries and 60-second idle lease | Serialize the complete native report, including output schemas and Explain, into anonymous storage with SHA-256 and length. Report references are read-only, scope/connection bound and distinct from candidate references. Derived reports do not inherit either source/document byte cap or the candidate’s 32 MiB wire allowance. | Read all chunks and release the report. Reject forged/wrong-kind/stale references, invalid ranges and full capacity. Ordinary control records retain their 1 MiB bound. |
 | App Server / child IPC | 1 MiB UTF-8 JSON record / 1 MiB child frame | Existing transport ingress/egress/queue checks remain unchanged. Workflow source/document bytes use references and chunks; Skill/Python asset bytes stay on disk. | Explicit transport refusal; use the bounded content operation. Control metadata/path manifests still have to fit their independent frame. Do not raise a record limit to carry a file. |
 | Product Host HTTP Workflow operation | Encoded wire document's 32 MiB plus 64 KiB envelope; other Host requests remain 64 KiB | Bound request accumulation before concatenation/JSON parsing. Host forwards Workflow bytes through the same native chunk carrier, inside the registered Workspace authority lane. | Refuse an oversized Host request; reduce its actual document/envelope. No partial native source publication. |
 | Other authored configuration and instructions | 1 MiB per file | Default `bounded_file` / admitted source directory reads stop at limit+1; ordinary source writers keep the same bound. Workflow opts into its own policy explicitly. | Native configuration/input diagnostic; reduce or split that authored resource. Uncapped Skill bodies do not make TOML/Agent instructions unbounded. |
@@ -55,10 +56,20 @@ line is rejected without buffering the remaining malformed file. Python scans
 requirements UTF-8, comments and whitespace with bounded state over the owned
 capture, then reads only effective declaration spans. Raw comment/blank-line
 length does not become retained declaration memory; capture read failures remain
-storage failures. Workflow clients serialize complete scratch operations per
-native client, before encoding and through release, across request wrappers.
-Native scratch work retains request/admission ownership through physical
-settlement after connection close, and host drain waits for that owner.
+storage failures. Missing Python entrypoint/requirements membership is rejected
+immediately after name collection, before opening anonymous capture or streaming
+any asset, including discovery and incomplete-observation evidence fallback.
+
+Workflow clients serialize complete scratch operations per native client, before
+encoding and through release, across request wrappers. Analysis admission checks
+its generation/query owner again before encoding, after hashing and before native
+analysis. Superseded queued operations consume no scratch; started transfers still
+settle and release their owner. Workspace operations use the same browser-client
+queue before Host HTTP encoding/dispatch. Native scratch work and Python Tool
+catalog queries retain request/admission ownership through physical settlement
+after connection close. Catalog queries also retain their listing permit through
+cached source verification and inherit Host resource cancellation. Host drain
+waits for these owners.
 
 Model-choice paging reads only the admitted TOML documents and uses the same
 strict native overlay and reread fence. Status/control requests do not hash a

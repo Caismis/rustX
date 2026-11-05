@@ -2692,14 +2692,16 @@ or compatibility handlers. See [Session-owned workspace uploads](session-uploads
 
 ## Workflow file authoring (Issue #491)
 
-Three read-only methods expose native Workflow files of one exact scope; the
+Workflow authoring methods expose native files of one exact scope; the
 semantics are specified in [Workflow authoring](workflow-authoring.md#file-authoring-app-server-and-web).
 
 | Method | Params | Result |
 | --- | --- | --- |
 | `workflow/list` | `target` | `workflow_library`: `target`, `directory`, `absent_revision`, bounded `files[]` and an optional directory `diagnostic` |
-| `workflow/read` | `target`, `id` | `workflow_source`: `revision`, `present`, the strictly parsed `document` (absent for a malformed file), `diagnostic` and the editor `vocabulary` |
-| `workflow/check` | `target`, `id`, `document`, optional `context`, `explain` | `workflow_check`: separate `structure` and `dependencies` facts and an optional compiled `explanation`; a valid structure carries the `revision` a `replace` with this candidate commits as |
+| `workflow/read` | `target`, `id` | `workflow_source`: `revision`, `present`, a strictly parsed document reference (absent for a malformed file), `diagnostic` and the editor `vocabulary` |
+| `workflow/check` | `target`, `id`, candidate `document` reference, optional `context`, `explain` | `workflow_check`: a read-only `report` reference (`report_id`, byte length, SHA-256) for the complete structure/dependencies/Explain report and candidate revision |
+| `workflow/checkReportRead` | `target`, report `reference`, `offset`, `max_bytes` ≤65,536 | `workflow_check_report_chunk`: exact `offset`, base64 `data`, optional `next_offset` |
+| `workflow/checkReportRelease` | `target`, report `reference` | `workflow_check_report_released`: connection-local scratch cleanup |
 
 Writes add no method: `configuration/sourceWrite` accepts the mutation
 `{kind: "workflow", id, edit}` with `edit.operation` one of `create`,
@@ -2709,15 +2711,22 @@ acknowledgement is the existing `sources_written` receipt (file `revision` and
 `{kind: "workflow_invalid", diagnostic}` and leaves the file unchanged; a
 changed revision is the ordinary revision conflict.
 
-All three reads are side-effect free (`may_commit` is false): they start no
+These authoring reads are side-effect free (`may_commit` is false): they start no
 node, connect to no provider or MCP endpoint and read no credential. Diagnostic
 paths are bounded to 512 bytes and details to 1 KiB, and each listing entry to a
 7 KiB serialized share, so a scope's at most 128 files always list within the
 message bound. Document numbers follow the Workflow number contract: a file or
 candidate holding a number a browser would round, retype or re-sign (an integer beyond ±(2^53 − 1), an integral float such as `1.0` below 1e21, or negative zero) is `unsupported_number`; see [the number contract](workflow-authoring.md#number-contract). Numbers
 travel in the existing exact wire domains, so `u64` fields such as `timeout_ms`
-are decimal strings in TypeScript. Documents are bounded by the native 512 KiB
-Workflow limit and the 1 MiB message limit.
+are decimal strings in TypeScript. Workflow source and normalized documents each
+have an independent 16 MiB native limit; candidate transfer has a 32 MiB wire
+encoding allowance. The complete check report, including a single schema larger
+than a control record and the requested Explain, uses native-held anonymous
+scratch and 64 KiB reads. Derived report size has no source/candidate byte cap.
+Report references are read-only and cannot be used as candidate/source-write
+capabilities. Candidates and reports share four connection-owned scratch entries
+and a 60-second idle lease; releasing or closing retires them. Every ordinary
+control record retains its 1 MiB limit.
 
 A `create` or `copy` that would pass a discovery bound (1024 authored entries or 128
 `.yaml` entries in the directory, or 64 composed Workflow IDs: User alone for a

@@ -329,12 +329,36 @@ impl AppServerConnection {
                 let report = self
                     .host
                     .manager()
-                    .check_workflow(target, id, *document, context, explain)
+                    .check_workflow(target.clone(), id, *document, context, explain)
                     .await
                     .map_err(source_settings_error)?;
-                Ok(MethodResult::WorkflowCheck {
-                    report: Box::new(report),
+                let documents = self.workflow_documents.clone();
+                let report =
+                    tokio::task::spawn_blocking(move || documents.capture_report(target, &report))
+                        .await
+                        .map_err(|_| domain(ErrorData::OperationFailed))??;
+                Ok(MethodResult::WorkflowCheck { report })
+            }
+            Method::WorkflowCheckReportRead {
+                target,
+                reference,
+                offset,
+                max_bytes,
+            } => {
+                let documents = self.workflow_documents.clone();
+                let chunk = tokio::task::spawn_blocking(move || {
+                    documents.read_report(&target, &reference, offset, max_bytes)
                 })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))??;
+                Ok(MethodResult::WorkflowCheckReportChunk { chunk })
+            }
+            Method::WorkflowCheckReportRelease { target, reference } => {
+                let documents = self.workflow_documents.clone();
+                tokio::task::spawn_blocking(move || documents.release_report(&target, &reference))
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))??;
+                Ok(MethodResult::WorkflowCheckReportReleased {})
             }
             Method::SourcesWrite {
                 target,

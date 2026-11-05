@@ -121,6 +121,50 @@ async fn attach(client: &impl AppServerConformanceDriver, f: &Fixture) -> Attach
     target
 }
 
+pub(crate) async fn cached_python_catalog_disconnect_scenario() {
+    use futures_util::FutureExt as _;
+    use tokio::io::AsyncWriteExt as _;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 0).await;
+        let package = fixture.workspaces[0].join(".agents/tools/demo");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("requirements.txt"), "").unwrap();
+        std::fs::write(package.join("server.py"), "from fastmcp import FastMCP\nmcp = FastMCP('demo')\n@mcp.tool\ndef hello() -> str:\n    return 'hello'\nif __name__ == '__main__':\n    mcp.run()\n").unwrap();
+        let target = crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: fixture.workspaces[0].clone() };
+        let catalog = fixture.manager.workflow_tool_catalog(target.clone(), Some("python:demo".into()), None).await.unwrap();
+        assert!(!catalog.sources[0].tools.is_empty(), "warm the real prepared environment: {catalog:?}");
+        let packages = fixture.manager.configuration.sources.runtime_root.join("environments/python-tools/packages");
+        let states: Vec<_> = std::fs::read_dir(packages).unwrap().map(|entry| entry.unwrap().path()).filter(|path| path.is_dir()).collect();
+        assert_eq!(states.len(), 1);
+        let (entered, release) = crate::tools::python::gate_cached_verification_for_test(states[0].clone());
+        let listings = crate::local_runtime::workflow_tools::listings_for_test();
+        let _other_listings = listings.acquire_many(3).await.unwrap();
+        let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+        super::protocol::initialize(&connection).await;
+        let (mut input, reader) = tokio::io::duplex(65_536);
+        let serving = tokio::spawn(stdio::serve(connection.clone(), reader, tokio::io::sink(), CancellationToken::new()));
+        let request = Request { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(713), call: Method::WorkflowToolCatalog { target, source: Some("python:demo".into()), cursor: None } };
+        input.write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes()).await.unwrap();
+        entered.await.unwrap();
+        let mut operations = fixture.host.request_operations();
+        assert_eq!(*operations.borrow(), 1);
+        assert_eq!(listings.available_permits(), 0);
+        input.shutdown().await.unwrap();
+        serving.await.unwrap().unwrap();
+        assert!(connection.closed_for_test());
+        assert_eq!(*operations.borrow(), 1, "EOF retains the cached verification owner");
+        assert_eq!(listings.available_permits(), 0, "physical verification retains listing admission");
+        let draining = fixture.host.drain();
+        tokio::pin!(draining);
+        assert!(draining.as_mut().now_or_never().is_none());
+        release.send(()).unwrap();
+        operations.wait_for(|count| *count == 0).await.unwrap();
+        assert_eq!(listings.available_permits(), 1);
+        assert!(draining.await.is_empty());
+        fixture.close().await;
+    })).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t12_workflow_scratch_disconnect_retains_physical_request_until_settlement() {
     use base64::Engine as _;

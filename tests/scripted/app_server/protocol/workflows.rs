@@ -90,6 +90,7 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
         else {
             panic!("check")
         };
+        let report = read_report(&connection, &target, &report).await;
         assert!(matches!(report.structure, WorkflowStructure::Valid { .. }));
         assert!(matches!(
             report.dependencies,
@@ -390,5 +391,49 @@ async fn read_document(
         }
     }
     crate::app_server::wire::workflow_document_from_json(&String::from_utf8(bytes).unwrap())
+        .unwrap()
+}
+
+async fn read_report(
+    connection: &AppServerConnection,
+    target: &SourceTarget,
+    reference: &crate::app_server::workflow_documents::WorkflowCheckReportRef,
+) -> crate::local_runtime::workflow_authoring::WorkflowCheckReport {
+    use base64::Engine as _;
+    let mut bytes = Vec::new();
+    loop {
+        let MethodResult::WorkflowCheckReportChunk { chunk } = call(
+            connection,
+            1004,
+            Method::WorkflowCheckReportRead {
+                target: target.clone(),
+                reference: reference.clone(),
+                offset: bytes.len() as u64,
+                max_bytes: 65_536,
+            },
+        )
+        .await
+        else {
+            panic!("report chunk")
+        };
+        bytes.extend(
+            base64::engine::general_purpose::STANDARD
+                .decode(chunk.data)
+                .unwrap(),
+        );
+        if chunk.next_offset.is_none() {
+            break;
+        }
+    }
+    call(
+        connection,
+        1005,
+        Method::WorkflowCheckReportRelease {
+            target: target.clone(),
+            reference: reference.clone(),
+        },
+    )
+    .await;
+    crate::app_server::wire::workflow_check_report_from_json(&String::from_utf8(bytes).unwrap())
         .unwrap()
 }

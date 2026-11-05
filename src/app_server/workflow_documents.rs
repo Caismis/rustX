@@ -38,9 +38,43 @@ pub struct WorkflowDocumentChunk {
     pub next_offset: Option<u32>,
 }
 
+/// Read-only derived report; it is never a candidate/source capability.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowCheckReportRef {
+    pub report_id: String,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub byte_length: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowCheckReportChunk {
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub offset: u64,
+    pub data: String,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub next_offset: Option<u64>,
+}
+
+#[derive(PartialEq, Eq)]
+enum Reference {
+    Candidate(WorkflowDocumentRef),
+    CheckReport(WorkflowCheckReportRef),
+}
+impl Reference {
+    fn id(&self) -> &str {
+        match self {
+            Self::Candidate(value) => &value.id,
+            Self::CheckReport(value) => &value.report_id,
+        }
+    }
+}
+
 struct Document {
     target: SourceTarget,
-    reference: WorkflowDocumentRef,
+    reference: Reference,
     file: std::fs::File,
     written: u32,
     ready: bool,
@@ -105,6 +139,20 @@ impl WorkflowDocuments {
         {
             return Err(invalid());
         }
+        let reference = WorkflowDocumentRef {
+            id: uuid::Uuid::now_v7().to_string(),
+            byte_length,
+            sha256,
+        };
+        self.insert(target, Reference::Candidate(reference.clone()))?;
+        Ok(reference)
+    }
+
+    fn insert(
+        &self,
+        target: SourceTarget,
+        reference: Reference,
+    ) -> Result<Arc<Mutex<Document>>, RpcError> {
         let mut documents = self.documents.lock().expect("Workflow documents");
         documents.retain(|_, value| {
             value
@@ -121,29 +169,37 @@ impl WorkflowDocuments {
                 Some(ErrorData::OperationFailed),
             ));
         }
-        let reference = WorkflowDocumentRef {
-            id: uuid::Uuid::now_v7().to_string(),
-            byte_length,
-            sha256,
-        };
-        documents.insert(
-            reference.id.clone(),
-            Arc::new(Mutex::new(Document {
-                target,
-                reference: reference.clone(),
-                file: tempfile::tempfile().map_err(io)?,
-                written: 0,
-                ready: false,
-                used: Instant::now(),
-            })),
-        );
-        Ok(reference)
+        let id = reference.id().to_owned();
+        let document = Arc::new(Mutex::new(Document {
+            target,
+            reference,
+            file: tempfile::tempfile().map_err(io)?,
+            written: 0,
+            ready: false,
+            used: Instant::now(),
+        }));
+        documents.insert(id, document.clone());
+        Ok(document)
     }
 
     fn with<T>(
         &self,
         target: &SourceTarget,
         reference: &WorkflowDocumentRef,
+        operation: impl FnOnce(&mut Document) -> Result<T, RpcError>,
+    ) -> Result<T, RpcError> {
+        self.with_entry(target, &reference.id, |document| {
+            if document.reference != Reference::Candidate(reference.clone()) {
+                return Err(invalid());
+            }
+            operation(document)
+        })
+    }
+
+    fn with_entry<T>(
+        &self,
+        target: &SourceTarget,
+        id: &str,
         operation: impl FnOnce(&mut Document) -> Result<T, RpcError>,
     ) -> Result<T, RpcError> {
         target.validate().map_err(|_| invalid())?;
@@ -156,14 +212,16 @@ impl WorkflowDocuments {
         if self.closed.load(Ordering::Acquire) {
             return Err(invalid());
         }
-        let document = documents.get(&reference.id).cloned().ok_or_else(invalid)?;
+        let document = documents.get(id).cloned().ok_or_else(invalid)?;
         drop(documents);
         let mut document = document.lock().expect("Workflow document");
-        if document.target != *target || document.reference != *reference {
+        if document.target != *target {
             return Err(invalid());
         }
         document.used = Instant::now();
-        operation(&mut document)
+        let result = operation(&mut document);
+        document.used = Instant::now();
+        result
     }
 
     pub(super) fn write(
@@ -334,6 +392,116 @@ impl WorkflowDocuments {
             .remove(&reference.id);
         Ok(())
     }
+
+    pub(super) fn capture_report(
+        &self,
+        target: SourceTarget,
+        report: &crate::local_runtime::workflow_authoring::WorkflowCheckReport,
+    ) -> Result<WorkflowCheckReportRef, RpcError> {
+        target.validate().map_err(|_| invalid())?;
+        let mut reference = WorkflowCheckReportRef {
+            report_id: uuid::Uuid::now_v7().to_string(),
+            byte_length: 0,
+            sha256: String::new(),
+        };
+        // Reserve the same finite connection-owned capacity before serialization.
+        // Reports have derived schemas, so their length is not a source-file cap.
+        let entry = self.insert(target, Reference::CheckReport(reference.clone()))?;
+        let result = (|| {
+            let mut entry = entry.lock().expect("Workflow report");
+            let mut writer = ReportWriter {
+                file: &mut entry.file,
+                hash: Sha256::new(),
+                length: 0,
+            };
+            super::wire::write_workflow_check_report(report, &mut writer).map_err(io)?;
+            reference.byte_length = writer.length;
+            reference.sha256 = format!("{:x}", writer.hash.finalize());
+            if self.closed.load(Ordering::Acquire) {
+                return Err(invalid());
+            }
+            entry.reference = Reference::CheckReport(reference.clone());
+            entry.ready = true;
+            entry.used = Instant::now();
+            Ok(reference.clone())
+        })();
+        if result.is_err() {
+            self.documents
+                .lock()
+                .expect("Workflow documents")
+                .remove(&reference.report_id);
+        }
+        result
+    }
+
+    pub(super) fn read_report(
+        &self,
+        target: &SourceTarget,
+        reference: &WorkflowCheckReportRef,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<WorkflowCheckReportChunk, RpcError> {
+        self.with_entry(target, &reference.report_id, |document| {
+            if document.reference != Reference::CheckReport(reference.clone())
+                || !document.ready
+                || max_bytes == 0
+                || max_bytes as usize > CHUNK
+                || offset >= reference.byte_length
+            {
+                return Err(invalid());
+            }
+            document.file.seek(SeekFrom::Start(offset)).map_err(io)?;
+            let length =
+                usize::try_from((reference.byte_length - offset).min(u64::from(max_bytes)))
+                    .map_err(io)?;
+            let mut bytes = vec![0; length];
+            document.file.read_exact(&mut bytes).map_err(io)?;
+            let end = offset + length as u64;
+            Ok(WorkflowCheckReportChunk {
+                offset,
+                data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                next_offset: (end < reference.byte_length).then_some(end),
+            })
+        })
+    }
+
+    pub(super) fn release_report(
+        &self,
+        target: &SourceTarget,
+        reference: &WorkflowCheckReportRef,
+    ) -> Result<(), RpcError> {
+        self.with_entry(target, &reference.report_id, |document| {
+            if document.reference != Reference::CheckReport(reference.clone()) {
+                return Err(invalid());
+            }
+            Ok(())
+        })?;
+        self.documents
+            .lock()
+            .expect("Workflow documents")
+            .remove(&reference.report_id);
+        Ok(())
+    }
+}
+
+struct ReportWriter<'a> {
+    file: &'a mut std::fs::File,
+    hash: Sha256,
+    length: u64,
+}
+impl Write for ReportWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.file.write(&bytes[..bytes.len().min(CHUNK)])?;
+        self.hash.update(&bytes[..written]);
+        self.length = self
+            .length
+            .checked_add(written as u64)
+            .ok_or_else(|| std::io::Error::other("Workflow report length overflow"))?;
+        Ok(written)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
 }
 
 fn decode_document(file: &std::fs::File) -> Result<WorkflowFileDocument, RpcError> {
@@ -351,6 +519,102 @@ fn decode_document(file: &std::fs::File) -> Result<WorkflowFileDocument, RpcErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::local_runtime::workflow_authoring::{
+        WorkflowCheckReport, WorkflowDependencies, WorkflowStructure,
+    };
+
+    #[test]
+    fn reports_are_read_only_scoped_chunked_and_do_not_inherit_candidate_byte_limits() {
+        let documents = WorkflowDocuments::default();
+        let target = SourceTarget::User;
+        // Carrier-only fixture: derived report size has no relationship to the
+        // input document's transfer allowance. Real compilation is covered by stdio.
+        let report = WorkflowCheckReport {
+            revision: None,
+            structure: WorkflowStructure::Valid {
+                outputs: BTreeMap::from([(
+                    "derived".into(),
+                    serde_json::json!({"description": "x".repeat(MAX_TRANSFER_BYTES + 1)}),
+                )]),
+            },
+            dependencies: WorkflowDependencies::NotChecked,
+            explanation: None,
+            presentation: Vec::new(),
+        };
+        let reference = documents.capture_report(target.clone(), &report).unwrap();
+        assert!(reference.byte_length > MAX_TRANSFER_BYTES as u64);
+        let candidate = WorkflowDocumentRef {
+            id: reference.report_id.clone(),
+            byte_length: u32::try_from(reference.byte_length).unwrap(),
+            sha256: reference.sha256.clone(),
+        };
+        assert!(documents.resolve(&target, &candidate).is_err());
+        assert!(documents.finish(&target, &candidate).is_err());
+        assert!(documents.write(&target, &candidate, 0, "eA==").is_err());
+        assert!(documents.release(&target, &candidate).is_err());
+        let other = tempfile::tempdir().unwrap();
+        let elsewhere = SourceTarget::Workspace {
+            directory: other.path().canonicalize().unwrap(),
+        };
+        assert!(documents.read_report(&elsewhere, &reference, 0, 1).is_err());
+        let mut forged = reference.clone();
+        forged.sha256 = "0".repeat(64);
+        assert!(documents.read_report(&target, &forged, 0, 1).is_err());
+        assert!(
+            documents
+                .read_report(&target, &reference, 0, 65_537)
+                .is_err()
+        );
+        assert!(
+            documents
+                .read_report(&target, &reference, reference.byte_length, 1)
+                .is_err()
+        );
+        let mut offset = 0;
+        let mut hash = Sha256::new();
+        loop {
+            let chunk = documents
+                .read_report(&target, &reference, offset, 65_536)
+                .unwrap();
+            assert_eq!(chunk.offset, offset);
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(chunk.data)
+                .unwrap();
+            assert!(bytes.len() <= CHUNK);
+            hash.update(&bytes);
+            offset += bytes.len() as u64;
+            if chunk.next_offset.is_none() {
+                break;
+            }
+            assert_eq!(chunk.next_offset, Some(offset));
+        }
+        assert_eq!(offset, reference.byte_length);
+        assert_eq!(format!("{:x}", hash.finalize()), reference.sha256);
+        for _ in 1..CAPACITY {
+            documents.capture(&target, &document()).unwrap();
+        }
+        assert!(documents.capture_report(target.clone(), &report).is_err());
+        documents.documents.lock().unwrap()[&reference.report_id]
+            .lock()
+            .unwrap()
+            .used = Instant::now().checked_sub(TTL).unwrap();
+        documents.capture(&target, &document()).unwrap();
+        assert!(documents.read_report(&target, &reference, 0, 1).is_err());
+        documents.clear();
+        let reference = WorkflowDocuments::default()
+            .capture_report(
+                target.clone(),
+                &WorkflowCheckReport {
+                    structure: WorkflowStructure::Valid {
+                        outputs: BTreeMap::new(),
+                    },
+                    ..report
+                },
+            )
+            .unwrap();
+        assert!(documents.read_report(&target, &reference, 0, 1).is_err());
+    }
+
     fn document() -> WorkflowFileDocument {
         serde_json::from_value(serde_json::json!({
             "description":"Document scratch contract",
@@ -481,12 +745,10 @@ mod tests {
                 .message
                 .contains("four documents")
         );
-        documents
-            .with(&target, &reference, |document| {
-                document.used = Instant::now().checked_sub(TTL).unwrap();
-                Ok(())
-            })
-            .unwrap();
+        documents.documents.lock().unwrap()[&reference.id]
+            .lock()
+            .unwrap()
+            .used = Instant::now().checked_sub(TTL).unwrap();
         documents.begin(target.clone(), 1, "0".repeat(64)).unwrap();
         assert!(documents.resolve(&target, &reference).is_err());
     }

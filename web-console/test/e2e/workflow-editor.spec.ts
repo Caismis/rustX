@@ -595,7 +595,7 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
   } finally { await fixture.stop(false); }
 });
 
-test('large Workflow documents load, edit and atomically save in Global and Workspace scopes', async ({ page }, info) => {
+test('large Workflow documents and oversized check schemas load, edit and save in both scopes', async ({ page }, info) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = [];
   const frames: number[] = [];
@@ -611,6 +611,10 @@ test('large Workflow documents load, edit and atomically save in Global and Work
     const code = authored.block.nodes.code;
     if (code.type !== 'code') throw new Error('Code fixture');
     code.code += '\n' + '# resource bytes stay out of control frames\n'.repeat(75_000);
+    const schema = { type: 'object', properties: Object.fromEntries(Array.from({ length: 300 }, (_, index) => [`field_${index}`, { type: 'string', description: 'd'.repeat(4096) }])), additionalProperties: false };
+    expect(Buffer.byteLength(JSON.stringify(schema))).toBeGreaterThan(1_048_576);
+    authored.block.nodes.contract = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'json', schema } };
+    authored.block.edges = [{ from: 'start', to: 'code' }, { from: 'code', to: 'contract' }, { from: 'contract', to: 'done' }];
     const documentBytes = JSON.stringify(authored);
     expect(Buffer.byteLength(documentBytes)).toBeGreaterThan(3 * 1024 * 1024);
     const globalFile = join(fixture.directory, 'home/rustx/.agents/workflows/large_global.yaml');
@@ -634,6 +638,7 @@ test('large Workflow documents load, edit and atomically save in Global and Work
       await page.getByRole('button', { name: 'Save File', exact: true }).waitFor({ state: 'visible' });
       await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
       expect(parse(readFileSync(file, 'utf8')).block.nodes.code.code).toBe(code.code);
+      expect(parse(readFileSync(file, 'utf8')).block.nodes.contract.result.schema).toEqual(schema);
       await page.screenshot({ path: info.outputPath(`large-${scope.toLowerCase()}.png`) });
       await page.getByRole('button', { name: 'Back to Workflows', exact: true }).first().click();
     }

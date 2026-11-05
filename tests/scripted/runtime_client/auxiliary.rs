@@ -466,6 +466,9 @@ async fn classification_history_is_bounded_data_and_never_a_tool_continuation() 
     .scripts((0..3).map(|_| answer(r#"{"label":"yes"}"#)).collect())
     .build()
     .await;
+    let admission = std::sync::Arc::new(crate::runtime::conversation_runtime::Gate::default());
+    let release_admission = admission.arm_scoped();
+    park_primary_admission(&fixture.runtime, admission).await;
     let (attachment, _) = fixture
         .host
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -492,6 +495,21 @@ async fn classification_history_is_bounded_data_and_never_a_tool_continuation() 
             result(&attachment, &receipt.call_id).await.value,
             ConsumerResult::Classification { .. }
         ));
+        // A retained result precedes consumer retirement and admission release.
+        // This case tests history projection, not a racing transfer-generation
+        // refusal (covered separately in previous_call_retirement_*).
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            fixture.runtime.wait_for_configuration_admissions(),
+        )
+        .await
+        .expect("the prior classification physically settled");
+        assert!(
+            !attachment
+                .auxiliary_status(&receipt.call_id)
+                .unwrap()
+                .executing
+        );
         let request = fixture.model.requests().last().unwrap().clone();
         assert_eq!(request.messages.len(), 1);
         assert!(request.messages.tool_indices().is_empty());
@@ -502,6 +520,7 @@ async fn classification_history_is_bounded_data_and_never_a_tool_continuation() 
         assert!(question.render().contains(source.id().as_str()));
     }
     assert_eq!(fixture.model.requests().len(), 3);
+    drop(release_admission);
     fixture.host.shutdown().await.unwrap();
 }
 

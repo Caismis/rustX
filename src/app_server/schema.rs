@@ -1131,7 +1131,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     fixtures.push(success(
         "workflow-check",
         MethodResult::WorkflowCheck {
-            report: Box::new(WorkflowCheckReport {
+            report: report_reference(&WorkflowCheckReport {
                 revision: Some(revision.clone()),
                 presentation: Vec::new(),
                 structure: WorkflowStructure::Valid {
@@ -1354,6 +1354,19 @@ fn document_reference(
     super::workflow_documents::WorkflowDocumentRef {
         id: "document-fixture".into(),
         byte_length: u32::try_from(bytes.len()).expect("fixture document below 16 MiB"),
+        sha256: format!("{:x}", sha2::Sha256::digest(bytes)),
+    }
+}
+
+fn report_reference(
+    report: &crate::local_runtime::workflow_authoring::WorkflowCheckReport,
+) -> super::workflow_documents::WorkflowCheckReportRef {
+    use sha2::Digest;
+    let mut bytes = Vec::new();
+    super::wire::write_workflow_check_report(report, &mut bytes).expect("report fixture");
+    super::workflow_documents::WorkflowCheckReportRef {
+        report_id: "report-fixture".into(),
+        byte_length: bytes.len() as u64,
         sha256: format!("{:x}", sha2::Sha256::digest(bytes)),
     }
 }

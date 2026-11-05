@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { AppServerHost } from '../src/app-server/host.ts';
 import { AppServerRequestError } from '../src/app-server/client.ts';
 import { JSONL_MAX_RECORD_BYTES } from '../src/protocol/jsonl.ts';
-import { readWorkflowSource, withWorkflowDocument, type WorkflowRequest } from '../../protocol/app-server/workflow-documents.ts';
+import { checkWorkflowDocument, readWorkflowSource, withWorkflowDocument, type WorkflowRequest } from '../../protocol/app-server/workflow-documents.ts';
 import type { WorkflowFileDocument } from '../../protocol/app-server/v71.ts';
 import { TempFixture } from './support/temp-fixture.ts';
 
@@ -55,15 +55,14 @@ test('large Workflow read/check/save/CAS and incomplete scratch over real stdio'
     if (candidate.block.nodes.code?.type !== 'code') throw new Error('Code fixture');
     candidate.block.nodes.code.code = "def main(): return {'result': 1}";
     const [concurrent, overlappingRead] = await Promise.all([Promise.all(Array.from({ length: 8 }, (_, index) =>
-      withWorkflowDocument(host!.client, index % 2 ? request : alternate, target,
-        { ...candidate, description: `Concurrent candidate ${index}` },
-        document => request({ method: 'workflow/check', params: { target, id: 'large', document, explain: false } }, 'workflow_check')))),
+      checkWorkflowDocument(host!.client, index % 2 ? request : alternate, target, 'large',
+        { ...candidate, description: `Concurrent candidate ${index}` }))),
       readWorkflowSource(host!.client, alternate, target, 'large')]);
-    assert.ok(concurrent.every(result => result.report.structure.status === 'valid'));
+    assert.ok(concurrent.every(report => report.structure.status === 'valid'));
     assert.deepEqual(overlappingRead.document, initial);
     await assert.rejects(withWorkflowDocument(host!.client, request, target, candidate, async () => { throw new Error('candidate failed'); }), /candidate failed/);
     assert.deepEqual((await readWorkflowSource(host!.client, alternate, target, 'large')).document, initial, 'failed operation releases admission and cannot mutate source');
-    const { report } = await withWorkflowDocument(host!.client, request, target, changed, document => request({ method: 'workflow/check', params: { target, id: 'large', document, explain: false } }, 'workflow_check'));
+    const report = await checkWorkflowDocument(host!.client, request, target, 'large', changed);
     assert.equal(report.structure.status, 'valid');
     const { revision } = await withWorkflowDocument(host!.client, request, target, changed, document => request({ method: 'configuration/sourceWrite', params: { target, expected_revision: source.revision, mutation: { kind: 'workflow', id: 'large', edit: { operation: 'replace', document } } } }, 'sources_written'));
     assert.equal(revision, report.revision);
@@ -88,5 +87,41 @@ test('large Workflow read/check/save/CAS and incomplete scratch over real stdio'
     await assert.rejects(readWorkflowSource(host!.client, request, target, 'large'), error => error instanceof AppServerRequestError && error.error.data?.kind === 'workflow_invalid' && error.error.data.diagnostic.category === 'source_size');
     assert.equal(JSONL_MAX_RECORD_BYTES, 1_048_576);
     assert.ok(largestRequest < JSONL_MAX_RECORD_BYTES);
+  } finally { await host?.shutdown(); fixture.cleanup(); }
+});
+
+
+test('complete oversized Tool schemas and Explain reports cross bounded stdio records', { skip, timeout: 60_000 }, async () => {
+  const fixture = TempFixture.create('rustx-workflow-reports-');
+  const home = fixture.path('home'); mkdirSync(home, { recursive: true });
+  const config = fixture.path('rustx.toml'); writeFileSync(config, '');
+  const target = { kind: 'user' as const };
+  const schema = { type: 'object', properties: Object.fromEntries(Array.from({ length: 300 }, (_, index) => [`field_${index}`, { type: 'string', description: 'd'.repeat(4096) }])), additionalProperties: false };
+  const document: WorkflowFileDocument = { description: 'Complete large Tool contract', block: {
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    nodes: { start: { type: 'start' }, tool: { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'json', schema } }, done: { type: 'return', outputs: [] } },
+    edges: [{ from: 'start', to: 'tool' }, { from: 'tool', to: 'done' }],
+  } };
+  assert.ok(Buffer.byteLength(JSON.stringify(schema)) > JSONL_MAX_RECORD_BYTES);
+  let host: AppServerHost | undefined;
+  try {
+    host = await AppServerHost.spawnLocal({ binary, launch: { config, runtimeRoot: fixture.path('runtime') }, env: { ...process.env, HOME: home }, cwd: fixture.root });
+    let largest = 0;
+    const request: WorkflowRequest = async (operation, expected) => {
+      largest = Math.max(largest, Buffer.byteLength(JSON.stringify(operation)) + 1024);
+      const result = await host!.client.call(operation.method, operation.params, expected);
+      largest = Math.max(largest, Buffer.byteLength(JSON.stringify(result)) + 1024);
+      return result;
+    };
+    for (const explain of [false, true]) {
+      const report = await checkWorkflowDocument(host.client, request, target, 'large', document, explain);
+      assert.equal(report.structure.status, 'valid');
+      if (report.structure.status !== 'valid') throw new Error('valid compiled structure');
+      assert.deepEqual(report.structure.outputs['block.nodes.tool'], schema);
+      assert.ok(Buffer.byteLength(JSON.stringify(report)) > JSONL_MAX_RECORD_BYTES);
+      assert.equal(!!report.explanation, explain);
+      if (report.explanation) assert.equal(typeof report.explanation.configured_timeout_ms, 'string', 'report content uses the ordinary exact-u64 wire codec');
+    }
+    assert.ok(largest < JSONL_MAX_RECORD_BYTES, `largest envelope allowance: ${largest}`);
   } finally { await host?.shutdown(); fixture.cleanup(); }
 });

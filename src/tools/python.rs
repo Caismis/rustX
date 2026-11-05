@@ -295,6 +295,21 @@ pub(crate) fn discover_package(
         other => other,
     })?;
     let files = collect_files(root, cancellation)?;
+    // Membership is already complete. Reject malformed winning candidates
+    // before creating capture storage or reading any supporting asset bytes.
+    if !files.iter().any(|path| path == Path::new(SERVER_FILE)) {
+        return Err(invalid(format!(
+            "the package has no {SERVER_FILE} (the managed FastMCP server)"
+        )));
+    }
+    if !files
+        .iter()
+        .any(|path| path == Path::new(REQUIREMENTS_FILE))
+    {
+        return Err(invalid(format!(
+            "the package has no {REQUIREMENTS_FILE} (required, even when empty)"
+        )));
+    }
     let mut source_file = tempfile::tempfile().map_err(io_error)?;
     let directory = crate::package_io::PackageDirectory::open(root).map_err(io_error)?;
     let mut hash = sha2::Sha256::new();
@@ -340,19 +355,6 @@ pub(crate) fn discover_package(
         file: source_file,
         entries,
     };
-    if !files.iter().any(|path| path == Path::new(SERVER_FILE)) {
-        return Err(invalid(format!(
-            "the package has no {SERVER_FILE} (the managed FastMCP server)"
-        )));
-    }
-    if !files
-        .iter()
-        .any(|path| path == Path::new(REQUIREMENTS_FILE))
-    {
-        return Err(invalid(format!(
-            "the package has no {REQUIREMENTS_FILE} (required, even when empty)"
-        )));
-    }
     // Only declarations require text parsing. Binary supporting assets are copied
     // and hashed as bytes and are never held in the parsed package representation.
     let requirements = requirements
@@ -1128,6 +1130,55 @@ fn venv_python(state_dir: &Path) -> PathBuf {
     })
 }
 
+#[cfg(test)]
+mod cached_verification_gate {
+    use super::*;
+    type Gate = (
+        tokio::sync::oneshot::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+    );
+    fn gates() -> &'static std::sync::Mutex<std::collections::BTreeMap<PathBuf, Gate>> {
+        static GATES: std::sync::OnceLock<
+            std::sync::Mutex<std::collections::BTreeMap<PathBuf, Gate>>,
+        > = std::sync::OnceLock::new();
+        GATES.get_or_init(Default::default)
+    }
+    pub(super) fn register(
+        path: PathBuf,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        let (entered, arrival) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        assert!(
+            gates()
+                .lock()
+                .unwrap()
+                .insert(path, (entered, wait))
+                .is_none()
+        );
+        (arrival, release)
+    }
+    pub(super) fn wait(path: &Path) {
+        let gate = gates().lock().unwrap().remove(path);
+        if let Some((entered, release)) = gate {
+            let _ = entered.send(());
+            let _ = release.recv();
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn gate_cached_verification_for_test(
+    path: PathBuf,
+) -> (
+    tokio::sync::oneshot::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+) {
+    cached_verification_gate::register(path)
+}
+
 /// Validates a published state against the exact deterministic inputs that
 /// derive it, and returns the handle. A state whose directory exists but
 /// does not verify — missing/invalid manifest, mismatched identity inputs
@@ -1180,6 +1231,8 @@ fn read_prepared_state(
             package.name
         )));
     }
+    #[cfg(test)]
+    cached_verification_gate::wait(state_dir);
     let source_root = state_dir.join(SOURCE_DIRECTORY);
     let files = collect_files(&source_root, cancellation)?;
     if source_digest(&source_root, &files, cancellation)? != manifest.source_digest {

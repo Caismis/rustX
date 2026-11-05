@@ -11547,6 +11547,78 @@
           ]
         },
         {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "workflow/checkReportRead"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "reference": {
+                  "$ref": "#/$defs/WorkflowCheckReportRef"
+                },
+                "offset": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "max_bytes": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "reference",
+                "offset",
+                "max_bytes"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "workflow/checkReportRelease"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "reference": {
+                  "$ref": "#/$defs/WorkflowCheckReportRef"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "reference"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "description": "The Workflow files physically owned by exactly one source scope\n(Issue #491); never the merged effective catalog.",
           "type": "object",
           "properties": {
@@ -14275,6 +14347,30 @@
       "additionalProperties": false,
       "required": [
         "id",
+        "byte_length",
+        "sha256"
+      ]
+    },
+    "WorkflowCheckReportRef": {
+      "description": "Read-only derived report; it is never a candidate/source capability.",
+      "type": "object",
+      "properties": {
+        "report_id": {
+          "type": "string"
+        },
+        "byte_length": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "report_id",
         "byte_length",
         "sha256"
       ]
@@ -18740,7 +18836,7 @@
           "type": "object",
           "properties": {
             "report": {
-              "$ref": "#/$defs/WorkflowCheckReport"
+              "$ref": "#/$defs/WorkflowCheckReportRef"
             },
             "type": {
               "type": "string",
@@ -18751,6 +18847,36 @@
           "required": [
             "type",
             "report"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "chunk": {
+              "$ref": "#/$defs/WorkflowCheckReportChunk"
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow_check_report_chunk"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "chunk"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "workflow_check_report_released"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
           ]
         },
         {
@@ -34802,456 +34928,32 @@
         }
       ]
     },
-    "WorkflowCheckReport": {
-      "description": "One offline check of one exact candidate document.",
+    "WorkflowCheckReportChunk": {
       "type": "object",
       "properties": {
-        "revision": {
-          "description": "The file revision a `replace` with this candidate commits: the native\nidentity of its canonical serialization, so a client recognizes its\nown normalized commit on reread. Absent when the file cannot hold it.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
-        "structure": {
-          "$ref": "#/$defs/WorkflowStructure"
-        },
-        "dependencies": {
-          "$ref": "#/$defs/WorkflowDependencies"
-        },
-        "explanation": {
-          "description": "The redacted static explanation, when requested of a valid candidate.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/WorkflowInspection2"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "presentation": {
-          "description": "Retained orphaned presentation references; executable validity is separate.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/WorkflowPresentationDiagnostic"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "structure",
-        "dependencies"
-      ]
-    },
-    "WorkflowStructure": {
-      "description": "Whether the native compiler admits the candidate's structure.",
-      "oneOf": [
-        {
-          "description": "Compiled. `outputs` are the compiled output contracts of every node\nby authored path, including derived Loop results.",
-          "type": "object",
-          "properties": {
-            "outputs": {
-              "type": "object",
-              "additionalProperties": true
-            },
-            "status": {
-              "type": "string",
-              "const": "valid"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "outputs"
-          ]
-        },
-        {
-          "description": "The first native compiler rejection.",
-          "type": "object",
-          "properties": {
-            "diagnostic": {
-              "$ref": "#/$defs/WorkflowDiagnostic"
-            },
-            "status": {
-              "type": "string",
-              "const": "invalid"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "diagnostic"
-          ]
-        }
-      ]
-    },
-    "WorkflowDependencies": {
-      "description": "Dependency admission of a structurally valid candidate in one explicit\nWorkspace composition.",
-      "oneOf": [
-        {
-          "description": "No context was named, or the structure is invalid.",
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "not_checked"
-            }
-          },
-          "required": [
-            "status"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "description": "Every named Agent and Tool admits in `context`.",
-          "type": "object",
-          "properties": {
-            "context": {
-              "type": "string"
-            },
-            "status": {
-              "type": "string",
-              "const": "admitted"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "context"
-          ]
-        },
-        {
-          "description": "Static dependencies admit, but Session-following Model nodes require\nthe invoking Attempt's frozen model. No future provider availability is\nestablished by this offline check.",
-          "type": "object",
-          "properties": {
-            "context": {
-              "type": "string"
-            },
-            "model_nodes": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "status": {
-              "type": "string",
-              "const": "requires_attempt"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "context",
-            "model_nodes"
-          ]
-        },
-        {
-          "description": "Native admission diagnostics in `context`.",
-          "type": "object",
-          "properties": {
-            "context": {
-              "type": "string"
-            },
-            "diagnostics": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/WorkflowAdmissionDiagnostic"
-              }
-            },
-            "status": {
-              "type": "string",
-              "const": "blocked"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "context",
-            "diagnostics"
-          ]
-        },
-        {
-          "description": "`context` cannot be composed offline; readiness stays unknown.",
-          "type": "object",
-          "properties": {
-            "context": {
-              "type": "string"
-            },
-            "reason": {
-              "type": "string"
-            },
-            "status": {
-              "type": "string",
-              "const": "unavailable"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "context",
-            "reason"
-          ]
-        }
-      ]
-    },
-    "WorkflowInspection2": {
-      "description": "Static program facts. Literals and task text are deliberately not exported.",
-      "type": "object",
-      "properties": {
-        "identity": {
-          "$ref": "#/$defs/WorkflowToolIdentity"
-        },
-        "stage": {
+        "data": {
           "type": "string"
         },
-        "input_schema": true,
-        "output_schema": true,
-        "configured_timeout_ms": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "conservative_steps": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "conservative_agent_runs": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "conservative_model_calls": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "conservative_retained_bytes": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "caps": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          }
-        },
-        "blocks": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/BlockInspection"
-          }
-        },
-        "tools": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "$ref": "#/$defs/ExactToolSelector"
-          }
-        },
-        "profiles": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "$ref": "#/$defs/SubagentName"
-          }
-        }
-      },
-      "required": [
-        "identity",
-        "stage",
-        "input_schema",
-        "output_schema",
-        "configured_timeout_ms",
-        "conservative_steps",
-        "conservative_agent_runs",
-        "conservative_model_calls",
-        "conservative_retained_bytes",
-        "caps",
-        "blocks",
-        "tools",
-        "profiles"
-      ]
-    },
-    "BlockInspection": {
-      "type": "object",
-      "properties": {
-        "entry": {
-          "type": "string"
-        },
-        "input_schema": true,
-        "output_schema": true,
-        "nodes": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/NodeInspection"
-          }
-        }
-      },
-      "required": [
-        "entry",
-        "input_schema",
-        "output_schema",
-        "nodes"
-      ]
-    },
-    "NodeInspection": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string"
-        },
-        "edges": {
-          "type": "array",
-          "items": {
-            "type": "array",
-            "prefixItems": [
-              {
-                "$ref": "#/$defs/WorkflowPort"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "minItems": 2,
-            "maxItems": 2
-          }
-        },
-        "bindings": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "profile": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SubagentName"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "model": {
-          "description": "Selector identities only; provider parameters may contain secrets.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ModelPolicyInspection"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "selector": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ExactToolSelector"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "output_schema": true,
-        "result_kind": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "loop_count": {
+        "next_offset": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "uint32",
+          "format": "uint64",
           "minimum": 0,
-          "maximum": 4294967295
-        }
-      },
-      "required": [
-        "kind",
-        "edges",
-        "bindings"
-      ]
-    },
-    "ModelPolicyInspection": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "type": "string",
-              "const": "session"
-            }
-          },
-          "required": [
-            "mode"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "model": {
-              "$ref": "#/$defs/ModelRef"
-            },
-            "profile": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelProfileId"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "max_output_tokens": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "uint32",
-              "minimum": 0,
-              "maximum": 4294967295
-            },
-            "mode": {
-              "type": "string",
-              "const": "explicit"
-            }
-          },
-          "required": [
-            "mode",
-            "model"
-          ]
-        }
-      ]
-    },
-    "WorkflowPresentationDiagnostic": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string"
-        },
-        "category": {
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false,
       "required": [
-        "path",
-        "category",
-        "reason"
+        "offset",
+        "data"
       ]
     },
     "WorkflowAnalysisReport": {
@@ -35435,6 +35137,26 @@
         "compatible",
         "incompatible",
         "unknown"
+      ]
+    },
+    "WorkflowPresentationDiagnostic": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "category",
+        "reason"
       ]
     },
     "BoundedSessionApplication": {
@@ -36937,6 +36659,438 @@
       "enum": [
         "replay_unavailable",
         "record_too_large"
+      ]
+    },
+    "WorkflowCheckReport": {
+      "description": "One offline check of one exact candidate document.",
+      "type": "object",
+      "properties": {
+        "revision": {
+          "description": "The file revision a `replace` with this candidate commits: the native\nidentity of its canonical serialization, so a client recognizes its\nown normalized commit on reread. Absent when the file cannot hold it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "structure": {
+          "$ref": "#/$defs/WorkflowStructure"
+        },
+        "dependencies": {
+          "$ref": "#/$defs/WorkflowDependencies"
+        },
+        "explanation": {
+          "description": "The redacted static explanation, when requested of a valid candidate.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowInspection2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "presentation": {
+          "description": "Retained orphaned presentation references; executable validity is separate.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkflowPresentationDiagnostic"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "structure",
+        "dependencies"
+      ]
+    },
+    "WorkflowStructure": {
+      "description": "Whether the native compiler admits the candidate's structure.",
+      "oneOf": [
+        {
+          "description": "Compiled. `outputs` are the compiled output contracts of every node\nby authored path, including derived Loop results.",
+          "type": "object",
+          "properties": {
+            "outputs": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "status": {
+              "type": "string",
+              "const": "valid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "outputs"
+          ]
+        },
+        {
+          "description": "The first native compiler rejection.",
+          "type": "object",
+          "properties": {
+            "diagnostic": {
+              "$ref": "#/$defs/WorkflowDiagnostic"
+            },
+            "status": {
+              "type": "string",
+              "const": "invalid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "diagnostic"
+          ]
+        }
+      ]
+    },
+    "WorkflowDependencies": {
+      "description": "Dependency admission of a structurally valid candidate in one explicit\nWorkspace composition.",
+      "oneOf": [
+        {
+          "description": "No context was named, or the structure is invalid.",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "not_checked"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Every named Agent and Tool admits in `context`.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "admitted"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "context"
+          ]
+        },
+        {
+          "description": "Static dependencies admit, but Session-following Model nodes require\nthe invoking Attempt's frozen model. No future provider availability is\nestablished by this offline check.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "type": "string"
+            },
+            "model_nodes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "status": {
+              "type": "string",
+              "const": "requires_attempt"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "context",
+            "model_nodes"
+          ]
+        },
+        {
+          "description": "Native admission diagnostics in `context`.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "type": "string"
+            },
+            "diagnostics": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowAdmissionDiagnostic"
+              }
+            },
+            "status": {
+              "type": "string",
+              "const": "blocked"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "context",
+            "diagnostics"
+          ]
+        },
+        {
+          "description": "`context` cannot be composed offline; readiness stays unknown.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "unavailable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "context",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "WorkflowInspection2": {
+      "description": "Static program facts. Literals and task text are deliberately not exported.",
+      "type": "object",
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/WorkflowToolIdentity"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "input_schema": true,
+        "output_schema": true,
+        "configured_timeout_ms": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "conservative_steps": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "conservative_agent_runs": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "conservative_model_calls": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "conservative_retained_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "caps": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "blocks": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/BlockInspection"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ExactToolSelector"
+          }
+        },
+        "profiles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/SubagentName"
+          }
+        }
+      },
+      "required": [
+        "identity",
+        "stage",
+        "input_schema",
+        "output_schema",
+        "configured_timeout_ms",
+        "conservative_steps",
+        "conservative_agent_runs",
+        "conservative_model_calls",
+        "conservative_retained_bytes",
+        "caps",
+        "blocks",
+        "tools",
+        "profiles"
+      ]
+    },
+    "BlockInspection": {
+      "type": "object",
+      "properties": {
+        "entry": {
+          "type": "string"
+        },
+        "input_schema": true,
+        "output_schema": true,
+        "nodes": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/NodeInspection"
+          }
+        }
+      },
+      "required": [
+        "entry",
+        "input_schema",
+        "output_schema",
+        "nodes"
+      ]
+    },
+    "NodeInspection": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/WorkflowPort"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubagentName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "description": "Selector identities only; provider parameters may contain secrets.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelPolicyInspection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExactToolSelector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_schema": true,
+        "result_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "loop_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "kind",
+        "edges",
+        "bindings"
+      ]
+    },
+    "ModelPolicyInspection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "session"
+            }
+          },
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelProfileId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "max_output_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "mode": {
+              "type": "string",
+              "const": "explicit"
+            }
+          },
+          "required": [
+            "mode",
+            "model"
+          ]
+        }
       ]
     }
   }
