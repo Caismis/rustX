@@ -13,7 +13,40 @@ pub(crate) fn within_bound(bytes: &[u8]) -> bool {
     u64::try_from(bytes.len()).is_ok_and(|length| length <= MAX_RESOURCE_BYTES)
 }
 
+thread_local! {
+    static READS: std::cell::RefCell<Option<std::collections::BTreeSet<std::path::PathBuf>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `read`, returning with its result every file it opened through
+/// [`read_bounded`] on this thread, whether or not the read succeeded: the
+/// exact inputs of a synchronous capture, including the one it failed at.
+pub(crate) fn recording_reads<T>(
+    read: impl FnOnce() -> T,
+) -> (T, std::collections::BTreeSet<std::path::PathBuf>) {
+    let outer = READS.with(|reads| {
+        reads
+            .borrow_mut()
+            .replace(std::collections::BTreeSet::default())
+    });
+    let result = read();
+    let recorded = READS
+        .with(|reads| std::mem::replace(&mut *reads.borrow_mut(), outer))
+        .unwrap_or_default();
+    READS.with(|reads| {
+        if let Some(outer) = reads.borrow_mut().as_mut() {
+            outer.extend(recorded.iter().cloned());
+        }
+    });
+    (result, recorded)
+}
+
 pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
+    READS.with(|reads| {
+        if let Some(reads) = reads.borrow_mut().as_mut() {
+            reads.insert(path.to_path_buf());
+        }
+    });
     if !std::fs::metadata(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?
         .is_file()

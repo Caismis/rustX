@@ -188,15 +188,12 @@ impl UserConfigManager {
         let policy_effective = layers.merged.clone();
         let process = layers.merged.app_server.clone().unwrap_or_default();
         process.validate()?;
-        let context = self
-            .resolve_captured_layers(layers)
-            .and_then(Self::resolve_runtime_configuration)
-            .and_then(|capture| self.resolve_resources(request, capture));
-        let failed_input = context
-            .as_ref()
-            .err()
-            .and_then(|error| error.diagnostic.file.clone());
-        let context = context.map_err(|error| error.diagnostic.reason);
+        let (context, read) = crate::bounded_file::recording_reads(|| {
+            self.resolve_captured_layers(layers)
+                .and_then(Self::resolve_runtime_configuration)
+                .and_then(|capture| self.resolve_resources(request, capture))
+                .map_err(|error| error.diagnostic.reason)
+        });
         self.verify_documents(&documents, &revisions)
             .map_err(|error| error.to_string())?;
         let manifest = context
@@ -214,7 +211,7 @@ impl UserConfigManager {
             process,
             revision,
             context,
-            failed_input,
+            read: read.into_iter().collect(),
         })
     }
 

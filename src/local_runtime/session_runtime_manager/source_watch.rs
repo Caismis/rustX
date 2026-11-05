@@ -14,7 +14,7 @@
 //! | User resources and guidance | `~/rustx/.agents` for `mcp.toml` and its guidance files, and its `agents`, `skills`, `tools` and `workflows`, recursively (the parent until it exists) |
 //! | Workspace document and root guidance | each known Workspace root, non-recursively, for `rustx.toml`, the guidance files and `*.md` |
 //! | Workspace resources | each known Workspace's `.agents`, as for the User |
-//! | Captured inputs | each other file a known Workspace's retained capture read (a selected instruction file, for one) or a failed capture stopped at, and the target of each link among them, through its directory — its nearest existing ancestor while the directory is gone — non-recursively |
+//! | Captured inputs | each other file a known Workspace's retained capture read or tried to read (a selected instruction file, for one, valid or not), as every directory entry opening it traverses — each component, each link and what it resolves to, up to the first missing entry — through each entry's canonical directory, non-recursively |
 //!
 //! The guidance files are exactly the loader's (`AGENTS.override.md`,
 //! `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`). A notification for a
@@ -37,8 +37,10 @@
 //! A captured input, or a directory holding it that was replaced, removed or
 //! created, routes to every Workspace whose capture read it; the set is
 //! exactly the captures' own source manifests, so nothing else under a
-//! Workspace is watched. Watches are registered until the set settles before
-//! anything is captured, and an input first learned of from a capture is
+//! Workspace is watched. One physical directory takes one watch, since the
+//! platform shares a registration between its spellings. Watches are
+//! registered until the set settles before anything is captured, and an
+//! input the watch has not yet seen — every input on its first pass — is
 //! captured again once it is watched, so no edit falls between the two.
 //!
 //! A path belongs to every source target whose loaders read it, and only to
@@ -266,10 +268,22 @@ fn notified(
     active: &mut BTreeMap<PathBuf, RecursiveMode>,
 ) -> Vec<SourceTarget> {
     invalidate(active, path);
+    // Inputs are spelled under canonical directories; a watch registered
+    // under another spelling of the same directory reports that spelling.
+    let canonical = path
+        .parent()
+        .zip(path.file_name())
+        .and_then(|(parent, name)| Some(std::fs::canonicalize(parent).ok()?.join(name)))
+        .filter(|canonical| canonical != path);
     let mut targets = Vec::new();
     for (target, path) in owners(path, &sources.user, &sources.workspaces, same)
         .into_iter()
         .chain(input_owners(path, &sources.inputs, same))
+        .chain(
+            canonical
+                .iter()
+                .flat_map(|canonical| input_owners(canonical, &sources.inputs, same)),
+        )
     {
         invalidate(active, &path);
         if !targets.contains(&target) {
@@ -279,21 +293,96 @@ fn notified(
     targets
 }
 
-/// `inputs` with the target each symbolic link among them resolves to. The
-/// loaders follow a link and read its target, so both are inputs: the link's
-/// directory reports it re-pointed, the target's its content.
-fn followed(mut inputs: Vec<(PathBuf, PathBuf)>) -> Vec<(PathBuf, PathBuf)> {
-    let targets: Vec<_> = inputs
-        .iter()
-        .filter_map(|(directory, file)| {
-            let target = std::fs::canonicalize(file).ok()?;
-            (target != *file).then(|| (directory.clone(), target))
+/// Every directory entry a loader opening `file` traverses, each spelled
+/// under its canonical directory: each component beneath `base` (the
+/// Workspace that reads it, or the file's own directory), each link on the
+/// way and what it resolves to, up to and including the first entry that
+/// does not exist. Watching each entry's directory reports any of them
+/// replaced, re-pointed, removed or created; a link and its target are
+/// separate entries, so neither hides the other.
+fn resolution(base: &Path, file: &Path) -> Vec<PathBuf> {
+    use std::collections::VecDeque;
+    use std::path::Component;
+    let (base, rest) = match file.strip_prefix(base) {
+        Ok(rest) => (base, rest),
+        Err(_) => match file.parent().zip(file.file_name()) {
+            Some((parent, name)) => (parent, Path::new(name)),
+            None => return Vec::new(),
+        },
+    };
+    let Ok(mut directory) = std::fs::canonicalize(base) else {
+        return vec![file.to_path_buf()];
+    };
+    let mut pending: VecDeque<_> = rest
+        .components()
+        .map(Component::as_os_str)
+        .map(ToOwned::to_owned)
+        .collect();
+    let mut entries = Vec::new();
+    let mut links = 0;
+    while let Some(name) = pending.pop_front() {
+        if name == ".." {
+            directory.pop();
+            continue;
+        }
+        if name == "." {
+            continue;
+        }
+        let entry = directory.join(&name);
+        entries.push(entry.clone());
+        let Ok(metadata) = std::fs::symlink_metadata(&entry) else {
+            break;
+        };
+        if metadata.file_type().is_symlink() {
+            links += 1;
+            let Some(target) = std::fs::read_link(&entry).ok().filter(|_| links <= 40) else {
+                break;
+            };
+            let mut spliced: VecDeque<_> = if target.is_absolute() {
+                // Resolved from its nearest existing ancestor, which is
+                // canonical once it exists.
+                let Some((existing, canonical)) = target
+                    .ancestors()
+                    .find_map(|ancestor| Some((ancestor, std::fs::canonicalize(ancestor).ok()?)))
+                else {
+                    break;
+                };
+                directory = canonical;
+                target
+                    .strip_prefix(existing)
+                    .unwrap_or(Path::new(""))
+                    .components()
+                    .map(|component| component.as_os_str().to_owned())
+                    .collect()
+            } else {
+                target
+                    .components()
+                    .map(|component| component.as_os_str().to_owned())
+                    .collect()
+            };
+            spliced.extend(pending);
+            pending = spliced;
+        } else if metadata.is_dir() {
+            directory = entry;
+        }
+    }
+    entries
+}
+
+/// Each reader's input files as the [`resolution`] entries a loader opening
+/// them traverses.
+fn resolved(inputs: Vec<(PathBuf, PathBuf)>) -> Vec<(PathBuf, PathBuf)> {
+    let mut entries: Vec<_> = inputs
+        .into_iter()
+        .flat_map(|(directory, file)| {
+            resolution(&directory, &file)
+                .into_iter()
+                .map(move |entry| (directory.clone(), entry))
         })
         .collect();
-    inputs.extend(targets);
-    inputs.sort();
-    inputs.dedup();
-    inputs
+    entries.sort();
+    entries.dedup();
+    entries
 }
 
 /// The sources one pass of the watch observes.
@@ -391,6 +480,17 @@ pub(super) fn desired(sources: &KnownSources) -> BTreeMap<PathBuf, RecursiveMode
             resource_watches(&resources, &mut watches);
         }
     }
+    // One physical directory takes one watch: the platform shares a single
+    // registration between its spellings, so removing one would end the
+    // others. A fixed watch keeps its own spelling.
+    let identity = |path: &Path| {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path)
+            .ok()
+            .map(|metadata| (metadata.dev(), metadata.ino()))
+    };
+    let mut identities: std::collections::BTreeSet<_> =
+        watches.keys().filter_map(|path| identity(path)).collect();
     // An input whose directory is gone is watched through its nearest
     // existing ancestor, which reports the directory coming back.
     for directory in inputs
@@ -401,7 +501,7 @@ pub(super) fn desired(sources: &KnownSources) -> BTreeMap<PathBuf, RecursiveMode
             watched == directory
                 || (*mode == RecursiveMode::Recursive && directory.starts_with(watched))
         });
-        if !covered {
+        if !covered && identity(directory).is_none_or(|identity| identities.insert(identity)) {
             watches.insert(directory.to_path_buf(), RecursiveMode::NonRecursive);
         }
     }
@@ -413,7 +513,7 @@ pub(super) fn desired(sources: &KnownSources) -> BTreeMap<PathBuf, RecursiveMode
 /// directory created while its parent's watch was being registered is
 /// watched too before anything beneath it is read.
 fn settle(
-    watcher: &mut impl Watcher,
+    watcher: &mut dyn Watcher,
     active: &mut BTreeMap<PathBuf, RecursiveMode>,
     sources: &KnownSources,
 ) {
@@ -431,7 +531,7 @@ fn settle(
 /// Converge the registered watches on `desired`; only a watch that
 /// registered is active.
 fn rearm(
-    watcher: &mut impl Watcher,
+    watcher: &mut dyn Watcher,
     active: &mut BTreeMap<PathBuf, RecursiveMode>,
     desired: &BTreeMap<PathBuf, RecursiveMode>,
 ) {
@@ -475,7 +575,7 @@ impl SessionRuntimeManager {
         KnownSources {
             user: self.user_source_roots(),
             workspaces,
-            inputs: followed(inputs),
+            inputs: resolved(inputs),
         }
     }
 
@@ -489,6 +589,58 @@ impl SessionRuntimeManager {
         };
         forward(Ok(event), sender);
         true
+    }
+
+    /// The platform watcher that forwards notifications to `sender`, or,
+    /// where a test turned platform watches off, one that registers nothing.
+    #[cfg_attr(not(test), allow(clippy::unused_self))] // the switch is a test hook
+    fn platform_watcher(
+        &self,
+        sender: tokio::sync::mpsc::UnboundedSender<Signal>,
+    ) -> Result<Box<dyn Watcher + Send>, String> {
+        #[cfg(test)]
+        let platform = self
+            .registry
+            .0
+            .lock()
+            .expect("registry mutex")
+            .source_watch_platform;
+        #[cfg(not(test))]
+        let platform = true;
+        Ok(if platform {
+            Box::new(
+                notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+                    forward(result, &sender);
+                })
+                .map_err(|error| error.to_string())?,
+            )
+        } else {
+            Box::new(notify::NullWatcher)
+        })
+    }
+
+    /// Capture again each Workspace with an input `known` did not hold, now
+    /// that every input is watched, and remember the inputs. Returns whether
+    /// anything was captured.
+    async fn capture_new_inputs(
+        &self,
+        known: &mut Vec<(PathBuf, PathBuf)>,
+        sources: &KnownSources,
+    ) -> bool {
+        let mut appeared = Vec::new();
+        for (directory, _) in sources.inputs.iter().filter(|input| !known.contains(input)) {
+            let target = SourceTarget::Workspace {
+                directory: directory.clone(),
+            };
+            if !appeared.contains(&target) {
+                appeared.push(target);
+            }
+        }
+        known.clone_from(&sources.inputs);
+        for target in &appeared {
+            self.observe_source_change(target).await;
+        }
+        !appeared.is_empty()
     }
 
     /// Observe the supported sources until `stop`. Each batch of notifications
@@ -515,40 +667,30 @@ impl SessionRuntimeManager {
                 .expect("registry mutex")
                 .source_watch_signals = Some(sender.clone());
         }
-        let mut watcher =
-            notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-                forward(result, &sender);
-            })
-            .map_err(|error| error.to_string())?;
+        let mut watcher = self.platform_watcher(sender)?;
         let mut changes = self.configuration_changes();
         let mut active = BTreeMap::<PathBuf, RecursiveMode>::new();
-        let mut known: Option<Vec<(PathBuf, PathBuf)>> = None;
+        // Nothing is watched before the first pass, so every input the first
+        // pass finds is new: an edit after the capture that read it and
+        // before its watch is captured again like any other.
+        let mut known: Vec<(PathBuf, PathBuf)> = Vec::new();
         loop {
             let sources = self.known_sources();
-            settle(&mut watcher, &mut active, &sources);
+            settle(watcher.as_mut(), &mut active, &sources);
             // An input that just appeared — a newly selected instruction
             // file, a link's new target — may have changed between the
             // capture that found it and its watch: capture its readers again
             // now that it is watched. Unchanged sources stay no-ops.
-            let appeared: Vec<_> = known.as_ref().map_or_else(Vec::new, |known| {
-                let mut readers = Vec::new();
-                for (directory, _) in sources.inputs.iter().filter(|input| !known.contains(input)) {
-                    let target = SourceTarget::Workspace {
-                        directory: directory.clone(),
-                    };
-                    if !readers.contains(&target) {
-                        readers.push(target);
-                    }
-                }
-                readers
-            });
-            known = Some(sources.inputs.clone());
-            if !appeared.is_empty() {
-                for target in appeared {
-                    self.observe_source_change(&target).await;
-                }
+            if self.capture_new_inputs(&mut known, &sources).await {
                 continue;
             }
+            #[cfg(test)]
+            self.registry
+                .0
+                .lock()
+                .expect("registry mutex")
+                .source_watch_settled
+                .send_modify(|passes| *passes += 1);
             tokio::select! {
                 () = stop.cancelled() => return Ok(()),
                 result = changes.changed() => if result.is_err() { return Ok(()) },
@@ -592,7 +734,7 @@ impl SessionRuntimeManager {
                     }
                     // Watch the replacements before capturing them, so an
                     // edit after the capture reads is always notified.
-                    settle(&mut watcher, &mut active, &sources);
+                    settle(watcher.as_mut(), &mut active, &sources);
                     targets.sort_by_key(|target| target.workspace().is_some());
                     for target in targets {
                         self.observe_source_change(&target).await;
@@ -1193,7 +1335,7 @@ mod tests {
         let sources = KnownSources {
             user: roots(&root.path().join("home")),
             workspaces: vec![workspace.clone()],
-            inputs: followed(vec![(workspace.clone(), workspace.join("docs/policy.md"))]),
+            inputs: resolved(vec![(workspace.clone(), workspace.join("docs/policy.md"))]),
         };
         assert_eq!(
             desired(&sources).get(&workspace.join("policies")),
@@ -1210,6 +1352,87 @@ mod tests {
                 directory: workspace.clone()
             }]
         );
+    }
+
+    /// Every link on the way to an input is an entry of its own, and a
+    /// target that is gone stays one: re-pointing an intermediate link, or
+    /// restoring the target, is reported by a watched directory and routes to
+    /// the reader.
+    #[test]
+    fn a_link_chain_is_observed_link_by_link() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = std::fs::canonicalize(root.path()).unwrap().join("w");
+        for directory in ["docs", "links", "policies"] {
+            std::fs::create_dir_all(workspace.join(directory)).unwrap();
+        }
+        std::fs::write(workspace.join("policies/a.md"), "a").unwrap();
+        std::os::unix::fs::symlink("../links/current", workspace.join("docs/policy.md")).unwrap();
+        std::os::unix::fs::symlink("../policies/a.md", workspace.join("links/current")).unwrap();
+        let sources = || KnownSources {
+            user: roots(&root.path().join("home")),
+            workspaces: vec![workspace.clone()],
+            inputs: resolved(vec![(workspace.clone(), workspace.join("docs/policy.md"))]),
+        };
+        let reader = [SourceTarget::Workspace {
+            directory: workspace.clone(),
+        }];
+        let watches = desired(&sources());
+        for directory in ["docs", "links", "policies"] {
+            assert!(
+                watches.contains_key(&workspace.join(directory)),
+                "{directory}"
+            );
+        }
+        let routed = |path: &str| {
+            notified(
+                &workspace.join(path),
+                &sources(),
+                &|_, _| false,
+                &mut BTreeMap::new(),
+            )
+        };
+        assert_eq!(routed("links/current"), reader);
+        assert_eq!(routed("policies/a.md"), reader);
+        std::fs::remove_file(workspace.join("policies/a.md")).unwrap();
+        assert!(desired(&sources()).contains_key(&workspace.join("policies")));
+        assert_eq!(routed("policies/a.md"), reader);
+        assert!(routed("policies/b.md").is_empty());
+    }
+
+    /// A directory reached through a link takes one watch, under its
+    /// canonical path: when the link stops being an input, the platform
+    /// watch the remaining input needs still reports its edits.
+    #[test]
+    fn a_directory_reached_through_a_link_keeps_its_one_watch() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = std::fs::canonicalize(root.path()).unwrap().join("w");
+        std::fs::create_dir_all(workspace.join("policies")).unwrap();
+        std::fs::write(workspace.join("policies/a.md"), "a").unwrap();
+        std::fs::write(workspace.join("policies/b.md"), "b").unwrap();
+        std::os::unix::fs::symlink("policies", workspace.join("docs")).unwrap();
+        let sources = |file: &str| KnownSources {
+            user: roots(&root.path().join("home")),
+            workspaces: vec![workspace.clone()],
+            inputs: resolved(vec![(workspace.clone(), workspace.join(file))]),
+        };
+        assert!(!desired(&sources("docs/a.md")).contains_key(&workspace.join("docs")));
+        let (sender, events) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(sender).unwrap();
+        let mut active = BTreeMap::new();
+        settle(&mut watcher, &mut active, &sources("docs/a.md"));
+        settle(&mut watcher, &mut active, &sources("policies/b.md"));
+        std::fs::write(workspace.join("policies/b.md"), "edited").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let event: notify::Event = events
+                .recv_timeout(remaining)
+                .expect("the remaining watch reports the edit")
+                .unwrap();
+            if event.paths.iter().any(|path| path.ends_with("b.md")) {
+                break;
+            }
+        }
     }
 
     #[test]

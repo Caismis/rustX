@@ -443,6 +443,7 @@ enum Entry {
     },
 }
 #[derive(Debug)]
+#[cfg_attr(test, allow(clippy::struct_excessive_bools))] // independent test hooks
 struct RegistryState {
     entries: HashMap<ConversationId, Entry>,
     // WriterAbsent results are observation receipts, never residency owners.
@@ -479,6 +480,14 @@ struct RegistryState {
     /// case-folding volume does.
     #[cfg(test)]
     source_watch_case_aliases: bool,
+    /// Whether the source watch registers platform watches; without them only
+    /// injected notifications arrive.
+    #[cfg(test)]
+    source_watch_platform: bool,
+    /// Counts the source watch's settled passes: every watch registered and
+    /// every newly found input captured again.
+    #[cfg(test)]
+    source_watch_settled: tokio::sync::watch::Sender<u64>,
     #[cfg(test)]
     configuration_settlement: Arc<tests::AsyncGate>,
     #[cfg(test)]
@@ -776,6 +785,10 @@ impl SessionRuntimeManager {
                 source_watch_signals: None,
                 #[cfg(test)]
                 source_watch_case_aliases: false,
+                #[cfg(test)]
+                source_watch_platform: true,
+                #[cfg(test)]
+                source_watch_settled: tokio::sync::watch::Sender::new(0),
                 #[cfg(test)]
                 configuration_settlement: Arc::default(),
                 #[cfg(test)]
