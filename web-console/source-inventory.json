@@ -7534,7 +7534,7 @@
         "Harness context injection history, request diffing and runtime authority"
       ],
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-      "local_sha256": "4f1c7c07e47af6c15a52e95e7a63e4fe1d701b48d6595df41ef520d7fef7de48"
+      "local_sha256": "cee0d621bb0616ed8e5a976eba48a10ba8a2aba0e843cf94500cc970b76e7efb"
     },
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",

@@ -2390,6 +2390,72 @@ async fn a_user_skill_inside_a_workspace_refreshes_every_consumer() {
     .await;
 }
 
+/// A selected instruction file outside the fixed sources is a captured
+/// input: its edit, the only notification, reaches the resident runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_edited_selected_instruction_file_reaches_the_resident_runtime() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let policy = fixture.workspaces[0].join("docs/policy.md");
+        std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
+        std::fs::write(&policy, "Policy version A").unwrap();
+        let config = fixture.workspaces[0].join("rustx.toml");
+        let mut document = std::fs::read_to_string(&config).unwrap();
+        document.push_str("\n[agent.agents_md]\nfiles = [\"docs/policy.md\"]\n");
+        std::fs::write(&config, document).unwrap();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let policy_text = |runtime: &crate::runtime::ConversationRuntime| {
+            runtime
+                .runtime_resources()
+                .project_instructions()
+                .unwrap_or_default()
+                .to_owned()
+        };
+        assert!(policy_text(&runtime).contains("Policy version A"));
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        // Edited before the watch starts: the injected event is the only one.
+        std::fs::write(&policy, "Policy version B").unwrap();
+        let captured = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_captured
+            .clone();
+        captured.arm();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let observe = async {
+            let edit =
+                notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
+                    .add_path(policy.clone());
+            while !fixture.manager.notify_source_watch(edit.clone()) {
+                tokio::task::yield_now().await;
+            }
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                policy_text(&runtime).contains("Policy version B"),
+                "the edit was not routed: {}",
+                policy_text(&runtime)
+            );
+            captured.release();
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
+        watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
 /// An execution-policy update that really published after an earlier
 /// unrecorded commit is retained: it survives unload/load, and the healthy
 /// replacement allocation recovers the Session's application view.

@@ -1540,8 +1540,8 @@ facts and never enter the Journal, so its size stays O(human decisions).
 
 Native configuration application publishes independently valid, complete units.
 The source/application fence and runtime gate order publication against new input
-and Attempt capture. Explicit context adoption requires an idle Session and the
-inspected candidate/binding revision. Existing Attempts and every derived request,
+and Attempt capture. Native commits a prepared Session configuration itself at
+the Session's safe boundary, before the next Attempt captures. Existing Attempts and every derived request,
 Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
 [configuration application](configuration.md#save-and-automatic-application).
@@ -2418,8 +2418,8 @@ independently complete active checkpoint's run eligibility.
 
 Native configuration application publishes independently valid, complete units.
 The source/application fence and runtime gate order publication against new input
-and Attempt capture. Explicit context adoption requires an idle Session and the
-inspected candidate/binding revision. Existing Attempts and every derived request,
+and Attempt capture. Native commits a prepared Session configuration itself at
+the Session's safe boundary, before the next Attempt captures. Existing Attempts and every derived request,
 Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
 [configuration application](configuration.md#save-and-automatic-application).
@@ -5992,8 +5992,9 @@ The following describes that internal framing adapter.
 #### Runtime Client configuration projection
 
 App Server v35 projects authored sources, effective configuration and composable
-per-unit application state. Save transfers work to native reconciliation; clients
-render native cache impact and submit explicit adoption intent. Scope/version
+per-unit application state. Save transfers work to native reconciliation, which
+commits prepared context at the Session's safe boundary; clients only render the
+application state and committed changes. Scope/version
 notifications and authoritative rereads repair reconnect without mutation replay.
 
 
@@ -6011,8 +6012,8 @@ existing MCP/Python lifecycle owners.
 
 Native configuration application publishes independently valid, complete units.
 The source/application fence and runtime gate order publication against new input
-and Attempt capture. Explicit context adoption requires an idle Session and the
-inspected candidate/binding revision. Existing Attempts and every derived request,
+and Attempt capture. Native commits a prepared Session configuration itself at
+the Session's safe boundary, before the next Attempt captures. Existing Attempts and every derived request,
 Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
 [configuration application](configuration.md#save-and-automatic-application).
@@ -6644,7 +6645,8 @@ loading; native configuration coordination now owns application:
   configuration during streaming cannot alter the in-flight provider request,
   the model Tool schemas, preflight authority, publication classification, or
   the later canonical Assistant of that stream;
-- explicit context adoption returns `Busy` while an Attempt owns the Session;
+- a prepared configuration stays staged while an Attempt owns the Session and
+  commits at its safe boundary;
 - independent policy can publish for new Attempts while old execution continues;
 - recovery classifies P/U/C and tool-proposal state from rustX-owned durable
   evidence, never by re-reading current resources or the current Tool registry.

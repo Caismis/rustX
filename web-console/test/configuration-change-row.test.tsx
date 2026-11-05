@@ -24,6 +24,17 @@ it('a single Tool is one compact row with no pointless expansion', () => {
   expect(screen.queryByRole('button', { expanded: false })).toBeNull();
 });
 
+it('a single Tool whose name the native bound omitted shows its count, never an empty name', () => {
+  for (const [omitted, summary] of [[change({ names: [], total: 1 }, none), '1 added'], [change(none, { names: [], total: 1 }), '1 removed']] as const) {
+    const { container, unmount } = render(<ConfigurationChangeRow change={omitted}/>);
+    expect(screen.getByText('Tools updated')).toBeTruthy();
+    expect(screen.getByText(summary)).toBeTruthy();
+    expect(container.textContent).not.toMatch(/: ?$/m);
+    expect(screen.queryByRole('button', { expanded: false })).toBeNull();
+    unmount();
+  }
+});
+
 it('several Tools show counts collapsed and grouped bounded names expanded', () => {
   render(<ConfigurationChangeRow change={change({ names: ['fetch', 'search'], total: 18 }, { names: ['read'], total: 1 })}/>);
   expect(screen.getByText('Tools updated')).toBeTruthy();

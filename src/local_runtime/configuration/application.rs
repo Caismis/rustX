@@ -717,6 +717,30 @@ impl ApplicationState {
             .collect()
     }
 
+    /// Every file a known Workspace's retained capture read, with that
+    /// Workspace: the bounded inputs its configuration depends on, such as
+    /// selected instruction files outside its fixed sources.
+    pub(crate) fn source_inputs(&self) -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
+        self.available
+            .iter()
+            .chain(
+                self.desired_sources
+                    .iter()
+                    .filter_map(|(directory, capture)| {
+                        Some((directory, capture.as_ref().ok()?.context.as_ref().ok()?))
+                    }),
+            )
+            .flat_map(|(directory, config)| {
+                config
+                    .source_revisions
+                    .keys()
+                    .map(|file| (directory.clone(), file.clone()))
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     #[cfg(test)]
     pub(crate) fn test_available(
         &self,

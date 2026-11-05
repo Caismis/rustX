@@ -16,8 +16,8 @@ executable recovery, preparation before Enter consumes none of that budget.
 Existing durable recovery uses its earlier native entry receipt. Withdrawal does
 not reset the clock. Ready sources add no delay; terminal optional-source failures use the
 existing error/status surfaces. Successful runtime MCP updates publish at the
-native safe boundary without `/session adopt`; that command remains available
-for authored configuration changes. See [MCP startup policy](configuration.md#runtime-policies).
+native safe boundary, and so do authored configuration changes; there is no
+adoption command. See [MCP startup policy](configuration.md#runtime-policies).
 
 Cold reconnection retains the same logical draft and editor, including pasted
 command-token provenance. It captures complete input blocks and an explicit Tab

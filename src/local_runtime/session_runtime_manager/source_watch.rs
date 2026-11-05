@@ -14,6 +14,7 @@
 //! | User resources and guidance | `~/rustx/.agents` for `mcp.toml` and its guidance files, and its `agents`, `skills`, `tools` and `workflows`, recursively (the parent until it exists) |
 //! | Workspace document and root guidance | each known Workspace root, non-recursively, for `rustx.toml`, the guidance files and `*.md` |
 //! | Workspace resources | each known Workspace's `.agents`, as for the User |
+//! | Captured inputs | each other file a known Workspace's retained capture read (a selected instruction file, for one), through its directory, non-recursively |
 //!
 //! The guidance files are exactly the loader's (`AGENTS.override.md`,
 //! `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`). A notification for a
@@ -32,6 +33,10 @@
 //! loaders open before it is routed or invalidates watches, so the watcher
 //! sees exactly the sources they read. The entry decides by identity, never
 //! by probing the volume through an unrelated name.
+//!
+//! A captured input routes to every Workspace whose capture read it; the
+//! set is exactly the capture's own source manifest, so nothing else under a
+//! Workspace is watched.
 //!
 //! A path belongs to every source target whose loaders read it, and only to
 //! those: a known Workspace inside the User root, or inside another
@@ -226,23 +231,57 @@ fn owners(
     owners
 }
 
-/// The source targets a notification at `path` invalidates. The watches at
-/// or below it, as reported and as each owner opens it, are registered again.
+/// The Workspaces whose retained capture read the input file at `path`,
+/// matched by the same identity rule, each with the file as it reads it.
+fn input_owners<'a>(
+    path: &'a Path,
+    inputs: &'a [(PathBuf, PathBuf)],
+    same: &'a impl Fn(&Path, &Path) -> bool,
+) -> impl Iterator<Item = (SourceTarget, PathBuf)> + 'a {
+    inputs
+        .iter()
+        .filter(move |(_, file)| {
+            beneath(path, file, same).is_some_and(|mut rest| rest.next().is_none())
+        })
+        .map(|(directory, file)| {
+            (
+                SourceTarget::Workspace {
+                    directory: directory.clone(),
+                },
+                file.clone(),
+            )
+        })
+}
+
+/// The source targets a notification at `path` invalidates: its owners, and
+/// the Workspaces whose capture read it as an input. The watches at or below
+/// it, as reported and as each owner opens it, are registered again.
 fn notified(
     path: &Path,
-    user: &UserSourceRoots,
-    workspaces: &[PathBuf],
+    sources: &KnownSources,
     same: &impl Fn(&Path, &Path) -> bool,
     active: &mut BTreeMap<PathBuf, RecursiveMode>,
 ) -> Vec<SourceTarget> {
     invalidate(active, path);
-    owners(path, user, workspaces, same)
+    let mut targets = Vec::new();
+    for (target, path) in owners(path, &sources.user, &sources.workspaces, same)
         .into_iter()
-        .map(|(target, path)| {
-            invalidate(active, &path);
-            target
-        })
-        .collect()
+        .chain(input_owners(path, &sources.inputs, same))
+    {
+        invalidate(active, &path);
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+    targets
+}
+
+/// The sources one pass of the watch observes.
+pub(super) struct KnownSources {
+    pub(super) user: UserSourceRoots,
+    pub(super) workspaces: Vec<PathBuf>,
+    /// Each known Workspace with a file its retained capture read.
+    pub(super) inputs: Vec<(PathBuf, PathBuf)>,
 }
 
 /// The watches of one existing resource root: the root itself, for its
@@ -303,11 +342,15 @@ fn invalidate(active: &mut BTreeMap<PathBuf, RecursiveMode>, path: &Path) {
     active.retain(|watched, _| !watched.starts_with(path));
 }
 
-/// The exact watch set for these roots: existing directories only.
-pub(super) fn desired(
-    user: &UserSourceRoots,
-    workspaces: &[PathBuf],
-) -> BTreeMap<PathBuf, RecursiveMode> {
+/// The exact watch set for these sources: existing directories only. An
+/// input file outside them is watched through its directory, which also
+/// reports the file replaced in place.
+pub(super) fn desired(sources: &KnownSources) -> BTreeMap<PathBuf, RecursiveMode> {
+    let KnownSources {
+        user,
+        workspaces,
+        inputs,
+    } = sources;
     let mut watches = BTreeMap::new();
     if let Some(parent) = user.document.parent() {
         watches.insert(parent.to_path_buf(), RecursiveMode::NonRecursive);
@@ -326,6 +369,15 @@ pub(super) fn desired(
         let resources = workspace.join(".agents");
         if resources.is_dir() {
             resource_watches(&resources, &mut watches);
+        }
+    }
+    for directory in inputs.iter().filter_map(|(_, file)| file.parent()) {
+        let covered = watches.iter().any(|(watched, mode)| {
+            watched == directory
+                || (*mode == RecursiveMode::Recursive && directory.starts_with(watched))
+        });
+        if !covered {
+            watches.insert(directory.to_path_buf(), RecursiveMode::NonRecursive);
         }
     }
     watches.retain(|path, _| path.is_dir());
@@ -368,8 +420,13 @@ impl SessionRuntimeManager {
         }
     }
 
-    fn known_workspaces(&self) -> Vec<PathBuf> {
-        self.applications.lock().watched_source_directories()
+    fn known_sources(&self) -> KnownSources {
+        let application = self.applications.lock();
+        KnownSources {
+            user: self.user_source_roots(),
+            workspaces: application.watched_source_directories(),
+            inputs: application.source_inputs(),
+        }
     }
 
     /// Deliver `event` as the platform watcher of the running source watch
@@ -416,9 +473,8 @@ impl SessionRuntimeManager {
         let mut changes = self.configuration_changes();
         let mut active = BTreeMap::<PathBuf, RecursiveMode>::new();
         loop {
-            let user = self.user_source_roots();
-            let workspaces = self.known_workspaces();
-            rearm(&mut watcher, &mut active, &desired(&user, &workspaces));
+            let sources = self.known_sources();
+            rearm(&mut watcher, &mut active, &desired(&sources));
             tokio::select! {
                 () = stop.cancelled() => return Ok(()),
                 result = changes.changed() => if result.is_err() { return Ok(()) },
@@ -440,12 +496,12 @@ impl SessionRuntimeManager {
                     while let Some(signal) = next {
                         let owners = match signal {
                             Signal::Path(path) => {
-                                notified(&path, &user, &workspaces, &same, &mut active)
+                                notified(&path, &sources, &same, &mut active)
                             }
                             Signal::Rescan => {
                                 active.clear();
                                 std::iter::once(SourceTarget::User)
-                                    .chain(workspaces.iter().map(|directory| {
+                                    .chain(sources.workspaces.iter().map(|directory| {
                                         SourceTarget::Workspace {
                                             directory: directory.clone(),
                                         }
@@ -462,7 +518,7 @@ impl SessionRuntimeManager {
                     }
                     // Watch the replacements before capturing them, so an
                     // edit after the capture reads is always notified.
-                    rearm(&mut watcher, &mut active, &desired(&user, &workspaces));
+                    rearm(&mut watcher, &mut active, &desired(&sources));
                     targets.sort_by_key(|target| target.workspace().is_some());
                     for target in targets {
                         self.observe_source_change(&target).await;
@@ -492,6 +548,14 @@ mod tests {
         UserSourceRoots {
             document: home.join("config/rustx.toml"),
             resources: home.join("rustx/.agents"),
+        }
+    }
+
+    fn known(user: &UserSourceRoots, workspaces: &[PathBuf]) -> KnownSources {
+        KnownSources {
+            user: user.clone(),
+            workspaces: workspaces.to_vec(),
+            inputs: Vec::new(),
         }
     }
 
@@ -718,7 +782,12 @@ mod tests {
             (PathBuf::from("/w/.agents/skills"), RecursiveMode::Recursive),
         ]);
         let notify = |path: &str, active: &mut BTreeMap<PathBuf, RecursiveMode>| {
-            notified(Path::new(path), &user, &workspaces, &|_, _| true, active)
+            notified(
+                Path::new(path),
+                &known(&user, &workspaces),
+                &|_, _| true,
+                active,
+            )
         };
         notify("/w/.agents/Skills", &mut active);
         assert_eq!(active.len(), 2);
@@ -890,6 +959,56 @@ mod tests {
         );
     }
 
+    /// A file a Workspace's capture read outside its fixed sources — a
+    /// selected instruction file — is watched through its directory, unless a
+    /// fixed watch already covers it, and routes to every Workspace that read
+    /// it; a sibling no capture read routes nowhere.
+    #[test]
+    fn a_captured_input_file_is_watched_and_routed_to_its_readers() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("w");
+        let other = root.path().join("v");
+        for directory in ["w/docs", "w/.agents/skills/x", "v"] {
+            std::fs::create_dir_all(root.path().join(directory)).unwrap();
+        }
+        let policy = workspace.join("docs/policy.md");
+        let sources = KnownSources {
+            user: roots(&root.path().join("home")),
+            workspaces: vec![workspace.clone(), other.clone()],
+            inputs: vec![
+                (other.clone(), policy.clone()),
+                (workspace.clone(), policy.clone()),
+                (
+                    workspace.clone(),
+                    workspace.join(".agents/skills/x/SKILL.md"),
+                ),
+            ],
+        };
+        let watches = desired(&sources);
+        assert_eq!(
+            watches.get(&workspace.join("docs")),
+            Some(&RecursiveMode::NonRecursive)
+        );
+        assert!(!watches.contains_key(&workspace.join(".agents/skills/x")));
+        let mut active = BTreeMap::new();
+        let workspace_target = |directory: &Path| SourceTarget::Workspace {
+            directory: directory.to_path_buf(),
+        };
+        assert_eq!(
+            notified(&policy, &sources, &|_, _| false, &mut active),
+            [workspace_target(&other), workspace_target(&workspace)]
+        );
+        assert!(
+            notified(
+                &workspace.join("docs/other.md"),
+                &sources,
+                &|_, _| false,
+                &mut active
+            )
+            .is_empty()
+        );
+    }
+
     #[test]
     fn a_notification_reregisters_the_watches_at_or_below_it() {
         let mut active = BTreeMap::from([
@@ -915,7 +1034,7 @@ mod tests {
         std::fs::create_dir_all(home.path().join("rustx")).unwrap();
         let workspace = tempfile::tempdir().unwrap();
         let workspaces = vec![workspace.path().to_path_buf()];
-        let watches = desired(&user, &workspaces);
+        let watches = desired(&known(&user, &workspaces));
         assert_eq!(
             watches,
             BTreeMap::from([
@@ -927,7 +1046,7 @@ mod tests {
         std::fs::create_dir_all(home.path().join("rustx/.agents/skills")).unwrap();
         std::fs::create_dir_all(workspace.path().join(".agents/uploads")).unwrap();
         std::fs::create_dir_all(workspace.path().join(".agents/workflows")).unwrap();
-        let watches = desired(&user, &workspaces);
+        let watches = desired(&known(&user, &workspaces));
         assert_eq!(
             watches.get(&home.path().join("rustx/.agents")),
             Some(&RecursiveMode::NonRecursive)
@@ -1065,13 +1184,12 @@ mod case_insensitive_tests {
             (root.join(".agents"), RecursiveMode::NonRecursive),
             (root.join(".agents/skills"), RecursiveMode::Recursive),
         ]);
-        notified(
-            &root.join(".Agents"),
-            &user,
-            &workspaces,
-            &same_entry,
-            &mut active,
-        );
+        let sources = KnownSources {
+            user,
+            workspaces,
+            inputs: Vec::new(),
+        };
+        notified(&root.join(".Agents"), &sources, &same_entry, &mut active);
         assert!(active.is_empty());
     }
 }
