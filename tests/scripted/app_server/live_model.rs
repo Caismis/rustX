@@ -4,7 +4,7 @@
 use super::super::model_selection::selection;
 use super::*;
 use crate::model::catalog::{ModelProfileId, ModelRef};
-use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
+use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
 use serde_json::json;
 
 async fn select(
@@ -155,13 +155,12 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             request_params: crate::scripted_suites::common::request_params(json!({"seed": 7})),
             max_output_tokens: Some(777),
             title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: AuxiliaryModelPolicy::Explicit {
+            summary_model: SummaryModelPolicy::Explicit {
                 model: ModelRef::parse("local/b").unwrap(),
                 profile: None,
                 request_params: crate::scripted_suites::common::request_params(
                     json!({"temperature": 0.2}),
                 ),
-                max_output_tokens: Some(222),
             },
             ..selection("local/a")
         };

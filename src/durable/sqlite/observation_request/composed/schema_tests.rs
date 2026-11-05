@@ -230,7 +230,7 @@ fn t10_t19_schema_66_full_child_facts_are_refused_without_conversion() {
 #[test]
 fn binary_fragment_gate_rejects_schema_70_without_rewriting_it() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("page-v71.sqlite");
+    let path = directory.path().join("page-v72.sqlite");
     let conversation = crate::runtime::identity::ConversationId::generate();
     let store =
         crate::durable::sqlite::SqliteConversationStore::open(conversation.clone(), &path).unwrap();

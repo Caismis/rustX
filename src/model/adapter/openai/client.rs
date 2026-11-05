@@ -91,6 +91,7 @@ pub(crate) struct HttpFailure {
     pub(crate) message: String,
     pub(crate) provider_code: Option<String>,
     pub(crate) provider_type: Option<String>,
+    pub(crate) provider_param: Option<String>,
 }
 
 impl std::fmt::Display for HttpFailure {
@@ -119,13 +120,15 @@ impl HttpFailure {
             .await
             .map(|b| b.to_vec())
             .unwrap_or_default();
-        let (message, provider_code, provider_type) = parse_error_body(&body, status);
+        let (message, provider_code, provider_type, provider_param) =
+            parse_error_body(&body, status);
         Self {
             status,
             retry_after_ms,
             message,
             provider_code,
             provider_type,
+            provider_param,
         }
     }
 }
@@ -134,9 +137,12 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     crate::model::adapter::retry::retry_after(headers)
 }
 
-fn parse_error_body(body: &[u8], status: StatusCode) -> (String, Option<String>, Option<String>) {
+fn parse_error_body(
+    body: &[u8],
+    status: StatusCode,
+) -> (String, Option<String>, Option<String>, Option<String>) {
     let Ok(root) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return (String::from_utf8_lossy(body).into_owned(), None, None);
+        return (String::from_utf8_lossy(body).into_owned(), None, None, None);
     };
     // OpenAI uses `{ "error": { ... } }`, while several compatible
     // providers return the same detail object at the top level.
@@ -166,7 +172,11 @@ fn parse_error_body(body: &[u8], status: StatusCode) -> (String, Option<String>,
         .get("code")
         .and_then(provider_code_value)
         .or_else(|| provider_type.clone());
-    (message, provider_code, provider_type)
+    let provider_param = detail
+        .get("param")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    (message, provider_code, provider_type, provider_param)
 }
 
 fn provider_code_value(value: &serde_json::Value) -> Option<String> {
@@ -224,7 +234,7 @@ mod tests {
     #[test]
     fn top_level_compatible_error_body_is_preserved() {
         let body = br#"{"message":"This model's maximum context length is 116800 tokens","type":"BadRequestError","param":"input_tokens","code":400}"#;
-        let (message, provider_code, provider_type) =
+        let (message, provider_code, provider_type, provider_param) =
             parse_error_body(body, StatusCode::BAD_REQUEST);
         assert_eq!(
             message,
@@ -232,6 +242,7 @@ mod tests {
         );
         assert_eq!(provider_code.as_deref(), Some("400"));
         assert_eq!(provider_type.as_deref(), Some("BadRequestError"));
+        assert_eq!(provider_param.as_deref(), Some("input_tokens"));
     }
 
     #[test]
@@ -240,7 +251,7 @@ mod tests {
             let body = serde_json::to_vec(&serde_json::json!({"error": {
                 "type": "invalid_request_error", "code": "context_length_exceeded", "message": message
             }})).unwrap();
-            let (message, provider_code, provider_type) =
+            let (message, provider_code, provider_type, provider_param) =
                 parse_error_body(&body, StatusCode::BAD_REQUEST);
             let error = super::super::mapping::normalize_error(
                 async_openai::error::OpenAIError::Boxed(Box::new(HttpFailure {
@@ -249,6 +260,7 @@ mod tests {
                     message,
                     provider_code,
                     provider_type,
+                    provider_param,
                 })),
             );
             assert_eq!(

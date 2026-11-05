@@ -85,7 +85,7 @@ cost. These measurements are not a schema-75 cost baseline. No history is pruned
 
 Clone/Fork canonical overlap never creates target-local auxiliary execution or reserves a local correlation. Only an explicitly retained Summary-generation dependency may carry source audit, with original source identity and the exact eligible prerequisite closure. Source audit remains distinct from target-local request ownership, quota and admission. Independent retained dependencies must survive source deletion.
 
-A new local checkpoint naming a Summary-generation dependency requires the successful physical request and completed local Call to be visible at the dependency's declared Journal cut. A later settlement cannot authorize a dependency captured before that settlement. Historical inspection and inherited source audit preserve open or failed execution evidence at their captured cuts; that evidence grants no new checkpoint commit authority.
+A new local checkpoint naming Summary-generation dependencies requires every accepted chunk to identify a successful physical request and completed local Call of the same operation and generation, with exact source ranges, visible at the declared Journal cut. The `preceding_call` and `previous_summary` links close the dependency chain, including failed calls when retained by a fork. A later settlement cannot authorize a dependency captured before that settlement. Historical inspection and inherited source audit preserve open or failed execution evidence at their captured cuts; that evidence grants no new checkpoint commit authority.
 
 Inspection archives keep requests.jsonl for actual primary Snapshots. Auxiliary facts have a separate auxiliary_audit.jsonl projection at the captured Journal cut; generation rows identify their owner. Complete audit does not imply reconstructed prompts or generated output. Archive dependency validation walks the captured native Journal/activation prefix one checkpoint at a time. Each local Summary audit closure has its own bounded materialization budget; released history does not consume a lifetime archive allowance. Later checkpoints cannot enter an older captured archive. Archive projections explicitly exclude private diagnostics and execution bindings instead of serializing newly added native fields indiscriminately.
 
@@ -134,12 +134,14 @@ no Store allocation. Unresolved exact intent moves to the native failed-durabili
 owner only after physical exit; historical uncertainty does not pin global
 capacity indefinitely. Live/unproven cleanup retains its old allocation.
 
-Compaction shares twelve confirmed/unresolved starts, three total input
-shrinks and a five-minute absolute deadline across carryover, input replans and
-technical retries. Automatic Compactions in one logical Agent step share that
-allowance from the first Compaction admission, including later entries into
-`perform_compaction`; each checkpoint still has its own operation identity and
-exact receipt. An independent manual Compaction gets a new business allowance.
+Compaction admits a finite plan of at most 256 normal Summary starts before any
+start. Twelve exceptional recovery actions are shared across re-entry, retries,
+format fallback, carryover degradation and replanning; at most three input
+reductions are permitted. The original absolute deadline is five minutes plus
+30 seconds per planned start after the first, capped at two hours. Automatic
+Compactions in one logical Agent step share this authority; a manual Compaction
+gets an independent allowance. Each checkpoint has its own operation receipt.
+
 The model and resources remain frozen. Manual compaction transfers its native
 business tail before the manager lease is released, and a lost observer or
 later checkpoint cannot replace the exact result of the original invocation.
@@ -168,7 +170,7 @@ The local delays are two then four seconds. The absolute next eligibility time i
 `failure_observed_at + max(local_delay, valid_provider_retry_after)`. The maximum
 acceptable single wait is 60 seconds; a larger Retry-After is refused, never
 shortened. Settlement latency consumes this delay. A next start must precede the
-original five-minute Call/parent deadline. Cancellation during backoff settles
+original Call/parent deadline. Cancellation during backoff settles
 only the Call; it neither repeats the failed request terminal nor creates a start.
 
 The failed request and AuxiliaryRetryScheduled commit in one Store transaction.

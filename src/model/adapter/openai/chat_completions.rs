@@ -49,7 +49,8 @@ use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{
-    map_chat_finish_reason, normalize_chat_usage, normalize_error, stream_retry_disposition,
+    is_explicit_format_rejection, map_chat_finish_reason, normalize_chat_usage, normalize_error,
+    normalize_error_for_format, stream_retry_disposition,
 };
 use crate::model::adapter::openai::qwen_xml::{self, QwenReservedEnvelope};
 use crate::model::adapter::proposal::{accept_tool_call_arguments, resolve_tool_identity};
@@ -128,6 +129,12 @@ impl ModelAdapter for OpenAiChatCompletionsAdapter {
                 normalizer: ChatStreamNormalizer::new(
                     validated,
                     request.invocation.compat.chat_tool_protocol,
+                )
+                .with_native_format(
+                    request
+                        .response_schema
+                        .as_ref()
+                        .is_some_and(crate::model::structured::PreparedResponseSchema::is_native),
                 ),
                 cancellation,
             },
@@ -190,7 +197,10 @@ async fn chat_phase_next(phase: ChatPhase) -> Option<(ModelStreamItem, ChatPhase
                     };
                     Some((event, next_phase))
                 }
-                Err(error) => Some((failed(normalize_error(error)), ChatPhase::Finished)),
+                Err(error) => Some((
+                    failed(normalizer.normalize_error(error)),
+                    ChatPhase::Finished,
+                )),
             }
         }
         ChatPhase::Streaming {
@@ -243,7 +253,7 @@ async fn chat_pull(
                 break;
             }
             Some(Err(error)) => {
-                pending.push_back(failed(normalize_error(error)));
+                pending.push_back(failed(normalizer.normalize_error(error)));
                 break;
             }
             None => {
@@ -574,6 +584,7 @@ struct ToolAssembly {
 #[derive(Debug)]
 struct ChatStreamNormalizer {
     tools: ValidatedTools,
+    native_format: bool,
     /// The model's declared in-band tool protocol. It is the only evidence
     /// this adapter uses to recognize reserved tool-protocol markup that
     /// leaked into ordinary output; nothing is inferred from a provider name
@@ -593,6 +604,7 @@ impl ChatStreamNormalizer {
     fn new(tools: ValidatedTools, tool_protocol: ChatToolProtocol) -> Self {
         Self {
             tools,
+            native_format: false,
             tool_protocol,
             blocks: BlockAllocator::new(),
             tool_calls: BTreeMap::new(),
@@ -602,6 +614,19 @@ impl ChatStreamNormalizer {
             reasoning_buffer: None,
             refusal_buffer: None,
             buffered_generation: false,
+        }
+    }
+
+    fn with_native_format(mut self, native_format: bool) -> Self {
+        self.native_format = native_format;
+        self
+    }
+
+    fn normalize_error(&self, error: async_openai::error::OpenAIError) -> ModelError {
+        if self.native_format {
+            normalize_error_for_format(error, "response_format")
+        } else {
+            normalize_error(error)
         }
     }
 
@@ -626,7 +651,7 @@ impl ChatStreamNormalizer {
     #[allow(clippy::too_many_lines)] // one provider stream chunk state machine
     fn push_events(&mut self, chunk: &serde_json::Value) -> Result<Vec<ModelEvent>, ModelError> {
         if let Some(error) = chunk.get("error") {
-            return Err(chat_stream_error(error));
+            return Err(chat_stream_error(error, self.native_format));
         }
         let chunk: ChatChunkWire = serde_json::from_value(chunk.clone())
             .map_err(|e| provider_error(format!("malformed chat chunk: {e}")))?;
@@ -1332,7 +1357,7 @@ fn value_has_output(value: Option<&serde_json::Value>) -> bool {
     })
 }
 
-fn chat_stream_error(error: &serde_json::Value) -> ModelError {
+fn chat_stream_error(error: &serde_json::Value, native_format: bool) -> ModelError {
     let message = error
         .get("message")
         .and_then(serde_json::Value::as_str)
@@ -1356,7 +1381,7 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
         })
         .or_else(|| error_type.map(str::to_owned));
     let provider_code = provider_code.as_deref();
-    let kind = if matches!(
+    let mut kind = if matches!(
         error_type,
         Some("authentication" | "authentication_error" | "permission_error" | "401" | "403")
     ) || matches!(
@@ -1395,15 +1420,29 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
     } else {
         ModelErrorKind::ProviderError
     };
+    if native_format
+        && kind == ModelErrorKind::InvalidRequest
+        && is_explicit_format_rejection(
+            error.get("type").and_then(serde_json::Value::as_str),
+            error.get("code").and_then(serde_json::Value::as_str),
+            error.get("param").and_then(serde_json::Value::as_str),
+            "response_format",
+        )
+        && error
+            .get("status")
+            .is_none_or(|value| value.as_u64() == Some(400) || value.as_str() == Some("400"))
+    {
+        kind = ModelErrorKind::NativeFormatUnsupported;
+    }
+    let retry_disposition = if kind == ModelErrorKind::NativeFormatUnsupported {
+        crate::model::ModelRetryDisposition::Never
+    } else {
+        stream_retry_disposition(error_type, provider_code, numeric_code, message)
+    };
     ModelError {
         kind,
         message: format!("OpenAI-compatible stream error: {message}"),
-        retry_disposition: stream_retry_disposition(
-            error_type,
-            provider_code,
-            numeric_code,
-            message,
-        ),
+        retry_disposition,
         retry_after_ms: None,
         provider_code: provider_code.map(str::to_owned),
         context_overflow: None,
@@ -1412,6 +1451,52 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
         generation: None,
     }
     .normalized()
+}
+
+#[cfg(test)]
+mod native_format_rejection_tests {
+    use super::chat_stream_error;
+    use crate::model::{ModelErrorKind, ModelRetryDisposition};
+    use serde_json::json;
+
+    #[test]
+    fn stream_rejection_requires_native_request_and_exact_structured_fields() {
+        let mut error = json!({
+            "type": "invalid_request_error",
+            "code": "unsupported_parameter",
+            "param": "response_format",
+            "message": "feature unavailable"
+        });
+        let typed = chat_stream_error(&error, true);
+        assert_eq!(typed.kind, ModelErrorKind::NativeFormatUnsupported);
+        assert_eq!(typed.retry_disposition, ModelRetryDisposition::Never);
+        assert_eq!(
+            chat_stream_error(&error, false).kind,
+            ModelErrorKind::InvalidRequest
+        );
+        error["status"] = json!(401);
+        assert_ne!(
+            chat_stream_error(&error, true).kind,
+            ModelErrorKind::NativeFormatUnsupported
+        );
+        error.as_object_mut().unwrap().remove("status");
+        error["param"] = json!("text.format");
+        assert_eq!(
+            chat_stream_error(&error, true).kind,
+            ModelErrorKind::InvalidRequest
+        );
+        error["param"] = json!("response_format");
+        error["message"] = json!("maximum context length exceeded");
+        assert_eq!(
+            chat_stream_error(&error, true).kind,
+            ModelErrorKind::ContextWindowExceeded
+        );
+        error["type"] = json!("authentication_error");
+        assert_eq!(
+            chat_stream_error(&error, true).kind,
+            ModelErrorKind::Authentication
+        );
+    }
 }
 
 /// Translates a provider-neutral request into the final Chat Completions request

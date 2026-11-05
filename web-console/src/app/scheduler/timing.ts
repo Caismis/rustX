@@ -1,5 +1,5 @@
 import { parseAbsolute, parseDateTime, toCalendarDateTime, toZoned } from '@internationalized/date';
-import type { ScheduleSpec, ScheduleTiming } from '../../../../protocol/app-server/v71';
+import type { ScheduleSpec, ScheduleTiming } from '../../../../protocol/app-server/v72';
 import { cronPreview, parseCronExpression } from './cron';
 import type { TaskTranslate } from './copy';
 

@@ -200,7 +200,6 @@ impl SubagentSpawnPlan {
             approval_mode,
             model_timeout_policy: execution_policy.model_timeout,
             tool_deadline_policy: execution_policy.tool_deadline,
-            context: execution_policy.context,
             workspace: workspace.to_path_buf(),
             incarnation: runtime_root
                 .path()
@@ -3242,11 +3241,6 @@ mod tests {
             approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            context: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             workspace: dir.path().join("workspace"),
             incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,

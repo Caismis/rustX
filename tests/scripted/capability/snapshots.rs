@@ -2247,11 +2247,6 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     );
     let generation_facts = serde_json::to_value(resources.inspection()).unwrap();
     let runtime = rustx::context::ContextRuntime::for_attempt(
-        rustx::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(rustx::context::DefaultTokenEstimator),
         Some(rustx::context::AgentStatusEngine::default()),
         &request.model,

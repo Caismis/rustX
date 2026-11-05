@@ -1,4 +1,4 @@
-import type { WorkflowOrderTarget, WorkflowSchemaStep } from '../../../../../protocol/app-server/v71';
+import type { WorkflowOrderTarget, WorkflowSchemaStep } from '../../../../../protocol/app-server/v72';
 import { CommandRejected } from './commands';
 import { fieldValue, nodeField, setField, type FieldAddress, type FieldStep } from './fields';
 import { blockAt, nodeAt, sameBlockPath, sameDocument, updateBlock, type BlockPath, type Value, type WorkflowDocument } from './model';

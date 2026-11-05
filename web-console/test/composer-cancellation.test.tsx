@@ -1,7 +1,7 @@
 import { compactReceipt } from './fixture';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v71';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v72';
 import { composerPreferences } from '../src/app/composer/preferences';
 import { App } from '../src/app/App';
 import { isOutcomeUncertain } from '../src/client/errors';
@@ -393,7 +393,7 @@ it.each(['queue', 'steer'] as const)('resident ContextSeat preserves %s submissi
   expect(input().value).toBe(''); expect(screen.queryByRole('dialog')).toBeNull();
   fireEvent.change(input(), { target: { value: 'later draft' } });
   const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
-  await act(async () => server.update('A', { ...snapshot(), context: { compaction_count: 1, compaction_in_progress: false, manual_compaction: { request_id: requestId, released: true, error: null } } }));
+  await act(async () => server.update('A', { ...snapshot(), context: { compaction_count: 1, compaction_in_progress: false, manual_compaction: { request_id: requestId, released: true, skipped: false, cancelled: false, error: null } } }));
   expect(screen.getByText('Context compacted')).toBeTruthy();
   expect(input().value).toBe('later draft');
   expect(server.requests.filter(row => ['turn/start', 'turn/steer'].includes(row.request.method))).toHaveLength(1);

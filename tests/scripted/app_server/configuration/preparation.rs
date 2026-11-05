@@ -639,7 +639,6 @@ async fn t03_t05_mixed_instructions_publication_rejects_rebound_project_path() {
         assert_eq!(retained.config.agent.instructions, "I1");
         assert_eq!(retained.config.agent.agents_md.files, vec![old_path]);
         assert_eq!(retained.effective.agent, old.authored.effective.agent);
-        assert_eq!(retained.effective.context, old.authored.effective.context);
         assert_eq!(retained.root_agent_project_files, before.root_profile().unwrap().project_instructions.files);
         assert_eq!(retained.component_revisions, old.authored.component_revisions);
         assert_eq!(retained.source_revisions, old.authored.source_revisions);

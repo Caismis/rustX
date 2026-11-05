@@ -70,13 +70,31 @@ fn threshold_equality_compacts() {
     let e = engine(200, 0, 0);
     let p = e.build_projection_input(SurfaceRevision::new(2), input(2).into(), &[], None, "");
     assert!(e.should_compact(&p, 0).unwrap());
-    assert!(!e.fits_under_soft_limit(&p, 0).unwrap());
+    assert!(
+        e.fits_under_soft_limit(&p, 0).unwrap(),
+        "hard admission accepts equality"
+    );
+    for (tokens, triggered) in [(179, false), (180, true), (181, true)] {
+        let estimator = ScriptedEstimator::new(100, 100, 0).with_override("M1", tokens);
+        let e = ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 200,
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+            },
+            Arc::new(estimator),
+        )
+        .unwrap();
+        let p = e.build_projection_input(SurfaceRevision::new(1), input(1).into(), &[], None, "");
+        assert_eq!(e.should_compact(&p, 0).unwrap(), triggered);
+        assert!(e.fits_under_soft_limit(&p, 0).unwrap());
+    }
 }
 #[test]
 fn soft_limit_respects_output_budget_and_reserve() {
     let e = engine(1000, 100, 0);
-    assert_eq!(e.soft_input_limit(200).unwrap(), 700);
-    assert!(e.soft_input_limit(900).is_err());
+    assert_eq!(e.admissible_input_limit(200).unwrap(), 700);
+    assert!(e.admissible_input_limit(900).is_err());
 }
 #[test]
 fn same_context_produces_same_estimate_and_order() {
@@ -114,31 +132,100 @@ async fn hard_fit_retains_the_most_content_when_recent_target_is_impossible() {
         plan(&e, &input(6), budgets(), &CompactionConstraints::default())
             .await
             .unwrap(),
-        4
+        5
     );
 }
 #[tokio::test]
-async fn summary_reservation_changes_the_hard_fit_independently_of_primary_output() {
+async fn summary_output_tokens_do_not_change_primary_retirement() {
     let e = engine(500, 0, 0);
     let low = CompactionBudgets::new(100, 50, 100_000);
     let high = CompactionBudgets::new(100, 300, 100_000);
-    assert!(
-        plan(&e, &input(6), low, &CompactionConstraints::default())
-            .await
-            .is_ok()
-    );
-    assert!(
+    let first = plan(&e, &input(6), low, &CompactionConstraints::default())
+        .await
+        .unwrap();
+    assert_eq!(
         plan(&e, &input(6), high, &CompactionConstraints::default())
             .await
-            .is_ok()
+            .unwrap(),
+        first
     );
-    let impossible = CompactionBudgets::new(100, 500, 100_000);
     assert_eq!(
-        plan(&e, &input(6), impossible, &CompactionConstraints::default())
+        plan(
+            &e,
+            &input(6),
+            CompactionBudgets::new(100, 500, 100_000),
+            &CompactionConstraints::default()
+        )
+        .await
+        .unwrap(),
+        first
+    );
+}
+
+#[tokio::test]
+async fn primary_prices_real_minimum_summary_with_protected_input() {
+    let estimator = rustx::context::ClosureTokenEstimator::new(|messages, _, _| {
+        messages
+            .iter()
+            .map(|message| match message {
+                ModelInputMessage::Derived(_) => 50,
+                ModelInputMessage::Canonical(block) if block.id().as_str() == "M1" => 2_000,
+                ModelInputMessage::Canonical(_) => 900,
+                ModelInputMessage::RequestOnly(_) => 0,
+            })
+            .sum()
+    });
+    let e = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 1_000,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(estimator),
+    )
+    .unwrap();
+    let fresh = rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new("M2")]).unwrap();
+    let constraints = CompactionConstraints {
+        fresh_inbound: Some(&fresh),
+        ..Default::default()
+    };
+    assert_eq!(
+        plan(
+            &e,
+            &input(2),
+            CompactionBudgets::new(0, 250, 10_000),
+            &constraints
+        )
+        .await
+        .unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn selected_prefix_must_include_new_source_after_existing_summary() {
+    let history = vec![
+        crate::context::planning::minimum_summary(),
+        input(1).remove(0),
+    ];
+    let e = engine(1_000, 0, 100);
+    assert_eq!(
+        plan(&e, &history, budgets(), &CompactionConstraints::default())
             .await
-            .unwrap_err()
-            .kind,
-        ContextErrorKind::CannotFit
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        plan(
+            &e,
+            &history[..1],
+            budgets(),
+            &CompactionConstraints::default()
+        )
+        .await
+        .unwrap_err()
+        .kind,
+        ContextErrorKind::NoEligibleHistory
     );
 }
 #[tokio::test]
@@ -167,7 +254,7 @@ async fn protected_first_message_produces_explicit_no_progress() {
             .await
             .unwrap_err()
             .kind,
-        ContextErrorKind::NoProgress
+        ContextErrorKind::NoEligibleHistory
     );
 }
 #[tokio::test]
@@ -183,7 +270,7 @@ async fn missing_continuation_anchor_never_silently_loosens_selection() {
             .await
             .unwrap_err()
             .kind,
-        ContextErrorKind::NoProgress
+        ContextErrorKind::MalformedHistory
     );
 }
 #[tokio::test]
@@ -204,24 +291,88 @@ async fn staged_core_context_is_charged_as_a_whole_request() {
         staged_request_context: &staged,
         ..Default::default()
     };
+    let error = plan(&e, &input(6), budgets(), &constraints)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ContextErrorKind::CannotFit);
+    assert!(
+        error
+            .message
+            .contains("protected Fresh Inbound/current Context=500")
+    );
+    assert!(error.message.contains("not additive or provider usage"));
+}
+
+#[tokio::test]
+async fn fit_failure_labels_fixed_input_without_treating_components_as_additive() {
+    let prompt = "x".repeat(500);
+    let e = engine(100, 0, 0);
+    let error = crate::context::planning::summary_prefix(
+        &e,
+        &input(1).into(),
+        &prompt,
+        &[],
+        budgets(),
+        &CompactionConstraints::default(),
+        &rustx::runtime::CancellationSignal::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, ContextErrorKind::CannotFit);
+    assert!(error.message.contains("fixed System Prompt/Tools=125"));
+    assert!(
+        error
+            .message
+            .contains("protected Fresh Inbound/current Context=not present")
+    );
+    assert!(error.message.contains("complete candidate estimate="));
+
+    // A nonmonotone estimator can price a combined request below either
+    // component; component-only estimates must never reject this candidate.
+    let arbitrary = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 100,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(rustx::context::ClosureTokenEstimator::new(
+            |messages, _, _| {
+                if messages
+                    .iter()
+                    .any(|message| matches!(message, ModelInputMessage::Derived(_)))
+                {
+                    50
+                } else {
+                    500
+                }
+            },
+        )),
+    )
+    .unwrap();
     assert_eq!(
-        plan(&e, &input(6), budgets(), &constraints)
-            .await
-            .unwrap_err()
-            .kind,
-        ContextErrorKind::CannotFit
+        crate::context::planning::summary_prefix(
+            &arbitrary,
+            &input(1).into(),
+            &prompt,
+            &[],
+            budgets(),
+            &CompactionConstraints::default(),
+            &rustx::runtime::CancellationSignal::new(),
+        )
+        .await
+        .unwrap(),
+        1
     );
 }
 #[tokio::test]
-async fn summary_input_limit_includes_the_actual_instruction_and_wrapper() {
+async fn retirement_selection_is_independent_of_summary_input_capacity() {
     let e = engine(1000, 0, 0);
     let too_small = CompactionBudgets::new(0, 50, 1);
     assert_eq!(
         plan(&e, &input(3), too_small, &CompactionConstraints::default())
             .await
-            .unwrap_err()
-            .kind,
-        ContextErrorKind::CannotFit
+            .unwrap(),
+        3
     );
 }
 #[tokio::test]
@@ -348,12 +499,12 @@ async fn long_prefix_planning_bounds_actual_rendering_and_complete_estimator_wor
             .unwrap();
         assert_eq!(
             crate::context::summarizer::take_summary_rendered_messages(),
-            history.len(),
-            "the transcript is rendered exactly once"
+            0,
+            "primary retirement does not render summary source material"
         );
         assert!(
             visits.load(Ordering::SeqCst)
-                <= crate::context::planning::MAX_GENERIC_CANDIDATES * (2 * history.len() + 1),
+                <= crate::context::planning::MAX_GENERIC_CANDIDATES * (2 * history.len() + 2),
             "complete candidate materialization is capped independently of history length"
         );
         assert_eq!(
@@ -376,17 +527,11 @@ async fn non_additive_planning_checks_complete_requests_and_retention_without_in
         },
         Arc::new(rustx::context::ClosureTokenEstimator::new(
             |messages, prompt, _| {
-                if messages
-                    .iter()
-                    .any(|m| matches!(m, ModelInputMessage::Derived(_)))
-                {
-                    return 30;
-                }
                 // A whole suffix can cost less than each constituent, and adding
                 // staged material may make it much more expensive. Neither cost
                 // is inferable from singleton prices or monotonicity.
                 if prompt == "primary" {
-                    if messages.len() == 4 { 50 } else { 500 }
+                    if messages.len() == 5 { 50 } else { 500 }
                 } else if messages.len() == 3 {
                     100
                 } else {
@@ -414,41 +559,58 @@ async fn non_additive_planning_checks_complete_requests_and_retention_without_in
     .await
     .unwrap();
     assert_eq!(n, 3);
-    let full =
-        rustx::model::input::assemble_model_input(&history[n..], &staged, None, None).unwrap();
+    let mut full = vec![crate::context::planning::minimum_summary()];
+    full.extend_from_slice(&history[n..]);
+    let full = rustx::model::input::assemble_model_input(&full, &staged, None, None).unwrap();
     assert!(
-        e.estimate_model_input(&full.into(), "primary", &[]) + 20
-            <= e.soft_input_limit(10).unwrap()
+        e.estimate_model_input(&full.into(), "primary", &[])
+            <= e.admissible_input_limit(10).unwrap()
     );
     assert!(
         e.estimate_model_input(&history[n..].to_vec().into(), "", &[])
             >= e.config().keep_recent_tokens
     );
-    let summary = rustx::context::SummaryRequest {
-        retired: history[..n].to_vec(),
-    }
-    .model_input();
-    assert!(e.estimate_model_input(&summary.messages.into(), "", &[]) <= 30);
 }
 
 #[tokio::test]
-async fn incremental_transcript_boundaries_match_complete_summary_requests() {
+async fn detached_fragment_covers_complete_utf8_source_ranges() {
     let mut history = input(4);
+    let ModelInputMessage::Canonical(MessageBlock::User(first)) = &mut history[0] else {
+        unreachable!()
+    };
+    first.content = vec![UserContentBlock::Text(TextBlock {
+        text: "Unicode 雪🙂".into(),
+    })];
     let ModelInputMessage::Canonical(MessageBlock::User(empty)) = &mut history[1] else {
         unreachable!()
     };
     empty.content.clear();
-    let mut rendered = String::new();
-    for (index, message) in history.iter().enumerate() {
+    let mut plan =
+        crate::context::chunks::ChunkPlan::new(&history.clone().into(), history.len()).unwrap();
+    let request = plan
+        .next(None, None, Some(100), 100, true, |_| Ok(1))
+        .unwrap();
+    let fragment = request.fragment.as_ref().expect("detached fragment");
+    assert_eq!(fragment.ranges.len(), history.len());
+    let mut pieces = Vec::new();
+    for (index, (message, range)) in history.iter().zip(&fragment.ranges).enumerate() {
+        let mut rendered = String::new();
         crate::context::summarizer::append_summary_message(message, &mut rendered);
+        assert_eq!(range.projection_index as usize, index);
         assert_eq!(
-            crate::context::summarizer::summary_model_input(&rendered),
-            rustx::context::SummaryRequest {
-                retired: history[..=index].to_vec()
-            }
-            .model_input()
+            range.role,
+            rustx::model::auxiliary::AuxiliarySourceRole::User
         );
+        assert_eq!(range.byte_start, 0);
+        assert_eq!(range.byte_end as usize, rendered.len());
+        if !rendered.is_empty() {
+            pieces.push(rendered);
+        }
     }
+    assert_eq!(fragment.text, pieces.join("\n\n"));
+    assert!(request.render_transcript().contains("Unicode 雪🙂"));
+    plan.accept(&request).unwrap();
+    assert!(plan.is_complete());
 }
 
 #[tokio::test]
@@ -583,7 +745,7 @@ async fn complete_tool_batch_and_core_owned_boundaries_constrain_every_probe() {
             .await
             .unwrap_err()
             .kind,
-            ContextErrorKind::CannotFit
+            ContextErrorKind::NoEligibleHistory
         );
     }
 }
@@ -592,23 +754,11 @@ async fn complete_tool_batch_and_core_owned_boundaries_constrain_every_probe() {
 async fn n1_unsampled_only_feasible_boundary_is_not_proven_cannot_fit() {
     let history = input(129);
     let estimator = rustx::context::ClosureTokenEstimator::new(|messages, _, _| {
-        if let [ModelInputMessage::Derived(derived)] = messages {
-            let rustx::model::projected::ProjectedMessage::User { content, .. } = &derived.message
-            else {
-                unreachable!()
-            };
-            let UserContentBlock::Text(text) = &content[0] else {
-                unreachable!()
-            };
-            if text.text.contains("message 3\n") {
-                1000
-            } else {
-                1
-            }
-        } else if messages.len() >= 128 {
-            1000
-        } else {
+        if matches!(messages.first(), Some(ModelInputMessage::Derived(_))) && messages.len() == 128
+        {
             1
+        } else {
+            1_000
         }
     });
     let e = ContextEngine::new(
@@ -627,80 +777,25 @@ async fn n1_unsampled_only_feasible_boundary_is_not_proven_cannot_fit() {
         &CompactionConstraints::default(),
     )
     .await;
-    match outcome {
-        Ok(n) => assert_eq!(n, 2),
-        Err(error) => assert_eq!(
-            error.kind,
-            ContextErrorKind::SearchIncomplete,
-            "boundary 2 is feasible; not examining it proves nothing"
-        ),
-    }
-}
-
-#[tokio::test]
-async fn n1_default_estimator_finds_only_feasible_second_of_129_boundaries() {
-    let history = input(129);
-    let summary_cost = |n| {
-        DefaultTokenEstimator.estimate_input(
-            &rustx::context::SummaryRequest {
-                retired: history[..n].to_vec(),
-            }
-            .model_input()
-            .messages,
-            "",
-            &[],
-        )
-    };
-    let tail_cost = |n| DefaultTokenEstimator.estimate_input(&history[n..], "", &[]);
-    assert!(summary_cost(3) > summary_cost(2));
-    assert!(tail_cost(1) > tail_cost(2));
-    let e = ContextEngine::new(
-        ContextConfig {
-            context_window_tokens: tail_cost(2) + 50,
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-        },
-        Arc::new(DefaultTokenEstimator),
-    )
-    .unwrap();
     assert_eq!(
-        plan(
-            &e,
-            &history,
-            CompactionBudgets::new(0, 50, summary_cost(2)),
-            &CompactionConstraints::default()
-        )
-        .await
-        .unwrap(),
-        2
+        outcome.unwrap_err().kind,
+        ContextErrorKind::SearchIncomplete
     );
 }
 
 #[tokio::test]
-async fn n1_default_search_preserves_extremes_preference_and_fallback() {
+async fn n1_default_search_matches_exhaustive_primary_request_prices() {
     let history = input(129);
-    let summary_cost = |n| {
-        DefaultTokenEstimator.estimate_input(
-            &rustx::context::SummaryRequest {
-                retired: history[..n].to_vec(),
-            }
-            .model_input()
-            .messages,
-            "",
-            &[],
-        )
+    let primary_cost = |n| {
+        let mut candidate = vec![crate::context::planning::minimum_summary()];
+        candidate.extend_from_slice(&history[n..]);
+        DefaultTokenEstimator.estimate_input(&candidate, "", &[])
     };
     let tail_cost = |n| DefaultTokenEstimator.estimate_input(&history[n..], "", &[]);
-    for (first, last, recent) in [
-        (1, 1, 0),
-        (129, 129, 0),
-        (2, 100, 0),
-        (2, 100, tail_cost(50)),
-        (2, 100, u64::MAX),
-    ] {
+    for (first, recent) in [(1, 0), (129, 0), (2, 0), (2, tail_cost(50)), (2, u64::MAX)] {
         let e = ContextEngine::new(
             ContextConfig {
-                context_window_tokens: tail_cost(first) + 50,
+                context_window_tokens: primary_cost(first),
                 reserve_tokens: 0,
                 keep_recent_tokens: recent,
             },
@@ -708,10 +803,7 @@ async fn n1_default_search_preserves_extremes_preference_and_fallback() {
         )
         .unwrap();
         let feasible: Vec<_> = (1..=129)
-            .filter(|n| {
-                summary_cost(*n) <= summary_cost(last)
-                    && tail_cost(*n) + 50 <= e.soft_input_limit(0).unwrap()
-            })
+            .filter(|n| primary_cost(*n) <= e.admissible_input_limit(0).unwrap())
             .collect();
         let expected = feasible
             .iter()
@@ -723,7 +815,7 @@ async fn n1_default_search_preserves_extremes_preference_and_fallback() {
             plan(
                 &e,
                 &history,
-                CompactionBudgets::new(0, 50, summary_cost(last)),
+                CompactionBudgets::new(0, 50, 1),
                 &CompactionConstraints::default()
             )
             .await
@@ -736,9 +828,7 @@ async fn n1_default_search_preserves_extremes_preference_and_fallback() {
 #[tokio::test]
 async fn n1_arbitrary_non_monotone_prices_require_actual_candidate_queries() {
     let estimator = rustx::context::ClosureTokenEstimator::new(|messages, _, _| {
-        if matches!(messages, [ModelInputMessage::Derived(_)])
-            || [28, 23, 11].contains(&messages.len())
-        {
+        if [29, 24, 12].contains(&messages.len()) {
             1
         } else {
             1000
@@ -808,12 +898,10 @@ async fn n1_generic_exhaustion_distinguishes_incomplete_search_from_infeasibilit
 async fn n1_default_search_bounds_actual_render_copy_and_serialization_work() {
     for length in [512, 1024] {
         let history = input(length);
-        let full_summary = rustx::context::SummaryRequest {
-            retired: history.clone(),
-        }
-        .model_input();
         let logical_bytes = serde_json::to_vec(&history).unwrap().len() as u64;
-        let summary_bytes = serde_json::to_vec(&full_summary.messages).unwrap().len() as u64;
+        let summary_bytes = serde_json::to_vec(&crate::context::planning::minimum_summary())
+            .unwrap()
+            .len() as u64;
         let e = ContextEngine::new(
             ContextConfig {
                 context_window_tokens: 100_000,
@@ -834,10 +922,11 @@ async fn n1_default_search_bounds_actual_render_copy_and_serialization_work() {
         let probes = 3 * (u64::from(length.ilog2()) + 1) + 1;
         assert_eq!(
             crate::context::summarizer::take_summary_rendered_messages(),
-            length
+            0,
+            "retirement search never renders the historical summary input"
         );
         assert!(crate::context::tokens::take_estimator_calls() <= 3 * probes);
-        assert!(crate::context::summarizer::take_summary_copied_bytes() <= probes * summary_bytes);
+        assert_eq!(crate::context::summarizer::take_summary_copied_bytes(), 0);
         assert!(crate::context::planning::take_copied_bytes() <= probes * logical_bytes);
         assert!(
             crate::context::tokens::take_accounted_bytes()
@@ -925,12 +1014,10 @@ async fn production_media_search_bounds_reads_renders_queries_and_copied_bytes()
         let captured = crate::model::media::take_work();
         assert_eq!(captured.reads, 1);
         assert_eq!(captured.resolutions, 1);
-        let full_summary = rustx::context::SummaryRequest {
-            retired: history.clone(),
-        }
-        .model_input();
         let logical_bytes = serde_json::to_vec(&history).unwrap().len();
-        let summary_bytes = serde_json::to_vec(&full_summary.messages).unwrap().len();
+        let summary_bytes = serde_json::to_vec(&crate::context::planning::minimum_summary())
+            .unwrap()
+            .len();
         crate::context::summarizer::take_summary_rendered_messages();
         crate::context::tokens::take_estimator_calls();
         plan(
@@ -947,7 +1034,8 @@ async fn production_media_search_bounds_reads_renders_queries_and_copied_bytes()
         assert_eq!(work.resolutions, 0);
         assert_eq!(
             crate::context::summarizer::take_summary_rendered_messages(),
-            length
+            0,
+            "media-aware retirement search does not render summary fragments"
         );
         assert!(
             usize::try_from(crate::context::tokens::take_estimator_calls()).unwrap() <= 3 * probes

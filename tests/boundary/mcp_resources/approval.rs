@@ -270,11 +270,6 @@ async fn run_case(
     ]);
     let model_snapshot = support::attempt_model(model, "mcp-resource-approval");
     let context = crate::context::ContextRuntime::for_attempt(
-        crate::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(crate::context::DefaultTokenEstimator),
         None,
         &model_snapshot,

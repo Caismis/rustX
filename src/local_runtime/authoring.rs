@@ -1,17 +1,78 @@
 //! Strict TOML layers and explicit native composition. No dynamic value merge.
 use super::{
     config::{
-        ContextPolicyDocument, CurrentRuntimeConfig, InvocationPolicyDocument, McpServerDocument,
-        McpTransportType, NativePolicyOverrideDocument,
+        CurrentRuntimeConfig, InvocationPolicyDocument, McpServerDocument, McpTransportType,
+        NativePolicyOverrideDocument,
     },
     configuration::Origin,
 };
 use crate::model::catalog::{ModelProfileId, ModelRef};
-use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
+use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig, SummaryModelPolicy};
 use crate::toml_authoring::AuthoredRequestParams;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+/// Removed context controls are not repaired or ignored: compaction is automatic.
+pub(super) const REMOVED_CONTEXT_DIAGNOSTIC: &str = "remove the obsolete [context] table (reserve_tokens, keep_recent_tokens, and summary_output_cap); compaction is automatic, and primary and summary models can be selected under agent.model";
+
+pub(super) const REMOVED_SUMMARY_OUTPUT_DIAGNOSTIC: &str = "remove agent.model.summary_model.max_output_tokens; compaction determines its summary output allowance automatically";
+
+pub(super) enum RuntimeLayerParseFailure {
+    RemovedContext,
+    RemovedSummaryOutput,
+    Invalid(crate::toml_authoring::ParseFailure),
+}
+
+impl RuntimeLayerParseFailure {
+    pub(super) fn into_detail(self) -> String {
+        match self {
+            Self::RemovedContext => REMOVED_CONTEXT_DIAGNOSTIC.to_owned(),
+            Self::RemovedSummaryOutput => REMOVED_SUMMARY_OUTPUT_DIAGNOSTIC.to_owned(),
+            Self::Invalid(error) => error.into_detail(),
+        }
+    }
+}
+
+/// Recognize any root context value using the TOML syntax tree, including
+/// dotted keys and inline tables, without examining or exposing its values.
+pub(super) fn has_removed_context(document: &toml_edit::DocumentMut) -> bool {
+    document.as_table().contains_key("context")
+}
+
+/// Detect obsolete overrides in either root or named Agent TOML, including
+/// inline tables and dotted keys, without inspecting the authored value.
+pub(super) fn has_removed_summary_output(
+    document: &toml_edit::DocumentMut,
+    root_agent: bool,
+) -> bool {
+    let root: &dyn toml_edit::TableLike = document.as_table();
+    let profile = if root_agent {
+        root.get("agent").and_then(toml_edit::Item::as_table_like)
+    } else {
+        Some(root)
+    };
+    profile
+        .and_then(|table| table.get("model"))
+        .and_then(toml_edit::Item::as_table_like)
+        .and_then(|table| table.get("summary_model"))
+        .and_then(toml_edit::Item::as_table_like)
+        .is_some_and(|summary| summary.contains_key("max_output_tokens"))
+}
+
+pub(super) fn parse_runtime_layer(bytes: &[u8]) -> Result<RuntimeLayer, RuntimeLayerParseFailure> {
+    if let Ok(text) = std::str::from_utf8(bytes)
+        && let Ok(document) = text.parse::<toml_edit::DocumentMut>()
+    {
+        if has_removed_context(&document) {
+            return Err(RuntimeLayerParseFailure::RemovedContext);
+        }
+        if has_removed_summary_output(&document, true) {
+            return Err(RuntimeLayerParseFailure::RemovedSummaryOutput);
+        }
+    }
+    crate::toml_authoring::parse_detailed(bytes).map_err(RuntimeLayerParseFailure::Invalid)
+}
 
 type Origins = BTreeMap<String, Origin>;
 
@@ -97,8 +158,6 @@ pub struct RuntimeLayer<P = crate::model::authoring::Provider, E = AuthoredEnvir
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentProfileLayer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context: Option<ContextLayer>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_timeout_policy: Option<TimeoutLayer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_deadline_policy: Option<ToolDeadlineLayer>,
@@ -129,7 +188,6 @@ impl<P, E> Default for RuntimeLayer<P, E> {
             agent_id: None,
             approval_mode: None,
             agent: None,
-            context: None,
             model_timeout_policy: None,
             tool_deadline_policy: None,
             mcp_startup_policy: None,
@@ -163,7 +221,6 @@ impl<P, E> RuntimeLayer<P, E> {
             agent_id: self.agent_id,
             approval_mode: self.approval_mode,
             agent: self.agent,
-            context: self.context,
             model_timeout_policy: self.model_timeout_policy,
             tool_deadline_policy: self.tool_deadline_policy,
             mcp_startup_policy: self.mcp_startup_policy,
@@ -237,7 +294,7 @@ pub struct ModelLayer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<ModelOutput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary_model: Option<AuxiliaryModelAuthoring>,
+    pub summary_model: Option<SummaryModelAuthoring>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_model: Option<AuxiliaryModelAuthoring>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,11 +302,6 @@ pub struct ModelLayer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub btw_model: Option<AuxiliaryModelAuthoring>,
 }
-partial!(ContextLayer {
-    reserve_tokens: u64,
-    keep_recent_tokens: u64,
-    summary_output_cap: SummaryOutput
-});
 partial!(TimeoutLayer {
     response_start_timeout_ms: u64,
     stream_idle_timeout_ms: u64
@@ -286,20 +338,6 @@ impl ModelOutput {
 }
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-pub enum SummaryOutput {
-    ModelLimit {},
-    Limit { tokens: u32 },
-}
-impl SummaryOutput {
-    fn resolve(self) -> Option<u32> {
-        match self {
-            Self::ModelLimit {} => None,
-            Self::Limit { tokens } => Some(tokens),
-        }
-    }
-}
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum IdleLiveness {
     Disabled {},
     Window { milliseconds: u64 },
@@ -309,6 +347,34 @@ impl IdleLiveness {
         match self {
             Self::Disabled {} => None,
             Self::Window { milliseconds } => Some(milliseconds),
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SummaryModelAuthoring {
+    Session {},
+    Explicit {
+        model: ModelRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<ModelProfileId>,
+        #[serde(default)]
+        request_params: AuthoredRequestParams,
+    },
+}
+impl SummaryModelAuthoring {
+    fn resolve(self) -> SummaryModelPolicy {
+        match self {
+            Self::Session {} => SummaryModelPolicy::Session,
+            Self::Explicit {
+                model,
+                profile,
+                request_params,
+            } => SummaryModelPolicy::Explicit {
+                model,
+                profile,
+                request_params: request_params.0,
+            },
         }
     }
 }
@@ -489,18 +555,15 @@ pub(super) fn serialize_profile_model<S: serde::Serializer>(
                 .max_output_tokens
                 .map(|tokens| ModelOutput::Limit { tokens }),
             summary_model: Some(match &model.summary_model {
-                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
-                AuxiliaryModelPolicy::Explicit {
+                SummaryModelPolicy::Session => SummaryModelAuthoring::Session {},
+                SummaryModelPolicy::Explicit {
                     model,
                     profile,
                     request_params,
-                    max_output_tokens,
-                } => AuxiliaryModelAuthoring::Explicit {
+                } => SummaryModelAuthoring::Explicit {
                     model: model.clone(),
                     profile: profile.clone(),
                     request_params: AuthoredRequestParams(request_params.clone()),
-                    max_output_tokens: max_output_tokens
-                        .map(|tokens| ModelOutput::Limit { tokens }),
                 },
             }),
             title_model: Some(match &model.title_model {
@@ -584,16 +647,6 @@ impl ModelLayer {
         Ok(model)
     }
 }
-impl ContextLayer {
-    fn resolve(self) -> ContextPolicyDocument {
-        let mut context = ContextPolicyDocument::default();
-        apply!(self, context, reserve_tokens, keep_recent_tokens);
-        if let Some(cap) = self.summary_output_cap {
-            context.summary_output_cap = cap.resolve();
-        }
-        context
-    }
-}
 impl RuntimeLayer {
     /// Default provenance is native metadata, not a serialization/merge pass.
     pub fn record_default_origins(config: &CurrentRuntimeConfig, origins: &mut Origins) {
@@ -627,9 +680,6 @@ impl RuntimeLayer {
             "agent.model.title_model",
             "agent.model.classification_model",
             "agent.model.btw_model",
-            "context.reserve_tokens",
-            "context.keep_recent_tokens",
-            "context.summary_output_cap",
             "model_timeout_policy.response_start_timeout_ms",
             "model_timeout_policy.stream_idle_timeout_ms",
             "tool_deadline_policy.hard_deadline_ms",
@@ -677,7 +727,7 @@ impl RuntimeLayer {
     pub fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
         replace_units!(self, layer, "", origin, origins;
             schema_version, agent_id, approval_mode,
-            context, model_timeout_policy, tool_deadline_policy, mcp_startup_policy, subagents
+            model_timeout_policy, tool_deadline_policy, mcp_startup_policy, subagents
         );
         named(
             &mut self.providers,
@@ -712,17 +762,14 @@ impl RuntimeLayer {
             origins,
         );
     }
-    /// Resolve complete model selection and context policy.
+    /// Resolve the complete model selection.
     /// # Errors
     /// Rejects a missing model or an invalid complete selection.
-    pub fn model_sections(self) -> Result<(SessionModelConfig, ContextPolicyDocument), String> {
-        Ok((
-            self.agent
-                .and_then(|agent| agent.model)
-                .ok_or("missing agent.model")?
-                .resolve()?,
-            self.context.unwrap_or_default().resolve(),
-        ))
+    pub fn model_sections(self) -> Result<SessionModelConfig, String> {
+        self.agent
+            .and_then(|agent| agent.model)
+            .ok_or("missing agent.model")?
+            .resolve()
     }
     /// Resolve the winning semantic units with their domain defaults.
     ///
@@ -773,7 +820,6 @@ impl RuntimeLayer {
             }
             config.agent = profile;
         }
-        config.context = self.context.unwrap_or_default().resolve();
         if let Some(layer) = self.model_timeout_policy {
             let mut policy = config.model_timeout_policy;
             apply!(
@@ -830,13 +876,7 @@ mod tests {
         );
         (merged.resolve().unwrap(), origins)
     }
-    const LOWER: &str = r#"[context]
-[context.summary_output_cap]
-mode = "limit"
-tokens = 256
-
-
-[tool_deadline_policy]
+    const LOWER: &str = r#"[tool_deadline_policy]
 [tool_deadline_policy.idle_liveness_ms]
 mode = "window"
 milliseconds = 100
@@ -869,18 +909,12 @@ timezone = "Asia/Shanghai"
             inherited.initial_model().clone().max_output_tokens,
             Some(512)
         );
-        assert_eq!(inherited.context.summary_output_cap, Some(256));
         assert_eq!(inherited.tool_deadline_policy.idle_liveness_ms, Some(100));
         // The model selection is one replacement unit: an upper selection that
         // omits `profile` selects the Model's default profile.
         let (reset, origins) = resolve(
             LOWER,
-            r#"[context]
-[context.summary_output_cap]
-mode = "model_limit"
-
-
-[tool_deadline_policy]
+            r#"[tool_deadline_policy]
 [tool_deadline_policy.idle_liveness_ms]
 mode = "disabled"
 
@@ -902,7 +936,6 @@ timezone = "UTC"
         );
         assert_eq!(reset.initial_model().clone().profile, None);
         assert_eq!(reset.initial_model().clone().max_output_tokens, None);
-        assert_eq!(reset.context.summary_output_cap, None);
         assert_eq!(reset.tool_deadline_policy.idle_liveness_ms, None);
         assert_eq!(
             reset
@@ -915,7 +948,6 @@ timezone = "UTC"
         );
         for field in [
             "agent.model",
-            "context",
             "tool_deadline_policy",
             "agent.plugins.agent_status",
         ] {
@@ -926,13 +958,7 @@ timezone = "UTC"
     fn concrete_replacements_and_profile_names_do_not_collide_with_reset_modes() {
         let (config, _) = resolve(
             LOWER,
-            r#"[context]
-[context.summary_output_cap]
-mode = "limit"
-tokens = 512
-
-
-[tool_deadline_policy]
+            r#"[tool_deadline_policy]
 [tool_deadline_policy.idle_liveness_ms]
 mode = "window"
 milliseconds = 200
@@ -954,7 +980,6 @@ tokens = 1024
             "catalog_default"
         );
         assert_eq!(config.initial_model().clone().max_output_tokens, Some(1024));
-        assert_eq!(config.context.summary_output_cap, Some(512));
         assert_eq!(config.tool_deadline_policy.idle_liveness_ms, Some(200));
     }
     #[test]
@@ -1022,9 +1047,6 @@ profile = "summary"
 request_params = '''
 {"vendor": ["text", [1, 2], {"arbitrary": "yes", "unset": null}]}
 '''
-[agent.model.summary_model.max_output_tokens]
-mode = "limit"
-tokens = 256
 [agent.model.title_model]
 mode = "explicit"
 model = "p/t"
@@ -1046,7 +1068,7 @@ tokens = 128
         );
         let summary = model.summary_selection().unwrap();
         assert_eq!(summary.profile.as_ref().unwrap().as_str(), "summary");
-        assert_eq!(summary.max_output_tokens, Some(256));
+        assert_eq!(summary.max_output_tokens, None);
         assert_eq!(
             summary.request_params["vendor"][2]["unset"],
             serde_json::Value::Null

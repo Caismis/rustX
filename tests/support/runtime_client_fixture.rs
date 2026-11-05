@@ -15,9 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::model::scripted_session_model;
-use rustx::context::{
-    AgentStatusEngine, DefaultTokenEstimator, SessionContextPolicy, TokenEstimator,
-};
+use rustx::context::{AgentStatusEngine, DefaultTokenEstimator, TokenEstimator};
 use rustx::message::types::MessageBlock;
 use rustx::model::session::SessionModelState;
 use rustx::runtime::conversation_runtime::{
@@ -73,11 +71,6 @@ impl RuntimeClientFixture {
                 ..Default::default()
             },
             session_model: None,
-            context_policy: SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
         }
     }
 
@@ -140,8 +133,6 @@ pub struct RuntimeClientFixtureBuilder {
     /// catalog (several models, Model Profiles, or an explicit summary
     /// model). Defaults to the one scripted model.
     session_model: Option<SessionModelState>,
-    /// The static session context policy.
-    context_policy: SessionContextPolicy,
 }
 
 impl RuntimeClientFixtureBuilder {
@@ -265,13 +256,6 @@ impl RuntimeClientFixtureBuilder {
     #[must_use]
     pub fn session_model(mut self, model: SessionModelState) -> Self {
         self.session_model = Some(model);
-        self
-    }
-
-    /// Replaces the static session context policy.
-    #[must_use]
-    pub const fn context_policy(mut self, policy: SessionContextPolicy) -> Self {
-        self.context_policy = policy;
         self
     }
 
@@ -412,7 +396,6 @@ impl RuntimeClientFixtureBuilder {
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
-                policy: self.context_policy,
                 estimator,
                 status_engine: Some(self.status_engine),
             },

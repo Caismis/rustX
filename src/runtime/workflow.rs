@@ -5814,14 +5814,12 @@ chat_reasoning_replay = "omit"
         .unwrap();
         future.model_timeout_policy.response_start_timeout_ms = 41_000;
         future.tool_deadline_policy.hard_deadline_ms = 42_000;
-        future.context.reserve_tokens = 123;
         // Capture precedes publication; the Workflow's child is not prepared
         // until after this native registry publication has completed.
         plane.registry.publish_configuration(&future);
         let new_policy = crate::runtime::subagent::InheritedExecutionPolicy {
             model_timeout: future.timeout_policy().unwrap(),
             tool_deadline: future.tool_deadline_policy().unwrap(),
-            context: future.context_policy(),
         };
         assert_ne!(old_policy, new_policy);
         let (_, old_cancellation) = workflow_cancellation();

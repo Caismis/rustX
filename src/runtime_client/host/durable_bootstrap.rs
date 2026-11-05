@@ -180,21 +180,81 @@ fn read_compaction(
     context: &mut RuntimeClientContextView,
 ) -> Result<(), ConversationStoreError> {
     context.occupancy = store.observation_occupancy(cut.read.journal)?;
-    let facts = latest(
-        store,
-        cut,
-        vec![
-            K::CompactionStarted,
-            K::CompactionCompleted,
-            K::CompactionFailed,
-        ],
-        TraceFactScope::All,
-        1,
-    )?;
-    if let Some(latest) = facts.first() {
-        context.compaction_in_progress = latest.kind == K::CompactionStarted;
-        if let Some(B::CompactionFailed { detail }) = &latest.bootstrap {
-            context.compaction_error = Some(detail.text.clone());
+    // Progress is a bounded Journal observation, intentionally absent from
+    // Trace's closed event vocabulary. Read the latest lifecycle/progress
+    // witness directly at the same frozen Journal cut.
+    let kinds = [
+        "compaction_started",
+        "compaction_chunk_accepted",
+        "compaction_skipped",
+        "compaction_cancelled",
+        "compaction_failed",
+        "compaction_completed",
+    ]
+    .map(str::to_owned);
+    if let Some(latest) = store
+        .latest_observation_events(cut.read.journal, &kinds, None, 1)?
+        .pop()
+    {
+        let witness = latest.witness.ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "compaction observation witness unavailable".into(),
+            )
+        })?;
+        if witness.source_unavailable {
+            return Err(ConversationStoreError::InvalidReference(
+                "compaction observation witness unavailable".into(),
+            ));
+        }
+        match witness.event_kind.as_str() {
+            "compaction_started" | "compaction_chunk_accepted" => {
+                let event: crate::events::types::RuntimeEvent =
+                    serde_json::from_value(witness.value).map_err(|_| {
+                        ConversationStoreError::InvalidReference(
+                            "invalid compaction observation witness".into(),
+                        )
+                    })?;
+                context.compaction_progress = match event {
+                    crate::events::types::RuntimeEvent::CompactionStarted { operation_id } => Some(
+                        crate::runtime_client::snapshot::RuntimeClientCompactionProgress {
+                            operation_id,
+                            accepted_fragments: 0,
+                            source_ranges: Vec::new(),
+                            generation: None,
+                        },
+                    ),
+                    crate::events::types::RuntimeEvent::CompactionChunkAccepted {
+                        operation_id,
+                        accepted_fragments,
+                        source_ranges,
+                        generation,
+                    } => Some(
+                        crate::runtime_client::snapshot::RuntimeClientCompactionProgress {
+                            operation_id,
+                            accepted_fragments,
+                            source_ranges,
+                            generation,
+                        },
+                    ),
+                    _ => {
+                        return Err(ConversationStoreError::InvalidReference(
+                            "invalid compaction observation family".into(),
+                        ));
+                    }
+                };
+                // This reader has only historical authorities and no execution
+                // owner. An unfinished prefix is not proof that work survived
+                // a process restart; live hosts receive owner publications.
+                context.compaction_in_progress = false;
+            }
+            "compaction_failed" => {
+                context.compaction_error = witness
+                    .value
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+            }
+            _ => {}
         }
     }
     if let Some(compaction) = read_latest_compaction(store, cut)? {

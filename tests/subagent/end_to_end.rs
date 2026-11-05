@@ -49,10 +49,6 @@ chat_reasoning_replay = "omit"
 
 const SESSION_TOML: &str = r#"agent_id = "agent-parent"
 
-[context]
-reserve_tokens = 1024
-keep_recent_tokens = 8192
-
 
 [subagents]
 max_concurrent = 4
@@ -73,10 +69,6 @@ model = "fixture/subagent-model"
 "#;
 
 const SHARED_SUBDIRECTORY_SESSION_TOML: &str = r#"agent_id = "agent-parent"
-
-[context]
-reserve_tokens = 1024
-keep_recent_tokens = 8192
 
 
 [subagents]

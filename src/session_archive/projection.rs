@@ -179,6 +179,15 @@ fn auxiliary_finish_reason(reason: crate::model::auxiliary::AuxiliaryFinishReaso
 fn auxiliary_input(input: &crate::model::auxiliary::AuxiliaryInputEvidence) -> Value {
     use crate::model::auxiliary::AuxiliaryInputEvidence;
     match input {
+        AuxiliaryInputEvidence::Compaction {
+            cut,
+            source_ranges,
+            previous_summary,
+            output_strategy,
+        } => json!({
+            "mode": "compaction", "cut": cut, "source_ranges": source_ranges,
+            "previous_summary": previous_summary, "output_strategy": output_strategy,
+        }),
         AuxiliaryInputEvidence::Temporary => json!({"mode":"temporary"}),
         AuxiliaryInputEvidence::Historical { cut } => json!({"mode":"historical","cut":{
             "conversation_id":cut.conversation_id, "ledger":cut.ledger,
@@ -201,8 +210,11 @@ fn auxiliary_business_source(source: &crate::model::auxiliary::AuxiliaryBusiness
         } => {
             json!({"kind":"business","namespace":namespace,"reference":reference})
         }
-        AuxiliaryBusinessSource::Compaction { operation_id } => {
-            json!({"kind":"compaction","operation_id":operation_id})
+        AuxiliaryBusinessSource::Compaction {
+            operation_id,
+            preceding_call,
+        } => {
+            json!({"kind":"compaction","operation_id":operation_id,"preceding_call":preceding_call})
         }
         AuxiliaryBusinessSource::HumanMessage { message_id } => {
             json!({"kind":"human_message","message_id":message_id})
@@ -461,6 +473,9 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::ToolExecutionSettlementObserved { .. }
         | RuntimeEvent::ToolMessageCommitted { .. }
         | RuntimeEvent::CompactionStarted { .. }
+        | RuntimeEvent::CompactionChunkAccepted { .. }
+        | RuntimeEvent::CompactionSkipped { .. }
+        | RuntimeEvent::CompactionCancelled { .. }
         | RuntimeEvent::CompactionCompleted { .. }
         | RuntimeEvent::BackgroundExecutionCommitted { .. }
         | RuntimeEvent::BackgroundTerminalPublished { .. }

@@ -6,6 +6,7 @@
 
 #[cfg(test)]
 use super::attribution;
+use super::compaction::{CompactionInput, CompactionNeed};
 use super::start::RequestObservationIdentity;
 use super::terminal::Terminal;
 use super::{AgentExecution, DurableFailureKind};
@@ -88,8 +89,6 @@ pub(super) struct StagedModelTurn {
     /// The staged projection (over the scratch conversation that includes
     /// the not-yet-committed request-scoped context).
     projection: ContextProjection,
-    /// The staged Effective System Prompt.
-    effective_system_prompt: String,
     /// Snapshot metadata; exact input is frozen only after final preflight.
     snapshot: RequestSnapshot,
     /// The exact provider-neutral request of the staged projection.
@@ -198,38 +197,6 @@ impl AgentExecution<'_> {
             )));
         }
         self.freeze_pending_carryover()?;
-        // Compact already-committed history before staging this step's
-        // dynamic context. This keeps an unobserved fresh inbound batch and
-        // its newly staged Runtime fact from blocking a
-        // complete-message compaction candidate that belongs to older
-        // history. A second fit check below still rejects a request whose
-        // newly staged context cannot fit on its own. This compaction is
-        // independent conversation-history maintenance with its own
-        // canonical commit; it reserves no staged tokens.
-        self.freeze_model_media(&[]).await?;
-        let baseline_prompt = self.effective_system_prompt()?;
-        let baseline_projection = self.current_projection(&baseline_prompt)?;
-        if self
-            .context_runtime
-            .engine
-            .should_compact(
-                &baseline_projection,
-                self.compaction_budgets().primary_output_budget,
-            )
-            .map_err(|error| Self::context_failure_terminal(&error))?
-        {
-            let must_cover = self.continuation_owner.clone();
-            let fresh = self.pending_fresh_inbound.clone();
-            self.perform_compaction(
-                must_cover.as_ref(),
-                fresh.as_ref(),
-                &baseline_prompt,
-                None,
-                &[],
-                None,
-            )
-            .await?;
-        }
         // The pending fresh inbound turn's canonical consistency is an
         // Agent Loop contract, checked before and independently of the
         // launch's native Agent Extension composition (Issue #256): an
@@ -344,7 +311,29 @@ impl AgentExecution<'_> {
         self.freeze_model_media(&staged_context).await?;
         let mut staged = self.stage_model_turn(request_ordinal, &staged_context)?;
         let budgets = self.compaction_budgets();
-        let should_compact = match self
+        let hard_input_limit = self
+            .context_runtime
+            .engine
+            .admissible_input_limit(budgets.primary_output_budget)
+            .map_err(|error| Self::context_failure_terminal(&error))?;
+        // A carryover is auxiliary continuity data. Degrade it first if that
+        // alone lets the complete request pass the hard admission limit.
+        while staged.estimated_input > hard_input_limit
+            && staged.projection.estimated_input.input_tokens <= hard_input_limit
+        {
+            if !self
+                .logical_step
+                .frozen_carryover
+                .as_mut()
+                .is_some_and(FrozenCarryover::degrade)
+            {
+                break;
+            }
+            staged = self.stage_model_turn(request_ordinal, &staged_context)?;
+        }
+        let mandatory = staged.estimated_input > hard_input_limit
+            || staged.projection.estimated_input.input_tokens > hard_input_limit;
+        let projection_pressure = match self
             .context_runtime
             .engine
             .should_compact(&staged.projection, budgets.primary_output_budget)
@@ -352,7 +341,16 @@ impl AgentExecution<'_> {
             Ok(value) => value,
             Err(error) => return Err(Self::context_failure_terminal(&error)),
         };
-        if should_compact {
+        // Price the complete frozen request as well as the projection's
+        // potentially provider-anchored measurement. Request-only carryover
+        // and protocol feedback are part of this actual input.
+        let proactive_limit = self
+            .context_runtime
+            .engine
+            .proactive_input_limit(budgets.primary_output_budget)
+            .map_err(|error| Self::context_failure_terminal(&error))?;
+        let should_compact = projection_pressure || staged.estimated_input >= proactive_limit;
+        if mandatory || (should_compact && self.compaction_control.optional_allowed()) {
             // The staged context is not yet canonical, so this compaction
             // plans over the committed Surface and evaluates every candidate
             // against the exact hypothetical post-compaction request: the
@@ -368,13 +366,22 @@ impl AgentExecution<'_> {
             // `perform_compaction` owns the post-surface-rewrite
             // invalidation of the opaque provider continuation; no caller
             // clears it a second time.
-            self.perform_compaction(
+            self.perform_compaction_with_need(
                 must_cover.as_ref(),
                 fresh.as_ref(),
-                &staged.effective_system_prompt,
+                &CompactionInput {
+                    effective_system_prompt: &staged.request.effective_system_prompt,
+                    tools: &staged.request.tools,
+                    staged_request_context: &staged_context,
+                    estimated_input: staged.estimated_input,
+                },
                 None,
-                &staged_context,
                 None,
+                if mandatory {
+                    CompactionNeed::Mandatory
+                } else {
+                    CompactionNeed::Optional
+                },
             )
             .await?;
             // Restage over the rewritten Surface: the staged context blocks
@@ -383,25 +390,19 @@ impl AgentExecution<'_> {
         }
         // Carryover is auxiliary continuity context. If the canonical
         // projection is runnable, reduce only this request-only value until
-        // the exact mixed request is runnable; it never creates a compaction
-        // trigger and never turns a canonical fit into `CannotFit`.
-        let soft_limit = self
-            .context_runtime
-            .engine
-            .soft_input_limit(budgets.primary_output_budget)
-            .map_err(|error| Self::context_failure_terminal(&error))?;
-        while staged.estimated_input >= soft_limit {
-            let canonical_fits = staged.projection.estimated_input.input_tokens < soft_limit;
+        // the exact mixed request is runnable, without bypassing hard admission.
+        while staged.estimated_input > hard_input_limit {
+            let canonical_fits = staged.projection.estimated_input.input_tokens <= hard_input_limit;
             let Some(carryover) = self.logical_step.frozen_carryover.as_mut() else {
                 if canonical_fits {
                     return Err(Self::context_failure_terminal(&ContextError::new(
                         ContextErrorKind::CannotFit,
-                        "the staged model turn exceeds the soft input limit",
+                        "the staged model turn exceeds the admissible input limit",
                     )));
                 }
                 return Err(Self::context_failure_terminal(&ContextError::new(
                     ContextErrorKind::CannotFit,
-                    "the staged model turn still exceeds the soft input limit after compaction",
+                    "the staged model turn still exceeds the admissible input limit after compaction",
                 )));
             };
             if !carryover.degrade() {
@@ -410,11 +411,17 @@ impl AgentExecution<'_> {
                     if canonical_fits {
                         "request-only carryover exhausted its fit degradation ladder"
                     } else {
-                        "the staged model turn still exceeds the soft input limit after compaction"
+                        "the staged model turn still exceeds the admissible input limit after compaction"
                     },
                 )));
             }
             staged = self.stage_model_turn(request_ordinal, &staged_context)?;
+        }
+        if staged.projection.estimated_input.input_tokens > hard_input_limit {
+            return Err(Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::CannotFit,
+                "the admitted model input still exceeds the hard limit after compaction",
+            )));
         }
         self.finalize_model_turn(&staged_context, staged)
     }
@@ -651,13 +658,17 @@ impl AgentExecution<'_> {
             );
         }
         let projected = projected.messages();
-        let projection = self.context_runtime.engine.build_projection_input(
-            revision,
-            projected,
-            &self.tool_registry().model_definitions(),
-            self.reusable_observation(),
-            &effective_system_prompt,
-        );
+        let projection = {
+            #[cfg(test)]
+            let _profile = attribution::Timer::new(attribution::Phase::ContextProjection);
+            self.context_runtime.engine.build_projection_input(
+                revision,
+                projected,
+                &self.tool_registry().model_definitions(),
+                self.reusable_observation(),
+                &effective_system_prompt,
+            )
+        };
         let (mut request_messages, mut input_manifest) =
             crate::model::input::assemble_selected_model_input(
                 &self.request.conversation_id,
@@ -784,7 +795,6 @@ impl AgentExecution<'_> {
             input_manifest,
             retire_continuation,
             projection,
-            effective_system_prompt: request.effective_system_prompt.clone(),
             snapshot,
             request,
             estimated_input,
@@ -800,15 +810,17 @@ impl AgentExecution<'_> {
         staged_context: &[MessageBlock],
         mut staged: StagedModelTurn,
     ) -> Result<PreparedModelTurn, Terminal> {
-        let soft_limit = self
+        let hard_limit = self
             .context_runtime
             .engine
-            .soft_input_limit(self.compaction_budgets().primary_output_budget)
+            .admissible_input_limit(self.compaction_budgets().primary_output_budget)
             .map_err(|error| Self::context_failure_terminal(&error))?;
-        if staged.estimated_input >= soft_limit {
+        if staged.estimated_input > hard_limit
+            || staged.projection.estimated_input.input_tokens > hard_limit
+        {
             return Err(Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::CannotFit,
-                "final frozen request exceeds the soft input limit",
+                "final frozen request exceeds the admissible input limit",
             )));
         }
         // The single mandatory adapter-owned semantic admission boundary follows
@@ -882,48 +894,6 @@ impl AgentExecution<'_> {
             request_identity,
             estimated_input: staged.estimated_input,
         })
-    }
-
-    /// The current finite projection of the Conversation Surface, or the
-    /// terminal the attempt must settle with when the context plane failed.
-    fn current_projection(
-        &self,
-        effective_system_prompt: &str,
-    ) -> Result<ContextProjection, Terminal> {
-        #[cfg(test)]
-        let _profile = attribution::Timer::new(attribution::Phase::ContextProjection);
-        let history = self.store.projected_history().map_err(|error| {
-            Self::context_failure_terminal(&ContextError::new(
-                ContextErrorKind::MalformedHistory,
-                error.to_string(),
-            ))
-        })?;
-        Ok(self.context_runtime.engine.build_projection_input(
-            self.conversation.revision(),
-            history.messages,
-            &self.tool_registry().model_definitions(),
-            self.reusable_observation(),
-            effective_system_prompt,
-        ))
-    }
-
-    /// Renders the exact request-time Effective System Prompt solely from
-    /// the attempt-pinned resource generation and accepted request sections.
-    pub(super) fn effective_system_prompt(&self) -> Result<String, Terminal> {
-        if let Some(accepted) = &self.logical_step.accepted_context {
-            return Ok(render_effective_system_prompt(&accepted.system_sections));
-        }
-        let sections = self
-            .context_runtime
-            .assembly
-            .system_sections(&self.context_runtime.native_system)
-            .map_err(|error| {
-                Self::context_failure_terminal(&ContextError::new(
-                    ContextErrorKind::Internal,
-                    error.to_string(),
-                ))
-            })?;
-        Ok(render_effective_system_prompt(&sections))
     }
 
     fn claimed_model_input(
@@ -1108,6 +1078,8 @@ impl AgentExecution<'_> {
             effective_system_prompt.push_str(&hint.reason);
         }
         ModelRequest {
+            prompt_fallback_authorization:
+                crate::model::types::PromptFallbackAuthorization::default(),
             response_schema: None,
             response_byte_limit: None,
             images: std::collections::BTreeMap::new(),

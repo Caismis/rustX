@@ -320,6 +320,8 @@ impl RuntimeResourceSnapshot {
             binding,
             snapshot.primary().context_window(),
             crate::model::ModelRequest {
+                prompt_fallback_authorization:
+                    crate::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: None,
                 continuation_source: None,
@@ -345,6 +347,8 @@ impl RuntimeResourceSnapshot {
             summary_binding,
             snapshot.summary_invocation().context_window(),
             crate::model::ModelRequest {
+                prompt_fallback_authorization:
+                    crate::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: None,
                 continuation_source: None,

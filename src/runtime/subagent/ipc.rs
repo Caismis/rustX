@@ -47,7 +47,6 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::context::SessionContextPolicy;
 use crate::model::deadline::ModelTimeoutPolicy;
 use crate::runtime::identity::{AgentId, ConversationId, ProcessUnitId, SubagentId};
 use crate::runtime::types::{ApprovalMode, CancellationReason};
@@ -113,7 +112,7 @@ use super::resolver::ResolvedSubagentSpec;
 /// Version 36 freezes source-wide Resources authority independently of exact Tools.
 /// Version 37 combines frozen Resources authority with Scheduled Workflow and
 /// interaction origins and prepared execution inputs.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 37;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 38;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -209,7 +208,6 @@ pub(crate) struct SubagentChildSpec {
     /// to the hard/idle deadlines of its own foreground Tool executions.
     pub tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
     /// The session context policy of the child.
-    pub context: SessionContextPolicy,
     /// The invoking Session's execution workspace binding, frozen by the
     /// parent at creation. The child uses exactly this directory; it never
     /// resolves a default workspace or falls back to its process CWD.
@@ -1193,11 +1191,6 @@ mod tests {
             approval_mode: ApprovalMode::FullAccess,
             model_timeout_policy: ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            context: SessionContextPolicy {
-                reserve_tokens: 1,
-                keep_recent_tokens: 2,
-                summary_output_cap: None,
-            },
             workspace: PathBuf::from("/tmp/ws"),
             incarnation: "incarnation-test".to_owned(),
             product_root: PathBuf::from("/tmp"),
@@ -1224,7 +1217,7 @@ mod tests {
         old_version["protocolVersion"] = serde_json::json!(30);
         let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
         assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
-        assert_eq!(SUBAGENT_IPC_VERSION, 37);
+        assert_eq!(SUBAGENT_IPC_VERSION, 38);
     }
 
     #[test]

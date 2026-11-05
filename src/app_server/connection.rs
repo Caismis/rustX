@@ -1019,9 +1019,12 @@ impl AppServerConnection {
                         async move {
                             let authority = authority?;
                             let tail = match method {
-                                Method::CompactContext { request_id, .. } => {
-                                    authority.admit_compaction_transfer(Some(request_id))
-                                }
+                                Method::CompactContext {
+                                    request_id,
+                                    instructions,
+                                    ..
+                                } => authority
+                                    .admit_compaction_transfer(Some(request_id), instructions),
                                 Method::JobWait { job_id, .. } => authority.admit_job_wait(&job_id),
                                 Method::AgentWait { agent_id, .. } => {
                                     authority.admit_agent_wait(&agent_id)

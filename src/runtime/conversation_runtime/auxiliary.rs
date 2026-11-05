@@ -398,11 +398,6 @@ impl ConversationRuntime {
             })?;
         let invocation = invocation.clone();
         let resources = state.resources.clone();
-        let policy = resources
-            .configuration()
-            .map_or(self.inner.context.policy, |generation| {
-                generation.config.context_policy()
-            });
         let timeout =
             resources
                 .configuration()
@@ -414,7 +409,13 @@ impl ConversationRuntime {
                 });
         drop(state);
         let mut engine = crate::context::ContextEngine::new(
-            policy.config_for_window(invocation.context_window()),
+            crate::context::policy::CompactionPolicy::resolve(
+                invocation.context_window(),
+                invocation.max_output_tokens(),
+                invocation.context_window(),
+                invocation.max_output_tokens(),
+            )?
+            .primary,
             self.inner.context.estimator.clone(),
         )?;
         engine.set_image_projection(
@@ -519,6 +520,8 @@ impl ConversationRuntime {
                 crate::model::RequestOnlyModelContext::AuxiliaryQuestion { text: question },
             ));
             let request = ModelRequest {
+                prompt_fallback_authorization:
+                    crate::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: Some(
                     crate::model::adapter::response_budget::AUXILIARY_RESPONSE_BYTES,
@@ -554,7 +557,7 @@ impl ConversationRuntime {
                 }
             })?;
             if engine.estimate_frozen_request(&request)
-                > engine.soft_input_limit(invocation.max_output_tokens())?
+                > engine.admissible_input_limit(invocation.max_output_tokens())?
             {
                 return Err(ContextError::new(
                     ContextErrorKind::CannotFit,

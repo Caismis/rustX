@@ -7,16 +7,29 @@
 use serde_json::{Value, json};
 
 use crate::model::error::{ModelError, ModelErrorKind, ModelRetryDisposition};
+use crate::model::structured::StructuredOutputStrategy;
 use crate::model::types::{ModelProtocol, ModelRequest};
 
 pub(crate) fn validate_request(request: &ModelRequest) -> Result<(), ModelError> {
     let Some(output) = &request.response_schema else {
         return Ok(());
     };
-    if output.is_native() != request.invocation.capabilities.json_schema_output {
+    if !output.matches_capability(request.invocation.capabilities.json_schema_output) {
         return Err(error(
             ModelErrorKind::Unsupported,
             "the prepared structured output strategy does not match the frozen native JSON Schema capability",
+        ));
+    }
+    if let StructuredOutputStrategy::PromptFallback { operation_id } = &output.strategy
+        && (operation_id.as_str().is_empty()
+            || !request.has_prompt_fallback_authorization(operation_id)
+            || !request
+                .effective_system_prompt
+                .ends_with(&output.schema.prompt_instruction()))
+    {
+        return Err(error(
+            ModelErrorKind::InvalidRequest,
+            "structured output fallback lacks exact operation authorization or its frozen prompt contract",
         ));
     }
     let params = request.request_params();

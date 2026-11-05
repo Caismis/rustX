@@ -2,6 +2,7 @@
 //! latest frozen input, context-overflow compact-and-retry, and the shared
 //! semantic corrective-generation budget.
 
+use super::compaction::{CompactionInput, CompactionNeed, CompactionOutcome};
 use super::request::PreparedModelTurn;
 use super::stream::ModelInvocation;
 use super::terminal::Terminal;
@@ -334,7 +335,23 @@ impl AgentExecution<'_> {
                 failure: AttemptFailure::Runtime { error },
             });
         }
-        let effective_system_prompt = self.effective_system_prompt()?;
+        let (effective_system_prompt, tools, estimated_input) = self
+            .logical_step
+            .current_input
+            .as_ref()
+            .map(|input| {
+                (
+                    input.request.effective_system_prompt.clone(),
+                    input.request.tools.clone(),
+                    input.estimated_input,
+                )
+            })
+            .ok_or_else(|| {
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    "overflow recovery has no frozen primary request",
+                ))
+            })?;
         let must_cover = self.continuation_owner.clone();
         // ContextWindowExceeded is a rejected provider request, not evidence
         // that a successful model invocation observed the fresh inbound
@@ -367,17 +384,28 @@ impl AgentExecution<'_> {
             })
             .unwrap_or(EstimateCorrection::UNQUANTIFIED);
         match self
-            .perform_compaction(
+            .perform_compaction_with_need(
                 must_cover.as_ref(),
                 fresh.as_ref(),
-                &effective_system_prompt,
+                &CompactionInput {
+                    effective_system_prompt: &effective_system_prompt,
+                    tools: &tools,
+                    staged_request_context: &[],
+                    estimated_input,
+                },
                 Some(overflow_error),
-                &[],
                 Some(estimate_correction),
+                CompactionNeed::Mandatory,
             )
             .await
         {
-            Ok(()) => {}
+            Ok(CompactionOutcome::Committed) => {}
+            Ok(CompactionOutcome::Deferred) => {
+                return Err(Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    "mandatory overflow compaction was unexpectedly deferred",
+                )));
+            }
             Err(terminal) => return Err(terminal),
         }
         // The cancellation check here is a cheap fast path only: it avoids

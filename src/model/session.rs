@@ -36,9 +36,7 @@
 //! protected-key validation, and shallow overlay as a primary model:
 //!
 //! - `session` — the summary uses the attempt's frozen primary invocation,
-//!   subject only to the context plane's summary output safety cap, which is
-//!   applied through the runtime-owned protected max-output field and never
-//!   by mutating a Model Profile or a request-parameter object;
+//!   with the runtime determining the summary output allowance;
 //! - `explicit` — a separately resolved catalog model, frozen at admission
 //!   so a later mutation of live session state cannot change the summary
 //!   model of an already-admitted attempt.
@@ -51,6 +49,42 @@ use crate::model::invocation::{
     ModelBindingRegistry, ModelInvocationError, ModelInvocationView, ModelSelection, RequestParams,
     RequestParamsLayer, ResolvedModelInvocation,
 };
+
+/// Compaction follows the Session model or selects an independent model.
+/// Summary output is determined by the runtime from model capabilities.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SummaryModelPolicy {
+    #[default]
+    Session,
+    Explicit {
+        model: ModelRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<ModelProfileId>,
+        #[serde(default)]
+        request_params: RequestParams,
+    },
+}
+
+impl SummaryModelPolicy {
+    /// The explicit model selection, without a user-authored output override.
+    #[must_use]
+    pub fn selection(&self) -> Option<ModelSelection> {
+        match self {
+            Self::Session => None,
+            Self::Explicit {
+                model,
+                profile,
+                request_params,
+            } => Some(ModelSelection {
+                model: model.clone(),
+                profile: profile.clone(),
+                request_params: request_params.clone(),
+                max_output_tokens: None,
+            }),
+        }
+    }
+}
 
 /// A Session auxiliary invocation follows primary or selects a catalog model.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -102,7 +136,7 @@ pub struct SessionModelConfig {
     pub max_output_tokens: Option<u32>,
     /// The compaction summary model policy.
     #[serde(default)]
-    pub summary_model: AuxiliaryModelPolicy,
+    pub summary_model: SummaryModelPolicy,
     /// The independent automatic title model policy.
     #[serde(default)]
     pub title_model: AuxiliaryModelPolicy,
@@ -133,7 +167,7 @@ impl SessionModelConfig {
             profile: None,
             request_params: RequestParams::new(),
             max_output_tokens: None,
-            summary_model: AuxiliaryModelPolicy::Session,
+            summary_model: SummaryModelPolicy::Session,
             title_model: AuxiliaryModelPolicy::Session,
             classification_model: Box::new(AuxiliaryModelPolicy::Session),
             btw_model: Box::new(AuxiliaryModelPolicy::Session),
@@ -798,7 +832,7 @@ impl SessionModelReadSource {
                     .as_ref()
                     .map(super::catalog::ModelProfileId::as_str),
                 "requestParams" => parameter_text(&self.state.config.request_params, &path[2..]),
-                "summaryModel" => policy_text(&self.state.config.summary_model, &path[2..]),
+                "summaryModel" => summary_policy_text(&self.state.config.summary_model, &path[2..]),
                 "titleModel" => policy_text(&self.state.config.title_model, &path[2..]),
                 "classificationModel" => {
                     policy_text(&self.state.config.classification_model, &path[2..])
@@ -1080,6 +1114,24 @@ fn invocation_text<'a>(
             .profile()
             .map(super::catalog::ModelProfileId::as_str),
         "requestParams" => parameter_text(invocation.request_params(), &path[1..]),
+        _ => None,
+    }
+}
+fn summary_policy_text<'a>(policy: &'a SummaryModelPolicy, path: &[String]) -> Option<&'a str> {
+    let SummaryModelPolicy::Explicit {
+        model,
+        profile,
+        request_params,
+    } = policy
+    else {
+        return None;
+    };
+    match path.first()?.as_str() {
+        "model" if path.len() == 1 => Some(model.as_str()),
+        "profile" if path.len() == 1 => {
+            profile.as_ref().map(super::catalog::ModelProfileId::as_str)
+        }
+        "request_params" => parameter_text(request_params, &path[1..]),
         _ => None,
     }
 }
@@ -1392,6 +1444,15 @@ mod tests {
     }
 
     #[test]
+    fn summary_model_rejects_output_override_while_title_retains_it() {
+        let summary =
+            serde_json::json!({"mode":"explicit", "model":"p/m", "max_output_tokens":128});
+        assert!(serde_json::from_value::<SummaryModelPolicy>(summary.clone()).is_err());
+        let title: AuxiliaryModelPolicy = serde_json::from_value(summary).unwrap();
+        assert_eq!(title.selection().unwrap().max_output_tokens, Some(128));
+    }
+
+    #[test]
     fn analyze_session_model_config_validates_primary_and_explicit_summary() {
         let document: crate::local_runtime::authoring::RuntimeLayer = crate::toml_authoring::parse(
             include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
@@ -1408,15 +1469,14 @@ mod tests {
         .unwrap();
         let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
         config.max_output_tokens = Some(2048);
-        config.summary_model = AuxiliaryModelPolicy::Explicit {
+        config.summary_model = SummaryModelPolicy::Explicit {
             model: config.model.clone(),
             profile: None,
             request_params: RequestParams::new(),
-            max_output_tokens: Some(1024),
         };
         let (primary, summary) = analyze_session_model_config(&catalog, &config).unwrap();
         assert_eq!(primary.max_output_tokens, 2048);
-        assert_eq!(summary.unwrap().max_output_tokens, 1024);
+        assert_eq!(summary.unwrap().max_output_tokens, 4096);
 
         config
             .request_params
@@ -1428,8 +1488,7 @@ mod tests {
         };
         assert_eq!(error.layer, RequestParamsLayer::SessionOverrides);
         config.request_params.clear();
-        let AuxiliaryModelPolicy::Explicit { request_params, .. } = &mut config.summary_model
-        else {
+        let SummaryModelPolicy::Explicit { request_params, .. } = &mut config.summary_model else {
             unreachable!()
         };
         request_params.insert("messages".into(), serde_json::json!([]));
@@ -1457,17 +1516,14 @@ mod tests {
         )
         .unwrap();
         let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
-        for (model, profile, budget) in [
-            ("example/missing", None, None),
-            ("example/demo-model", Some("missing"), None),
-            ("example/demo-model", None, Some(0)),
-            ("example/demo-model", None, Some(4097)),
+        for (model, profile) in [
+            ("example/missing", None),
+            ("example/demo-model", Some("missing")),
         ] {
-            config.summary_model = AuxiliaryModelPolicy::Explicit {
+            config.summary_model = SummaryModelPolicy::Explicit {
                 model: ModelRef::parse(model).unwrap(),
                 profile: profile.map(|p| ModelProfileId::parse(p).unwrap()),
                 request_params: RequestParams::new(),
-                max_output_tokens: budget,
             };
             assert!(analyze_session_model_config(&catalog, &config).is_err());
         }

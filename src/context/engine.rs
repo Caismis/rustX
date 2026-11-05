@@ -62,74 +62,16 @@ pub(crate) fn assemble_context_input(
     Ok(messages)
 }
 
-/// The static current-runtime context policy.
-///
-/// A conversation session owns the *policy* — the safety reserve, the
-/// uncompressed recent-history target, and the summary output safety cap —
-/// but it deliberately does **not** own a context window. The context window
-/// belongs to the model, and the session model may change between attempts,
-/// so the effective [`ContextConfig`] of an attempt is derived from this
-/// policy plus that attempt's immutable model snapshot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionContextPolicy {
-    /// Tokens permanently reserved out of whichever model context window is
-    /// in force.
-    pub reserve_tokens: u64,
-    /// Tokens of recent conversation content kept uncompressed. This is a
-    /// token target, never a message count target.
-    pub keep_recent_tokens: u64,
-    /// The context plane's summary/output safety cap, when it imposes one.
-    pub summary_output_cap: Option<u32>,
-}
-
-impl SessionContextPolicy {
-    /// Validate primary and summary budgets without binding a provider.
-    ///
-    /// # Errors
-    /// Rejects impossible input budgets and a zero summary cap.
-    pub fn validate_budgets(
-        &self,
-        primary: (u64, u32),
-        summary: (u64, u32),
-    ) -> Result<(), ContextError> {
-        if self.summary_output_cap == Some(0) {
-            return Err(ContextError::new(
-                ContextErrorKind::InvalidConfiguration,
-                "summary_output_cap must be positive when present",
-            ));
-        }
-        self.config_for_window(primary.0)
-            .soft_input_limit(primary.1)?;
-        let summary_output = self
-            .summary_output_cap
-            .map_or(summary.1, |cap| cap.min(summary.1));
-        self.config_for_window(summary.0)
-            .soft_input_limit(summary_output)?;
-        Ok(())
-    }
-
-    /// Derives the attempt context configuration for one model context
-    /// window.
-    #[must_use]
-    pub const fn config_for_window(&self, context_window_tokens: u64) -> ContextConfig {
-        ContextConfig {
-            context_window_tokens,
-            reserve_tokens: self.reserve_tokens,
-            keep_recent_tokens: self.keep_recent_tokens,
-        }
-    }
-}
-
 /// The runtime-owned context configuration of one attempt.
 ///
 /// The soft input limit of one request is derived explicitly and checked:
 ///
 /// ```text
-/// soft_input_limit = context_window_tokens - reserve_tokens - max_output_tokens
+/// admissible_input_limit = context_window_tokens - reserve_tokens - max_output_tokens
 /// ```
 ///
-/// Automatic compaction triggers at `estimated_input >= soft_input_limit`
-/// (equality compacts). Impossible configurations are rejected; no fallback
+/// Automatic compaction triggers at 90% of the admissible input limit.
+/// Admission accepts equality at the hard limit. Impossible capacities are rejected; no fallback
 /// constant is hidden.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextConfig {
@@ -200,7 +142,7 @@ impl ContextConfig {
     ///
     /// Returns [`ContextErrorKind::InvalidConfiguration`] when the window
     /// leaves no positive effective input budget.
-    pub fn soft_input_limit(&self, max_output_tokens: u32) -> Result<u64, ContextError> {
+    pub fn admissible_input_limit(&self, max_output_tokens: u32) -> Result<u64, ContextError> {
         let output = u64::from(max_output_tokens);
         if self.context_window_tokens <= self.reserve_tokens {
             return Err(ContextError::new(
@@ -237,6 +179,8 @@ impl ContextConfig {
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct CompactionConstraints<'a> {
+    /// Bounded summary focus hints; never changes coverage or output authority.
+    pub focus: Option<&'a str>,
     /// The continuation constraint: the span must retire the
     /// continuation-owning turn completely.
     pub must_cover_through: Option<&'a MessageId>,
@@ -267,6 +211,9 @@ pub struct CompactionConstraints<'a> {
     /// request, if any. It is fit-tested as the exact provider-neutral item
     /// rather than as a guessed scalar reservation.
     pub carryover: Option<&'a crate::model::RenderedUnresolvedOutputCarryover>,
+    /// Frozen, progressively less detailed alternatives for mandatory fit.
+    /// The caller supplies no alternatives when degradation is not allowed.
+    pub carryover_fallbacks: &'a [CompactionCarryover],
     /// The frozen canonical anchor of that request-only item.
     pub carryover_anchor: Option<&'a RequestOnlyInsertionAnchor>,
     /// The measured error of this runtime's deterministic token estimate,
@@ -280,6 +227,15 @@ pub struct CompactionConstraints<'a> {
     /// observed error implies, so the post-compaction request targets a
     /// genuinely smaller provider request rather than the same one again.
     pub estimate_correction: Option<EstimateCorrection>,
+}
+
+/// One already-frozen request-only carryover alternative.
+#[derive(Debug, Clone)]
+pub struct CompactionCarryover {
+    /// The detail level the caller installs after a successful commit.
+    pub level: crate::model::CarryoverDetailLevel,
+    /// `None` represents the omitted level.
+    pub value: Option<crate::model::RenderedUnresolvedOutputCarryover>,
 }
 
 /// The measured error of one deterministic token estimate.
@@ -506,8 +462,17 @@ impl ContextEngine {
     ///
     /// Returns [`ContextErrorKind::InvalidConfiguration`] for an impossible
     /// effective input budget.
-    pub fn soft_input_limit(&self, max_output_tokens: u32) -> Result<u64, ContextError> {
-        self.config.soft_input_limit(max_output_tokens)
+    pub fn admissible_input_limit(&self, max_output_tokens: u32) -> Result<u64, ContextError> {
+        self.config.admissible_input_limit(max_output_tokens)
+    }
+
+    /// Proactive pressure is distinct from the final request admission limit.
+    ///
+    /// # Errors
+    /// Returns an invalid-configuration error when the hard input budget is impossible.
+    pub fn proactive_input_limit(&self, max_output_tokens: u32) -> Result<u64, ContextError> {
+        let hard = self.admissible_input_limit(max_output_tokens)?;
+        Ok(hard - hard.div_ceil(10))
     }
 
     /// Whether the given projection requires automatic compaction for a
@@ -523,7 +488,8 @@ impl ContextEngine {
         projection: &ContextProjection,
         max_output_tokens: u32,
     ) -> Result<bool, ContextError> {
-        Ok(projection.estimated_input.input_tokens >= self.soft_input_limit(max_output_tokens)?)
+        Ok(projection.estimated_input.input_tokens
+            >= self.proactive_input_limit(max_output_tokens)?)
     }
 
     /// Whether the projection fits under the soft input limit of a request
@@ -538,7 +504,8 @@ impl ContextEngine {
         projection: &ContextProjection,
         max_output_tokens: u32,
     ) -> Result<bool, ContextError> {
-        Ok(projection.estimated_input.input_tokens < self.soft_input_limit(max_output_tokens)?)
+        Ok(projection.estimated_input.input_tokens
+            <= self.admissible_input_limit(max_output_tokens)?)
     }
 
     /// The exact estimated input of one hypothetical post-compaction
@@ -632,7 +599,7 @@ impl ContextEngine {
         })
     }
 
-    fn rendered_input(
+    pub(crate) fn rendered_input(
         &self,
         messages: &crate::model::SelectedModelInput,
     ) -> Result<crate::model::SelectedModelInput, String> {

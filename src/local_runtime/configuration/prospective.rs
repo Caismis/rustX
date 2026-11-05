@@ -53,7 +53,6 @@ impl ProspectiveSessionConfig {
                 super::super::config::ToolDeadlinePolicyDocument::default();
             config.mcp_startup_policy = super::super::config::McpStartupPolicyDocument::default();
             config.subagents = super::super::config::SubagentsDocument::default();
-            config.context = super::super::config::ContextPolicyDocument::default();
             config.agent.instructions.clear();
             config.agent.model = None;
             config.agent.agents_md =
@@ -110,7 +109,6 @@ impl ProspectiveSessionConfig {
     pub(crate) fn same_context(&self, other: &Self) -> bool {
         self.config.agent.instructions == other.config.agent.instructions
             && self.config.agent.agents_md == other.config.agent.agents_md
-            && self.config.context == other.config.context
             && self.project_context_files == other.project_context_files
             && self.root_agent_project_files == other.root_agent_project_files
     }
@@ -302,7 +300,6 @@ impl ProspectiveSessionConfig {
             .agent
             .agents_md
             .clone_from(&adopted.config.agent.agents_md);
-        config.context = adopted.config.context;
         self.project_context_files
             .clone_from(&adopted.project_context_files);
         self.root_agent_project_files
@@ -322,9 +319,6 @@ impl ProspectiveSessionConfig {
             .agent
             .as_ref()
             .and_then(|agent| agent.agents_md.clone());
-        self.effective
-            .context
-            .clone_from(&adopted.effective.context);
         copy_unit_provenance(
             &mut self.provenance,
             &adopted.provenance,

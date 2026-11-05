@@ -34,9 +34,7 @@ use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AttemptLifecycle, LifecycleError,
     PreToolDecision, PreToolPolicy, PreToolView,
 };
-use rustx::context::{
-    ContextAssembly, ContextRuntime, DefaultTokenEstimator, SessionContextPolicy,
-};
+use rustx::context::{ContextAssembly, ContextRuntime, DefaultTokenEstimator};
 use rustx::conversation::ConversationState;
 use rustx::durable::{ConversationStore, SqliteConversationStore};
 use rustx::events::interaction::{
@@ -376,11 +374,6 @@ fn request(conversation_id: ConversationId, model: &Arc<FakeModel>) -> AgentExec
 
 fn context_runtime(model: &Arc<FakeModel>) -> ContextRuntime {
     ContextRuntime::for_attempt_with_assembly(
-        SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(DefaultTokenEstimator),
         Some(rustx::context::AgentStatusEngine::default()),
         ContextAssembly::new(),

@@ -1,9 +1,9 @@
 import { useTranslation } from '../../../locale/react';
 import { useState, type ReactNode } from 'react';
 import type {
-  AppServerPolicy, ContextLayer, RuntimeLayer, SourceScope, SourceSettings, SubagentsLayer,
+  AppServerPolicy, RuntimeLayer, SourceScope, SourceSettings, SubagentsLayer,
   TimeoutLayer, ToolDeadlineLayer,
-} from '../../../../../protocol/app-server/v71';
+} from '../../../../../protocol/app-server/v72';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitForm } from '../forms/bridge';
 import { TextField } from '../forms/controls';
@@ -109,19 +109,6 @@ function AdvancedEditors({ source, scope, document, revision, processPolicyImpac
   const resolved = source.resolved;
   return <>
     <h4>{tx('settings:advanced-page.context-and-runtime-limits')}</h4>
-    <UnitForm<ContextLayer> title={tx('settings:advanced-page.context-policy')} authored={document.context ?? undefined} blank={{}} revision={revision}
-      mutation={authored => ({ kind: 'config', mutation: { unit: 'context', authored } })}>
-      {(value, change) => <>
-        {(['reserve_tokens', 'keep_recent_tokens'] as const).map(key =>
-          <TextField key={key} label={key} value={value[key]} change={next => change({ ...value, [key]: next || null })} />)}
-        <Choice label={tx('settings:advanced-page.summary-output')} value={value.summary_output_cap?.mode ?? ''}
-          options={[['', tx('settings:copy.domain-default')], ['model_limit', tx('settings:copy.model-limit')], ['limit', tx('settings:copy.explicit-token-limit')]]}
-          onChange={mode => change({ ...value, summary_output_cap: mode === 'limit' ? { mode: 'limit', tokens: 2048 } : mode === 'model_limit' ? { mode: 'model_limit' } : null })} />
-        {value.summary_output_cap?.mode === 'limit' && <label>{tx('settings:advanced-page.summary-token-limit')}<input type="number" min="1"
-          value={value.summary_output_cap.tokens} onChange={event => change({ ...value, summary_output_cap: { mode: 'limit', tokens: Number(event.target.value) } })} /></label>}
-      </>}
-    </UnitForm>
-
     <UnitForm<TimeoutLayer> title={tx('settings:advanced-page.model-timeout')} authored={document.model_timeout_policy ?? undefined} blank={{}} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'model_timeout', authored } })}>
       {(value, change) => <>{(['response_start_timeout_ms', 'stream_idle_timeout_ms'] as const).map(key =>

@@ -116,30 +116,59 @@ Agent owner gate. Neither path adds a durable execution state machine.
 
 ## Default Summary
 
-The default policy preserves reserve/output accounting, compaction thresholds,
-keep-recent behavior, summary-input reservation/shrinks, structured Markdown/XML
-and deterministic file-operation sections. It selects only complete historical
-prefixes. Fresh Inbound, current-generation Context and carryover anchors remain
-core-owned protected inputs.
+The runtime derives one deterministic policy from the frozen primary and Summary
+models. For context window C, the safety margin is `M(C) = clamp(ceil(C / 20),
+1, 65536)`. With primary window Cp and effective primary output Op, hard input
+limit `H = Cp - Op - M(Cp)` must be positive. Proactive compaction begins at
+`T = floor(0.9 * H)`; input above H requires compaction. The recent-history
+target is `min(ceil(0.15 * H), 20000)` tokens.
 
-Planning indexes canonical positions, discovers complete Tool batches and renders the
-authorized historical transcript once. Eligible boundaries already respect
-`must_cover_through`, Fresh Inbound, accepted Context and request-only carryover
-anchors. Each queried boundary is priced using the complete Summary request,
-complete retained primary request with fixed core inputs and Summary output
-reservation, and whole recent-history suffix. A selected boundary is never accepted
-from an approximate per-message token sum. Generated Checkpoint and complete actual
-primary input are validated again after Summary output exists, before commit.
+For Summary window Cs and output capability cap, initial total Summary output is
+`min(cap, max(1, floor(Cs / 4)), max(1, floor(H / 4)))`, raised when necessary
+to cover frozen explicit reasoning plus 1024 visible JSON tokens. An impossible
+reasoning/output combination is rejected. Summary input is independently limited
+to `Cs - M(Cs) - Summary output`; neither the primary nor Summary model borrows
+the other's window. Summary output can grow within the bounded derived ceiling
+when output is exhausted; frozen reasoning settings do not change.
 
-`DefaultTokenEstimator` supplies a narrow monotone compaction guarantee. Its price
-is `ceil(serialized semantic JSON bytes / 4)`: array brackets, separators and
-independent item encodings have nonnegative byte costs; removing a prefix cannot
-increase the primary or recent suffix price. Appending rendered transcript text
-cannot decrease the escaped JSON byte count of the fixed Summary wrapper. Tools,
-prompt and core overlays remain fixed. Rounding preserves monotonicity, but does
-**not** justify adding separately rounded per-message estimates. Production media
-preparation freezes authorized resources before advertising this proof, as described
-below. An arbitrary estimator never inherits a guarantee from media preparation.
+For example, Cp=256000, Op=16000, Cs=128000 and Summary cap=64000 give
+M(Cp)=12800, H=227200, T=204480, recent=20000, Summary output=32000 and
+Summary input=89600. With Cp=128000, Op=8000, Cs=16000, cap=8000 and an
+explicit 5000-token Summary reasoning budget, H=113600, recent=17040, Summary
+output=6024 and Summary input=9176. These are accounting values, not claims
+about the quality of a model's summary.
+
+`ContextConfig` is the resolved internal policy, not an authored configuration
+surface. Whole-request estimates govern fit; component estimates are heuristic
+and cannot generally be added to reconstruct that price. In the occupancy
+breakdown, system and tool estimates are heuristic and messages are the remaining
+total, clamped at zero when the components exceed it.
+
+Planning indexes complete eligible historical prefixes, protects Fresh Inbound,
+current-generation Context and carryover anchors, and prices the complete retained
+primary request, including fixed inputs and the Summary output reservation. The
+complete Summary request is priced independently in its own model window. Each
+selected retired transcript is processed sequentially in largest-fitting UTF-8
+source ranges. Each call merges the previous accepted private rolling JSON summary
+with the next range under a runtime-owned strict schema; the final validated value
+is rendered as deterministic Markdown with trusted file-operation metadata. The
+summary request has no tools, primary continuation or authority to fetch spill
+files. A typed native structured-format rejection or completed contract violation
+permits one operation-local prompt-format fallback only when sealed evidence proves the native
+request was actually attempted; it does not alter the frozen model policy.
+
+Only one final checkpoint is committed after all chunks succeed, the result makes
+progress, and the complete actual primary request fits. Partial rolling summaries
+are not checkpoints. Cancellation or any pre-commit failure leaves the old head
+authoritative. Summary provider overflow may reduce the independently measured
+Summary input limit; actual primary overflow applies its correction only to the
+primary plan.
+
+`DefaultTokenEstimator` prices whole semantic JSON as `ceil(bytes / 4)` with
+nonnegative image charges. Complete request prices, not separately rounded
+per-message estimates, govern admission. Fixed inputs and frozen media preserve
+monotonicity as a historical prefix is removed. An arbitrary estimator has no
+such guarantee.
 
 Tool items are priced from the Tool Plane's existing bounded model-facing projection,
 not serialized `ToolExecutionResult`. The neutral semantic view joins text-only parts
@@ -156,17 +185,11 @@ bytes after frozen media materialization. Whole-array JSON accounting, fixed cor
 inputs and nonnegative immutable image charges therefore retain the monotone proof.
 No per-message rounding, candidate-time I/O or approximate-fit substitution is used.
 
-For a guaranteed estimator, binary partition queries find the intersection of the
-Summary-fit initial interval and primary-fit final interval. Whole recent prices
-identify the keep-recent initial interval. Selection preserves the established
-policy: the largest feasible boundary retaining `keep_recent_tokens`; if none
-retains that target, the earliest feasible boundary. Empty fit intersection proves
-`CannotFit`. The selected candidate's complete prices are checked explicitly.
-With N boundaries and B input/transcript bytes, preparation is O(N log N + B),
-queried materialization is O(B log N), and memory is O(N + B), including bounded
-core overlays. At most `3 ceil(log2(N+1)) + 1` distinct candidates are priced, with
-three complete estimator calls each; cached prices do not retain copied bodies.
-Estimator implementations remain responsible for their own query complexity.
+For the guaranteed estimator, binary partition queries select the largest feasible
+boundary retaining the derived recent target, or the earliest feasible fallback.
+Complete prices are checked again. The transcript is chunked after this boundary
+selection; a boundary does not need the entire retired transcript to fit one
+Summary request.
 
 ### Frozen production media accounting
 
@@ -242,21 +265,25 @@ feasible fallback or proves `CannotFit`. If eligible boundaries remain unexamine
 infeasibility. This path bounds materialization to O(64 B), independent of N.
 An arbitrary non-monotone estimator can make any unseen boundary uniquely feasible;
 no finite sampling shortcut can establish otherwise. Incomplete planning starts no
-Summary, commits no Checkpoint, and settles once as a runtime compaction failure,
-even when recovery followed a real provider overflow. It does not retry planning,
-classify itself as provider overflow, or alter unrelated recovery budgets.
+Summary and commits no Checkpoint. It may be deferred under the classified
+proactive-failure rule if the complete frozen primary request fits H; otherwise
+it settles as a runtime compaction failure, including after provider overflow.
+It is not classified as provider overflow and does not create a new allowance.
 
 Agent-owned cancellation is observed at cooperative yields during indexing/rendering,
 before/after each complete estimate, and before Summary admission. Individual
 synchronous estimates finish before the next observation; no new execution owner or
-request-start arbitration is introduced. The existing Summary shrink loop remains
-separately bounded.
+request-start arbitration is introduced. Summary input reductions share the operation budget.
 
 The summary is a Derived User checkpoint item. Retained history remains ordered
 Original/Derived items. Trusted cumulative read/modified-file metadata comes from
 canonical native ToolCall facts and earlier immutable checkpoint metadata;
 summary prose cannot invent that authority. Consuming an earlier Summary retains
 its scoped checkpoint provenance.
+
+The [repeated-compaction semantic corpus](../tests/fixtures/compaction-quality/README.md)
+provides an opt-in real-model evaluation rubric. Introducing the fixture does not
+establish semantic quality or mean that a live evaluation was run.
 
 Manual, proactive and overflow recovery share this pipeline. Manual compaction
 creates no Agent Turn, primary request snapshot/start or dynamic-contributor
@@ -631,13 +658,12 @@ provenance and operation receipts. Existing payload and cumulative limits remain
 
 ### Auxiliary Summary retry allowance
 
-Summary input replanning, carryover degradation and physical technical retries
-share the Compaction owner's original twelve-start allowance, three total input
-shrinks and five-minute deadline. Automatic Compactions admitted in one logical
-Agent step share this finite allowance across `perform_compaction` entries;
-separate checkpoint operation identities and exact per-invocation receipts remain
-independent. Manual Compaction freezes its own invocation and allowance at
-admission. A technical retry retains the same selected-input roots, ranges and
-captured media, whereas semantic input changes admit a new Call under remaining
-authority. SearchIncomplete remains unresolved planning feasibility, never a
-transient provider error or a new allowance. See [auxiliary execution](auxiliary-execution.md).
+A finite source plan must be admitted before any Summary start, with at most 256
+planned starts. Twelve exceptional recovery actions are shared across technical
+retries, semantic replanning, fallback, carryover degradation and reductions;
+at most three input reductions are allowed. The absolute deadline starts at the
+original operation creation and is `min(2 hours, 5 minutes + 30 seconds *
+(planned starts - 1))`. Re-entry cannot expand the plan or renew its budget.
+Automatic compactions in one logical Agent step share the authority; manual
+compaction has its own. Each checkpoint retains a distinct operation receipt.
+See [auxiliary execution](auxiliary-execution.md).

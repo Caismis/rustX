@@ -153,6 +153,49 @@ pub(crate) fn normalize_http_error(
     .normalized()
 }
 
+/// Classify only explicit structured rejection of the actual native format.
+pub(crate) fn is_native_format_rejection(
+    provider_type: Option<&str>,
+    code: Option<&str>,
+    param: Option<&str>,
+) -> bool {
+    provider_type == Some("invalid_request_error")
+        && matches!(code, Some("unsupported_parameter" | "unsupported_value"))
+        && matches!(
+            param,
+            Some("output_config.format" | "output_config.format.type")
+        )
+}
+
+pub(crate) fn normalize_http_error_for_format(
+    status: StatusCode,
+    headers: &HeaderMap,
+    body: &[u8],
+    native_format: bool,
+) -> ModelError {
+    let mut error = normalize_http_error(status, headers, body);
+    if native_format
+        && status == StatusCode::BAD_REQUEST
+        && error.kind == ModelErrorKind::InvalidRequest
+    {
+        let detail = serde_json::from_slice::<serde_json::Value>(body).ok();
+        let detail = detail
+            .as_ref()
+            .map(|root| root.get("error").filter(|v| v.is_object()).unwrap_or(root));
+        if detail.is_some_and(|detail| {
+            is_native_format_rejection(
+                detail.get("type").and_then(serde_json::Value::as_str),
+                detail.get("code").and_then(serde_json::Value::as_str),
+                detail.get("param").and_then(serde_json::Value::as_str),
+            )
+        }) {
+            error.kind = ModelErrorKind::NativeFormatUnsupported;
+            error.retry_disposition = ModelRetryDisposition::Never;
+        }
+    }
+    error
+}
+
 fn http_retry_disposition(
     status: StatusCode,
     provider_code: Option<&str>,
@@ -191,6 +234,8 @@ fn http_retry_disposition(
         ModelErrorKind::InvalidRequest
         | ModelErrorKind::Authentication
         | ModelErrorKind::Unsupported
+        | ModelErrorKind::NativeFormatUnsupported
+        | ModelErrorKind::StructuredOutputContractViolation
         | ModelErrorKind::ContextWindowExceeded
         | ModelErrorKind::Cancelled
         | ModelErrorKind::Transport
@@ -816,6 +861,54 @@ mod tests {
     use crate::tools::types::{
         ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolResultContent,
     };
+
+    #[test]
+    fn native_format_rejection_requires_request_specific_structured_evidence() {
+        let headers = reqwest::header::HeaderMap::new();
+        for code in ["unsupported_parameter", "unsupported_value"] {
+            for param in ["output_config.format", "output_config.format.type"] {
+                let body = serde_json::json!({"error":{"type":"invalid_request_error","code":code,"param":param,"message":"rejected"}}).to_string();
+                let classify = |status, native| {
+                    super::normalize_http_error_for_format(
+                        status,
+                        &headers,
+                        body.as_bytes(),
+                        native,
+                    )
+                    .kind
+                };
+                assert_eq!(
+                    classify(reqwest::StatusCode::BAD_REQUEST, true),
+                    ModelErrorKind::NativeFormatUnsupported
+                );
+                assert_eq!(
+                    classify(reqwest::StatusCode::BAD_REQUEST, false),
+                    ModelErrorKind::InvalidRequest
+                );
+                assert_eq!(
+                    classify(reqwest::StatusCode::UNAUTHORIZED, true),
+                    ModelErrorKind::Authentication
+                );
+                assert_eq!(
+                    classify(reqwest::StatusCode::TOO_MANY_REQUESTS, true),
+                    ModelErrorKind::RateLimit
+                );
+            }
+        }
+        for body in [
+            r#"{"error":{"type":"invalid_request_error","code":"unsupported_parameter","param":"thinking","message":"output_config.format"}}"#,
+            r#"{"error":{"type":"invalid_request_error","message":"unsupported output_config.format"}}"#,
+            r#"{"error":{"type":"invalid_request_error","code":"unsupported_parameter","param":"output_config.format","message":"prompt is too long: 213462 tokens > 200000 maximum"}}"#,
+        ] {
+            let error = super::normalize_http_error_for_format(
+                reqwest::StatusCode::BAD_REQUEST,
+                &headers,
+                body.as_bytes(),
+                true,
+            );
+            assert_ne!(error.kind, ModelErrorKind::NativeFormatUnsupported);
+        }
+    }
 
     /// The adapter — not the agent loop — recovers the provider's own
     /// measurement of a rejected oversized request, and it crosses the

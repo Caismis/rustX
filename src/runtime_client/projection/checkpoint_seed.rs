@@ -77,6 +77,7 @@ impl CheckpointSeed {
         let mut context = RuntimeClientContextView {
             projection_head: self.snapshot.context.projection_head.clone(),
             compaction_in_progress: self.snapshot.context.compaction_in_progress,
+            compaction_progress: self.snapshot.context.compaction_progress.clone(),
             compaction_count: self.snapshot.context.compaction_count,
             latest_compaction: capture
                 .item(

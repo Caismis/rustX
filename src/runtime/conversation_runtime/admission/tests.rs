@@ -765,11 +765,6 @@ async fn admitted_attempt_executes_under_the_frozen_tool_deadline_policy() {
             None,
         ),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator: Arc::new(DefaultTokenEstimator),
             status_engine: Some(AgentStatusEngine::default()),
         },

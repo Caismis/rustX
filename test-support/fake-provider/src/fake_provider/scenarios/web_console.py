@@ -6,6 +6,7 @@ import json
 from fake_provider.scenario import (
     OPENAI_CHAT_COMPLETIONS, Expect, Finish, Gate, HttpError, Raw, Scenario, Step, Stream, Text, ToolCall, Usage,
 )
+from fake_provider.scenarios.conformance import summary_json
 
 
 def web_console_dogfood() -> Scenario:
@@ -388,14 +389,14 @@ def web_compaction() -> Scenario:
                       body_contains=("compaction-evidence-435",))
     return Scenario("web_compaction",
                     Step(expected, Stream(Text("Original context ready."), Finish(), Usage(32000, 20))),
-                    Step(expected, Stream(Gate("manual-summary"), Text("The user supplied compaction-evidence-435. Preserve that fact."), Finish())),
+                    Step(expected, Stream(Gate("manual-summary"), Text(summary_json("The user supplied compaction-evidence-435. Preserve that fact.")), Finish())),
                     Step(expected, Stream(ToolCall("after-compact-question", "ask_user", json.dumps({"questions": [{
                         "header": "Continuation", "question": "Continue after compaction?",
                         "options": [{"label": "Continue", "description": "Keep the compacted history."},
                                     {"label": "Inspect", "description": "Inspect the history first."}],
                     }]})), Finish("tool_calls"))),
                     Step(expected, HttpError(400, {"error": {"message": "context window exceeded", "type": "invalid_request_error", "code": "context_length_exceeded"}})),
-                    Step(expected, Stream(Gate("automatic-summary"), Text("Preserve compaction-evidence-435 and the user's instruction to continue."), Finish())),
+                    Step(expected, Stream(Gate("automatic-summary"), Text(summary_json("Preserve compaction-evidence-435 and the user's instruction to continue.")), Finish())),
                     Step(expected, Stream(Text("Question answered after compaction."), Finish())),
                     Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Stop a partial reply",)),
                          Stream(Text("## Partial answer\n\nThis text was already released."), Gate("stop-partial"), Text("This must not appear after stopping."), Finish()), allow_disconnect=True),

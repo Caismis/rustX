@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::context::checkpoint::SummaryGenerationRef;
 use crate::context::resources::ResourceReadCut;
 use crate::model::error::ModelErrorKind;
 use crate::model::finish::ModelFinishReason;
@@ -52,6 +53,9 @@ pub(crate) fn generation_is_bounded(evidence: &GenerationEvidence) -> bool {
 
 /// Largest number of explicitly selected `MessageId` references on one Call.
 pub const AUXILIARY_INPUT_MESSAGE_REF_LIMIT_MAX: usize = 32;
+
+/// Largest number of contiguous projected-source ranges in one compaction Call.
+pub const AUXILIARY_SOURCE_RANGE_LIMIT_MAX: usize = 32;
 
 /// Largest auxiliary `RequestId` accepted by the Store.
 pub const AUXILIARY_REQUEST_ID_BYTES_MAX: usize = 512;
@@ -137,10 +141,22 @@ pub enum AuxiliaryBusinessSource {
     },
     Compaction {
         operation_id: CompactionOperationId,
+        /// The immediately preceding settled Call in this Compaction operation.
+        preceding_call: Option<AuxiliaryCallRef>,
     },
     HumanMessage {
         message_id: MessageId,
     },
+}
+
+/// Exact settled Call preceding another Call in a Compaction operation.
+/// This names audit causality even when the Call failed or never dispatched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuxiliaryCallRef {
+    pub conversation_id: crate::runtime::identity::ConversationId,
+    pub call_id: AuxiliaryCallId,
+    pub through_journal: u64,
 }
 
 /// Versioned caller semantics, distinct from the frozen execution fingerprint.
@@ -159,8 +175,38 @@ pub struct AuxiliarySubmissionIdentity {
 pub enum AuxiliaryInputEvidence {
     /// Complete native coordinates of the historical source selection.
     Historical { cut: ResourceReadCut },
+    /// A compaction chunk can combine ranges of historical projected input
+    /// with an earlier accepted auxiliary summary. Neither is temporary input.
+    Compaction {
+        cut: ResourceReadCut,
+        source_ranges: Vec<AuxiliarySourceRange>,
+        previous_summary: Option<SummaryGenerationRef>,
+        /// Strategy frozen for this actual structured Summary request.
+        output_strategy: crate::model::structured::StructuredOutputStrategy,
+    },
     /// Input supplied directly to the Call. Its bytes are not retained here.
     Temporary,
+}
+
+/// Model-visible role of one projected source occurrence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AuxiliarySourceRole {
+    User,
+    Assistant,
+    Tool,
+}
+
+/// A half-open byte range in the deterministic rendered text of one selected
+/// projection occurrence, rather than an offset in canonical JSON. Empty
+/// rendered occurrences use `[0, 0)` and still identify their coverage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuxiliarySourceRange {
+    pub projection_index: u32,
+    pub role: AuxiliarySourceRole,
+    pub byte_start: u32,
+    pub byte_end: u32,
 }
 
 /// Exact lowercase SHA-256 fingerprint of frozen semantic execution metadata.

@@ -885,6 +885,7 @@ async fn summarizer_consumes_generation_and_liveness_progress_without_retry() {
                     .into_iter()
                     .map(Into::into)
                     .collect(),
+                ..Default::default()
             },
             rustx::runtime::CancellationSignal::new(),
         ),

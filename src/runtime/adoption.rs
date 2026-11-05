@@ -102,9 +102,9 @@ impl PreparedConfiguration {
 ///
 /// Compares the configuration-induced request shape of the current
 /// generation and model with the candidate's. An unavailable shape on either
-/// side is never proof of preservation, and a changed context policy is
-/// never preserved even when the provider request bytes are identical,
-/// because it changes future history projection.
+/// side is never proof of preservation. The captured shape also compares both
+/// model windows and invocation settings, which determine the derived context
+/// policy and future history projection.
 #[must_use]
 pub(crate) fn configuration_cache_impact(
     current: &RuntimeResourceSnapshot,
@@ -112,7 +112,7 @@ pub(crate) fn configuration_cache_impact(
     candidate: &RuntimeResourceSnapshot,
     candidate_model: &SessionModelState,
 ) -> CacheImpact {
-    let impact = match (
+    match (
         current.request_shape(current_model),
         candidate.request_shape(candidate_model),
     ) {
@@ -123,16 +123,6 @@ pub(crate) fn configuration_cache_impact(
             let _ = error;
             CacheImpact::Unproven
         }
-    };
-    let context = |snapshot: &RuntimeResourceSnapshot| {
-        snapshot
-            .configuration()
-            .map(|configuration| configuration.config.context)
-    };
-    if impact == CacheImpact::Preserved && context(current) != context(candidate) {
-        CacheImpact::Unproven
-    } else {
-        impact
     }
 }
 

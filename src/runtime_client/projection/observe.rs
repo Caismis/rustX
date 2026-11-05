@@ -85,6 +85,9 @@ pub(super) fn invalidates_event(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::AssistantMessageCommitted { .. }
         | RuntimeEvent::ToolMessageCommitted { .. }
         | RuntimeEvent::CompactionStarted { .. }
+        | RuntimeEvent::CompactionChunkAccepted { .. }
+        | RuntimeEvent::CompactionSkipped { .. }
+        | RuntimeEvent::CompactionCancelled { .. }
         | RuntimeEvent::CompactionCompleted { .. } => true,
         _ => false,
     }
@@ -452,7 +455,12 @@ impl RuntimeClientProjection {
         self.snapshot.context.manual_compaction =
             Some(super::super::snapshot::RuntimeClientManualCompaction {
                 request_id: request.cloned(),
-                released: witness.event_kind != "compaction_started",
+                released: !matches!(
+                    witness.event_kind.as_str(),
+                    "compaction_started" | "compaction_chunk_accepted"
+                ),
+                skipped: witness.event_kind == "compaction_skipped",
+                cancelled: witness.event_kind == "compaction_cancelled",
                 error: (witness.event_kind == "compaction_failed")
                     .then(|| {
                         witness
@@ -766,10 +774,20 @@ impl RuntimeClientProjection {
             ConversationObservation::ToolProgress { .. }
             | ConversationObservation::AttemptAdmitted { .. } => &["attempt"],
             #[cfg(test)]
+            ConversationObservation::Event {
+                event: RuntimeEvent::CompactionChunkAccepted { .. },
+                ..
+            } => &["context"],
+            #[cfg(test)]
             ConversationObservation::Event { event, .. }
                 if event.is_auxiliary_model_request() || event.auxiliary_call_id().is_some() =>
             {
                 &["auxiliary"]
+            }
+            ConversationObservation::JournalFact(witness)
+                if witness.event_kind == "compaction_chunk_accepted" =>
+            {
+                &["context"]
             }
             ConversationObservation::JournalFact(witness)
                 if witness.auxiliary_call_id.is_some()

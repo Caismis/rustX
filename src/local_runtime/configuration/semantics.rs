@@ -146,9 +146,8 @@ pub(in crate::local_runtime) fn source_semantics(
 
 /// Native semantics of one complete User + Workspace composition: its
 /// source-intrinsic constraints and the references between its scopes — Model
-/// Catalog closure and, once a default model is selected, the selected models
-/// and the context budgets they bound. Session resolution applies the same
-/// validators to the same composition.
+/// Catalog closure and, once a default model is selected, the selected models.
+/// Session resolution applies the same validators to the same composition.
 pub(in crate::local_runtime) fn composition_semantics(
     merged: &RuntimeLayer,
 ) -> Result<Composition, SemanticFailure> {
@@ -167,25 +166,10 @@ pub(in crate::local_runtime) fn composition_semantics(
         };
     };
     let models = catalog.map_err(|error| SemanticFailure::catalog(&error))?;
-    let (primary, summary) = crate::model::session::analyze_session_model_config(&models, model)
-        .map_err(|error| {
-            let (field, reason) = error.classification();
-            SemanticFailure::new(field, reason, error.to_string())
-        })?;
-    let summary = summary.as_ref().unwrap_or(&primary);
-    config
-        .context_policy()
-        .validate_budgets(
-            (primary.context_window, primary.max_output_tokens),
-            (summary.context_window, summary.max_output_tokens),
-        )
-        .map_err(|error| {
-            SemanticFailure::new(
-                "context",
-                "context budgets cannot fit the selected models",
-                error.message,
-            )
-        })?;
+    crate::model::session::analyze_session_model_config(&models, model).map_err(|error| {
+        let (field, reason) = error.classification();
+        SemanticFailure::new(field, reason, error.to_string())
+    })?;
     Ok(Composition::Complete)
 }
 

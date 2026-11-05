@@ -29,6 +29,12 @@ pub enum ModelErrorKind {
     Cancelled,
     /// The requested capability or protocol is unsupported.
     Unsupported,
+    /// The provider explicitly rejected the exact native JSON Schema field.
+    /// This is distinct from other unsupported features and request errors.
+    NativeFormatUnsupported,
+    /// A completed Native structured response was not one schema-valid JSON
+    /// object. It excludes refusals, truncation, tools and transport failures.
+    StructuredOutputContractViolation,
     /// The model generated tool intent that cannot become a trustworthy
     /// canonical [`ToolCall`](crate::tools::types::ToolCall).
     ///

@@ -9,10 +9,12 @@ import pytest
 from fake_provider.control import ScenarioRun, declared_gates
 from fake_provider.protocols import codec_for
 from fake_provider.scenario import (
+    AdaptiveScenario,
     OPENAI_CHAT_COMPLETIONS,
     Expect,
     Finish,
     Gate,
+    HttpError,
     RecordedRequest,
     Scenario,
     Step,
@@ -278,9 +280,43 @@ def test_every_registered_scenario_builds():
             # Preview, configuration repair and refused Workspace submission
             # fixtures must reject every model request.
             assert scenario.steps == ()
-        else:
+        elif not isinstance(scenario, AdaptiveScenario):
             assert scenario.steps
         declared_gates(scenario)
+
+
+def test_chunked_compaction_scenario_enforces_fallback_and_fragment_count():
+    scenario = build("chunked_compaction")
+    assert isinstance(scenario, AdaptiveScenario)
+    primary = recorded({"model": "chat-model"})
+    native = recorded({"model": "summary-model"})
+    with pytest.raises(ValueError, match="before enough source history"):
+        scenario.select([primary, native])
+    history = [primary] * 14
+    rejected, final = scenario.select([*history, native])
+    assert not final
+    assert isinstance(rejected.respond, HttpError)
+    assert rejected.respond.body["error"]["code"] == "unsupported_parameter"
+    assert rejected.expect.json_subset["response_format"]["type"] == "json_schema"
+    first_prompt, final = scenario.select([*history, native, native])
+    assert not final
+    assert first_prompt.respond.script[0] == Gate("first-prompt-summary")
+    assert '"response_format"' in first_prompt.expect.body_excludes
+    with pytest.raises(ValueError, match="more than twelve fragments"):
+        scenario.select([*history, *([native] * 13), primary])
+    completed, final = scenario.select([*history, *([native] * 14), primary])
+    assert final
+    assert completed.expect.model == "chat-model"
+
+
+def test_chunked_tool_history_is_bounded_distinct_and_not_short_periodic():
+    from fake_provider.scenarios.conformance import _chunked_write_content
+
+    first = _chunked_write_content(1)
+    assert first == _chunked_write_content(1)
+    assert first != _chunked_write_content(2)
+    assert 18_000 <= len(first) < 19_000
+    assert len({first[i:i + 32] for i in range(0, len(first) - 32, 32)}) > 500
 
 
 def test_a_workspace_placeholder_without_a_workspace_fails_loudly():

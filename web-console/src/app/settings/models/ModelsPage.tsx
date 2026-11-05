@@ -3,7 +3,7 @@ import { useTranslation } from '../../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted settings cards and request controls; see PROVENANCE.md. */
 import { useRef, useState } from 'react';
 import { GridList, GridListItem } from 'react-aria-components';
-import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v71';
+import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v72';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
@@ -244,7 +244,7 @@ export function ModelSelection({ value, change, models, profiles }: { value: Mod
     </fieldset>}
   </>;
 }
-type RequestFields = Pick<ModelLayer, 'profile' | 'max_output_tokens' | 'request_params'>;
+type RequestFields = Pick<ModelLayer, 'profile' | 'request_params'> & { max_output_tokens?: ModelLayer['max_output_tokens'] };
 /** Each variant owns complete, distinct labels so the Summary model's fields
  * and the outer model's fields stay unambiguously distinguishable, for a reader
  * and for a test alike, in every locale. */
@@ -267,8 +267,8 @@ function ModelRequestFields<T extends RequestFields>({ value, change, profiles, 
     {choices.length > 0 && <Choice label={tx(labels.profile)} value={selected}
       options={[['', tx('settings:copy.model-default-profile')], ...choices.map(id => [id, id] as const)]}
       onChange={profile => { const { profile: _, ...rest } = value; change((profile ? { ...rest, profile } : rest) as T); }} />}
-    <label>{tx(labels.limit)}<input type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''}
-      onChange={event => change({ ...value, max_output_tokens: event.target.value ? { mode: 'limit', tokens: Number(event.target.value) } : { mode: 'catalog_default' } })} /></label>
+    {variant !== 'summary' && <label>{tx(labels.limit)}<input type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''}
+      onChange={event => change({ ...value, max_output_tokens: event.target.value ? { mode: 'limit', tokens: Number(event.target.value) } : { mode: 'catalog_default' } })} /></label>}
     <JsonObjectEditor label={tx(labels.params)} value={value.request_params ?? undefined} change={request_params => change({ ...value, request_params })} />
   </>;
 }

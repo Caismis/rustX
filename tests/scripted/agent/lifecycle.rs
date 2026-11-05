@@ -42,7 +42,7 @@ use rustx::agent::{
 use rustx::context::{
     ContextAssembly, ContextProposal, ContextRuntime, ContributorInputSnapshot,
     DefaultTokenEstimator, MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR,
-    SessionContextPolicy, UserMessageProposal,
+    UserMessageProposal,
 };
 use rustx::conversation::ConversationState;
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
@@ -969,11 +969,6 @@ fn bootstrap_revision() -> rustx::conversation::SurfaceRevision {
 
 fn context_runtime(model: &Arc<FakeModel>, assembly: ContextAssembly) -> ContextRuntime {
     ContextRuntime::for_attempt_with_assembly(
-        SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(DefaultTokenEstimator),
         Some(rustx::context::AgentStatusEngine::default()),
         assembly,

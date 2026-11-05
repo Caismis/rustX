@@ -58,7 +58,7 @@ function deferred<T>(): {
 
 it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
   const h = await harness();
-  const ref: import("../../protocol/app-server/v71.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v72.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
     representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
@@ -1250,15 +1250,26 @@ describe("CommandDispatcher", () => {
     assert.equal(h.transport.log.count('conversation/checkpointPage'), 0);
   });
 
-  it("rejects /compact arguments without reaching the server", async () => {
+  it("sends /compact instructions as focus hints", async () => {
     const h = await harness();
-    const before = h.transport.log.requests.length;
-    const outcome = await h.dispatcher.submit("/compact custom instructions");
+    const compacting = h.dispatcher.submit("/compact preserve deployment decisions");
+    const compact = await nextRequest(h, "context/compact");
+    assert.equal(paramsOf(compact, "context/compact").instructions, "preserve deployment decisions");
+    h.transport.respond(compact.id, { type: "context_compaction_skipped" });
+    const outcome = await compacting;
     assert.equal(outcome.kind, "transient");
     if (outcome.kind === "transient") {
-      assert.equal(outcome.level, "error");
-      assert.match(outcome.text, /usage: \/compact/);
+      assert.equal(outcome.level, "info");
+      assert.match(outcome.text, /No eligible conversation context/);
     }
+  });
+
+  it("rejects instructions over the UTF-8 byte limit before sending", async () => {
+    const h = await harness();
+    const before = h.transport.log.requests.length;
+    const outcome = await h.dispatcher.submit(`/compact ${"界".repeat(1366)}`);
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") assert.match(outcome.text, /4096 UTF-8 bytes/);
     assert.equal(h.transport.log.requests.length, before);
   });
 

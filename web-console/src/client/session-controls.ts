@@ -1,7 +1,7 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { replaceTranscript } from './transcript';
 import { OutcomeUncertain, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
-import type { AttachmentTarget, GoalMutation, GoalRef, PendingInboundRef, Request1 } from '../../../protocol/app-server/v71';
+import type { AttachmentTarget, GoalMutation, GoalRef, PendingInboundRef, Request1 } from '../../../protocol/app-server/v72';
 import type { ObservationPhase } from '../../../protocol/app-server/observation';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { CancellationTarget, ClientView, CompactionRequestEvidence, ConnectionRequest, GoalControlOutcome, InboundControlOutcome, SessionView } from './contracts';
@@ -138,12 +138,14 @@ export class SessionControls {
     const current = () => this.port.current(generation) && attachment.current() && sameTarget(this.port.state().views[id]?.target, target)
       && this.port.state().views[id]?.compactionRequest?.requestId === operation.requestId;
     const release = () => { if (this.compactionRequests.get(id) === operation) this.compactionRequests.delete(id); };
-    void this.port.request({ method: 'context/compact', params: { target, request_id: operation.requestId } }, 'context_compacted', undefined, current)
+    void this.port.request({ method: 'context/compact', params: { target, request_id: operation.requestId } }, ['context_compacted', 'context_compaction_skipped'] as const, undefined, current)
       .then(result => {
         release();
         if (!current()) return;
         // The response follows native release. Read failure cannot erase this fact.
-        this.port.setSession(id, { compactionRequest: { ...operation, status: 'succeeded', receipt: result.compaction } });
+        this.port.setSession(id, { compactionRequest: result.type === 'context_compaction_skipped'
+          ? { ...operation, status: 'skipped' }
+          : { ...operation, status: 'succeeded', receipt: result.compaction } });
       }, error => {
         release();
         if (this.port.state().views[id]?.compactionRequest !== operation) return;
@@ -200,14 +202,14 @@ export class SessionControls {
       if (request.authorityId !== this.port.state().authorityId || (request.generation === this.port.state().generation && !sameTarget(request.target, target)) || request.target.conversation_id !== target?.conversation_id
         || request.target.runtime_incarnation !== target?.runtime_incarnation) {
         this.port.setSession(id, { compactionRequest: undefined });
-      } else if (snapshot.context?.compaction_in_progress && ['succeeded', 'failed'].includes(request.status)) {
+      } else if (snapshot.context?.compaction_in_progress && ['succeeded', 'skipped', 'cancelled', 'failed'].includes(request.status)) {
         this.port.setSession(id, { compactionRequest: undefined });
       } else {
         const evidence = snapshot.context?.manual_compaction;
         if (evidence?.request_id === request.requestId && evidence.released) {
           // Native release ends gesture ownership independently of the RPC reply.
           if (this.compactionRequests.get(id)?.requestId === request.requestId) this.compactionRequests.delete(id);
-          if (request.status !== 'succeeded') this.port.setSession(id, { compactionRequest: { ...request, status: evidence.error ? 'failed' : 'succeeded', diagnostic: evidence.error ?? undefined } });
+          if (!['succeeded', 'skipped', 'cancelled'].includes(request.status)) this.port.setSession(id, { compactionRequest: { ...request, status: evidence.error ? 'failed' : evidence.cancelled ? 'cancelled' : evidence.skipped ? 'skipped' : 'succeeded', diagnostic: evidence.error ?? undefined } });
           if (this.port.state().uncertain.some(item => item.compactionRequestId === request.requestId && item.sessionId === id)) {
             this.port.publish({ uncertain: this.port.state().uncertain.filter(item => item.compactionRequestId !== request.requestId || item.sessionId !== id) });
           }

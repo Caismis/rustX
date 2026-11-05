@@ -311,7 +311,7 @@ fn count_conversation_store_open() {
 /// model invocations, workspace changes and MCP draft preparation. Earlier stores are rejected.
 /// Version 83 adds original Workflow node input/output Journal facts and data-node kinds.
 /// Version 84 requires exact Workflow run/instance indexes for bounded historical reads.
-pub const SQLITE_SCHEMA_VERSION: i64 = 84;
+pub const SQLITE_SCHEMA_VERSION: i64 = 85;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

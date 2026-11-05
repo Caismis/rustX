@@ -525,6 +525,7 @@ pub(super) fn persist_event_tx_internal(
         });
     }
     validate_event_identity(&event)?;
+    validate_compaction_progress(transaction, &event)?;
     validate_attempt_start_uniqueness(transaction, &event)?;
     validate_agent_admission_reference(transaction, &event)?;
     if let Some(proof) = validated_start {
@@ -857,6 +858,185 @@ pub(super) fn validate_event_identity(
     Ok(())
 }
 
+/// A progress fact is a bounded, strictly advancing observation of one open
+/// Compaction, never a new lifecycle or checkpoint commit.
+#[allow(
+    clippy::too_many_lines,
+    reason = "Validate complete progress authority in one transaction"
+)]
+fn validate_compaction_progress(
+    transaction: &Transaction<'_>,
+    envelope: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    let RuntimeEvent::CompactionChunkAccepted {
+        operation_id,
+        accepted_fragments,
+        source_ranges,
+        generation,
+    } = &envelope.event
+    else {
+        return Ok(());
+    };
+    if operation_id.as_str().is_empty()
+        || operation_id.as_str().len() > 256
+        || *accepted_fragments == 0
+        || *accepted_fragments > 256
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "invalid compaction progress identity or count".into(),
+        ));
+    }
+    crate::durable::auxiliary::validate_compaction_ranges(source_ranges)?;
+    crate::context::resources::bounded_encoded_len(&envelope.event, 8 * 1024)?;
+    let active: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1 AND terminal_event_id IS NULL)",
+        [format!("compaction:{operation_id}")], |row| row.get(0),
+    ).map_err(|error| storage(error.to_string()))?;
+    if !active {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction progress requires its open operation".into(),
+        ));
+    }
+    let previous: Option<Option<String>> = transaction.query_row(
+        "SELECT CASE WHEN octet_length(event_json)<=?2 THEN event_json END FROM events INDEXED BY events_compaction_operation_kind_idx WHERE json_extract(event_json,'$.event.operation_id')=?1 AND json_extract(event_json,'$.event.type')='compaction_chunk_accepted' ORDER BY sequence DESC LIMIT 1",
+        params![operation_id.as_str(), 16 * 1024], |row| row.get(0),
+    ).optional().map_err(|error| storage(error.to_string()))?;
+    let previous = match previous {
+        None => None,
+        Some(Some(text)) => Some(text),
+        Some(None) => {
+            return Err(ConversationStoreError::ResourceBoundExceeded(
+                "previous compaction progress exceeds its bound".into(),
+            ));
+        }
+    };
+    let previous = previous
+        .map(|text| decode::<RuntimeEventEnvelope>(&text, "compaction progress"))
+        .transpose()?;
+    let (previous_count, previous_ranges, previous_generation) =
+        match previous.as_ref().map(|item| &item.event) {
+            Some(RuntimeEvent::CompactionChunkAccepted {
+                accepted_fragments,
+                source_ranges,
+                generation,
+                ..
+            }) => (
+                *accepted_fragments,
+                Some(source_ranges.as_slice()),
+                generation.as_ref(),
+            ),
+            None => (0, None, None),
+            _ => {
+                return Err(ConversationStoreError::InvalidReference(
+                    "invalid previous compaction progress".into(),
+                ));
+            }
+        };
+    if *accepted_fragments != previous_count + 1 {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction accepted-fragment count must advance exactly once".into(),
+        ));
+    }
+    let first = &source_ranges[0];
+    let contiguous = match previous_ranges.and_then(|ranges| ranges.last()) {
+        None => first.projection_index == 0 && first.byte_start == 0,
+        Some(last) if first.projection_index == last.projection_index => {
+            last.byte_end > last.byte_start
+                && first.byte_start == last.byte_end
+                && first.byte_end > first.byte_start
+        }
+        Some(last) => {
+            last.projection_index.checked_add(1) == Some(first.projection_index)
+                && first.byte_start == 0
+        }
+    };
+    if !contiguous {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction progress must advance through contiguous source ranges".into(),
+        ));
+    }
+    let reference = generation.as_ref().ok_or_else(|| {
+        ConversationStoreError::InvalidReference(
+            "accepted compaction progress requires a completed Summary generation".into(),
+        )
+    })?;
+    if previous_generation.is_some_and(|prior| prior.call_id == reference.call_id) {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction progress cannot reuse a Summary Call".into(),
+        ));
+    }
+    let used: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_compaction_operation_kind_idx WHERE json_extract(event_json,'$.event.operation_id')=?1 AND json_extract(event_json,'$.event.type')='compaction_chunk_accepted' AND json_extract(event_json,'$.event.generation.call_id')=?2)",
+        params![operation_id.as_str(), reference.call_id.as_str()], |row| row.get(0),
+    ).map_err(|error| storage(error.to_string()))?;
+    if used {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction progress cannot reuse a Summary Call".into(),
+        ));
+    }
+    let limits = crate::context::resources::ResourceLimits::default();
+    let mut remaining_records = limits.total_items;
+    let mut remaining_bytes = limits.total_bytes;
+    let mut call = super::projection::auxiliary_lineage::progress_call(
+        transaction,
+        &envelope.conversation_id,
+        operation_id,
+        reference,
+        &mut remaining_records,
+        &mut remaining_bytes,
+    )?;
+    let crate::model::auxiliary::AuxiliaryInputEvidence::Compaction {
+        source_ranges: expected,
+        ..
+    } = &call.input
+    else {
+        unreachable!()
+    };
+    if expected != source_ranges {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction progress ranges disagree with the Summary Call input".into(),
+        ));
+    }
+    // Reductions are real completed Summary Calls between accepted fragments.
+    // Follow their explicit previous-output links, never more than the shared
+    // operation start ceiling, until the previous accepted generation.
+    for _ in 0..(crate::context::compaction_budget::MAX_PLANNED_SUMMARY_STARTS
+        + crate::context::compaction_budget::COMPACTION_RECOVERY_LIMIT)
+    {
+        let prior = match &call.input {
+            crate::model::auxiliary::AuxiliaryInputEvidence::Compaction {
+                previous_summary,
+                ..
+            } => previous_summary.as_ref(),
+            _ => None,
+        };
+        if prior == previous_generation {
+            return Ok(());
+        }
+        let Some(prior) = prior else {
+            return Err(ConversationStoreError::InvalidReference(
+                "compaction progress does not continue its prior accepted Summary".into(),
+            ));
+        };
+        if previous_generation.is_some_and(|accepted| accepted.call_id == prior.call_id) {
+            return Err(ConversationStoreError::InvalidReference(
+                "compaction progress changed the prior accepted Summary cut".into(),
+            ));
+        }
+        call = super::projection::auxiliary_lineage::progress_call(
+            transaction,
+            &envelope.conversation_id,
+            operation_id,
+            prior,
+            &mut remaining_records,
+            &mut remaining_bytes,
+        )?;
+    }
+    Err(ConversationStoreError::ResourceBoundExceeded(
+        "compaction progress Summary chain exceeds its bound".into(),
+    ))
+}
+
 /// An attempt identity starts exactly once in durable authority (Issue #12,
 /// M9a).
 ///
@@ -1092,6 +1272,8 @@ pub(super) fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)
             return vec![(format!("compaction:{operation_id}"), false)];
         }
         RuntimeEvent::CompactionCompleted { operation_id, .. }
+        | RuntimeEvent::CompactionSkipped { operation_id }
+        | RuntimeEvent::CompactionCancelled { operation_id }
         | RuntimeEvent::CompactionFailed { operation_id, .. } => {
             return vec![(format!("compaction:{operation_id}"), true)];
         }

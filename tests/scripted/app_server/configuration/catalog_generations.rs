@@ -991,7 +991,7 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
 async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() {
     use crate::model::catalog::ModelRef;
     use crate::model::invocation::RequestParams;
-    use crate::model::session::{AuxiliaryModelPolicy, AuxiliaryModelView, SessionModelConfig};
+    use crate::model::session::{AuxiliaryModelView, SessionModelConfig, SummaryModelPolicy};
     Box::pin(bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
         let id = fixture.sessions[0].id.clone();
@@ -1002,11 +1002,10 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
         issue459_pin_fast(&fixture).await;
-        let summary_on = |model: &str| AuxiliaryModelPolicy::Explicit {
+        let summary_on = |model: &str| SummaryModelPolicy::Explicit {
             model: ModelRef::parse(model).unwrap(),
             profile: None,
             request_params: RequestParams::new(),
-            max_output_tokens: Some(256),
         };
         let with_summary = |profile, summary| SessionModelConfig {
             title_model: crate::model::session::AuxiliaryModelPolicy::Session,

@@ -338,11 +338,6 @@ async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_m
     let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let context_runtime = rustx::context::ContextRuntime::for_attempt(
-        rustx::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(rustx::context::DefaultTokenEstimator),
         Some(rustx::context::AgentStatusEngine::default()),
         &model,
@@ -503,11 +498,6 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
     let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let context_runtime = rustx::context::ContextRuntime::for_attempt(
-        rustx::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(rustx::context::DefaultTokenEstimator),
         Some(rustx::context::AgentStatusEngine::default()),
         &model,
@@ -687,11 +677,6 @@ async fn a_genuine_file_block_is_still_rejected_locally_for_a_text_only_model() 
     let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let context_runtime = rustx::context::ContextRuntime::for_attempt(
-        rustx::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(rustx::context::DefaultTokenEstimator),
         Some(rustx::context::AgentStatusEngine::default()),
         &model,

@@ -54,11 +54,11 @@ export interface DispatcherContext {
 const NO_CURRENT_WORKSPACE = 'No Session is focused, so there is no current Workspace. Name one with /settings workspace "<path>" repairs.';
 
 export class CommandDispatcher {
-  readonly #occupancyCuts = new WeakMap<AppServerSession, {domain:string;cut:import('../../../protocol/app-server/v71.ts').CheckpointReadCut}>();
-  readonly #attemptCuts=new WeakMap<AppServerSession,{identity:string;cut:import('../../../protocol/app-server/v71.ts').CheckpointReadCut}>();
+  readonly #occupancyCuts = new WeakMap<AppServerSession, {domain:string;cut:import('../../../protocol/app-server/v72.ts').CheckpointReadCut}>();
+  readonly #attemptCuts=new WeakMap<AppServerSession,{identity:string;cut:import('../../../protocol/app-server/v72.ts').CheckpointReadCut}>();
   #inspectionView = {};
-  readonly #observationPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v71.ts').CheckpointPage>();
-  readonly #agentPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v71.ts').CheckpointPage>();
+  readonly #observationPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v72.ts').CheckpointPage>();
+  readonly #agentPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v72.ts').CheckpointPage>();
   #context: DispatcherContext;
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
@@ -66,7 +66,7 @@ export class CommandDispatcher {
   readonly #observationReads = new WeakMap<AppServerSession,object>();
   readonly #contentDecoders = new WeakMap<AppServerSession, { identity: string; end: number; extent?:number; representation?:string;view?:object; decoder: InstanceType<typeof TextDecoder> }>();
   readonly #contentCaches = new WeakMap<AppServerSession, ContentCache>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v71.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v72.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -547,10 +547,11 @@ export class CommandDispatcher {
     session: AppServerSession,
     argument: string,
   ): Promise<CommandOutcome> {
-    if (argument.length > 0) {
-      return transient("error", "usage: /compact");
+    if (new TextEncoder().encode(argument).length > 4096) {
+      return transient("error", "compaction instructions must not exceed 4096 UTF-8 bytes");
     }
-    const receipt = await session.compactContext();
+    const receipt = await session.compactContext(argument || undefined);
+    if (!receipt) return transient("info", "No eligible conversation context to compact.");
     return transient(
       "info",
       `context compacted to generation ${receipt.generation}: ${receipt.tokens_before.input_tokens} → ${receipt.estimated_tokens_after} tokens`,
@@ -584,7 +585,7 @@ export class CommandDispatcher {
     const usage = transient("error", 'usage: /settings [repairs] | [user | workspace ["<canonical absolute path>"]] [repairs | rescan | approval policy|full_access|inherit]');
     if (words.length === 1 && words[0] === "repairs") return this.#repairs("current");
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v71.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v72.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0] === "repairs" && words.length === 1) return this.#repairs("current workspace");
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
@@ -622,10 +623,10 @@ export class CommandDispatcher {
    * retarget it, and a result from a replaced App Server is never shown.
    */
   async #repairs(
-    target: import("../../../protocol/app-server/v71.ts").SourceTarget | "current" | "current workspace",
+    target: import("../../../protocol/app-server/v72.ts").SourceTarget | "current" | "current workspace",
   ): Promise<CommandOutcome> {
     const { host, session } = this.#context;
-    let workspace: import("../../../protocol/app-server/v71.ts").SourceTarget | undefined;
+    let workspace: import("../../../protocol/app-server/v72.ts").SourceTarget | undefined;
     if (typeof target === "string") {
       if (session !== undefined) {
         const { summary } = await host.client.call("session/summary", { session_id: session.sessionId }, "session_summary");
