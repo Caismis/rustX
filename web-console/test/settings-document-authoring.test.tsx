@@ -44,9 +44,9 @@ async function assertRepairIsTheOnlyConfigMutation(s: ReturnType<typeof cfg3Clie
   // structured editor, add action or catalog row is offered for it.
   for (const page of configPages) {
     open(page);
-    expect(screen.getByText(/Structured editing is unavailable because .*rustx\.toml does not parse/)).toBeTruthy();
-    expect(forms()).toEqual(['Repair malformed source']);
-    expect(screen.queryByRole('button', { name: /^(Add|Edit|Override|Author|Use global default|Remove) |^Save (?!Repair malformed source$)/ })).toBeNull();
+    expect(screen.getByText(/Structured editing is unavailable because .*rustx\.toml violates the source contract/)).toBeTruthy();
+    expect(forms()).toEqual(['Repair invalid source']);
+    expect(screen.queryByRole('button', { name: /^(Add|Edit|Override|Author|Use global default|Remove) |^Save (?!Repair invalid source$)/ })).toBeNull();
   }
   // Extensions: the native extensions and root availability are units of the
   // same document, and they are closed on the same terms.
@@ -57,10 +57,10 @@ async function assertRepairIsTheOnlyConfigMutation(s: ReturnType<typeof cfg3Clie
   open('Advanced');
   expect(writes(s)).toHaveLength(0);
   // The repair form is enabled and fenced on the exact current revision.
-  const repair = screen.getByRole('form', { name: 'Repair malformed source' });
+  const repair = screen.getByRole('form', { name: 'Repair invalid source' });
   expect((repair.querySelector('textarea') as HTMLTextAreaElement).disabled).toBe(false);
   fireEvent.change(repair.querySelector('textarea')!, { target: { value: '[agent]\n' } });
-  fireEvent.click(within(repair).getByRole('button', { name: 'Save Repair malformed source' }));
+  fireEvent.click(within(repair).getByRole('button', { name: 'Save Repair invalid source' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ expected_revision: revision, mutation: { kind: 'repair_config', document: '[agent]\n' } });
 }
@@ -74,12 +74,12 @@ it.each(['user', 'workspace'] as const)('DA-02 a malformed %s rustx.toml exposes
   await findOnAdvanced(new RegExp(`Revision: ${scope}-1`));
   open('Advanced');
   expect(screen.getAllByRole('alert').map(alert => alert.textContent)).toContain(MALFORMED);
-  if (scope === 'workspace') expect(forms()).toEqual(['Repair malformed source']);
+  if (scope === 'workspace') expect(forms()).toEqual(['Repair invalid source']);
   await assertRepairIsTheOnlyConfigMutation(s, `${scope}-1`);
   // The committed repair is observed by an authoritative read, and only that
   // observation makes structured editing available again.
   await screen.findByText(/Revision: saved-2/);
-  expect(screen.queryByRole('form', { name: 'Repair malformed source' })).toBeNull();
+  expect(screen.queryByRole('form', { name: 'Repair invalid source' })).toBeNull();
   open('Tools & Permissions');
   const tools = within(screen.getByRole('form', { name: 'Native Tools' }));
   fireEvent.click(tools.getByLabelText('read'));
@@ -97,7 +97,7 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   // MCP: its own valid document, its own revision.
   open('Extensions');
   filter('MCP servers');
-  expect(screen.queryByRole('form', { name: 'Repair malformed source' })).toBeNull();
+  expect(screen.queryByRole('form', { name: 'Repair invalid source' })).toBeNull();
   fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'probe' } });
   openMcpContractEditor();
@@ -110,7 +110,7 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
   open('Extensions');
   filter('Subagents');
-  expect(screen.queryByRole('form', { name: 'Repair malformed source' })).toBeNull();
+  expect(screen.queryByRole('form', { name: 'Repair invalid source' })).toBeNull();
   fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
   fireEvent.change(screen.getByLabelText('New Agent identity'), { target: { value: 'helper' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));

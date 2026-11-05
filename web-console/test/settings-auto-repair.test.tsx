@@ -662,8 +662,8 @@ it('shows an unresolved repair as a failure next to the manual repair', async ()
   expect(within(section).getByRole('alert').textContent).toBe('Automatic repair could not fix this source. It is unchanged.');
   expect(within(section).getByText(/malformed TOML at line 3, column 1/)).toBeTruthy();
   expect(within(section).getByText('No backup copy was made.')).toBeTruthy();
-  expect(within(section).getByText('Use Repair malformed source below to correct the document by hand.')).toBeTruthy();
-  expect(screen.getByRole('button', { name: /Save Repair malformed source/ })).toBeTruthy();
+  expect(within(section).getByText('Use Repair invalid source below to correct the document by hand.')).toBeTruthy();
+  expect(screen.getByRole('button', { name: /Save Repair invalid source/ })).toBeTruthy();
   s.client.disconnect();
 });
 

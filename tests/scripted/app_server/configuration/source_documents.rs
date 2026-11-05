@@ -4,6 +4,112 @@
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
 
+/// Parseable invalid Models must leave one atomic, revision-fenced repair path.
+#[allow(clippy::too_many_lines)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reasoning_order_semantic_source_repair_is_atomic_and_restores_editing() {
+    use crate::local_runtime::configuration::settings::{SettingsError, SourceTarget};
+    use crate::local_runtime::session_runtime_manager::SourceSettingsError::Source;
+    use crate::model::catalog::ModelProfileId;
+    Box::pin(bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        for target in [
+            SourceTarget::User,
+            SourceTarget::Workspace {
+                directory: f.workspaces[0].clone(),
+            },
+        ] {
+            let initial = f.manager.source_settings(&target).await.unwrap();
+            let source = initial.workspace.as_ref().unwrap_or(&initial.user);
+            let mut document: toml::Table = toml::from_str(
+                &std::fs::read_to_string(&initial.user.path).unwrap(),
+            )
+            .unwrap();
+            let mut model = initial.user.authored.as_ref().unwrap().models.as_ref().unwrap()["local/a"].clone();
+            model.default_profile = Some(ModelProfileId::new("high"));
+            model.profiles = Some(
+                ["low", "high"]
+                    .map(|id| (ModelProfileId::new(id), crate::model::authoring::Profile::default()))
+                    .into(),
+            );
+            let mut replacement = |a: &[&str], b: &[&str]| {
+                for (id, order) in [("local/a", a), ("local/b", b)] {
+                    model.reasoning_profile_order =
+                        Some(order.iter().map(|id| ModelProfileId::new(*id)).collect());
+                    document["models"].as_table_mut().unwrap().insert(
+                        id.into(),
+                        toml::from_str(&crate::toml_authoring::write(&model).unwrap()).unwrap(),
+                    );
+                }
+                toml::to_string(&document).unwrap()
+            };
+            let broken_bytes = replacement(&["low"], &["low"]);
+            // The original passes strict parsing; only intrinsic semantics fail.
+            crate::toml_authoring::parse::<crate::local_runtime::authoring::RuntimeLayer>(
+                broken_bytes.as_bytes(),
+            )
+            .unwrap();
+            std::fs::write(&source.path, &broken_bytes).unwrap();
+            let broken = f.manager.source_settings(&target).await.unwrap();
+            let broken = broken.workspace.as_ref().unwrap_or(&broken.user);
+            assert!(broken.authored.is_none());
+            assert_eq!(
+                broken.diagnostic.as_deref(),
+                Some("invalid rustx.toml; source was not loaded: invalid Model reasoning Profile order at models.*.reasoning_profile_order")
+            );
+            let valid_bytes = replacement(&["low", "high"], &["high", "low"]);
+            // A partial fix cannot publish, even though the first Model is valid.
+            assert!(matches!(
+                f.manager.write_source_settings(
+                    &target, broken.revision.clone(),
+                    SourceMutation::RepairConfig {
+                        document: replacement(&["low", "high"], &["low"]),
+                    },
+                ).await,
+                Err(Source(SettingsError::Invalid))
+            ));
+            assert!(matches!(
+                f.manager.write_source_settings(
+                    &target, source.revision.clone(),
+                    SourceMutation::RepairConfig { document: valid_bytes.clone() },
+                ).await,
+                Err(Source(SettingsError::Conflict { .. }))
+            ));
+            assert_eq!(std::fs::read(&source.path).unwrap(), broken_bytes.as_bytes());
+            let unchanged = f.manager.source_settings(&target).await.unwrap();
+            assert_eq!(unchanged.workspace.as_ref().unwrap_or(&unchanged.user).revision, broken.revision);
+            let accepted = f.manager.write_source_settings(
+                &target, broken.revision.clone(),
+                SourceMutation::RepairConfig { document: valid_bytes.clone() },
+            ).await.unwrap();
+            assert_ne!(accepted.revision, broken.revision);
+            let restored = f.manager.source_settings(&target).await.unwrap();
+            let restored = restored.workspace.as_ref().unwrap_or(&restored.user);
+            assert_eq!(restored.revision, accepted.revision);
+            assert!(restored.diagnostic.is_none());
+            let models = restored.authored.as_ref().unwrap().models.as_ref().unwrap();
+            for (id, order) in [("local/a", ["low", "high"]), ("local/b", ["high", "low"])] {
+                let model = &models[id];
+                assert_eq!(model.reasoning_profile_order, Some(order.map(ModelProfileId::new).into()));
+                assert_eq!(model.profiles.as_ref().unwrap().len(), 2);
+                assert_eq!(model.default_profile, Some(ModelProfileId::new("high")));
+            }
+            // Healthy sources reject whole-document repair and admit unit edits.
+            assert!(matches!(f.manager.write_source_settings(
+                &target, restored.revision.clone(),
+                SourceMutation::RepairConfig { document: valid_bytes },
+            ).await, Err(Source(SettingsError::Invalid))));
+            f.manager.write_source_settings(
+                &target, restored.revision.clone(),
+                SourceMutation::Config { mutation: ConfigMutation::Model {
+                    id: "local/b".into(), authored: None,
+                } },
+            ).await.unwrap();
+        }
+        f.close().await;
+    })).await;
+}
+
 /// The same complete Model transaction owns membership, default and order.
 #[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

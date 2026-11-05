@@ -1,9 +1,59 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { closeSettings, connectRemote, openEmptySession, openWorkspaceSettings } from './shell-actions';
+import { closeSettings, connectRemote, openEmptySession, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
+
+test('parseable invalid Model orders expose whole-source repair and restore native editing', async ({ page }) => {
+  const fixture = await startDogfood();
+  const source = join(fixture.workspaceA, 'rustx.toml');
+  const document = (second: string) => ['a', 'b'].map(id => `
+[models.${id}]
+provider = "fixture"
+id = "console-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 4096
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
+default_profile = "high"
+profiles = { low = {}, high = {} }
+reasoning_profile_order = [${id === 'a' ? '"low", "high"' : second}]
+`).join('\n');
+  const invalid = document('"low"').replace('["low", "high"]', '["low"]');
+  writeFileSync(source, invalid);
+  try {
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await closeSettings(page);
+    await openWorkspaceSettings(page, 'Workspace A');
+    await openSettingsPage(page, 'Models');
+    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    const repair = settings.getByRole('form', { name: 'Repair invalid source', exact: true });
+    await expect(repair).toBeVisible();
+    await expect(settings.getByRole('alert')).toContainText('invalid Model reasoning Profile order at models.*.reasoning_profile_order');
+    await expect(settings.getByRole('button', { name: 'Add Model', exact: true })).toHaveCount(0);
+    await repair.getByLabel('Replacement TOML').fill(document('"low"'));
+    await repair.getByRole('button', { name: 'Save Repair invalid source', exact: true }).click();
+    await expect(repair.getByRole('alert')).toBeVisible();
+    expect(readFileSync(source, 'utf8')).toBe(invalid);
+    await repair.getByLabel('Replacement TOML').fill(document('"high", "low"'));
+    await repair.getByRole('button', { name: 'Save Repair invalid source', exact: true }).click();
+    await expect(repair).toHaveCount(0);
+    await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
+    await settings.getByRole('button', { name: /^All Models/ }).click();
+    await settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name: 'b', exact: true }).click();
+    const modal = page.getByRole('dialog', { name: 'Model b', exact: true });
+    await modal.getByRole('button', { name: 'Advanced configuration', exact: true }).click();
+    const list = modal.getByRole('list', { name: 'Reasoning order (low to high)' });
+    expect(await list.locator('li').evaluateAll(rows => rows.map(row => row.getAttribute('data-profile-order')))).toEqual(['high', 'low']);
+    for (const id of ['high', 'low']) await expect(modal.getByRole('button', { name: `Profile ${id}`, exact: true })).toBeVisible();
+    await modal.getByRole('button', { name: 'Move low up', exact: true }).click();
+    await modal.getByRole('button', { name: 'Save Model b', exact: true }).click();
+    await expect(page.getByText('Model b saved.', { exact: true })).toBeVisible();
+    expect(readFileSync(source, 'utf8')).toMatch(/\[models\.b\][\s\S]*?reasoning_profile_order = \[\s*"low",\s*"high",?\s*\]/s);
+  } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+});
 
 for (const width of [1440, 390]) test(`reasoning order ${width}: native save, reload, reset, cancel and clear`, async ({ page }) => {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });

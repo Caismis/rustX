@@ -95,3 +95,43 @@ stalled Scheduler gate. All three cases passed in isolation; the complete final
 run above passed at eight threads without filtering. The full browser suite and
 macOS checks are delegated to required final-head **FULL** CI, rather than claimed
 as local coverage. The PR records that run's exact head, link and current status.
+
+## Source recovery after semantic validation
+
+Settings uses the existing source-intrinsic native validator for source health,
+ordinary editing admission, whole-document repair admission and every encoded
+candidate. A strictly parseable source with invalid Model metadata is presented
+with a safe diagnostic and the existing complete-source repair form. That form
+admits only a fully valid replacement on the exact observed source revision.
+Failed candidates and stale requests preserve the original bytes and revision;
+repairing a healthy source is refused. Successful repair restores ordinary unit
+editing and clears an unresolved automatic-repair receipt only after native
+health is proven.
+
+This health decision does not require Catalog reference closure, a default Model
+or Provider definitions supplied by another scope. Those remain composition
+facts. Parser diagnostics keep their existing value-redaction rules, and semantic
+diagnostics expose only the native constant category and schema path.
+
+A deterministic regression first failed on the prior implementation because the
+source was incorrectly projected as editable. It now covers two parseable invalid
+Models in both User and Workspace sources, partial-repair rejection, stale-revision
+conflict, complete valid replacement and ordinary editing after reread. Native
+repair tests additionally cover non-Catalog semantic errors, receipt withdrawal,
+and an incomplete source with an absent Provider and default selection. The real
+browser regression repairs both Models through Settings, rejects a partial fix,
+reloads the committed order and edits it through the normal Model form without
+creating a Session or making a provider request.
+
+The full local verification table above records the feature implementation before
+this recovery revision. The PR separately records the recovery revision's targeted
+checks and the final-head FULL CI verdict.
+
+| Recovery revision check | Result |
+| --- | --- |
+| `RUST_TEST_THREADS=8 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features configuration::` | 254 passed |
+| Web `pnpm exec vitest run test/settings-document-authoring.test.tsx test/settings-surface-ownership.test.tsx test/settings-auto-repair.test.tsx` | 90 passed |
+| Web `pnpm typecheck && pnpm check:i18n && pnpm check:provenance` | Passed |
+| Web `pnpm test:e2e test/e2e/settings-reasoning-order.spec.ts test/e2e/settings-ownership.spec.ts` | 5 passed |
+| Pinned browser rerun of the new repair scenario with a Model-specific physical-source assertion | 1 passed |
+| Independent read-only review | No remaining actionable findings |

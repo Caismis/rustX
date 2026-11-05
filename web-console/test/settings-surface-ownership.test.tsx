@@ -393,15 +393,15 @@ it('S1-12 invalid configuration stays repairable and is not presented as empty o
   s.source.workspace = { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: null, diagnostic: 'invalid rustx.toml' };
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await screen.findByText(/invalid rustx\.toml/);
-  expect(screen.getByRole('form', { name: 'Repair malformed source' })).toBeTruthy();
+  expect(screen.getByRole('form', { name: 'Repair invalid source' })).toBeTruthy();
   fireEvent.click(screen.getByRole('tab', { name: 'Agent' }));
   // No structured editor presents the unparsed document as empty, inherited or
   // defaulted: it names the malformed document and offers only its repair.
-  expect(screen.getByText(/Structured editing is unavailable because \/workspace\/rustx\.toml does not parse/)).toBeTruthy();
+  expect(screen.getByText(/Structured editing is unavailable because \/workspace\/rustx\.toml violates the source contract/)).toBeTruthy();
   expect(screen.queryByText(/Inherited — no Workspace override/)).toBeNull();
   expect(screen.queryByText(/Native default — no authored value/)).toBeNull();
   // Repair submits an exact revision-fenced repair mutation.
-  const repair = screen.getByRole('form', { name: 'Repair malformed source' });
+  const repair = screen.getByRole('form', { name: 'Repair invalid source' });
   fireEvent.change(repair.querySelector('textarea')!, { target: { value: '[agent]\n' } });
   fireEvent.click(repair.querySelector('button[type="submit"]')!);
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { kind: 'repair_config', document: '[agent]\n' } } }));

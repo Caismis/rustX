@@ -775,7 +775,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "6f2ba27ae9743429f3a19e6db7e0966c00b44b47e9b1f73712f9eb4b2dfa1368"
+      "local_sha256": "ea96a8e81bb40dbc90ea5f39746b4d4a773165676af494ba250bdc45dedc7c9e"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -4099,7 +4099,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "0e70434f61718224d06dd0801e9b97ba5e6c5abc06b64421352a9ad435468591"
+      "local_sha256": "2b7851703b534739d44245546c2ad628e7a576c4ef97d457c2fe899b558cc516"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
