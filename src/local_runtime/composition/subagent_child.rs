@@ -428,6 +428,7 @@ async fn run_preparation_gate_if_armed(
 /// entries with their locations remapped onto the child's own copies.
 fn materialize_frozen_skills(
     spec: &crate::runtime::subagent::ipc::SubagentChildSpec,
+    cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<crate::skills::SkillSnapshot, LocalRuntimeError> {
     let root = spec
         .runtime_root()
@@ -455,6 +456,7 @@ fn materialize_frozen_skills(
             &skill.source_root,
             &skill.files,
             &destination,
+            cancellation,
         )
         .map_err(|error| LocalRuntimeError::Capability {
             detail: error.to_string(),
@@ -699,7 +701,29 @@ impl LocalConversationCore {
             // restarted, and the model-visible location is remapped onto the
             // child's own copy so the frozen identity stays authoritative even
             // once the child's filesystem ancestry differs from the parent's.
-            let skills = materialize_frozen_skills(spec)?;
+            let skill_spec = spec.clone();
+            let skill_cancellation = preparation.cancellation();
+            let skills = preparation
+                .guard(async move {
+                    tokio::task::spawn_blocking(move || {
+                        materialize_frozen_skills(&skill_spec, &skill_cancellation)
+                    })
+                    .await
+                    .map_err(|error| {
+                        crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                            error.to_string(),
+                        )
+                    })?
+                    .map_err(|error| {
+                        crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                            error.to_string(),
+                        )
+                    })
+                })
+                .await
+                .map_err(|error| LocalRuntimeError::Capability {
+                    detail: error.to_string(),
+                })?;
 
             // 8. The deny-by-construction base registry: exactly the Builtin
             // capabilities the parent's resolution authorized, with their exact

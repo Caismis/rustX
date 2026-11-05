@@ -22,7 +22,8 @@ use std::path::Path;
 /// revision for `replace` and `delete`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
-pub enum WorkflowEdit {
+#[schemars(rename = "WorkflowEdit")]
+pub enum WorkflowEdit<D = Box<WorkflowFileDocument>> {
     /// Create the native minimal valid program: an entry Return of an empty
     /// object, with matching empty object input and output contracts.
     /// `description` is for models; `display` is how people see the file.
@@ -32,7 +33,7 @@ pub enum WorkflowEdit {
         display: Option<crate::workflow_file::WorkflowDisplay>,
     },
     /// Replace the whole file with one definition, finished or not.
-    Replace { document: Box<WorkflowFileDocument> },
+    Replace { document: D },
     /// Copy another file of the same scope at exactly `source_revision`.
     Copy {
         source: WorkflowId,

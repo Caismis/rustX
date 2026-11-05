@@ -5,7 +5,7 @@ import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import { workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
 import WorkflowEditor from '../src/app/workflows/ui/editor/WorkflowEditor';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
-import type { WorkflowEdit } from '../../protocol/app-server/v70';
+import type { WorkflowEdit } from '../../protocol/app-server/workflow-documents.ts';
 import { encodeField, nodeField } from '../src/app/workflows/document/fields';
 import { viewId } from '../src/app/workflows/ui/editor/selection';
 import { dataNodesDocument } from './workflow-data-document';

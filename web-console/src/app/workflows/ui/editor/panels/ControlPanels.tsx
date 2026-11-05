@@ -1,5 +1,5 @@
 import { Menu } from '@base-ui/react/menu';
-import type { WorkflowAssignment, WorkflowLoopVariable, WorkflowVarType, WorkflowWriteMode } from '../../../../../../../protocol/app-server/v70';
+import type { WorkflowAssignment, WorkflowLoopVariable, WorkflowVarType, WorkflowWriteMode } from '../../../../../../../protocol/app-server/v71';
 import { useTranslation } from '../../../../../locale/react';
 import { IconChevronDownOutline14, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';

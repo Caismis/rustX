@@ -1015,7 +1015,7 @@ async fn a_nested_binding_child_never_discovers_ancestor_project_instructions() 
 #[allow(clippy::too_many_lines)] // complete child composition and ownership fixture
 async fn a_frozen_skill_allowlist_is_materialized_and_rendered_without_bodies() {
     let dir = lab();
-    let source = dir.path().join("selected-source");
+    let source = dir.path().canonicalize().unwrap().join("selected-source");
     std::fs::create_dir_all(&source).expect("source");
     std::fs::write(
         source.join("SKILL.md"),
@@ -1023,9 +1023,8 @@ async fn a_frozen_skill_allowlist_is_materialized_and_rendered_without_bodies() 
     )
     .expect("SKILL.md");
     let files = vec![std::path::PathBuf::from("SKILL.md")];
-    let markdown = std::fs::read(source.join("SKILL.md")).expect("read");
-    let version_id = crate::skills::identity::package_version_id(&source, &files, &markdown)
-        .expect("frozen identity");
+    let version_id =
+        crate::skills::identity::package_version_id(&source, &files).expect("frozen identity");
     let child_spec = spec(
         dir.path(),
         vec![builtin("read"), builtin("grep")],
@@ -1140,7 +1139,7 @@ async fn a_frozen_skill_allowlist_is_materialized_and_rendered_without_bodies() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_changed_skill_source_fails_child_composition() {
     let dir = lab();
-    let source = dir.path().join("selected-source");
+    let source = dir.path().canonicalize().unwrap().join("selected-source");
     std::fs::create_dir_all(&source).expect("source");
     std::fs::write(
         source.join("SKILL.md"),
@@ -1148,9 +1147,8 @@ async fn a_changed_skill_source_fails_child_composition() {
     )
     .expect("SKILL.md");
     let files = vec![std::path::PathBuf::from("SKILL.md")];
-    let markdown = std::fs::read(source.join("SKILL.md")).expect("read");
-    let version_id = crate::skills::identity::package_version_id(&source, &files, &markdown)
-        .expect("frozen identity");
+    let version_id =
+        crate::skills::identity::package_version_id(&source, &files).expect("frozen identity");
     // The source moves on after the freeze.
     std::fs::write(
         source.join("SKILL.md"),

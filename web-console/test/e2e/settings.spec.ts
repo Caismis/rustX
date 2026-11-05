@@ -22,7 +22,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     // Global Settings opens at General, one of seven product pages.
     await expect(page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab')).toHaveText(['General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced']);
     expect(await selectedSettingsPage(page)).toBe('General');
-    const saved = async (unit: string) => { await expect(page.getByText(`${unit} saved.`, {exact:true})).toBeVisible(); };
+    const saved = async (unit: string) => { await page.getByText(`${unit} saved.`, {exact:true}).waitFor({ state: 'visible' }); };
     const row = (name: string) => settings.getByRole('row', { name, exact: true });
     const modelRow = (name: string) => settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name, exact: true });
     await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);

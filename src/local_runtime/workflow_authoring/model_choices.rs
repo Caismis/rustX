@@ -69,7 +69,7 @@ impl UserConfigManager {
         query: WorkflowModelChoicesQuery,
         expected_revision: Option<&str>,
     ) -> Result<WorkflowModelChoices, SettingsError> {
-        let (source, revision) = self.capture_source_settings(target)?;
+        let (source, revision) = self.capture_authored_settings(target)?;
         if let Some(expected) = expected_revision
             && expected != revision
         {
@@ -79,10 +79,7 @@ impl UserConfigManager {
                 actual: revision,
             });
         }
-        let models = source
-            .resolved
-            .and_then(|source| source.models)
-            .unwrap_or_default();
+        let models = source.and_then(|source| source.models).unwrap_or_default();
         match query {
             WorkflowModelChoicesQuery::Models { offset } => {
                 let (models, next_offset) = page(

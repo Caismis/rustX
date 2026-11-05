@@ -3,7 +3,7 @@ import { useSelector } from '@xstate/react';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Modal } from '../../../../presentation/primitives/Modal';
 import { useTranslation } from '../../../../locale/react';
-import type { WorkflowFileDocument } from '../../../../../../protocol/app-server/v70';
+import type { WorkflowFileDocument } from '../../../../../../protocol/app-server/v71';
 import type { LibraryConfirmation, WorkflowLibraryActor } from '../../machines/library';
 import { setDisplay } from '../../document/presentation';
 import { classifyFailure, type WorkflowFailure } from '../../port';

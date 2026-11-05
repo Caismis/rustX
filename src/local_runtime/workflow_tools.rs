@@ -22,6 +22,11 @@ use std::sync::Arc;
 
 /// Sources connected at once, across requests.
 static LISTINGS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
+#[cfg(test)]
+pub(crate) fn listings_for_test() -> &'static tokio::sync::Semaphore {
+    &LISTINGS
+}
 /// Preparing a Python environment may install its requirements first.
 const PREPARE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
@@ -214,7 +219,13 @@ impl SessionRuntimeManager {
             .find(|plan| plan.source_id == source)
             .ok_or(SettingsError::Invalid)?;
         let _permit = LISTINGS.acquire().await.map_err(|_| SettingsError::Io)?;
-        let mut listed = list(plan, &workspace, &runtime_root, &CancellationSignal::new()).await;
+        let mut listed = list(
+            plan,
+            &workspace,
+            &runtime_root,
+            &self.configuration.resource_io,
+        )
+        .await;
         listed
             .tools
             .sort_by(|left, right| left.name.cmp(&right.name));
@@ -263,7 +274,11 @@ fn capture(
             }),
         });
     }
-    if let Ok(python) = super::managed_python_resources::discover(directory, &user_root) {
+    if let Ok(python) = super::managed_python_resources::discover_controlled(
+        directory,
+        &user_root,
+        &owner.resource_io,
+    ) {
         for (source, package) in python.packages() {
             plans.push(Plan {
                 source_id: source.to_string(),

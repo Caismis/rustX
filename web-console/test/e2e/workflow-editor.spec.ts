@@ -214,7 +214,7 @@ test('incomplete candidate variable picking and file-owned keyboard positions pr
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'metadata_flow').getByRole('button', { name: 'metadata_flow', exact: true }).click();
-    await editor(page).getByLabel('Output node done', { exact: true }).focus(); await editor(page).getByLabel('Output node done', { exact: true }).press('Enter');
+    await editor(page).getByLabel('Output node done', { exact: true }).click();
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
     const variables = page.getByRole('dialog', { name: 'Choose a variable' });
@@ -592,5 +592,61 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
+test('large Workflow documents and oversized check schemas load, edit and save in both scopes', async ({ page }, info) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = [];
+  const frames: number[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('websocket', socket => {
+    socket.on('framesent', event => { if (typeof event.payload === 'string') frames.push(Buffer.byteLength(event.payload)); });
+    socket.on('framereceived', event => { if (typeof event.payload === 'string') frames.push(Buffer.byteLength(event.payload)); });
+  });
+  try {
+    await seed(fixture);
+    const { codeDocument } = await import('../workflow-code-document');
+    const authored = codeDocument();
+    const code = authored.block.nodes.code;
+    if (code.type !== 'code') throw new Error('Code fixture');
+    code.code += '\n' + '# resource bytes stay out of control frames\n'.repeat(75_000);
+    const schema = { type: 'object', properties: Object.fromEntries(Array.from({ length: 300 }, (_, index) => [`field_${index}`, { type: 'string', description: 'd'.repeat(4096) }])), additionalProperties: false };
+    expect(Buffer.byteLength(JSON.stringify(schema))).toBeGreaterThan(1_048_576);
+    authored.block.nodes.contract = { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'object', fields: {} }, result: { type: 'json', schema } };
+    authored.block.edges = [{ from: 'start', to: 'code' }, { from: 'code', to: 'contract' }, { from: 'contract', to: 'done' }];
+    const documentBytes = JSON.stringify(authored);
+    expect(Buffer.byteLength(documentBytes)).toBeGreaterThan(3 * 1024 * 1024);
+    const globalFile = join(fixture.directory, 'home/rustx/.agents/workflows/large_global.yaml');
+    const workspaceFile = join(fixture.workspaceA, '.agents/workflows/large_workspace.yaml');
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    // Session navigation is a prerequisite, not part of large Workflow authoring.
+    // Install the large inventory after its settings capture has completed.
+    writeFileSync(globalFile, documentBytes); writeFileSync(workspaceFile, documentBytes);
+    await expect(page).toHaveTitle(/rustX/i);
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    for (const [scope, id, file] of [['Workspace', 'large_workspace', workspaceFile], ['Global', 'large_global', globalFile]]) {
+      await page.getByRole('tab', { name: scope, exact: true }).click();
+      await card(page, id).getByRole('button', { name: id, exact: true }).click();
+      const done = editor(page).getByLabel('Output node done', { exact: true });
+      await done.focus(); await done.press('Enter');
+      const inspector = page.getByRole('complementary', { name: 'Inspector' });
+      await inspector.getByRole('textbox', { name: 'Node title', exact: true }).fill(`Large ${scope} result`);
+      await inspector.getByRole('textbox', { name: 'Node title', exact: true }).press('Enter');
+      await page.getByRole('button', { name: 'Save File', exact: true }).click();
+      // Await the transfer/commit/reread lifecycle before checking its result;
+      // document admission does not impose a five-second save latency contract.
+      await page.getByRole('button', { name: 'Save File', exact: true }).waitFor({ state: 'visible' });
+      await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+      expect(parse(readFileSync(file, 'utf8')).block.nodes.code.code).toBe(code.code);
+      expect(parse(readFileSync(file, 'utf8')).block.nodes.contract.result.schema).toEqual(schema);
+      await page.screenshot({ path: info.outputPath(`large-${scope.toLowerCase()}.png`) });
+      await page.getByRole('button', { name: 'Back to Workflows', exact: true }).first().click();
+    }
+    expect(Math.max(...frames)).toBeLessThanOrEqual(1_048_576);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(errors).toEqual([]);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally { await fixture.stop(false); }
 });

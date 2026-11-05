@@ -53,6 +53,7 @@ impl UserConfigManager {
         Ok(Self {
             sources,
             runtime_root_origin: explicit,
+            resource_io: crate::runtime::CancellationSignal::new(),
             repairs: repair::RepairLedger::default(),
             #[cfg(test)]
             test_hooks: ConfigurationHooks::default(),
@@ -399,13 +400,20 @@ impl UserConfigManager {
             project_resources,
             scoped_workflows,
         } = capture;
-        for root in [
-            self.sources.home_directory.join("rustx/.agents"),
-            locations.workspace.join(".agents"),
+        for (root, scope) in [
+            (
+                self.sources.home_directory.join("rustx/.agents"),
+                SourceScope::User,
+            ),
+            (locations.workspace.join(".agents"), SourceScope::Workspace),
         ] {
             revisions.insert(
                 root.clone(),
-                super::super::resource_directory::revision(&root),
+                super::super::resource_directory::revision_with_cancellation(
+                    &root,
+                    scope,
+                    &self.resource_io,
+                ),
             );
         }
         let user_path = self.sources.config_path.clone();
@@ -558,6 +566,8 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         resolved: SourceCapture,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
+        crate::package_io::check_cancelled(&self.resource_io)
+            .map_err(|error| LaunchFailure::from(error.to_string()))?;
         let SourceCapture {
             definitions: mut resource_definitions,
             mut diagnostics,
@@ -628,6 +638,7 @@ impl UserConfigManager {
                     automatic: skill_sources.clone(),
                 },
             )
+            .with_cancellation(self.resource_io.clone())
             .discover()
         };
         if let Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(names)) =
@@ -655,9 +666,10 @@ impl UserConfigManager {
                 return Err(LaunchFailure::resource(error.clone()));
             }
         }
-        let managed_python = super::super::managed_python_resources::discover(
+        let managed_python = super::super::managed_python_resources::discover_controlled(
             Some(&locations.workspace),
             &host.home_directory.join("rustx/.agents"),
+            &self.resource_io,
         )
         .map_err(LaunchFailure::resource)?;
         let MetadataAdmission {
@@ -787,11 +799,18 @@ impl UserConfigManager {
                     .chain(ResourceDiagnostic::of_managed_python(&managed_python)),
             );
         }
-        for root in [
-            host.home_directory.join("rustx/.agents"),
-            locations.workspace.join(".agents"),
+        for (root, scope) in [
+            (host.home_directory.join("rustx/.agents"), SourceScope::User),
+            (locations.workspace.join(".agents"), SourceScope::Workspace),
         ] {
-            if revisions.get(&root) != Some(&super::super::resource_directory::revision(&root)) {
+            let actual = super::super::resource_directory::revision_with_cancellation(
+                &root,
+                scope,
+                &self.resource_io,
+            );
+            if !revisions.get(&root).is_some_and(|expected| {
+                super::super::resource_directory::same_capture(expected, &actual)
+            }) {
                 return Err(LaunchFailure::at(
                     Some(root),
                     "resources",
@@ -821,6 +840,8 @@ impl UserConfigManager {
                 super::super::settings::revision(Some(&bytes)),
             );
         }
+        crate::package_io::check_cancelled(&self.resource_io)
+            .map_err(|error| LaunchFailure::from(error.to_string()))?;
         for (path, expected) in &revisions {
             // Resource roots were compared above; the two documents are
             // fenced through their admitted directories by the capture.
@@ -1093,6 +1114,8 @@ pub(in crate::local_runtime) fn source_manifest_revision(
     hash.update(b"rustx-source-manifest-v1");
     hash.update((revisions.len() as u64).to_be_bytes());
     for (path, revision) in revisions {
+        let revision =
+            super::super::resource_directory::capture_token(revision).unwrap_or(revision);
         for bytes in [path.as_os_str().as_bytes(), revision.as_bytes()] {
             hash.update((bytes.len() as u64).to_be_bytes());
             hash.update(bytes);

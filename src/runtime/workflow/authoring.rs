@@ -315,9 +315,8 @@ pub fn validate_candidate(definition: &WorkflowDefinition) -> Result<(), &'stati
         }
         Ok(())
     }
-    if serde_json::to_vec(definition).map_or(true, |bytes| bytes.len() > super::MAX_WORKFLOW_BYTES)
-    {
-        return Err("executable candidate exceeds 512 KiB");
+    if !crate::bounded_file::json_fits(definition, super::MAX_WORKFLOW_BYTES) {
+        return Err("executable candidate exceeds 16 MiB");
     }
     walk(&definition.block, 0, &mut 0)
 }

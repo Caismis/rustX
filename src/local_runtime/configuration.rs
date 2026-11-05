@@ -74,6 +74,7 @@ pub struct UserConfigSources {
 pub struct UserConfigManager {
     pub(super) sources: UserConfigSources,
     runtime_root_origin: Origin,
+    pub(super) resource_io: crate::runtime::CancellationSignal,
     /// Process-local automatic repair observations, shared by every clone.
     repairs: repair::RepairLedger,
     #[cfg(test)]

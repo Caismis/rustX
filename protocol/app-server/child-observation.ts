@@ -1,4 +1,4 @@
-import type { AgentObservation, AgentObservationCursor, RuntimeClientCheckpoint, RuntimeClientSnapshot, RuntimeClientEvent, CheckpointReadCut } from './v70.ts';
+import type { AgentObservation, AgentObservationCursor, RuntimeClientCheckpoint, RuntimeClientSnapshot, RuntimeClientEvent, CheckpointReadCut } from './v71.ts';
 import { validateObservationCut } from './observation.ts';
 import { checkpointSnapshot, foldRuntimeEvent, contentBindings, observationCheckpoint } from './projection.ts';
 

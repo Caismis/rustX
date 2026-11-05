@@ -18,7 +18,7 @@ diagnostics identify the offending or missing Profiles, while safe classificatio
 retains only the fixed field and reason.
 
 Authoring/TOML uses `reasoning_profile_order`; full catalog contracts use
-`reasoningProfileOrder`. App Server v70 and Runtime Client v82 carry the optional
+`reasoningProfileOrder`. App Server v71 and Runtime Client v82 carry the optional
 metadata. The Rust-generated `v70.schema.json`, `v70.ts`, serialized fixtures,
 strict client decoding, type contracts and `schemas/rustx.schema.json` are updated.
 The old App Server generated pair is removed. Native authoring remains schema 10

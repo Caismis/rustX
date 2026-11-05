@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import clsx from 'clsx';
-import type { WorkflowVarType } from '../../../../../../../protocol/app-server/v70';
+import type { WorkflowVarType } from '../../../../../../../protocol/app-server/v71';
 import { useTranslation } from '../../../../../locale/react';
 import { IconCheckOutline16, IconCopyOutline16, IconFullscreenOutline16, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { Modal } from '../../../../../presentation/primitives/Modal';

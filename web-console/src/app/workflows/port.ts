@@ -1,7 +1,6 @@
-import type {
-  ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowDiagnostic, WorkflowEdit, WorkflowLibrary,
-  WorkflowSource, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor,
-} from '../../../../protocol/app-server/v70';
+import { checkWorkflowDocument, readWorkflowSource, withWorkflowDocument, withWorkflowOperation, type WorkflowRequest } from '../../../../protocol/app-server/workflow-documents.ts';
+import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowDiagnostic, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../../protocol/app-server/v71';
+import type { WorkflowEdit, WorkflowSource } from '../../../../protocol/app-server/workflow-documents.ts';
 import { analysisMatches } from '../../../../protocol/app-server/workflow-analysis';
 import type { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain, RequestNotDispatched, RpcFailure } from '../../client/errors';
@@ -99,7 +98,7 @@ export interface WorkflowScopePort {
   /** Check the exact candidate. A Workspace file's dependencies are
    * checked in its own Workspace; a Global file's are not checked. */
   check(id: string, document: WorkflowFileDocument): Promise<WorkflowCheckReport>;
-  analyze(id: string, document: WorkflowFileDocument, generation: string, query?: WorkflowAnalysisQuery): Promise<WorkflowAnalysisReport>;
+  analyze(id: string, document: WorkflowFileDocument, generation: string, query?: WorkflowAnalysisQuery, owns?: () => boolean): Promise<WorkflowAnalysisReport>;
   /** One whole-file write. Its acknowledgement and its reread are separate. */
   write(id: string, expectedRevision: string, edit: WorkflowEdit): Promise<WorkflowCommit>;
   /** Enable or disable one file for this scope's Sessions, against the
@@ -150,16 +149,22 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
     const commit = await attempt(true, operation);
     return current() || commit.reread.status === 'failed' ? commit : { ...commit, reread: { status: 'failed', error: 'server_replaced' } };
   };
-  const viaHost = async <K extends WorkflowHostResult['kind']>(workspaceId: string, operation: WorkflowHostOperation & { kind: K }) => {
-    const owner = host();
-    if (!owner?.workflowWorkspace) throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_unavailable' });
-    if (!hostAuthority?.current() || !sameEndpoint(hostAuthority.scope.endpoint, endpoint)) {
-      throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_replaced' });
-    }
-    if (!native) throw new WorkflowOperationError({ kind: 'unavailable', message: 'server_unavailable' });
-    const result = await owner.workflowWorkspace(hostAuthority.scope, native, workspaceId, operation);
-    if (result.kind !== operation.kind) throw new Error('Unexpected Product Host result');
-    return result as Extract<WorkflowHostResult, { kind: K }>;
+  const viaHost = async <K extends WorkflowHostResult['kind']>(workspaceId: string, operation: WorkflowHostOperation & { kind: K }, owns?: () => boolean) => {
+    const dispatch = async () => {
+      if (!current()) throw replaced(false);
+      const owner = host();
+      if (!owner?.workflowWorkspace) throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_unavailable' });
+      if (!hostAuthority?.current() || !sameEndpoint(hostAuthority.scope.endpoint, endpoint)) {
+        throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_replaced' });
+      }
+      if (!native) throw new WorkflowOperationError({ kind: 'unavailable', message: 'server_unavailable' });
+      const result = await owner.workflowWorkspace(hostAuthority.scope, native, workspaceId, operation);
+      if (result.kind !== operation.kind) throw new Error('Unexpected Product Host result');
+      return result as Extract<WorkflowHostResult, { kind: K }>;
+    };
+    // Admit before the HTTP body is encoded. Multiple ports for the same
+    // browser connection share this queue; a source listing keeps its own lane.
+    return operation.kind === 'tool_catalog' ? dispatch() : withWorkflowOperation(client, dispatch, owns);
   };
   if (scope.kind === 'workspace') {
     const { workspaceId } = scope;
@@ -169,7 +174,10 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
       read: id => read(async () => (await viaHost(workspaceId, { kind: 'read', id })).source),
       modelChoices: (query, expected_revision) => read(async () => (await viaHost(workspaceId, { kind: 'model_choices', query, expected_revision })).choices),
       toolCatalog: (source, cursor) => read(async () => (await viaHost(workspaceId, { kind: 'tool_catalog', source, cursor })).catalog),
-      analyze: (id, document, generation, query) => read(async () => (await viaHost(workspaceId, { kind: 'analyze', id, document, generation, query })).report),
+      analyze: (id, document, generation, query, owns) => read(async () => {
+        if (owns && !owns()) throw new Error('Workflow analysis request superseded');
+        return (await viaHost(workspaceId, { kind: 'analyze', id, document, generation, query }, owns)).report;
+      }),
       check: (id, document) => read(async () => (await viaHost(workspaceId, { kind: 'check', id, document })).report),
       write: (id, expected_revision, edit) => write(async () => (await viaHost(workspaceId, { kind: 'write', id, expected_revision, edit })).commit),
       enable: (id, expected_revision, enabled) => attempt(true, async () => {
@@ -178,23 +186,30 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
     };
   }
   const target = { kind: 'user' as const };
+  const request: WorkflowRequest = async (operation, expected) => {
+    if (!current()) throw replaced(false);
+    const result = await client.request(operation, expected, undefined, current);
+    if (!current()) throw replaced(false);
+    return result;
+  };
   return {
     endpoint, scope,
     list: () => read(async () => (await client.request({ method: 'workflow/list', params: { target } }, 'workflow_library')).library),
-    read: id => read(async () => (await client.request({ method: 'workflow/read', params: { target, id } }, 'workflow_source')).source),
+    read: id => read(() => readWorkflowSource(client, request, target, id)),
     modelChoices: (query, expected_revision) => read(async () => (await client.request({ method: 'workflow/modelChoices', params: { target, query, expected_revision } }, 'workflow_model_choices')).choices),
     toolCatalog: (source, cursor) => read(async () => (await client.request({ method: 'workflow/toolCatalog', params: { target, source, cursor } }, 'workflow_tool_catalog')).catalog),
-    analyze: (id, document, generation, query) => read(async () => {
-      const { report } = await client.request({ method: 'workflow/analyze', params: { target, id, document, generation, query } }, 'workflow_analysis');
+    analyze: (id, document, generation, query, owns) => read(async () => {
+      const { report } = await withWorkflowDocument(client, request, target, document, reference => client.request({ method: 'workflow/analyze', params: { target, id, document: reference, generation, query } }, 'workflow_analysis'), owns);
       if (!analysisMatches(report, target, id, generation, query)) throw new Error('Mismatched Workflow analysis target or query');
       return report;
     }),
-    check: (id, document) => read(async () => (await client.request({ method: 'workflow/check', params: { target, id, document, explain: false } }, 'workflow_check')).report),
+    check: (id, document) => read(() => checkWorkflowDocument(client, request, target, id, document)),
     write: (id, expected_revision, edit) => write(async () => {
-      const acknowledgement = await client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision, mutation: { kind: 'workflow', id, edit } } }, 'sources_written');
+      const commit = (authored: import('../../../../protocol/app-server/v71').WorkflowEdit) => client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision, mutation: { kind: 'workflow', id, edit: authored } } }, 'sources_written');
+      const acknowledgement = edit.operation === 'replace' ? await withWorkflowDocument(client, request, target, edit.document, reference => commit({ operation: 'replace', document: reference })) : await commit(edit);
       // The commit is a fact from here on; its reread may fail independently.
       let reread: WorkflowCommit['reread'];
-      try { reread = { status: 'observed', source: (await client.request({ method: 'workflow/read', params: { target, id } }, 'workflow_source')).source }; }
+      try { reread = { status: 'observed', source: await readWorkflowSource(client, request, target, id) }; }
       catch (error) { reread = { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
       return { acknowledgement: { revision: acknowledgement.revision, configuration_revision: acknowledgement.configuration_revision ?? null }, reread };
     }),
