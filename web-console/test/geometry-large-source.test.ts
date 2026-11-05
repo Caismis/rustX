@@ -26,6 +26,12 @@ it('assembles exact geometry bytes from bounded reads without exposing a partial
   expect(result.data.every((value, index) => value === f.source[index])).toBe(true); expect(f.read).toHaveBeenCalledTimes(2);
   expect(f.read.mock.calls[1][0]).toEqual({ kind: 'bytes', range: { offset: FILE_PREVIEW_LIMITS.pageBytes, length: 19 } });
 });
+it('reads a small STEP in one ordinary bounded page without sampling probes', async () => {
+  const f = reader(1024), header = new TextEncoder().encode('ISO-10303-21;');
+  f.source.set(header);
+  const result = await readGeometrySource(f.read, f.signal);
+  expect(result.data).toEqual(f.source); expect(f.read).toHaveBeenCalledExactlyOnceWith({kind: 'bytes', range: {offset: 0, length: FILE_PREVIEW_LIMITS.pageBytes}}, f.signal);
+});
 it.each(['version', 'size'])('rejects changed source %s instead of combining different copies', async field => {
   const f = reader(), read = f.read.getMockImplementation()!;
   f.read.mockImplementation(async options => { const page = await read(options); return page.offset ? { ...page, ...(field === 'version' ? { version: 'two' } : { bytes: page.bytes + 1, eof: false }) } : page; });

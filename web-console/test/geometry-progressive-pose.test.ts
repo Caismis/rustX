@@ -10,3 +10,8 @@ it.each(['perspective','orthographic'] as const)('keeps normalized framing, pan 
   if(camera.projection==='perspective')expect(camera.position[1]).toBeCloseTo(radius/Math.sin(Math.PI/8)/.5*1.1/2);
   else expect(camera.verticalSpan).toBeCloseTo(2*radius/.5*1.1/2);
 });
+
+it('normalizes LOD camera handoff to orthographic projection by default', () => {
+  const element = document.createElement('div'), bounds = new Box3(new Vector3(), new Vector3(10, 10, 10));
+  expect(cameraFromPose({direction: [1,1,1], target: [0,0,0], zoom: 1}, bounds, element).projection).toBe('orthographic');
+});

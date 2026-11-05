@@ -12,7 +12,7 @@ const imports = vi.hoisted(() => ({ pending: [] as { resolve: (value: unknown) =
 vi.mock('../src/app/components/documents/geometry/glb', () => ({ importGlb: () => new Promise((resolve, reject) => { imports.pending.push({ resolve, reject }); }) }));
 vi.mock('../src/app/components/documents/geometry/parse', () => ({ parseGeometry: (_bytes: unknown, _format: unknown, _signal: unknown, stage: (stage: GeometryImportStage) => void) => new Promise(resolve => { imports.cad.push({ stage, resolve }); }) }));
 vi.mock('../src/app/components/documents/geometry/viewport', () => ({ prepareGeometryGraphics:graphics,mountGeometry: (_element: unknown, _object: unknown, _bounds: unknown, saved: unknown, _labels: unknown, publish: (patch: unknown) => void) => {
-  const control = { fit: vi.fn(), reset: vi.fn(), focus: vi.fn(), isolate: vi.fn(), restore: vi.fn(), showAll: vi.fn(), refreshPreview: vi.fn(), projection: 'perspective', setProjection: vi.fn(), setOutlines: vi.fn(async (enabled:boolean) => enabled?'on':'off'), relabel: vi.fn(), inspect: () => ({ name: 'Body', triangles: 12, visibleTriangles: 12, min: [-5, -5, -5], max: [5, 5, 5], dimensions: [10, 10, 10] }), dispose: vi.fn(), publish, saved, pending: undefined as unknown, flush: vi.fn((save = publish) => { if (control.pending) { const patch = control.pending; control.pending = undefined; save(patch); } }), select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }] }; imports.mounts.push(control); return control;
+  const control = { fit: vi.fn(), reset: vi.fn(), focus: vi.fn(), isolate: vi.fn(), restore: vi.fn(), showAll: vi.fn(), refreshPreview: vi.fn(), projection: (saved as { camera?: { projection?: string } } | undefined)?.camera?.projection ?? 'orthographic', setProjection: vi.fn(), setOutlines: vi.fn(async (enabled:boolean) => enabled?'on':'off'), relabel: vi.fn(), inspect: () => ({ name: 'Body', triangles: 12, visibleTriangles: 12, min: [-5, -5, -5], max: [5, 5, 5], dimensions: [10, 10, 10] }), dispose: vi.fn(), publish, saved, pending: undefined as unknown, flush: vi.fn((save = publish) => { if (control.pending) { const patch = control.pending; control.pending = undefined; save(patch); } }), select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }] }; imports.mounts.push(control); return control;
 } }));
 afterEach(() => { cleanup(); imports.pending = []; imports.cad = []; imports.mounts = []; });
 function graph() {
@@ -32,12 +32,6 @@ it('keeps an explicit Off choice after optional surface preparation settles', as
   const button=ui.getByRole('button',{name:'Model outlines'});expect(button.getAttribute('aria-pressed')).toBe('true');
   await act(async()=>fireEvent.click(button));expect(button.getAttribute('aria-pressed')).toBe('false');
   await act(async()=>settle());expect(button.getAttribute('aria-pressed')).toBe('false');expect(imports.mounts[0].setOutlines).toHaveBeenLastCalledWith(false);
-});
-it('hands the coarse view direction and normalized pan into the admitted full-model camera',async()=>{
-  const source=graph(),initialPose=()=>({direction:[0,0,1] as [number,number,number],target:[.1,0,0] as [number,number,number],zoom:2});
-  render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="copy" signal={new AbortController().signal} current={()=>true} initialPose={initialPose} viewState={{}} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
-  await act(async()=>imports.pending[0].resolve(source.value));const saved=imports.mounts[0].saved as {camera:{position:number[];target:number[]}};
-  expect(saved.camera.target).toEqual([1,0,0]);expect(saved.camera.position[0]).toBe(1);expect(saved.camera.position[1]).toBe(0);expect(saved.camera.position[2]).toBeGreaterThan(10);expect(saved.camera.position[2]).toBeLessThan(15);
 });
 it.each([undefined, true, false])('starts outlines by default and respects the saved preference: %s', async preference => {
   const source = graph();
@@ -67,7 +61,7 @@ it('camera-only publications do not render the React parts tree', async () => {
   const rendered = vi.fn(), changed = vi.fn(), source = graph();
   const ui = render(<Profiler id="geometry" onRender={rendered}><GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="first" signal={new AbortController().signal} current={() => true} viewState={{}} onViewStateChange={changed} onGeometryRetire={vi.fn()}/></Profiler>);
   await act(async () => imports.pending[0].resolve(source.value)); rendered.mockClear();
-  for (let i = 0; i < 20; i++) act(() => imports.mounts[0].publish({ camera: { projection: 'perspective', position: [i, 2, 3], target: [0, 0, 0], up: [0, 1, 0] }, hidden: [] }));
+  for (let i = 0; i < 20; i++) act(() => imports.mounts[0].publish({ camera: { projection: 'orthographic', verticalSpan: 12, position: [i, 2, 3], target: [0, 0, 0], up: [0, 1, 0] }, hidden: [] }));
   expect(changed).toHaveBeenCalledTimes(20); expect(rendered).not.toHaveBeenCalled();
   act(() => imports.mounts[0].publish({ selected: '0', hidden: [] })); expect(rendered).toHaveBeenCalledOnce(); ui.unmount();
 });
@@ -85,13 +79,19 @@ it('shows projection choices in the existing View menu and keeps orthographic ca
   localeController.setLocale('en'); const rendered = vi.fn(), source = graph();
   const ui = render(<Profiler id="geometry" onRender={rendered}><GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="copy" signal={new AbortController().signal} current={() => true} viewState={{}} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/></Profiler>);
   await act(async () => imports.pending[0].resolve(source.value));
-  fireEvent.click(ui.getByRole('button', { name: 'View angle' })); expect(ui.getByRole('menuitem', { name: 'Perspective' }).getAttribute('aria-current')).toBe('true');
-  fireEvent.click(ui.getByRole('menuitem', { name: 'Orthographic' })); expect(imports.mounts[0].setProjection).toHaveBeenCalledExactlyOnceWith('orthographic');
+  fireEvent.click(ui.getByRole('button', { name: 'View angle' })); expect(ui.getByRole('menuitem', { name: 'Orthographic' }).getAttribute('aria-current')).toBe('true');
+  fireEvent.click(ui.getByRole('menuitem', { name: 'Perspective' })); expect(imports.mounts[0].setProjection).toHaveBeenCalledExactlyOnceWith('perspective');
   act(() => imports.mounts[0].publish({ camera: { projection: 'orthographic', verticalSpan: 12, position: [9, 8, 7], target: [0, 0, 0], up: [0, 1, 0] }, hidden: [] }));
   fireEvent.click(ui.getByRole('button', { name: 'View angle' })); expect(ui.getByRole('menuitem', { name: 'Orthographic' }).getAttribute('aria-current')).toBe('true'); fireEvent.keyDown(ui.getByRole('menu'), { key: 'Escape' });
   rendered.mockClear();
   for (let i = 0; i < 20; i++) act(() => imports.mounts[0].publish({ camera: { projection: 'orthographic', verticalSpan: 12 / (i + 1), position: [9 + i, 8, 7], target: [0, 0, 0], up: [0, 1, 0] }, hidden: [] }));
   expect(rendered).not.toHaveBeenCalled();
+});
+it('selects a saved perspective camera in the View menu for the same content copy', async () => {
+  const geometry = { copyId: 'copy', camera: { projection: 'perspective' as const, position: [9, 8, 7] as [number, number, number], target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number] } };
+  const ui = render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="copy" signal={new AbortController().signal} current={() => true} viewState={{ geometry }} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
+  await act(async () => imports.pending[0].resolve(graph().value)); expect(imports.mounts[0].saved).toEqual(geometry);
+  fireEvent.click(ui.getByRole('button', { name: 'View angle' })); expect(ui.getByRole('menuitem', { name: 'Perspective' }).getAttribute('aria-current')).toBe('true');
 });
 it('ignores projection metadata retained for a different content copy', async () => {
   const ui = render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="new" signal={new AbortController().signal} current={() => true} viewState={{ geometry: { copyId: 'old', camera: { projection: 'orthographic', verticalSpan: 12, position: [9, 8, 7], target: [0, 0, 0], up: [0, 1, 0] } } }} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
@@ -118,4 +118,15 @@ it('fences late stage observations from superseded or cancelled imports', () => 
   act(() => imports.cad[1].stage('initializing')); expect(ui.getByRole('status').textContent).toBe('Initializing CAD runtime…');
   act(() => signal.abort()); act(() => imports.cad[1].stage('importing'));
   expect(ui.getByRole('status').textContent).toBe('Initializing CAD runtime…'); expect(imports.mounts).toHaveLength(0);
+});
+
+it.each(['en', 'zh'] as const)('keeps outline preparation silent while exposing busy state (%s)', async locale => {
+  localeController.setLocale(locale); const source = graph();
+  const ui = render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="copy" signal={new AbortController().signal} current={() => true} viewState={{ geometry: { copyId: 'copy', outlines: false } }} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
+  await act(async () => imports.pending[0].resolve(source.value));
+  let finish!: (status: 'on' | 'failed') => void;
+  imports.mounts[0].setOutlines.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const button = ui.getByRole('button', { name: locale === 'en' ? 'Model outlines' : '模型轮廓' });
+  fireEvent.click(button); expect(button.getAttribute('aria-busy')).toBe('true'); expect(ui.queryByRole('status')).toBeNull();
+  await act(async () => finish('failed')); expect(button.getAttribute('aria-busy')).toBe('false'); expect(ui.getByRole('status').textContent).toBeTruthy();
 });

@@ -15,14 +15,16 @@ test('approximately 200 MB STEP first model, original geometry and interaction b
   await observeGeometryLatency(page);
   await page.getByRole('button', { name: 'Preview cube.step in sidebar', exact: true }).click();
   const body = page.locator('[data-geometry-format="step"]');
-  await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.coarseFirst || (window as any).geometryLatency.lodFirst || (window as any).geometryLatency.first),{timeout:70_000}).toBeGreaterThan(0);
-  const coarseFirst=await page.evaluate(()=>(window as any).geometryLatency.coarseFirst as number),coarseInteractions:number[]=[];
-  if(coarseFirst){const rough=page.locator('svg[data-geometry-rough]'),box=(await rough.boundingBox())!;await rough.screenshot({path:info.outputPath('step-200mb-rough.png')});
-    for(const button of ['left','right'] as const)for(let action=0;action<5;action++){const x=box.x+box.width/2,y=box.y+box.height/2;await page.mouse.move(x,y);await page.mouse.down({button});await page.mouse.move(x+32,y+12,{steps:10});await page.mouse.up({button});}
-    await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.coarsePending)).toBe(0);coarseInteractions.push(...await page.evaluate(()=>(window as any).geometryLatency.coarseSamples as number[]));
-  }
+  await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.firstModel),{timeout:70_000}).toBeGreaterThan(0);
+  const firstModel=await page.evaluate(()=>(window as any).geometryLatency.firstModel as number),firstModelInteractions:number[]=[];
+  const initialCanvas=body.locator('canvas'),initialBox=(await initialCanvas.boundingBox())!;
+  await initialCanvas.screenshot({path:info.outputPath('step-200mb-first-model.png')});
+  for(const button of ['left','right'] as const)for(let action=0;action<5;action++){const x=initialBox.x+initialBox.width/2,y=initialBox.y+initialBox.height/2;await page.mouse.move(x,y);await page.mouse.down({button});await page.mouse.move(x+32,y+12,{steps:10});await page.mouse.up({button});}
+  await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.pending)).toBe(0);
+  firstModelInteractions.push(...await page.evaluate(()=>(window as any).geometryLatency.lodSamples.concat((window as any).geometryLatency.samples) as number[]));
   await expect.poll(async()=>await page.evaluate(()=>(window as any).geometryLatency.first>0)?'ready':await body.getByRole('alert').count()?'error':'loading',{timeout:70_000}).not.toBe('loading');
-  const fineFirst=await page.evaluate(()=>(window as any).geometryLatency.first as number),lodFirst=await page.evaluate(()=>(window as any).geometryLatency.lodFirst as number),first=Math.min(...[coarseFirst,lodFirst,fineFirst].filter(value=>value>0)),outcome=fineFirst>0?'ready':'error';
+  const fineFirst=await page.evaluate(()=>(window as any).geometryLatency.first as number),lodFirst=await page.evaluate(()=>(window as any).geometryLatency.lodFirst as number),first=firstModel,outcome=fineFirst>0?'ready':'error';
+  const priorFineSamples=await page.evaluate(()=>(window as any).geometryLatency.samples.length as number);
   const interactions: number[] = [];
   if (outcome === 'ready') {
     const canvas = body.locator('canvas'), box = (await canvas.boundingBox())!;
@@ -33,7 +35,7 @@ test('approximately 200 MB STEP first model, original geometry and interaction b
       }
     }
     await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.pending)).toBe(0);
-    interactions.push(...await page.evaluate(()=>(window as any).geometryLatency.samples as number[]));
+    interactions.push(...await page.evaluate(()=>(window as any).geometryLatency.samples.slice(priorFineSamples) as number[]));
     await page.getByRole('button',{name:'View angle',exact:true}).click();
     await page.getByRole('menuitem',{name:'Reset view',exact:true}).click();
     await expect(canvas).toHaveAttribute('data-geometry-quality','complete');
@@ -42,15 +44,16 @@ test('approximately 200 MB STEP first model, original geometry and interaction b
     expect(await page.evaluate(()=>(window as any).geometryDrawCalls.lastModelTriangles)).toBe(triangles);
     await body.screenshot({path:info.outputPath('step-200mb-complete.png')});
   }
-  const result={workload:'step-200mb',source:{bytes:size,sha256:digest.digest('hex')},outcome,firstModelOpportunityMs:Number.isFinite(first)?first:null,firstFineModelOpportunityMs:fineFirst||null,lodFirstModelOpportunityMs:lodFirst||null,coarseFirstModelOpportunityMs:coarseFirst||null,coarseInteractions,maximumCoarseInteractionMs:coarseInteractions.length?Math.max(...coarseInteractions):null,
+  const result={workload:'step-200mb',source:{bytes:size,sha256:digest.digest('hex')},outcome,firstModelOpportunityMs:Number.isFinite(first)?first:null,firstFineModelOpportunityMs:fineFirst||null,lodFirstModelOpportunityMs:lodFirst||null,firstModelInteractions,maximumFirstModelInteractionMs:firstModelInteractions.length?Math.max(...firstModelInteractions):null,
     error:await body.getByRole('alert').count()?await body.getByRole('alert').textContent():null,interactions,maximumInteractionMs:interactions.length?Math.max(...interactions):null,
     imports:await page.evaluate(()=>(window as any).geometryImports),phases:await page.evaluate(()=>performance.getEntriesByType('measure').filter(entry=>entry.name.startsWith('geometry:')).map(entry=>({name:entry.name,ms:entry.duration}))),
-    beforeClose:await resources(page),method:'Original STEP; source preloaded before demand, authorized range sampling and complete assembly occur inside demand. Coarse coordinate envelope: DOM update then two rAF turns. Fine mesh: actual model submission -> GPU fence -> next rAF. Both clocks retained; neither certifies physical presentation or native source transport.'};
+    beforeClose:await resources(page),method:'Original STEP; source preloaded before demand, authorized contiguous bounded reads and complete assembly occur inside demand. First actual admitted whole-model CAD LOD or complete mesh: model submission -> GPU fence -> next rAF. This proxy does not certify physical presentation or native source transport.'};
   await page.getByRole('button',{name:'Close preview cube.step',exact:true}).click();
   await expect.poll(()=>resources(page)).toEqual({workers:0,contexts:0,buffers:0,textures:0,urls:0});
   writeFileSync(info.outputPath('step-200mb-latency.json'),JSON.stringify({...result,afterClose:await resources(page)},null,2));
   await info.attach('step-200mb-latency',{body:JSON.stringify(result,null,2),contentType:'application/json'});
   expect.soft(outcome).toBe('ready');
+  expect.soft(firstModelInteractions.length).toBeGreaterThanOrEqual(80);
   if(outcome==='ready')expect.soft(interactions.length).toBeGreaterThanOrEqual(80);
-  if(process.env.RUSTX_GEOMETRY_BUDGET==='1') {expect.soft(first||Infinity).toBeLessThanOrEqual(200);if(interactions.length)expect.soft(Math.max(...interactions)).toBeLessThan(50);if(coarseInteractions.length)expect.soft(Math.max(...coarseInteractions)).toBeLessThan(50);}
+  if(process.env.RUSTX_GEOMETRY_BUDGET==='1') {expect.soft(first||Infinity).toBeLessThanOrEqual(200);if(interactions.length)expect.soft(Math.max(...interactions)).toBeLessThan(50);if(firstModelInteractions.length)expect.soft(Math.max(...firstModelInteractions)).toBeLessThan(50);}
 });

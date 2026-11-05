@@ -4,6 +4,12 @@ Validated on 2026-11-05, Asia/Shanghai. This replaces the completed-piece displa
 prefix introduced at `235559e78`. Every optional level now covers the whole
 model; it replaces the previous graph rather than adding finished pieces.
 
+The later first-image/UI revision removes sampled coordinate envelopes and
+sparse triangle bridges, defaults new views to orthographic projection and
+uses three enlarged arrow controls. The captures and ordinary-import phase
+times below belong to the earlier LOD revision; they do not certify the newer
+first-image path or its latency. Current checks are recorded in the PR comment.
+
 The original three-sphere assembly has three named, colored occurrences at
 every level:
 
@@ -17,8 +23,8 @@ The source is parsed once in one native document. Each optional full-scene
 export has independent 65,536-triangle / 8-MiB admission, with complete
 hierarchy and material bounds. An oversized level is skipped entirely.
 Embedded BREP triangulations keep their original final path and skip optional
-retessellation. The rough STEP coordinate envelope remains a labeled loading
-aid; it is not counted as a whole-model LOD.
+retessellation. The coordinate-envelope loading aid from that earlier revision
+has since been removed by the first-image policy above.
 
 ## Native equivalence
 

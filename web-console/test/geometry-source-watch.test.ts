@@ -3,8 +3,8 @@ it('authorizes fresh geometry bytes before watch setup while retaining its readi
   let finish!:(value:{data:Uint8Array<ArrayBuffer>;version:string})=>void,ready!:(value:any)=>void,end!:()=>void;
   const done=new Promise<void>(resolve=>{end=resolve;}),close=vi.fn(async()=>{end();});
   const observe=vi.fn(()=>new Promise<any>(resolve=>{ready=resolve;}));
-  const owner=new PreviewContentOwner({current:()=>true,immutable:false,observe,probe:async()=>'one',page:async()=>{throw Error('page');},document:async()=>{throw Error('document');},bytes:(_signal,_mode,rough)=>{rough?.({version:'one',positions:new Float32Array([0,0,0,1,0,0,0,1,0])});return new Promise(resolve=>{finish=resolve;});}});
-  try{owner.activate();owner.ensure('geometry');expect(owner.getSnapshot().geometryPreview).toBeDefined();expect(observe).not.toHaveBeenCalled();
+  const owner=new PreviewContentOwner({current:()=>true,immutable:false,observe,probe:async()=>'one',page:async()=>{throw Error('page');},document:async()=>{throw Error('document');},bytes:()=>{return new Promise(resolve=>{finish=resolve;});}});
+  try{owner.activate();owner.ensure('geometry');expect(owner.getSnapshot().data).toBeUndefined();expect(observe).not.toHaveBeenCalled();
     finish({data:new Uint8Array([1]),version:'one'});await vi.waitFor(()=>expect(observe).toHaveBeenCalledOnce());expect(owner.getSnapshot().data).toBeDefined();expect(owner.getSnapshot().loading).toBe(true);
     ready({version:'one',done,close});await vi.waitFor(()=>expect(owner.getSnapshot().loading).toBe(false));end();await vi.waitFor(()=>expect(owner.getSnapshot().data).toBeUndefined());
   }finally{owner.dispose();}

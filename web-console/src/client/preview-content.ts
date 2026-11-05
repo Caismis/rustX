@@ -2,7 +2,6 @@
  * only renderer resources. Abort retires publication, never an operation slot. */
 import { WorkspaceHostError, fileSourceFailure } from '../workspaces/host';
 import type { PreviewObservation } from '../../shared/file-observation.ts';
-import type { GeometryRoughPreview } from './geometry-rough';
 export interface PreviewTextPage { text: string; version: string; offset: number; lines: number; eof: boolean }
 export interface PreviewBytes { data: Uint8Array<ArrayBuffer>; version: string }
 export type PreviewLoadMode = 'pages' | 'bytes' | 'geometry' | 'docx' | 'pptx';
@@ -10,7 +9,7 @@ export interface PreviewReader {
   current(): boolean;
   immutable: boolean;
   page(offset: number, signal: AbortSignal): Promise<PreviewTextPage>;
-  bytes(signal: AbortSignal, mode: 'bytes' | 'geometry', rough?: (value: GeometryRoughPreview) => void): Promise<PreviewBytes>;
+  bytes(signal: AbortSignal, mode: 'bytes' | 'geometry'): Promise<PreviewBytes>;
   document(extension: 'docx' | 'pptx', signal: AbortSignal): Promise<PreviewBytes>;
   observe?(signal: AbortSignal, changed: () => void): Promise<PreviewObservation>;
   probe(signal: AbortSignal): Promise<string>;
@@ -18,7 +17,6 @@ export interface PreviewReader {
 export interface PreviewContentSnapshot {
   revision: number; mode?: PreviewLoadMode; loading: boolean;
   text?: string; data?: Uint8Array<ArrayBuffer>; version?: string;
-  geometryPreview?: GeometryRoughPreview;
   page?: PreviewTextPage; error?: unknown; failedOffset?: number; loadedLines: number;
 }
 type Intent = { kind: 'read'; offset: number } | { kind: 'validate' };
@@ -47,7 +45,7 @@ export class PreviewContentOwner {
   getSnapshot = () => this.state;
   get automaticRefresh() { return this.state.mode !== 'geometry' && (this.reader.immutable || this.reader.observe !== undefined); }
   get retired() { return this.closed; }
-  get retainedBytes() { const value = this.saved ?? this.state; return (value.data?.byteLength ?? 0) + (value.text?.length ?? 0) * 2 + (value.geometryPreview?.positions.byteLength ?? 0); }
+  get retainedBytes() { const value = this.saved ?? this.state; return (value.data?.byteLength ?? 0) + (value.text?.length ?? 0) * 2; }
   /** A large raw copy cannot fit the inactive cache. Relinquish it to the
    * admitted import, keeping only this object's copy identity until hiding.
    * Original Download has its own independently authorized read. */
@@ -125,7 +123,7 @@ export class PreviewContentOwner {
     }
     this.saved ??= this.state;
     this.wantedLines = Math.max(this.wantedLines, this.saved.loadedLines);
-    this.state = { ...this.state, loading: true, ...(this.state.mode === 'geometry' && !this.state.data ? { geometryPreview: undefined } : {}) };
+    this.state = { ...this.state, loading: true };
     this.pending = { kind: 'validate' }; this.notify(); this.drain();
   };
   more() {
@@ -180,11 +178,9 @@ export class PreviewContentOwner {
           return;
         }
         if (mode !== 'pages') {
-          const result = await (mode === 'geometry' ? this.reader.bytes(controller.signal, mode, preview => {
-            if (this.current(epoch)) this.publish({ geometryPreview: preview, version: preview.version });
-          }) : mode === 'bytes' ? this.reader.bytes(controller.signal, mode) : this.reader.document(mode, controller.signal));
+          const result = await (mode === 'geometry' || mode === 'bytes' ? this.reader.bytes(controller.signal, mode) : this.reader.document(mode, controller.signal));
           if (this.current(epoch)) {
-            this.publish({ data: result.data, version: result.version, loading: mode==='geometry' && !!this.reader.observe && !this.observation, geometryPreview: this.state.geometryPreview?.version === result.version ? this.state.geometryPreview : undefined });
+            this.publish({ data: result.data, version: result.version, loading: mode==='geometry' && !!this.reader.observe && !this.observation });
             if(mode==='geometry' && this.reader.observe && !this.observation){this.saved??=this.state;this.pending={kind:'validate'};}
           }
         } else {
@@ -205,7 +201,7 @@ export class PreviewContentOwner {
           if (intent.kind === 'validate' || ['authorization_revoked', 'source_missing', 'source_unavailable', 'source_changed', 'obsolete'].includes(fileSourceFailure(error) ?? '')) {
             this.saved = undefined; this.resume = undefined; this.wantedLines = 0; this.state = { revision: this.state.revision + 1, mode, loading: false, loadedLines: 0 };
           }
-          this.publish({ error, geometryPreview: undefined, failedOffset: intent.kind === 'read' ? intent.offset : undefined, loading: false });
+          this.publish({ error, failedOffset: intent.kind === 'read' ? intent.offset : undefined, loading: false });
         }
       }
     })();

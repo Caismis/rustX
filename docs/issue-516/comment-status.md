@@ -1,8 +1,8 @@
 # PR 517 comment implementation status
 
-Checked on 2026-11-05, Asia/Shanghai, against all fifteen top-level/review timeline
-entries, their IDs and update times, and the complete review-thread response.
-The latest comment 6651081728 covers live clipping bounds and canvas focus;
+Checked on 2026-11-05, Asia/Shanghai, through review comment 6653051473 and the
+requested first-image/navigation policy. The review covers remaining owned-axis
+and sampled-view focus during adoption;
 the inline-thread list was empty. This is an implementation inventory, not a public reply or an
 acceptance of the remaining latency budget. The current implementation and
 verification are recorded in [the whole-model LOD report](lod-validation.md).
@@ -11,17 +11,19 @@ verification are recorded in [the whole-model LOD report](lod-validation.md).
 
 | Request | Current state | Source |
 | --- | --- | --- |
-| Approximately 200 MB geometry: first usable picture within 200 ms, every interaction below 50 ms, complete geometry when settled | The 200.762-MB STEP reference passed three native Host strict-gate runs at revision 235559e78. These historical runs do not certify the new whole-model LOD pipeline. General model-class acceptance remains open: the coordinate envelope omits topology/placements, and the historical large-STL first-display failure remains unrecertified. Loading text, P95 or smaller workloads cannot replace the gate. | [Historical STEP evidence](step-200mb-validation.md), [historical surface evidence](surface-preview-optimization.md) |
+| Approximately 200 MB geometry: first usable picture within 200 ms, every interaction below 50 ms, complete geometry when settled | The historical 235559e78 STEP runs used a sampled coordinate envelope. The current first-image policy excludes sampled points and sparse triangles; those historical times cannot certify the first admitted complete mesh. General model-class acceptance and the historical large-STL gap remain open. Loading text, P95 or smaller workloads cannot replace the gate. | [Historical STEP evidence](step-200mb-validation.md), [historical surface evidence](surface-preview-optimization.md) |
 
 ## Roadmap and evidence follow-ups
 
 | Item | Status |
 | --- | --- |
 | Whole-model CAD LOD refinement | Replaces the earlier completed-piece prefix. Coarse and medium tessellations cover the full model and atomically replace the prior level before final precision. Each optional tier has independent 65,536-triangle / 8-MiB admission; one parsed native document and one renderer/context remain. Historical per-piece captures do not certify this pipeline. |
+| First picture and navigation | The first picture uses the coarsest admitted complete mesh available; no coordinate envelope or sparse triangle bridge remains. New views default to orthographic, outline preparation is silent, View/Outlines have distinct glyphs, and three enlarged arrows toggle positive/opposite axis views without visible coordinate text. |
+| Native adaptive tier selection | Feasible screen-space-error direction is documented in the geometry contract. Native tessellation parameters remain fixed; camera-aware prepared-surface admission already uses one CSS pixel relative to the admitted mesh. Further native selection needs bounded error metadata and tier ownership; it is not represented as shipped. |
 | Orthographic/perspective switch | Implemented on the existing renderer/context, preserving target-plane scale, direction and target. Effective orthographic zoom, picking, resize, standard views and same-copy restoration have regression coverage. |
 | Observable loading-stage labels | Implemented from actual reading, CAD initialization, import and display-preparation events. Worker observations are a finite ordered enum sequence, independent of terminal result validation and the original deadline. No guessed parser/tessellation milestones, percentages or ETA. |
 | Full per-Worker memory attribution | [Phase samples](review-performance-samples.json) now separate JS heap, backing storage and exported WASM memory, including two genuinely overlapping CAD Workers. These are sampled checkpoints, not peak allocation or GPU/driver attribution; the full peak comparison remains open. |
-| Google Chrome Stable and optional Beta/Canary lanes | Not run. The separate installed Edge 156 functional/resource lane is explicitly identified; it does not claim a Google Chrome run or certify unknown future releases. |
+| Google Chrome Stable and optional Beta/Canary lanes | Installed Chrome 157 functional checks are recorded separately from pinned-container CI. Beta/Canary remain unrun; neither those versions nor a broad latency matrix are certified by the functional checks. |
 | Sectioning and mesh measurements | Not implemented. Explicit P1 follow-up scope; clipping/picking agreement, coordinate space and approximation contracts are required. |
 | Search/filtering | Implemented as a bounded local name filter over admitted metadata, retaining matching ancestors without changing scene state or manual expansion. Query resets on panel close or copy replacement. |
 | Explosion, synchronized views and version comparison | Not implemented. Explicit P2 follow-up scope. |
@@ -33,6 +35,7 @@ These follow-ups are not represented as disabled placeholder controls.
 
 | Comment | Implementation status |
 | --- | --- |
+| [6653051473](https://github.com/Caismis/rustX/pull/517#issuecomment-6653051473) | The sampled SVG and its focus transition have been removed. Coarse-to-final adoption captures the owned arrow identity and restores that arrow only if the document body still owns focus after mounting. Camera-derived actions initialize before immediate keyboard input. Actual component/OrbitControls regressions cover untouched/aligned arrows, canvas focus, external controls and external focus moved during adoption. |
 | [6651081728](https://github.com/Caismis/rustX/pull/517#issuecomment-6651081728) | Each admitted whole-model tier refreshes clipping/navigation bounds without changing the active camera or gesture. Final adoption keeps the same canvas attached and preserves its keyboard focus, while external focus remains untouched. Real Three.js/OrbitControls regressions cover distant geometry, both projections, active gestures, focus, keyboard input and disposal. The browser regression also checks focused adoption. |
 | [6641379632](https://github.com/Caismis/rustX/pull/517#issuecomment-6641379632) | Manual outlines wait for the same import/surface retirement barrier as automatic requests. Only the latest preference can start a Worker; Off and disposal cancel queued work. A real-owner two-pane regression first reached four live Workers, then passed with a peak of two. A component regression preserves explicit Off after surface settlement. Worker/GPU boundaries are controlled in these deterministic tests; browser retirement is checked separately. |
 | [6636090073](https://github.com/Caismis/rustX/pull/517#issuecomment-6636090073) | Picking intersects admitted original geometry, independently of temporary display quality. A real-Raycaster dense-foreground/background test first reproduced the omitted-triangle error, then passed in both moving and complete modes. Original material/geometry references remain intact. Browser selection search is rerun in the current production-fixture validation. |
@@ -45,7 +48,7 @@ These follow-ups are not represented as disabled placeholder controls.
 | [6593794843](https://github.com/Caismis/rustX/pull/517#issuecomment-6593794843) | Current PR increment supplies compact controls, isolate/restore/show-all/focus, distinct Fit/Reset and occurrence properties. Copy-bound inert state and explicit geometry/unit semantics remain. Later/conditional items are listed above. |
 | [6595300365](https://github.com/Caismis/rustX/pull/517#issuecomment-6595300365) | Selected GLB scenes have independent nonempty bounds admission. Part ancestry follows whole occurrence-ID segments, including unnamed branches and numeric siblings. |
 | [6598650036](https://github.com/Caismis/rustX/pull/517#issuecomment-6598650036) | Final camera metadata cannot reenter body admission during lease retirement; the real full-capacity coordinator regression covers replacement and final-pose preservation. |
-| [6599073494](https://github.com/Caismis/rustX/pull/517#issuecomment-6599073494) | Bounded mesh silhouette/boundary/crease lines, individual view icons and direct signed-axis navigation are implemented. Axis lines/labels are the pointer targets; keyboard semantics share that indicator. Outlines default on and retain an explicit off preference. |
+| [6599073494](https://github.com/Caismis/rustX/pull/517#issuecomment-6599073494) | Bounded mesh silhouette/boundary/crease lines and individual view icons are implemented. The later interaction request replaces signed labels with three enlarged arrow controls that toggle both directions, retaining keyboard semantics. Outlines default on and retain explicit Off. |
 | [6600405482](https://github.com/Caismis/rustX/pull/517#issuecomment-6600405482) | Historical checkpoint. Admitted geometry is lossless and original PBR/MSAA remain. Current lossy surface representations are temporary display resources with independent bounds, provenance, screen-error admission and disposal. Its paused state does not describe this active implementation. The latency gap remains open. |
 | [6600502539](https://github.com/Caismis/rustX/pull/517#issuecomment-6600502539) | Exact preparation preserves the import deadline reserve and admitted geometry. Optional lossy display work starts after receiver admission and first GPU readiness, within its separate 2-second cap and the original deadline. Dense closed STL and tiny disconnected-solid regressions retain complete settled geometry/bounds. |
 

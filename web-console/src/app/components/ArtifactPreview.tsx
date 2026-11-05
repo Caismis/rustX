@@ -49,7 +49,7 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
       return () => resources.release(url);
     } catch { setImage({ error: tx('artifacts:document.malformed') }); }
   }, [resources, content.data, mode, artifact.mimeType]);
-  const initialLoading = content.loading && content.text === undefined && content.data === undefined && content.geometryPreview === undefined;
+  const initialLoading = content.loading && content.text === undefined && content.data === undefined;
   const retry = () => owner.retry();
   const decodeError = () => setImage(value => ({ ...value, error: tx('artifacts:copy.image-could-not-be-decoded') }));
   const failure = content.error === undefined ? undefined : documentFailure(content.error);
@@ -62,7 +62,7 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
     hasMore={paged && content.page !== undefined && !content.page.eof} moreLoading={content.loading} onLoadMore={() => owner.more()}
     viewState={viewState} onViewStateChange={saveViewState} onDownload={() => { if (resources.current()) onDownload(); }}
     refresh={() => owner.refresh()} retry={retry}>
-    {mode === 'geometry' ? <GeometryDocument bytes={content.data} rough={content.geometryPreview} name={artifact.name} copyId={`${content.revision}:${content.version}`} signal={resources.signal} current={() => resources.current() && sameGeometryCopy()} takeSource={() => content.data && sameGeometryCopy() ? owner.takeGeometryBytes(content.data) : undefined} releaseSource={() => { if (content.data && sameGeometryCopy()) owner.releaseGeometryBytes(content.data); }} viewState={viewState} onViewStateChange={saveViewState} onGeometryRetire={geometry => { if (resources.sourceCurrent() && sameGeometryCopy()) onViewStateChange({ geometry }); }}/>
+    {mode === 'geometry' ? <GeometryDocument bytes={content.data} name={artifact.name} copyId={`${content.revision}:${content.version}`} signal={resources.signal} current={() => resources.current() && sameGeometryCopy()} takeSource={() => content.data && sameGeometryCopy() ? owner.takeGeometryBytes(content.data) : undefined} releaseSource={() => { if (content.data && sameGeometryCopy()) owner.releaseGeometryBytes(content.data); }} viewState={viewState} onViewStateChange={saveViewState} onGeometryRetire={geometry => { if (resources.sourceCurrent() && sameGeometryCopy()) onViewStateChange({ geometry }); }}/>
       : mode === 'image' ? image.url && !error ? <ImagePreview url={image.url} name={artifact.name} signal={resources.signal} decodeError={decodeError} viewState={viewState} onViewStateChange={saveViewState}/> : undefined
       : kind && content.data ? <DocumentPreview kind={kind === 'docx' || kind === 'pptx' ? 'pdf' : kind} derived={office} bytes={content.data} resources={resources} viewState={viewState} onViewStateChange={saveViewState} retry={retry}/> : undefined}
   </Preview>;

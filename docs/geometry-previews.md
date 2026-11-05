@@ -24,28 +24,12 @@ normalization and unitless BREP/STL behavior.
 
 ### STEP first picture
 
-STEP/STP reads can publish a small coordinate envelope before the complete
-source is available. The first authorized read is 32 KiB; up to four further
-32-KiB windows sample the file. Each window contributes at most 128 finite
-three-dimensional `CARTESIAN_POINT` records. The first noncollinear projection
-is drawn immediately; later samples improve its extent. Every read checks the
-same source version, total size, offset, length and EOF. Other geometry formats
-keep their existing read sizes. No model is invented when the samples cannot
-form an area.
-
-The localized **Rough preview** label distinguishes this projected convex
-coordinate envelope from the admitted CAD mesh. It may include construction
-and control points, omit disconnected parts and concavities, and does not apply
-assembly placements, topology or materials. It is unsuitable for picking,
-measurements or model metadata. It supports orbit, pan and zoom directly in a
-bounded SVG path without importing Three.js or compiling CAD code first. At
-most 640 points / 7,680 bytes belong to this provisional representation.
-
-The complete single-version source continues loading in the background. CAD
-runtime loading starts after that copy is ready and 120 ms without coarse
-input, so its large download and compilation do not compete with the first
-small probes or an active rough gesture. This quiet gate applies only to the
-initial full-view bootstrap; admitted imports continue in their Worker.
+The first model picture must use independently admitted complete geometry.
+STEP/STP reads use ordinary contiguous, authorized ranges of at most 2 MiB.
+There are no point-sampling probes, projected convex-hull placeholders or sparse
+triangle bridges. Source reading, viewer loading and CAD code compilation can
+overlap after explicit demand. Before a real mesh is ready, the viewer displays
+its actual loading stage rather than inventing a model picture.
 CAD refinement operates on the entire model at each level of detail (LOD).
 The Worker parses the source once, then tessellates the same native document
 at coarse, medium and final precision. Coarse and medium levels use bounding-box
@@ -53,7 +37,8 @@ deflection ratios of 0.02 and 0.005, and angular deflections of 1.0 and 0.75
 radians; the final level retains 0.001 and 0.5. Each published level contains
 every imported mesh and the complete occurrence hierarchy. Levels replace one
 another atomically; completed pieces never accumulate into an incomplete model.
-The rough coordinate envelope is a loading aid, not a whole-model LOD.
+The coarsest available complete tier supplies the first model picture. A ready
+finer or final result can skip an unpainted lower tier without artificial delay.
 
 Each optional level is independently bounded to 65,536 rendered triangles and
 8 MiB of attribute/index streams, including generated normals, with the existing
@@ -71,7 +56,7 @@ level preserves the active camera and gesture, refreshes clipping and navigation
 bounds, and retires the old graph after adopting the new graph's shaders. Final
 adoption waits for the end of an active gesture and its 120-ms quiet interval.
 It reuses the renderer and the attached canvas, preserving keyboard focus
-without taking it from another control. Rough/LOD gestures seed normalized
+without taking it from another control. LOD gestures seed normalized
 direction, pan, zoom, projection and up axis for the final model, with viewport
 aspect included in framing. Old callbacks, fences, controls and temporary
 resources retire. No provisional data enters the final geometry streams.
@@ -80,7 +65,7 @@ A fresh geometry range read authorizes itself; watch registration follows the
 complete copy instead of blocking first display. The existing reauthorization
 barrier still precedes reuse of a hidden retained copy. Version changes during
 reads, errors, hide, cancellation and authority retirement fence provisional
-publication. Incomplete rough copies are evicted on hide. Source reading yields
+publication. Incomplete source copies are evicted on hide. Source reading yields
 between bounded tasks; cancellation does not release a physical read permit
 until its transport has settled.
 
@@ -109,11 +94,15 @@ views, an orientation axis indicator, part selection/highlighting and visibility
 Fit recenters the model without changing the chosen viewing direction; the
 view-angle menu explicitly chooses a standard direction.
 Reset view restores the initial isometric framing without changing visibility.
-The six signed axis endpoints use the same standard-view path as the menu;
-+X/-X select Right/Left, +Y/-Y Top/Bottom and +Z/-Z Front/Back. Axis lines and
-signed labels are direct pointer targets, with keyboard activation on the same
-indicator. They stay separate from canvas picking and orbit gestures.
-Orientation icons supplement the localized menu names.
+Three enlarged SVG arrows supply orientation and navigation, with no visible
+signed coordinate labels. Activate an arrow to align its positive axis; activate
+it again to reverse the view. Manual orbit updates the next action from the
+actual camera direction. Axis actions use orthographic projection; menu actions
+retain the chosen projection. Each arrow has a 24-pixel hit target, keyboard
+activation and a localized action name; projected pole axes remain addressable.
+The View control uses rotation arrows, while Outlines uses a dashed boundary.
+Background outline preparation has no visible loading message; busy state and
+explicit unavailable/failure feedback remain accessible.
 Camera fitting centers a presentation-only parent. The admitted mesh surface,
 position-derived bounds and physical scale remain intact; preparation can remove
 redundant tessellation. Bounds are recomputed from admitted coordinates,
@@ -136,7 +125,8 @@ coordinates while preserving direction. A selection behind a hidden ancestor
 cannot be focused. Small occurrences use their own framing distance, including
 after compatible restoration. Fit frames visible model content and preserves
 direction; Reset uses the full model bounds and the initial orientation.
-The View menu switches perspective and orthographic projection on the same
+New previews default to orthographic projection. The View menu switches
+perspective and orthographic projection on the same
 renderer/context. Switching preserves the target, up axis, direction and apparent
 vertical size at the target plane. Orthographic zoom saves its effective vertical
 span with the copy-bound pose; compatible remounts restore it. Fit, Focus and
@@ -256,14 +246,11 @@ types, backing buffers, counts, exact source float bits, finite error and whole
 mesh extents before adopting it. Original geometry, materials, transforms,
 hierarchy, bounds and inspection counts remain authoritative.
 
-While that bounded background job is pending, evenly sampled source triangles
-bridge the first picture. If the optional job cannot finish, that bounded
-representation remains available during motion so an input cannot unexpectedly
-submit millions of original triangles. The bridge copies all original attributes,
-including normals, and retains the original material. It visits at most 20,000
-triangles plus one rounding triangle per occurrence and shares repeated geometry.
-It is disposed when an accepted surface arrives or the body retires. Ineligible
-meshes retain original geometry; every settled draw uses the original. Selection boxes and axis
+While that bounded background job is pending or unavailable, the intact original
+mesh remains visible. Sparse source-triangle sampling is not a display option.
+This can increase transient GPU work for a large model without a ready accepted
+surface; it does not justify displaying missing geometry. Every settled draw
+uses the original. Selection boxes and axis
 navigation remain visible. Mesh outline shaders pause during motion and return
 with the settled picture. Geometry references are restored synchronously after
 every submission, including on exceptions. Picking always uses originals.
@@ -273,13 +260,36 @@ gesture allow one frame to restore
 every admitted triangle, authored material/normal/color/texture, mesh outline
 and the original full-resolution pixel policy. New actions cancel/coalesce that
 refinement. A gesture with no pose/selection change schedules no extra work.
-An idle view has no quality loop. All bridge and surface buffers are disposed
+An idle view has no quality loop. All optional surface buffers are disposed
 with the visible body. `data-geometry-lod` identifies `coarse`, `medium` or `full`
 geometry. `data-geometry-quality` distinguishes provisional geometry from
 `interactive` and settled `complete` final-model draws.
 `data-geometry-completeness` separately identifies `preview` versus `complete`
 admission before pixel refinement. These are
 diagnostic states, not GPU-completion or presentation timestamps.
+
+### Adaptive LOD assessment
+
+Native CAD coarse/medium/final tessellation parameters remain fixed. The
+prepared meshoptimizer surface already has camera-dependent one-CSS-pixel
+admission relative to the admitted mesh; this is not an analytic CAD error
+guarantee or adaptive native retessellation.
+
+A screen-space-error policy is feasible. In orthographic projection, projected
+error is approximately `worldError * viewportHeight / effectiveVerticalSpan`;
+zoom and viewport size therefore matter even when camera distance is unchanged.
+A future native-tier selector should choose the coarsest complete tier meeting
+the pixel budget, with hysteresis and the existing memory/Worker limits. It
+needs independently admitted tessellation-error metadata and bounded ownership
+of reusable whole-model tiers. It must never substitute point or triangle
+samples when the desired tier is unavailable.
+
+[Cesium's screen-space-error refinement](https://cesium.com/learn/cesiumjs/ref-doc/Cesium3DTileset.html#maximumScreenSpaceError)
+is an established pattern for the pixel criterion;
+[Three.js LOD](https://threejs.org/docs/pages/LOD.html) documents distance-based
+selection and hysteresis. Distance alone is insufficient for this viewer's
+orthographic zoom. This assessment is a design direction, not a claim that
+native adaptive tier selection has shipped.
 
 The acceptance workload is approximately 200 MiB of source geometry on the
 project's fixed browser/test machine. First demand to a usable model picture
@@ -309,8 +319,8 @@ decoder download, CAD editing, exact measurement or format export is provided.
 
 Geometry uses an explicit `geometry` mode in `PreviewContentOwner`. It does not
 change a mutable reader into an immutable source or introduce a second source
-cache. A complete authorized read establishes the fixed full-source copy;
-version-bound rough envelopes are provisional display data. Geometry Session
+cache. A complete authorized read establishes the fixed full-source copy.
+Geometry Session
 files and Workbench sources use the existing at-most-2-MiB byte ranges to assemble
 at most 200 MiB in one exact-size buffer. Every range reauthorizes its source and
 checks offset, size, version, EOF and response length. A changed version/size
@@ -359,7 +369,7 @@ limits. It does not grant a download above the 32-MiB complete-read limit.
 ## Runtime and resource limits
 
 `GeometryDocument` is the small shared lazy mount. Ordinary startup loads no
-Three.js geometry viewer. Except for STEP's rough-first path, explicit geometry
+Three.js geometry viewer. Explicit geometry
 demand starts code loading alongside the already-authorized source read.
 Resolved eligible code mounts through explicit component state, without a
 Suspense fallback throttle. GLB loads its
@@ -367,9 +377,8 @@ GLTFLoader only for GLB demand and uses it on the main thread after preflight.
 STL and CAD use separate Worker entry bundles; STL cannot load CAD glue/WASM.
 Workers reuse one protocol, admission owner and cancellation/deadline handler.
 All assets are shipped locally, with no runtime CDN use.
-IGES/BREP code compilation starts on explicit visible demand alongside source
-and viewer code loading. STEP defers the full-view bootstrap until its source
-copy is complete and the rough view is quiet; STL demand does not compile CAD. The original parent
+STEP/IGES/BREP code compilation starts on explicit visible demand alongside
+source and viewer code loading; STL demand does not compile CAD. The original parent
 deadline and two-owner reservation include any remaining compilation wait. Cancelled waiters
 clear their source and callbacks and cannot create a late Worker. A failed code
 compilation clears the shared promise for an explicit retry; static asset fetch
@@ -396,7 +405,6 @@ The following are per visible body unless stated otherwise:
 | CAD WASM linear-memory maximum | 2 GiB, verified in both the shipped binary declaration and glue |
 | Aggregate renderer contexts / import Workers | 2 / 2, additionally restricted by existing visible-body ownership |
 | Submitted GPU frames / owned fences | 1 per visible body, 2 aggregate |
-| Temporary bridge triangles / copied position and normal buffers | At most 20,256 / 1,458,432 bytes per body; original materials retained |
 | Optional surface input / decoded STL chunk | 16 MiB total copied input, or one 786,432-vertex position chunk from the owned raw STL; no full decoded-model copy |
 | Optional surface output / error / Worker budget | 200,000 unique triangles / 20 MiB including provenance; relative error at most 0.002, projected error at most 1 CSS pixel; 2 seconds within the original deadline |
 | Exact small-assembly batch input | At most 16 MiB per body, including repeated occurrences; original attributes/materials and all triangles retained |

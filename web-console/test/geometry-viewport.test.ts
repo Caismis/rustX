@@ -58,10 +58,12 @@ function tier(level: 0 | 1 = 0, x=0) {
 it('replaces whole-model tiers, waits for the active gesture, and upgrades with one context', async () => {
   const element=document.createElement('div');Object.defineProperties(element,{clientWidth:{value:640},clientHeight:{value:480}});
   const graphics=prepareGeometryGraphics(true,vi.fn()),displayed=vi.fn(),failed=vi.fn(),a=tier(),b=tier(1,2);
-  const owner=progressivePresentation({container:element,graphics,current:()=>true,copyId:'copy',labels:()=>en,mounted:vi.fn(),displayed,failed});
+  let preview: ReturnType<typeof mountGeometry> | undefined;
+  const owner=progressivePresentation({container:element,graphics,current:()=>true,copyId:'copy',labels:()=>en,mounted:view=>{preview=view;},displayed,failed});
   try {
     owner.add(a);draw();draw();draw();expect(displayed).toHaveBeenCalledOnce();
-    const renderer=runtime.renderers[0];expect(renderer.domElement.dataset.geometryCompleteness).toBe('preview');expect(renderer.domElement.dataset.geometryLod).toBe('coarse');
+    const renderer=runtime.renderers[0];expect(renderer.domElement.dataset.geometryCompleteness).toBe('preview');expect(renderer.domElement.dataset.geometryLod).toBe('coarse');expect(runtime.controls.at(-1).object).toBeInstanceOf(OrthographicCamera);
+    preview!.setProjection('perspective');
     const graph=a.scene.parent;
     renderer.compile.mockImplementation(() => {
       expect(graph?.children).toEqual([b.scene]); expect(a.dispose).not.toHaveBeenCalled();
@@ -73,8 +75,8 @@ it('replaces whole-model tiers, waits for the active gesture, and upgrades with 
     const expectedTarget=control.target.clone().add(a.bounds.getCenter(new Vector3())).sub(b.bounds.getCenter(new Vector3()));
     let completed=false;const pending=owner.complete().then(value=>{completed=true;return value;});await Promise.resolve();expect(completed).toBe(false);
     control.dispatchEvent({type:'end'});await vi.advanceTimersByTimeAsync(119);expect(completed).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);const seed=await pending;expect(seed?.pose.direction.every(Number.isFinite)).toBe(true);
-    const restored=cameraFromPose(seed!.pose,b.bounds,element,seed!.projection);
+    await vi.advanceTimersByTimeAsync(1);const seed=await pending;expect(seed?.pose?.direction.every(Number.isFinite)).toBe(true);
+    const restored=cameraFromPose(seed!.pose!,b.bounds,element,seed!.projection);
     expect(new Vector3().fromArray(restored.position).distanceTo(expectedPosition)).toBeLessThan(1e-12);expect(new Vector3().fromArray(restored.target).distanceTo(expectedTarget)).toBeLessThan(1e-12);
     expect(renderer.dispose).not.toHaveBeenCalled();expect(runtime.renderers).toHaveLength(1);
     const object=new Group();object.add(new Mesh(new BoxGeometry(),new MeshBasicMaterial()));
@@ -186,21 +188,21 @@ it('owns bounded early shader preparation without submitting a model or leaking 
   } finally { first.dispose(); second.dispose(); }
 });
 it('coalesces poses while the GPU owns a frame and releases its fence on retirement', () => {
-  const f = mount(); draw(); expect(f.renderer.render).toHaveBeenCalledTimes(2);
+  const f = mount(); draw(); expect(f.renderer.render).toHaveBeenCalledTimes(1);
   f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.TIMEOUT_EXPIRED);
   move(f.control(), 2); draw(); move(f.control(), 3); draw();
-  expect(f.renderer.render).toHaveBeenCalledTimes(2); expect(frames.size).toBe(1);
+  expect(f.renderer.render).toHaveBeenCalledTimes(1); expect(frames.size).toBe(1);
   f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.ALREADY_SIGNALED); draw();
-  expect(f.renderer.render).toHaveBeenCalledTimes(4); expect(frames.size).toBe(0);
+  expect(f.renderer.render).toHaveBeenCalledTimes(2); expect(frames.size).toBe(0);
   f.view.dispose(); expect(f.renderer.gl.deleteSync).toHaveBeenCalledTimes(2);
 });
 it('starts background work only after the first GPU fence settles, without another submitted frame', () => {
   const ready=vi.fn(),f=mount(undefined,undefined,{generated:true,onFirstGpuReady:ready}); draw();
   expect(ready).not.toHaveBeenCalled(); f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.TIMEOUT_EXPIRED); draw(); expect(ready).not.toHaveBeenCalled();
-  f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.ALREADY_SIGNALED); draw(); expect(ready).toHaveBeenCalledOnce(); expect(f.renderer.render).toHaveBeenCalledTimes(2);
+  f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.ALREADY_SIGNALED); draw(); expect(ready).toHaveBeenCalledOnce(); expect(f.renderer.render).toHaveBeenCalledTimes(1);
   f.view.dispose(); expect(frames.size).toBe(0);
 });
-it('draws a bounded moving preview, restores the exact scene after settling and then stops drawing', () => {
+it('keeps the admitted surface intact before simplification is ready, including motion, and stops drawing after settling', () => {
   const indexed = new BoxGeometry(1, 1, 1, 100, 100, 100), geometry = indexed.toNonIndexed(); indexed.dispose();
   const prepared = modelScene({ meshes:[{name:'',positions:geometry.getAttribute('position').array as Float32Array,normals:geometry.getAttribute('normal').array as Float32Array,groups:[]}],root:{name:'',meshes:[0],children:[]} }); geometry.dispose(); prepared.markPreviews([0]);
   const object = prepared.scene, mesh = object.children[0].children[0] as Mesh, original = mesh.geometry;
@@ -208,11 +210,11 @@ it('draws a bounded moving preview, restores the exact scene after settling and 
   f.renderer.render.mockImplementation((scene: Group & { overrideMaterial?: unknown }) => {
     if (scene.children.includes(object.parent!)) samples.push({ triangles: (mesh.geometry.index?.count ?? mesh.geometry.getAttribute('position').count) / 3, material: mesh.material });
   });
-  draw(); expect(samples[0].triangles).toBeLessThan(30_000); expect(samples[0].material).toBe(mesh.material);
+  draw(); expect(samples[0].triangles).toBe(120_000); expect(samples[0].material).toBe(mesh.material);
   expect(mesh.geometry).toBe(original); expect(f.view.inspect()).toEqual(before);
   vi.advanceTimersByTime(150); draw(); expect(samples.at(-1)!.triangles).toBe(120_000); expect(samples.at(-1)!.material).toBe(mesh.material);
-  f.control().dispatchEvent({ type: 'start' }); move(f.control(), 4); draw(); expect(samples.at(-1)!.triangles).toBeLessThan(30_000);
-  vi.advanceTimersByTime(300); draw(); expect(samples.at(-1)!.triangles).toBeLessThan(30_000);
+  f.control().dispatchEvent({ type: 'start' }); move(f.control(), 4); draw(); expect(samples.at(-1)!.triangles).toBe(120_000);
+  vi.advanceTimersByTime(300); draw(); expect(samples.at(-1)!.triangles).toBe(120_000);
   f.control().dispatchEvent({ type: 'end' }); vi.advanceTimersByTime(150); draw(); expect(samples.at(-1)!.triangles).toBe(120_000);
   const draws = samples.length; vi.advanceTimersByTime(1000); draw(); expect(samples).toHaveLength(draws);
   expect(mesh.geometry).toBe(original); expect(f.view.inspect()).toEqual(before);
@@ -371,7 +373,7 @@ it('keeps authored outlines attached to the original occurrences with their loca
   }
 });
 it('switches projection with one renderer and preserves target-plane scale, target, up and orientation', () => {
-  const f = mount(); f.view.fit('top'); draw();
+  const f = mount(); f.view.setProjection('perspective'); f.view.fit('top'); draw();
   const perspective = f.control().object as PerspectiveCamera, target = f.control().target.clone(), up = perspective.up.clone(), position = perspective.position.clone(), rotation = perspective.quaternion.clone();
   const span = 2 * perspective.position.distanceTo(target) * Math.tan(perspective.fov * Math.PI / 360) / perspective.zoom;
   const old = f.control(); f.changed.mockClear(); f.view.setProjection('orthographic');
@@ -402,7 +404,7 @@ it('restores effective orthographic zoom and flushes a final zoom-only pose thro
 });
 it.each([NaN, Infinity, -1, 0, 1e20, '12', true, false])('rejects the entire saved orthographic pose with invalid span %s', verticalSpan => {
   const f = mount(undefined, { copyId: 'copy', camera: { projection: 'orthographic', verticalSpan: verticalSpan as number, position: [9, 8, 7], target: [1, 2, 3], up: [0, 0, 1] } });
-  expect(f.view.projection).toBe('perspective'); expect(f.control().target.toArray()).toEqual([0, 0, 0]); expect(f.control().object.up.toArray()).toEqual([0, 1, 0]);
+  expect(f.view.projection).toBe('orthographic'); expect(f.control().target.toArray()).toEqual([0, 0, 0]); expect(f.control().object.up.toArray()).toEqual([0, 1, 0]);
 });
 it('uses orthographic rays for picking and admits a restored distance above the old default controls maximum', () => {
   const object = new Group(), far = new Mesh(new BoxGeometry(), new MeshBasicMaterial()), near = far.clone(); far.position.z = -2; near.position.z = 2; object.add(far, near);
@@ -415,7 +417,7 @@ it('uses orthographic rays for picking and admits a restored distance above the 
 });
 it.each(['projection', 'fit', 'reset'] as const)('publishes one metadata update for an owner-driven %s after idle', action => {
   const f = mount(); f.view.fit('back'); draw(); vi.advanceTimersByTime(150); f.changed.mockClear();
-  if (action === 'projection') f.view.setProjection('orthographic');
+  if (action === 'projection') f.view.setProjection('perspective');
   else if (action === 'fit') f.view.fit('front');
   else f.view.reset();
   expect(f.changed).toHaveBeenCalledOnce(); expect(frames.size).toBe(1);

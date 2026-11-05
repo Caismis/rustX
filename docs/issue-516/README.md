@@ -3,13 +3,20 @@
 [Whole-model LOD validation](lod-validation.md) records the current coarse,
 medium and final tessellations, exact native equivalence and browser scope.
 
+The first-real-mesh revision passes 4,403 Web/Host tests and 41 installed-Chrome
+production functional cases. [Current phase records](first-mesh-browser-samples.json),
+[orthographic coarse first model](cad-first-mesh-orthographic.png) and
+[three arrow controls](geometry-arrow-controls.png) record that policy. The
+installed Chrome lane is separate from pinned-container CI and large-model
+performance acceptance.
+
 Geometry previews admit up to 200 MiB through authorized, single-version byte
-ranges. STEP can first show a labeled, source-version-bound coordinate envelope
-while full source reading and CAD import continue. CAD then refines the entire
+ranges. The first model picture uses a real complete CAD tier, with no sampled
+point envelope or sparse triangle bridge. CAD refines the entire
 model through coarse and medium tessellations before the final precision, using
 one parsed document and one renderer/context. Every published level includes
 all parts; levels replace one another instead of adding completed pieces.
-The coordinate envelope is a loading aid, not a whole-model LOD. Full-model moving pictures
+New previews default to orthographic projection. Full-model moving pictures
 preserve original shading and use bounded surface approximations where eligible; a
 settled view restores every admitted triangle, original shading and full pixel
 quality, then stops drawing. The current acceptance requirement is a usable
@@ -54,7 +61,7 @@ directly into the ready import Worker and are evicted on hide; retained small
 copies keep their existing fixed-copy behavior.
 No warm parsed-model/Worker/WASM-instance cache is shipped.
 
-Three independent native Host runs of the large STEP reference show a rough
+Historical native Host runs at `235559e78` showed a rough
 picture within 200 ms, every observed coarse/fine gesture below 50 ms and all
 admitted triangles after import. A coordinate envelope can omit topology,
 placements and concavities; it is not the authoritative geometry. Complete
@@ -64,7 +71,7 @@ format/model matrix, including the historical large-STL first-display gap.
 Native GPU completion is reported
 separately from the next-rendering-opportunity proxy and the legacy display
 clock; none is silently substituted for independently observed presentation.
-The explicit STEP gate passes for the documented reference. Earlier failing
+That sampled-envelope result does not certify the current first-real-mesh gate. Earlier failing
 workloads retain their original evidence and do not inherit this result.
 
 | Historical check at fbf0a875c | Result |

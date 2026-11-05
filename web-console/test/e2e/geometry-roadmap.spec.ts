@@ -63,39 +63,48 @@ for (const entry of ['delivery', 'workspace']) test(`roadmap structure, focus an
   expect(await reads(page)).toBe(initialReads);
 });
 
-test('all six axis endpoints match menu directions, stay separate and never pick the model', async ({ page }, info) => {
+test('three arrow controls toggle all six views, stay separate at poles and never pick the model', async ({ page }, info) => {
   await load(page); const tree = await parts(page); await tree.getByRole('button', { name: 'A', exact: true }).click();
   await page.getByRole('button', { name: 'Close parts', exact: true }).click();
-  await expect(page.locator('[data-geometry-axis-indicator] button')).toHaveCount(0);
+  await expect(page.locator('[data-geometry-axis-indicator] [role="button"]')).toHaveCount(3);
+  await expect(page.locator('[data-geometry-axis-indicator] text')).toHaveCount(0);
+  const expected = new Map<string, any>();
   for (const [view, label] of [['right','Right'], ['left','Left'], ['top','Top'], ['bottom','Bottom'], ['front','Front'], ['back','Back']]) {
     await page.getByRole('button', { name: 'View angle', exact: true }).click();
     await expect(page.getByRole('menuitem', { name: label, exact: true }).locator('[data-view-icon]')).toHaveAttribute('data-view-icon', view);
-    await page.getByRole('menuitem', { name: label, exact: true }).click(); const menuPose = await pose(page); await painted(page);
-    await page.locator(`[data-geometry-axis="${view}"] text`).click(); const axisPose = await pose(page);
-    for (const key of ['position', 'target', 'up']) axisPose.camera[key].forEach((value: number, index: number) => expect(value).toBeCloseTo(menuPose.camera[key][index], 8));
-    expect(axisPose.selected).toBe(menuPose.selected);
-    const boxes = await page.locator('[data-geometry-axis] text').evaluateAll(labels => labels.map(label => { const b = label.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; }));
-    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
-      const a = boxes[i], b = boxes[j]; expect(Math.max(0, Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)) * Math.max(0, Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y))).toBeLessThan(1);
-    }
-    if (view === 'top' || view === 'bottom') {
-      const box = (await page.locator('[data-geometry-format] canvas').boundingBox())!;
-      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 8 }); await page.mouse.up();
-      const after = await pose(page); expect(after.camera.position).not.toEqual(axisPose.camera.position); expect(after.camera.up).toEqual(axisPose.camera.up);
+    await page.getByRole('menuitem', { name: label, exact: true }).click(); expected.set(view, await pose(page));
+  }
+  for (const [axis, positive, negative] of [['X', 'right', 'left'], ['Y', 'top', 'bottom'], ['Z', 'front', 'back']]) {
+    await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: 'Isometric', exact: true }).click(); await painted(page);
+    for (const view of [positive, negative]) {
+      await page.locator(`[data-axis="${axis}"] circle`).last().click(); const axisPose = await pose(page), menuPose = expected.get(view); await painted(page);
+      for (const key of ['position', 'target', 'up']) axisPose.camera[key].forEach((value: number, index: number) => expect(value).toBeCloseTo(menuPose.camera[key][index], 8));
+      expect(axisPose.camera.projection).toBe('orthographic'); expect(axisPose.selected).toBe(menuPose.selected);
+      const targets = await page.locator('[data-geometry-axis] circle:last-child').evaluateAll(circles => circles.map(circle => { const b = circle.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2, width: b.width }; }));
+      for (const target of targets) expect(target.width).toBeGreaterThanOrEqual(24);
+      for (let i = 0; i < targets.length; i++) for (let j = i + 1; j < targets.length; j++) expect(Math.hypot(targets[i].x - targets[j].x, targets[i].y - targets[j].y)).toBeGreaterThanOrEqual(24);
     }
   }
+  const beforeOrbit = await pose(page), box = (await page.locator('[data-geometry-format] canvas').boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 8 }); await page.mouse.up();
+  expect((await pose(page)).camera.position).not.toEqual(beforeOrbit.camera.position);
+  await page.locator('[data-axis="Z"] circle').last().click(); expect((await pose(page)).camera.position[2]).toBeGreaterThan(0);
   await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: 'Isometric', exact: true }).click(); await painted(page);
-  await page.locator('[data-geometry-axis="right"] path').click();
+  await page.locator('[data-axis="X"] circle').last().click();
   const linePose = await pose(page); expect(linePose.camera.position[0]).toBeGreaterThan(0); expect(Math.abs(linePose.camera.position[2])).toBeLessThan(1e-6); expect(linePose.selected).toBeDefined();
   await page.setViewportSize({ width: 700, height: 500 }); await painted(page);
-  await page.locator('[data-geometry-axis="right"]').focus(); await page.keyboard.press('Enter'); expect((await pose(page)).selected).toBeDefined();
+  await page.locator('[data-axis="X"]').focus(); await page.keyboard.press('Enter'); expect((await pose(page)).camera.position[0]).toBeLessThan(0); expect((await pose(page)).selected).toBeDefined();
   await page.getByRole('button', { name: 'Chinese', exact: true }).click(); await page.getByRole('button', { name: 'Dark theme', exact: true }).click();
-  await expect(page.getByRole('button', { name: '+X: 右视图', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '右视图', exact: true })).toBeVisible();
   await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('geometry-axis-narrow-zh-dark.png') });
 });
 
 test('projection switches preserve framing and resources, persist orthographic wheel zoom, and reset in the chosen projection', async ({ page }, info) => {
-  await load(page); const tree = await parts(page);
+  await load(page); expect((await pose(page)).camera.projection).toBe('orthographic');
+  await page.getByRole('button', { name: 'View angle', exact: true }).click();
+  await expect(page.getByRole('menuitem', { name: 'Orthographic', exact: true })).toHaveAttribute('aria-current', 'true');
+  await page.getByRole('menuitem', { name: 'Perspective', exact: true }).click();
+  const tree = await parts(page);
   await tree.getByRole('checkbox', { name: 'Visible: B', exact: true }).uncheck(); await tree.getByRole('button', { name: 'A', exact: true }).click();
   await page.getByRole('button', { name: 'Focus selected', exact: true }).click(); await page.getByRole('button', { name: 'Close parts', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Model outlines', exact: true })).toHaveAttribute('aria-pressed', 'true'); await refined(page);
@@ -117,6 +126,13 @@ test('projection switches preserve framing and resources, persist orthographic w
   await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('projection-orthographic-menu.png') });
   await page.getByRole('menuitem', { name: 'Perspective', exact: true }).click();
   expect((await pose(page)).camera.projection).toBe('perspective'); expect((await pose(page)).camera).not.toHaveProperty('verticalSpan'); expect((await resources(page)).contexts).toBe(1);
+  const perspective = await pose(page);
+  await page.getByRole('button', { name: 'Hide delivery', exact: true }).click();
+  await page.getByRole('button', { name: 'Show delivery', exact: true }).click(); await ready(page);
+  const perspectiveRestored = (await pose(page)).camera; expect(perspectiveRestored.projection).toBe('perspective');
+  for (const key of ['position', 'target', 'up']) perspectiveRestored[key].forEach((value: number, index: number) => expect(value).toBeCloseTo(perspective.camera[key][index], 8));
+  await page.getByRole('button', { name: 'View angle', exact: true }).click();
+  await expect(page.getByRole('menuitem', { name: 'Perspective', exact: true })).toHaveAttribute('aria-current', 'true');
 });
 
 test('projection roundtrip preserves a tiny focused part far from the orbit origin', async ({ page }) => {
@@ -126,6 +142,7 @@ test('projection roundtrip preserves a tiny focused part far from the orbit orig
     { name: 'B', mesh: 0, translation: [-.5, 999.5, -.5], scale: [.1, .1, .1] },
     { name: 'Small', mesh: 0, translation: [-5e-7, 500 - 5e-7, -5e-7], scale: [1e-7, 1e-7, 1e-7] },
   ]));
+  await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: 'Perspective', exact: true }).click();
   await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: 'Front', exact: true }).click();
   const tree = await parts(page); await tree.getByRole('button', { name: 'Small', exact: true }).click();
   await page.getByRole('button', { name: 'Focus selected', exact: true }).click(); await painted(page);
@@ -304,7 +321,8 @@ for (const workload of ['planar-outline-envelope', 'cad-96-parts']) test(`two-pa
   const outputs = await page.evaluate(() => (window as any).roadmapOutlineOutputs as { segments: number; bytes: number }[]);
   expect(outputs).toHaveLength(2); for (const output of outputs) { expect(output.segments).toBeLessThanOrEqual(65536); expect(output.bytes).toBeLessThanOrEqual(65536 * 80); }
   expect(withOutlines.contexts).toBe(2); expect(withOutlines.workers).toBe(0);
-  const expectedReads = workload === 'planar-outline-envelope' ? Math.ceil((84 + 96_800 * 50) / FILE_PREVIEW_LIMITS.pageBytes) + 1 : 3;
+  // The small CAD source and GLB each need one complete content read.
+  const expectedReads = workload === 'planar-outline-envelope' ? Math.ceil((84 + 96_800 * 50) / FILE_PREVIEW_LIMITS.pageBytes) + 1 : 2;
   expect(browser.antialias).toBe(true); expect(await reads(page)).toBe(expectedReads);
   await refined(page);
   const draws = await page.evaluate(() => (window as any).geometryDrawCalls.calls); await page.waitForTimeout(1000); expect(await page.evaluate(() => (window as any).geometryDrawCalls.calls)).toBe(draws);
@@ -318,11 +336,12 @@ test.describe('scaled coordinate navigation', () => {
   test.use({ deviceScaleFactor: 2 });
   test('uses CSS hit areas after DPR/resize and preserves selection', async ({ page }) => {
     await load(page); await page.setViewportSize({ width: 700, height: 500 }); await painted(page);
-    await page.getByRole('button', { name: '+X: Right', exact: true }).locator('text').click();
+    await page.locator('[data-axis="X"] circle').last().click();
     const state = await pose(page); expect(state.camera.position[0]).toBeGreaterThan(0);
     expect(Math.abs(state.camera.position[1])).toBeLessThan(1e-6); expect(Math.abs(state.camera.position[2])).toBeLessThan(1e-6);
     await refined(page); const scale = await page.locator('[data-geometry-format] canvas').evaluate(canvas => (canvas as HTMLCanvasElement).width / canvas.clientWidth); expect(scale).toBeCloseTo(2, 2);
-    await page.getByRole('button', { name: '−Z: Back', exact: true }).focus(); await page.keyboard.press('Enter'); expect((await pose(page)).camera.position[2]).toBeLessThan(0);
+    await page.locator('[data-axis="Z"]').focus(); await page.keyboard.press('Enter'); expect((await pose(page)).camera.position[2]).toBeGreaterThan(0);
+    await page.keyboard.press('Space'); expect((await pose(page)).camera.position[2]).toBeLessThan(0);
     expect(await reads(page)).toBe(1);
     await page.getByRole('button', { name: 'Close preview cube.glb', exact: true }).click();
     await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });

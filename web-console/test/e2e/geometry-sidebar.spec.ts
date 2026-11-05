@@ -35,23 +35,24 @@ async function deliveredModel(page: Page, largeStep?:string) {
   } catch (error) { await fixture.stop(false); throw error; }
 }
 
-test('approximately 200 MB STEP has a source-bound first picture through the production Host',async({page},info)=>{
+test('approximately 200 MB STEP has an admitted whole-model first picture through the production Host',async({page},info)=>{
   const source=process.env.RUSTX_GEOMETRY_LARGE_STEP_PATH;test.skip(!source,'Provide an original approximately 200 MB STEP for native transport acceptance.');
   await instrument(page);const fixture=await deliveredModel(page,source);let passed=false;
   try{await observeGeometryLatency(page);await page.getByRole('button',{name:'Preview mounting-bracket.step in sidebar',exact:true}).click();
-    await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.coarseFirst),{timeout:10000}).toBeGreaterThan(0);
-    const rough=await page.evaluate(()=>(window as any).geometryLatency.coarseFirst as number);await page.locator('svg[data-geometry-rough]').screenshot({path:info.outputPath('step-native-rough.png')});
-    const area=(await page.locator('svg[data-geometry-rough]').boundingBox())!;
+    await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.firstModel),{timeout:70000}).toBeGreaterThan(0);
+    const firstModelMs=await page.evaluate(()=>(window as any).geometryLatency.firstModel as number),initialCanvas=page.locator('[data-geometry-format] canvas');
+    await initialCanvas.screenshot({path:info.outputPath('step-native-first-model.png')});
+    const area=(await initialCanvas.boundingBox())!;
     for(const button of ['left','right'] as const)for(let action=0;action<5;action++){const x=area.x+area.width/2,y=area.y+area.height/2,direction=action%2?-1:1;await page.mouse.move(x,y);await page.mouse.down({button});await page.mouse.move(x+32*direction,y+12*direction,{steps:10});await page.mouse.up({button});}
-    await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.coarsePending)).toBe(0);
-    const samples=await page.evaluate(()=>(window as any).geometryLatency.coarseSamples as number[]);
+    await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.pending)).toBe(0);
+    const samples=await page.evaluate(()=>(window as any).geometryLatency.lodSamples.concat((window as any).geometryLatency.samples) as number[]);
+    const priorFineSamples=await page.evaluate(()=>(window as any).geometryLatency.samples.length as number);
     await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.first),{timeout:70000}).toBeGreaterThan(0);
-    await expect(page.locator('svg[data-geometry-rough]')).toHaveCount(0);
     const canvas=page.locator('[data-geometry-format] canvas'),fineArea=(await canvas.boundingBox())!;
     await canvas.screenshot({path:info.outputPath('step-native-handoff.png')});
     for(const button of ['left','right'] as const)for(let action=0;action<5;action++){const x=fineArea.x+fineArea.width/2,y=fineArea.y+fineArea.height/2,direction=action%2?-1:1;await page.mouse.move(x,y);await page.mouse.down({button});await page.mouse.move(x+32*direction,y+12*direction,{steps:10});await page.mouse.up({button});}
     await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.pending)).toBe(0);
-    const fineSamples=await page.evaluate(()=>(window as any).geometryLatency.samples as number[]);
+    const fineSamples=await page.evaluate(()=>(window as any).geometryLatency.samples.slice(priorFineSamples) as number[]);
     await page.getByRole('button',{name:'View angle',exact:true}).click();await page.getByRole('menuitem',{name:'Reset view',exact:true}).click();
     await expect(canvas).toHaveAttribute('data-geometry-quality','complete');
     const originalTriangles=await page.evaluate(()=>(window as any).geometryImports.at(-1).reduce((sum:number,mesh:any)=>sum+mesh.triangles,0));
@@ -60,9 +61,9 @@ test('approximately 200 MB STEP has a source-bound first picture through the pro
     await page.screenshot({path:info.outputPath('step-native-complete.png')});
     await page.getByRole('button',{name:'Close preview mounting-bracket.step',exact:true}).click();
     const afterClose={workers:0,contexts:0,buffers:0,textures:0,urls:0};await expect.poll(()=>resources(page)).toEqual(afterClose);
-    const result={roughFirstMs:rough,lodFirstMs:await page.evaluate(()=>(window as any).geometryLatency.lodFirst||null),fineFirstMs,coarseInteractions:samples,maximumCoarseInteractionMs:Math.max(...samples),fineInteractions:fineSamples,maximumFineInteractionMs:Math.max(...fineSamples),originalTriangles,afterClose:await resources(page),phases:await page.evaluate(()=>performance.getEntriesByType('measure').filter(x=>x.name.startsWith('geometry:')).map(x=>({name:x.name,ms:x.duration}))),method:'Actual committed delivery, Product Host source authorization and native filesystem/range transport; coarse DOM/two-rAF, whole-model LOD GPU/next-rAF and complete-model GPU/next-rAF proxies are separate.'};
+    const result={firstModelMs,lodFirstMs:await page.evaluate(()=>(window as any).geometryLatency.lodFirst||null),fineFirstMs,firstModelInteractions:samples,maximumFirstModelInteractionMs:Math.max(...samples),fineInteractions:fineSamples,maximumFineInteractionMs:Math.max(...fineSamples),originalTriangles,afterClose:await resources(page),phases:await page.evaluate(()=>performance.getEntriesByType('measure').filter(x=>x.name.startsWith('geometry:')).map(x=>({name:x.name,ms:x.duration}))),method:'Actual committed delivery, Product Host source authorization and native contiguous bounded reads. First admitted whole-model CAD LOD or complete mesh, plus complete-model GPU/next-rAF proxies are recorded.'};
     writeFileSync(info.outputPath('step-native-first.json'),JSON.stringify(result,null,2));await info.attach('step-native-first',{body:JSON.stringify(result,null,2),contentType:'application/json'});
-    expect(samples.length).toBeGreaterThanOrEqual(80);expect(fineSamples.length).toBeGreaterThanOrEqual(80);if(process.env.RUSTX_GEOMETRY_BUDGET==='1'){expect.soft(rough).toBeLessThanOrEqual(200);expect.soft(Math.max(...samples,...fineSamples)).toBeLessThan(50);}passed=true;
+    expect(samples.length).toBeGreaterThanOrEqual(80);expect(fineSamples.length).toBeGreaterThanOrEqual(80);if(process.env.RUSTX_GEOMETRY_BUDGET==='1'){expect.soft(firstModelMs).toBeLessThanOrEqual(200);expect.soft(Math.max(...samples,...fineSamples)).toBeLessThan(50);}passed=true;
   }finally{await page.close();await fixture.workspaceHost.stop();await fixture.stop(passed);}
 });
 

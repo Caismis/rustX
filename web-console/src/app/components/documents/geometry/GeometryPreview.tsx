@@ -1,6 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { Box3, Object3D } from 'three';
-import type { GeometryRoughPose } from '../../../../client/geometry-rough';
 import { useLocale } from '../../../../locale/react';
 import { en, zh } from '../../../../locale/dictionaries/geometry';
 import type { PreviewViewState, PreviewViewStateProps } from '../../../../presentation/right-panel/preview-view-state';
@@ -23,11 +22,11 @@ import { Tooltip } from '../../../../presentation/primitives/Tooltip';
 import { IconChecklistOutline14, IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import css from './GeometryPreview.module.css';
 
-export interface GeometryPreviewProps extends PreviewViewStateProps { bytes: Uint8Array<ArrayBuffer>; name: string; copyId: string; signal: AbortSignal; current: () => boolean; takeSource?: () => Uint8Array<ArrayBuffer> | undefined; releaseSource?: () => void; initialPose?:()=>GeometryRoughPose|undefined; onDisplay?:()=>void; onFailure?:()=>void; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
-export default function GeometryPreview({ bytes, name, copyId, signal, current, takeSource, releaseSource, initialPose, onDisplay, onFailure, viewState, onViewStateChange, onGeometryRetire }: GeometryPreviewProps) {
+export interface GeometryPreviewProps extends PreviewViewStateProps { bytes: Uint8Array<ArrayBuffer>; name: string; copyId: string; signal: AbortSignal; current: () => boolean; takeSource?: () => Uint8Array<ArrayBuffer> | undefined; releaseSource?: () => void; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
+export default function GeometryPreview({ bytes, name, copyId, signal, current, takeSource, releaseSource, viewState, onViewStateChange, onGeometryRetire }: GeometryPreviewProps) {
   const locale = useLocale(), t = locale.active === 'zh' ? zh : en;
   const container = useRef<HTMLDivElement>(null), active = useRef<ReturnType<typeof mountGeometry>>(undefined), outlineAction = useRef(0);
-  const latest = useRef({ viewState, onViewStateChange, t, initialPose, onDisplay, onFailure }); latest.current = { viewState, onViewStateChange, t, initialPose, onDisplay, onFailure };
+  const latest = useRef({ viewState, onViewStateChange, t }); latest.current = { viewState, onViewStateChange, t };
   const [state, setState] = useState<{ stage?: GeometryImportStage; preview?: boolean; parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; selected?: string; hidden?: string[]; isolation?: string; projection?: Projection; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
   const [menu, setMenu] = useState(false);
   const [partsOpen, setPartsOpen] = useState(false), partsId = useId();
@@ -37,7 +36,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
     const controller = new AbortController(); let roots: Object3D[] = [], mounted: ReturnType<typeof mountGeometry> | undefined;
     let graphics: ReturnType<typeof prepareGeometryGraphics> | undefined, release: (() => void) | undefined;
     let progressive: ReturnType<typeof progressivePresentation> | undefined, provisional: ReturnType<typeof mountGeometry> | undefined;
-    let selection: { selected?: string; hidden?: string[]; isolation?: string; projection: Projection } = { projection: 'perspective' };
+    let selection: { selected?: string; hidden?: string[]; isolation?: string; projection: Projection } = { projection: 'orthographic' };
     // Capture this copy's predicate, rather than adopting a later render's
     // permission while an earlier import is still completing.
     const ownsCopy = current;
@@ -56,11 +55,11 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
     if (!live()) { retire(); return; }
     const failed = (error: unknown) => {
       const publish = live(); retire();
-      if (publish) { setState({ error: error instanceof GeometryError ? error.code : 'invalid' }); latest.current.onFailure?.(); }
+      if (publish) setState({ error: error instanceof GeometryError ? error.code : 'invalid' });
     };
     void (async () => {
       let object: Object3D, bounds: Box3, displayStart: number, prepared = Promise.resolve(), startPreview: (() => void) | undefined;
-      const graphicsLost = () => { const publish = live(); retire(); if (publish) {setState({ error: 'webgl' });latest.current.onFailure?.();} };
+      const graphicsLost = () => { const publish = live(); retire(); if (publish) setState({ error: 'webgl' }); };
       if (format === 'glb') stage('importing');
       const pending = format === 'glb' ? importGlb(bytes, controller.signal)
         : parseGeometry(bytes, format, controller.signal, stage, () => live() ? takeSource?.() : undefined, format === 'stl' ? undefined : lod => {
@@ -73,9 +72,8 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
         const props = latest.current;
         progressive = progressivePresentation({ container: container.current!, graphics, current: live, copyId, labels: () => latest.current.t,
           saved: props.viewState.geometry?.copyId === copyId ? props.viewState.geometry : undefined,
-          pose: () => latest.current.initialPose?.(),
           mounted: view => { provisional = view; active.current = view ?? mounted; },
-          displayed: () => { if (live()) { setState(value => ({ ...value, preview: true })); latest.current.onDisplay?.(); } }, failed,
+          displayed: () => { if (live()) setState(value => ({ ...value, preview: true })); }, failed,
         });
       }
       const loaded = await pending; object = loaded.scene; bounds = loaded.bounds; release = loaded.dispose;
@@ -90,8 +88,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
       releaseSource?.();
       stage('preparing');
       const props = latest.current;let saved = props.viewState.geometry?.copyId === copyId ? props.viewState.geometry : undefined;
-      const seed = lodSeed?.pose ?? props.initialPose?.();
-      if (seed) saved = { ...saved, copyId, camera: cameraFromPose(seed, bounds, container.current!, lodSeed?.projection ?? saved?.camera?.projection) };
+      if (lodSeed?.pose) saved = { ...saved, copyId, camera: cameraFromPose(lodSeed.pose, bounds, container.current!, lodSeed.projection) };
       mounted = mountGeometry(container.current!, object, bounds, saved, props.t, patch => {
         if (!live()) return;
         latest.current.onViewStateChange({ geometry: { copyId, ...patch } });
@@ -100,7 +97,9 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
           selection = { selected: patch.selected, hidden: patch.hidden, isolation: patch.isolation?.target, projection };
           setState(value => ({ ...value, ...selection, inspection: mounted?.inspect() }));
         }
-      }, graphicsLost, { generated: format !== 'glb', pendingPreview: !!startPreview, onFirstGpuReady:()=>{if(live()){startPreview?.();latest.current.onDisplay?.();}}, graphics });
+      }, graphicsLost, { generated: format !== 'glb', pendingPreview: !!startPreview, onFirstGpuReady:()=>{if(live())startPreview?.();}, graphics });
+      const ownerDocument = container.current!.ownerDocument;
+      if (lodSeed?.focusedAxis && ownerDocument.activeElement === ownerDocument.body) mounted.focusAxis(lodSeed.focusedAxis);
       progressive?.dispose(); progressive = undefined;
       // Keep only the latest measurement per supported format, rather than an
       // unbounded browser-lifetime history of preview openings.
@@ -138,14 +137,14 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
       {!state.error && <>
         <div className={css.rail} role="toolbar" aria-label={t.controls} aria-orientation="vertical">
           <Tooltip label={t.fit} side="right" delayMs={500}><button type="button" className={css.control} disabled={!state.parts} aria-label={t.fit} onClick={() => active.current?.fit()}><FitGlyph/></button></Tooltip>
-          <Menu open={menu} onClose={() => setMenu(false)} side="right" align="start" dense autoFocus selectedId={state.projection ?? 'perspective'}
+          <Menu open={menu} onClose={() => setMenu(false)} side="right" align="start" dense autoFocus selectedId={state.projection ?? 'orthographic'}
             items={[{ id: 'reset', label: t.reset, icon: <GeometryViewGlyph view="isometric"/> }, { id: 'directions', type: 'separator' }, ...views.map(view => ({ id: view, label: t[view], icon: <GeometryViewGlyph view={view}/> })), { id: 'projection-divider', type: 'separator' }, { id: 'projection-label', type: 'label', text: t.projection }, { id: 'perspective', label: t.perspective }, { id: 'orthographic', label: t.orthographic }]} onSelect={view => { if (view === 'reset') active.current?.reset(); else if (view === 'perspective' || view === 'orthographic') active.current?.setProjection(view); else active.current?.fit(view as StandardView); setMenu(false); }}
-            anchor={<Tooltip label={t.view} side="right" delayMs={500}><button type="button" className={`${css.control} ${menu ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.view} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(value => !value)}><ModelGlyph/></button></Tooltip>}/>
+            anchor={<Tooltip label={t.view} side="right" delayMs={500}><button type="button" className={`${css.control} ${menu ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.view} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(value => !value)}><ViewGlyph/></button></Tooltip>}/>
           <span className={css.divider} aria-hidden="true"/>
           <Tooltip label={t.outlineHelp} side="right" delayMs={500}><button type="button" className={`${css.control} ${state.outlineStatus === 'on' ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.outlines} aria-pressed={state.outlineStatus === 'on'} aria-busy={state.outlineStatus === 'loading'} onClick={() => requestOutlines(state.outlineStatus !== 'on' && state.outlineStatus !== 'loading')}><OutlineGlyph/></button></Tooltip>
           <Tooltip label={t.parts} side="right" delayMs={500}><button type="button" className={`${css.control} ${partsOpen ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.parts} aria-expanded={partsOpen} aria-controls={partsId} data-geometry-parts-toggle onClick={() => setPartsOpen(value => !value)}><IconChecklistOutline14 size={16}/></button></Tooltip>
         </div>
-        {state.outlineStatus === 'loading' || state.outlineStatus === 'limit' || state.outlineStatus === 'failed' ? <p className={css.outlineStatus} role="status">{state.outlineStatus === 'loading' ? t.outlineLoading : state.outlineStatus === 'limit' ? t.outlineLimit : t.outlineFailed}</p> : null}
+        {state.outlineStatus === 'limit' || state.outlineStatus === 'failed' ? <p className={css.outlineStatus} role="status">{state.outlineStatus === 'limit' ? t.outlineLimit : t.outlineFailed}</p> : null}
         {state.parts && partsOpen && <div className={css.partsPanel} id={partsId}>
           <header className={css.partsHeader}><span>{t.parts}<span className={css.count}>{number.format(partCount!)}</span></span><Button size="sm" className={css.panelClose} aria-label={t.closeParts} onClick={closeParts}><IconCloseOutline16/></Button></header>
           <div className={css.structureActions}>
@@ -183,6 +182,9 @@ function ModelGlyph() {
 function FitGlyph() {
   return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2.5 6V2.5H6m4 0h3.5V6M2.5 10v3.5H6m7.5-3.5v3.5H10"/></svg>;
 }
+function ViewGlyph() {
+  return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6a5.3 5.3 0 0 1 9-2l1.2 1.5M13.2 2.5v3h-3M13 10a5.3 5.3 0 0 1-9 2l-1.2-1.5M2.8 13.5v-3h3"/><path d="M8 5.5v5M5.8 9.2 8 10.5l2.2-1.3"/></svg>;
+}
 function OutlineGlyph() {
-  return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true"><path d="m8 1.5 6 3.3v6.4L8 14.5l-6-3.3V4.8L8 1.5Z"/><path d="m4.5 6 3.5 2 3.5-2M8 8v4" strokeWidth=".7"/></svg>;
+  return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2.5 2.5h11v11h-11z" strokeDasharray="2 2"/><path d="m4.5 10.5 3-5 4 5h-7Z"/></svg>;
 }

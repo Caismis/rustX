@@ -1,9 +1,10 @@
 import { Box3, Group, Vector3 } from 'three';
 import type { PreviewViewState } from '../../../../presentation/right-panel/preview-view-state';
-import type { GeometryRoughPose } from '../../../../client/geometry-rough';
 import type { GeometryLod } from './parse';
 import { mountGeometry, type Projection, type prepareGeometryGraphics } from './viewport';
 import { GEOMETRY_LIMITS as L, GeometryError } from './limits';
+
+export interface GeometryPose { direction: [number, number, number]; target: [number, number, number]; zoom: number; up?: [number, number, number] }
 
 type Saved = NonNullable<PreviewViewState['geometry']>;
 type Camera = NonNullable<Saved['camera']>;
@@ -12,7 +13,7 @@ function framing(bounds: Box3, container: HTMLElement) {
   const aspect = Math.max(1, container.clientWidth) / Math.max(1, container.clientHeight);
   return { span: Math.max(size.x, size.y, size.z), distance: radius / Math.sin(Math.PI / 8) / Math.min(1, aspect) * 1.1, height: radius * 2 / Math.min(1, aspect) * 1.1 };
 }
-export function cameraFromPose(pose: GeometryRoughPose, bounds: Box3, container: HTMLElement, projection: Projection = 'perspective'): Camera {
+export function cameraFromPose(pose: GeometryPose, bounds: Box3, container: HTMLElement, projection: Projection = 'orthographic'): Camera {
   const frame = framing(bounds, container), target = new Vector3().fromArray(pose.target).multiplyScalar(frame.span);
   const position = target.clone().add(new Vector3().fromArray(pose.direction).normalize().multiplyScalar(frame.distance / pose.zoom));
   return { position: position.toArray(), target: target.toArray(), up: pose.up ?? [0,1,0], ...(projection === 'orthographic' ? { projection, verticalSpan: frame.height / pose.zoom } : { projection }) };
@@ -21,7 +22,7 @@ function normalizedPose(camera: Camera, bounds: Box3, container: HTMLElement, pr
   const frame = framing(bounds, container), target = new Vector3().fromArray(camera.target), direction = new Vector3().fromArray(camera.position).sub(target);
   const zoom = camera.projection === 'orthographic' ? frame.height / camera.verticalSpan : frame.distance / direction.length();
   target.add(presentationCenter).sub(bounds.getCenter(new Vector3()));
-  return { direction: direction.normalize().toArray(), target: target.divideScalar(frame.span).toArray(), up: camera.up, zoom } satisfies GeometryRoughPose;
+  return { direction: direction.normalize().toArray(), target: target.divideScalar(frame.span).toArray(), up: camera.up, zoom } satisfies GeometryPose;
 }
 
 /** Replaces independently admitted whole-model tiers in one provisional graph.
@@ -30,7 +31,6 @@ export function progressivePresentation(options: {
   container: HTMLElement; graphics: ReturnType<typeof prepareGeometryGraphics>; current: () => boolean;
   copyId: string;
   labels: () => Parameters<typeof mountGeometry>[4]; saved?: Saved;
-  pose?: () => GeometryRoughPose | undefined;
   mounted: (view: ReturnType<typeof mountGeometry> | undefined) => void;
   displayed: () => void; failed: (error: unknown) => void;
 }) {
@@ -56,8 +56,7 @@ export function progressivePresentation(options: {
       if (view) { view.refreshContent(bounds, next.level); return; }
       bounds.getCenter(presentationCenter);
       // Tier meshes do not supply authoritative selection/visibility metadata.
-      const seed = options.pose?.(), saved: Saved = { copyId: options.copyId, camera: options.saved?.camera, outlines: false };
-      if (seed) saved.camera = cameraFromPose(seed, bounds, options.container, saved.camera?.projection);
+      const saved: Saved = { copyId: options.copyId, camera: options.saved?.camera, outlines: false };
       view = mountGeometry(options.container, root, bounds, saved, options.labels(), patch => { camera = patch.camera; }, () => options.failed(new GeometryError('webgl')), {
         generated: true, graphics: options.graphics, provisional: true, lod: next.level, onInteraction: activity,
         onFirstGpuReady: () => { if (!closed && options.current()) options.displayed(); },
@@ -78,9 +77,9 @@ export function progressivePresentation(options: {
       if (view && touched && (dragging || performance.now() - lastInput < L.refineDelayMs)) await new Promise<void>(resolve => { settle = resolve; arm(); });
       if (closed || !options.current()) return;
       view?.flush(patch => { camera = patch.camera; });
-      const seed = touched && camera && bounds ? { pose: normalizedPose(camera,bounds,options.container,presentationCenter), projection: camera.projection } : undefined;
+      const seed = { ...(touched && camera && bounds ? { pose: normalizedPose(camera,bounds,options.container,presentationCenter), projection: camera.projection } : {}), focusedAxis: view?.focusedAxis };
       view?.handoff(); view = undefined; options.mounted(undefined);
-      return seed;
+      return seed.pose || seed.focusedAxis ? seed : undefined;
     },
     dispose() {
       if (closed) return; closed = true; accepting = false; stopFrame(); clearTimeout(quiet); settle?.(); settle = undefined;

@@ -73,26 +73,19 @@ export const resources = (page: Page) => page.evaluate(() => ({ ...(window as an
 /** One capture per page; first-frame proxy and trusted input diagnostics. */
 export async function observeGeometryLatency(page: Page, startSelector = 'button[aria-label^="Preview "]') {
   await page.evaluate(startSelector => {
-    const state = { start: 0, first: 0, firstGpuReady: 0, lodFirst:0, lodGpuReady:0, lodSamples:[] as number[], lodStages:{} as Record<string,{submission:number;gpu:number;opportunity:number}>, coarseFirst:0, coarsePending:0, coarseSamples:[] as number[], pending: 0, cancelled: 0, samples: [] as number[], gpuSamples: [] as number[], stages: [] as { dispatch: number; submission: number; gpu: number; renderOpportunity: number }[] };
+    const state = { start: 0, first: 0, firstGpuReady: 0, lodFirst:0, lodGpuReady:0, lodSamples:[] as number[], lodStages:{} as Record<string,{submission:number;gpu:number;opportunity:number}>, firstModel:0, firstModelGpuReady:0, pending: 0, cancelled: 0, samples: [] as number[], gpuSamples: [] as number[], stages: [] as { dispatch: number; submission: number; gpu: number; renderOpportunity: number }[] };
     const waiting: { start: number; received: number; lod: boolean }[] = [];
-    const coarseWaiting:number[]=[];let coarseScheduled=false;
-    const coarseObserver=new MutationObserver(records=>{
-      const svg=document.querySelector<SVGSVGElement>('svg[data-geometry-rough]');
-      if(!svg?.querySelector('path')?.getAttribute('d')||!state.start)return;
-      if(!state.coarseFirst&&!coarseScheduled){coarseScheduled=true;requestAnimationFrame(()=>requestAnimationFrame(()=>{if(svg.isConnected)state.coarseFirst=performance.now()-state.start;else coarseScheduled=false;}));}
-      if(records.some(record=>record.target===svg&&record.attributeName==='data-geometry-rough-render')&&coarseWaiting.length){const inputs=coarseWaiting.splice(0);requestAnimationFrame(()=>requestAnimationFrame(()=>{if(svg.isConnected)for(const start of inputs)state.coarseSamples.push(performance.now()-start);else state.cancelled+=inputs.length;state.coarsePending-=inputs.length;}));}
-    });
-    coarseObserver.observe(document,{childList:true,subtree:true,attributes:true,attributeFilter:['data-geometry-rough-render']});
-    let firstSubmitted = false, lodSubmitted = false; const observedLods=new Set<string>();
+    let firstSubmitted = false, lodSubmitted = false, firstModelSubmitted = false; const observedLods=new Set<string>();
     // This test-only event runs at the microtask checkpoint AFTER the actual
     // model-render callback, including all parts and axes. A busy renderer's
     // skipped rAF cannot count as the response to a newer camera event.
     document.addEventListener('geometry-test-model-submitted', event => {
       const canvas = (event as CustomEvent).detail;
       if (!(canvas instanceof HTMLCanvasElement) || canvas !== document.querySelector('[data-geometry-format] canvas')) return;
-      const submitted = performance.now(), inputs = waiting.splice(0), provisional=canvas.dataset.geometryCompleteness==='preview',first = !provisional && !firstSubmitted && state.start > 0, firstLod=provisional&&!lodSubmitted&&state.start>0,lod=canvas.dataset.geometryLod??'',firstTier=provisional&&!observedLods.has(lod)&&state.start>0;
-      if (!first && !firstTier && !inputs.length) return;
+      const submitted = performance.now(), inputs = waiting.splice(0), firstModel=!firstModelSubmitted&&state.start>0, provisional=canvas.dataset.geometryCompleteness==='preview',first = !provisional && !firstSubmitted && state.start > 0, firstLod=provisional&&!lodSubmitted&&state.start>0,lod=canvas.dataset.geometryLod??'',firstTier=provisional&&!observedLods.has(lod)&&state.start>0;
+      if (!firstModel && !first && !firstTier && !inputs.length) return;
       if(firstTier){observedLods.add(lod);state.lodStages[lod]={submission:submitted-state.start,gpu:0,opportunity:0};}
+      if (firstModel) firstModelSubmitted = true;
       if (first) firstSubmitted = true;
       if (firstLod) lodSubmitted=true;
       const gl = canvas.getContext('webgl2')!;
@@ -111,6 +104,7 @@ export async function observeGeometryLatency(page: Page, startSelector = 'button
         }
         channel.port1.close(); channel.port2.close();
         const completed = performance.now();
+        if (firstModel) state.firstModelGpuReady = completed - state.start;
         if (first) state.firstGpuReady = completed - state.start;
         if (firstLod) state.lodGpuReady = completed - state.start;
         if(firstTier)state.lodStages[lod].gpu=completed-state.start;
@@ -118,6 +112,7 @@ export async function observeGeometryLatency(page: Page, startSelector = 'button
         gl.deleteSync(fence);
         requestAnimationFrame(() => {
           const frameReady = performance.now();
+          if (firstModel) state.firstModel = frameReady - state.start;
           if (first) state.first = frameReady - state.start;
           if (firstLod) state.lodFirst=frameReady-state.start;
           if(firstTier)state.lodStages[lod].opportunity=frameReady-state.start;
@@ -134,7 +129,6 @@ export async function observeGeometryLatency(page: Page, startSelector = 'button
       if (event.target instanceof Element && event.target.closest(startSelector)) state.start = event.timeStamp;
     }, { capture: true });
     document.addEventListener('pointermove', event => {
-      if(event.isTrusted&&event.buttons&&event.target instanceof SVGElement&&event.target.closest('svg[data-geometry-rough]')){state.coarsePending++;coarseWaiting.push(event.timeStamp);return;}
       if (!event.isTrusted || !event.buttons || !(event.target instanceof HTMLCanvasElement)) return;
       state.pending++;
       waiting.push({ start: event.timeStamp, received: performance.now(),lod:event.target.dataset.geometryCompleteness==='preview' });

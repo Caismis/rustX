@@ -4888,7 +4888,7 @@
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.tsx",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "52ac73a7a921b9702096331c29dd4a8b7f559da6e9d92ea3a225a62f826f52ee",
-      "treatment": "Harness files tree, suffix-selected viewer toolbar and text-page presentation adapted to native workspace descriptors and the shared logical preview owner. Versioned cached results, physical refresh serialization, scroll restoration and targeted observations remain under exact native scope.",
+      "treatment": "Harness files tree, suffix-selected viewer toolbar and text-page presentation adapted to native workspace descriptors and the shared logical preview owner. Versioned cached results, physical refresh serialization, scroll restoration and targeted observations remain under exact native scope. Sampled STEP envelope plumbing removed; existing native read authority unchanged.",
       "destination": "web-console/src/app/components/WorkbenchFiles.tsx",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -4897,7 +4897,6 @@
       "retained_dependencies": [
         "../../../shared/file-observation.ts",
         "../../../shared/file-preview",
-        "../../client/geometry-rough",
         "../../client/geometry-source",
         "../../client/preview-content",
         "../../locale/react",
@@ -4940,7 +4939,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "10bcc5d1b4ee823b14782e26e76a1d73c1414b7b0d76c4f06efbe97ed0deff36"
+      "local_sha256": "bcf0a69ac42f1e550a87314db0698df85961206f4854195dfac43b02e04fb402"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5911,7 +5910,7 @@
         "./resources",
         "react"
       ],
-      "local_sha256": "c14221de032b59fc2a1e0f10826f9257bbb98f31bd1b18e3c4de29e03334006a"
+      "local_sha256": "00de0309003abce96fa1ac582af9314e142aae6c40163cd2d43575931c7b9c5d"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",

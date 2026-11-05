@@ -14,7 +14,6 @@ import { FILE_PREVIEW_LIMITS, isFileData, type FileReadOptions } from '../../sha
 import type { DeliveryBytes } from '../workspaces/host';
 import { PreviewContentCache, PreviewContentOwner, type PreviewTextPage, type PreviewBytes } from './preview-content';
 import { readGeometrySource } from './geometry-source';
-import { isStepName } from './geometry-rough';
 
 export const SESSION_FILE_MAX_BYTES = FILE_PREVIEW_LIMITS.fileBytes;
 export const SESSION_FILE_MAX_TRANSFERS = 2;
@@ -141,8 +140,8 @@ export class FilePreviewCoordinator {
     };
     return new PreviewContentOwner({ current: () => this.sourceCurrent(source), immutable: source.kind === 'artifact',
       page: (offset, signal) => this.readPage(source, offset, signal),
-      bytes: (signal, mode, rough) => mode === 'geometry' && source.kind === 'session_file'
-        ? readGeometrySource((options, signal) => this.readSession(source, options, signal), signal, isStepName(source.file.name) ? rough : undefined) : this.read(source, signal),
+      bytes: (signal, mode) => mode === 'geometry' && source.kind === 'session_file'
+        ? readGeometrySource((options, signal) => this.readSession(source, options, signal), signal) : this.read(source, signal),
       document: (extension, signal) => this.derive(source, extension, signal), probe,
       observe: source.kind === 'session_file' && this.host.observeDelivery ? (signal, changed) => this.demand.privateReads.run(signal, async () => {
         const observation = this.authority.capture();

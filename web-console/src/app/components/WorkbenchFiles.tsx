@@ -8,7 +8,6 @@ import type { PreviewViewState } from '../../presentation/right-panel/preview-vi
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import { PreviewContentCache, PreviewContentOwner } from '../../client/preview-content';
 import { readGeometrySource } from '../../client/geometry-source';
-import { isStepName } from '../../client/geometry-rough';
 import type { PreviewObservation } from '../../../shared/file-observation.ts';
 import { FILE_PREVIEW_LIMITS, isFileData } from '../../../shared/file-preview';
 import { Button } from '../../presentation/primitives/Button';
@@ -86,8 +85,8 @@ export function WorkspaceFile({ path, call, view, onOpen }: { path: string; call
         const result = await read({ kind: 'preview', path, read: { kind: 'text', offset, limit: FILE_PREVIEW_LIMITS.pageLines } }, signal);
         if (result.offset !== offset || !Number.isSafeInteger(result.lines) || result.lines! < 0 || result.lines! > FILE_PREVIEW_LIMITS.pageLines || !result.eof && !result.lines || result.data.byteLength > FILE_PREVIEW_LIMITS.pageBytes) throw new Error('malformed');
         return { text: new TextDecoder('utf-8', { fatal: true }).decode(result.data), version: result.version, offset, lines: result.lines!, eof: result.eof };
-      }, bytes: async (signal, mode, rough) => {
-        if (mode === 'geometry') return readGeometrySource((options, signal) => read({ kind: 'preview', path, read: options }, signal), signal, isStepName(path) ? rough : undefined);
+      }, bytes: async (signal, mode) => {
+        if (mode === 'geometry') return readGeometrySource((options, signal) => read({ kind: 'preview', path, read: options }, signal), signal);
         const result = await read({ kind: 'preview', path, read: { kind: 'bytes' } }, signal);
         if (result.offset !== 0 || !result.eof || result.data.byteLength !== result.bytes || result.data.byteLength > FILE_PREVIEW_LIMITS.fileBytes) throw new Error('malformed');
         return result;
@@ -99,7 +98,7 @@ export function WorkspaceFile({ path, call, view, onOpen }: { path: string; call
   view.preview.call = call;
   const owner = view.preview.owner, value = useSyncExternalStore(owner.subscribe, owner.getSnapshot), error = value.error;
   const failure = error === undefined ? undefined : documentFailure(error);
-  const loaded = value.text !== undefined || value.data !== undefined || mode === 'geometry' && value.geometryPreview !== undefined;
+  const loaded = value.text !== undefined || value.data !== undefined;
   const reading = useViewScroll(view.top, view.left, (top, left) => { view.top = top; view.left = left; }, `${mode}:${loaded}:${value.loadedLines}`), scroll = reading.ref;
   useEffect(() => {
     view.cache.release(owner); owner.activate();

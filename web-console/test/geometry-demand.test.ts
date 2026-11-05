@@ -4,12 +4,12 @@ vi.mock('../src/app/components/documents/geometry/GeometryPreview', () => ({ def
 vi.mock('../src/app/components/documents/geometry/cad-code', () => ({ cadCode: runtime.cad }));
 vi.mock('three/addons/loaders/GLTFLoader.js', () => ({}));
 beforeEach(() => { vi.resetModules(); runtime.cad.mockClear(); });
-it('starts immutable IGES compilation on explicit demand before source bytes or a mounted body exist', async () => {
+it.each(['assembly.iges', 'assembly.step', 'assembly.stp'])('starts immutable CAD compilation for %s on explicit demand before source bytes or a mounted body exist', async name => {
   const { preloadGeometry } = await import('../src/app/components/documents/GeometryDocument');
-  expect(runtime.cad).not.toHaveBeenCalled(); preloadGeometry('assembly.iges'); await vi.dynamicImportSettled();
+  expect(runtime.cad).not.toHaveBeenCalled(); preloadGeometry(name); await vi.dynamicImportSettled();
   expect(runtime.cad).toHaveBeenCalledOnce();
 });
-it('keeps CAD compilation out of ordinary evaluation, STL/GLB demand and the initial STEP probe/paint path', async () => {
+it('keeps CAD compilation out of ordinary evaluation and STL/GLB demand', async () => {
   const { preloadGeometry } = await import('../src/app/components/documents/GeometryDocument');
-  preloadGeometry('mesh.stl'); preloadGeometry('mesh.glb'); preloadGeometry('assembly.step'); preloadGeometry('assembly.stp'); await vi.dynamicImportSettled(); expect(runtime.cad).not.toHaveBeenCalled();
+  preloadGeometry('mesh.stl'); preloadGeometry('mesh.glb'); await vi.dynamicImportSettled(); expect(runtime.cad).not.toHaveBeenCalled();
 });

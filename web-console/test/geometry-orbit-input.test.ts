@@ -1,13 +1,19 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { Box3, BoxGeometry, Frustum, Group, Matrix4, Mesh, MeshBasicMaterial, OrthographicCamera, Vector2, Vector3 } from 'three';
+import { act, cleanup, render } from '@testing-library/react';
+import { createElement } from 'react';
+import { Box3, BoxGeometry, Frustum, Group, Matrix4, Mesh, MeshBasicMaterial, OrthographicCamera, PerspectiveCamera, Vector2, Vector3 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mountGeometry, prepareGeometryGraphics } from '../src/app/components/documents/geometry/viewport';
 import { progressivePresentation } from '../src/app/components/documents/geometry/progressive';
 import { en } from '../src/locale/dictionaries/geometry';
+import GeometryPreview from '../src/app/components/documents/geometry/GeometryPreview';
+import type { GeometryLod } from '../src/app/components/documents/geometry/parse';
 import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/limits';
 
 // Keep the installed OrbitControls implementation, including its absolute EPS.
 // Only the GPU boundary is replaced; inputs go through real DOM listeners.
+const imports = vi.hoisted(() => ({ cad: [] as { resolve: (value: unknown) => void; lod: (value: GeometryLod) => void }[] }));
+vi.mock('../src/app/components/documents/geometry/parse', () => ({ parseGeometry: (_bytes: unknown, _format: unknown, _signal: unknown, _stage: unknown, _take: unknown, lod: (value: GeometryLod) => void) => new Promise(resolve => { imports.cad.push({ resolve, lod }); }) }));
 const runtime = vi.hoisted(() => ({ renderers: [] as any[] }));
 vi.mock('three', async original => {
   const actual = await original<typeof import('three')>();
@@ -30,13 +36,13 @@ let frames: Map<number, FrameRequestCallback>;
 const mounted: ReturnType<typeof mountGeometry>[] = [];
 beforeEach(() => {
   vi.useFakeTimers({ now: 0, toFake: ['setTimeout', 'clearTimeout', 'performance'] });
-  runtime.renderers.length = 0; frames = new Map(); let serial = 0;
+  imports.cad = []; runtime.renderers.length = 0; frames = new Map(); let serial = 0;
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++serial, callback); return serial; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
   vi.stubGlobal('matchMedia', () => ({ addEventListener() {}, removeEventListener() {} }));
 });
-afterEach(() => { mounted.splice(0).forEach(view => view.dispose()); document.body.replaceChildren(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); mounted.splice(0).forEach(view => view.dispose()); document.body.replaceChildren(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 function draw() { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); }
 function mount() {
   const object = new Group(), normal = new Mesh(new BoxGeometry(), new MeshBasicMaterial()), tiny = normal.clone();
@@ -54,11 +60,11 @@ function pointer(target: EventTarget, type: string, x: number) {
   Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: 'mouse' } }); target.dispatchEvent(event);
 }
 it('renders a 120px sub-EPS pan during the gesture and persists its final pose without idle polling', async () => {
-  const f = mount(); const before = f.renderer.render.mock.calls.at(-2)![1].position.clone();
+  const f = mount(); const before = f.renderer.render.mock.calls.at(-1)![1].position.clone();
   const draws = f.renderer.render.mock.calls.length;
   pointer(f.canvas, 'pointerdown', 300); pointer(document, 'pointermove', 420);
-  await Promise.resolve(); await Promise.resolve(); expect(frames.size).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws + 2); expect(f.changed).not.toHaveBeenCalled();
-  draw(); expect(f.renderer.render.mock.calls.at(-2)![1].position.distanceTo(before)).toBeGreaterThan(1e-7);
+  await Promise.resolve(); await Promise.resolve(); expect(frames.size).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws + 1); expect(f.changed).not.toHaveBeenCalled();
+  draw(); expect(f.renderer.render.mock.calls.at(-1)![1].position.distanceTo(before)).toBeGreaterThan(1e-7);
   pointer(document, 'pointerup', 420);
   expect(f.changed).toHaveBeenCalledOnce(); const pose = f.changed.mock.lastCall![0].camera;
   expect(Math.abs(pose.position[0] - before.x)).toBeGreaterThan(1e-7); expect(Math.abs(pose.position[0] - before.x)).toBeLessThan(1e-5);
@@ -74,10 +80,10 @@ it('retires an input pose before its queued observation through the supplied ret
   expect(retired).toHaveBeenCalledOnce(); expect(f.changed).not.toHaveBeenCalled(); expect(frames.size).toBe(0);
 });
 it('captures tiny keyboard pans and wheel zooms, and fences queued observations on disposal', async () => {
-  const f = mount();
+  const f = mount(); f.view.setProjection('perspective'); draw(); f.changed.mockClear();
   const draws = f.renderer.render.mock.calls.length;
   f.canvas.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight', bubbles: true, cancelable: true }));
-  await Promise.resolve(); await Promise.resolve(); expect(frames.size).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws + 2); vi.advanceTimersByTime(100);
+  await Promise.resolve(); await Promise.resolve(); expect(frames.size).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws + 1); vi.advanceTimersByTime(100);
   expect(f.changed).toHaveBeenCalledOnce(); const before = f.changed.mock.lastCall![0].camera;
   f.canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 300, clientY: 200, bubbles: true, cancelable: true }));
   expect(f.changed).toHaveBeenCalledTimes(2); expect(f.changed.mock.lastCall![0].camera.position).not.toEqual(before.position);
@@ -87,8 +93,8 @@ it('captures tiny keyboard pans and wheel zooms, and fences queued observations 
   expect(f.changed).toHaveBeenCalledTimes(publications); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(f.renderer.dispose).toHaveBeenCalledOnce();
 });
 it('persists real orthographic wheel zoom with an unchanged position and no idle work', () => {
-  const f = mount(); f.view.setProjection('orthographic'); draw(); f.changed.mockClear();
-  const camera = f.renderer.render.mock.calls.at(-2)![1], position = camera.position.clone(), before = (camera.top - camera.bottom) / camera.zoom;
+  const f = mount(); expect(f.view.projection).toBe('orthographic'); draw(); f.changed.mockClear();
+  const camera = f.renderer.render.mock.calls.at(-1)![1], position = camera.position.clone(), before = (camera.top - camera.bottom) / camera.zoom;
   f.canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 300, clientY: 200, bubbles: true, cancelable: true }));
   expect(f.changed).toHaveBeenCalledOnce(); expect(camera.position.distanceTo(position)).toBeLessThan(1e-12);
   expect(f.changed.mock.lastCall![0].camera.projection).toBe('orthographic'); expect(f.changed.mock.lastCall![0].camera.verticalSpan).toBeLessThan(before);
@@ -107,7 +113,7 @@ it.each(['front', 'top'] as const)('preserves an off-origin tiny focused part th
   const element = document.createElement('div'); document.body.append(element);
   Object.defineProperties(element, { clientWidth: { value: 640 }, clientHeight: { value: 480 } });
   const changed = vi.fn(), view = mountGeometry(element, object, new Box3().setFromObject(object), undefined, en, changed, vi.fn()); mounted.push(view);
-  view.fit(viewAngle); view.select('0.2'); view.focus(); draw();
+  view.setProjection('perspective'); view.fit(viewAngle); view.select('0.2'); view.focus(); draw();
   const before = changed.mock.lastCall![0].camera;
   const distance = new Vector3().fromArray(before.position).distanceTo(new Vector3().fromArray(before.target));
   expect(distance).toBeGreaterThan(2e-6); expect(distance).toBeLessThan(3e-6);
@@ -141,12 +147,13 @@ it.each(['perspective', 'orthographic'] as const)('replaces a whole-model tier w
   const first = tier(0, [10,11]), distant = tier(1, [10,-1000]), disposeControls = vi.spyOn(OrbitControls.prototype, 'dispose'), updateControls = vi.spyOn(OrbitControls.prototype, 'update');
   try {
     owner.add(first); draw(); draw();
+    expect(view!.projection).toBe('orthographic'); expect(runtime.renderers[0].render.mock.calls.at(-1)![1]).toBeInstanceOf(OrthographicCamera);
     view!.setProjection(projection); draw();
     const renderer = runtime.renderers[0], canvas = renderer.domElement as HTMLCanvasElement;
     canvas.focus(); expect(document.activeElement).toBe(canvas);
     canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -1000, bubbles: true, cancelable: true })); draw();
     pointer(canvas, 'pointerdown', 300); pointer(document, 'pointermove', 320);
-    const camera = renderer.render.mock.calls.at(-2)![1], control = updateControls.mock.contexts.at(-1) as OrbitControls, graph = first.scene.parent!, before = {
+    const camera = renderer.render.mock.calls.at(-1)![1], control = updateControls.mock.contexts.at(-1) as OrbitControls, graph = first.scene.parent!, before = {
       position: camera.position.clone(), rotation: camera.quaternion.clone(), up: camera.up.clone(), zoom: camera.zoom, near: camera.near,
       span: camera instanceof OrthographicCamera ? camera.top - camera.bottom : undefined,
       origin: graph.parent!.position.clone(), target: control.target.clone(), minDistance: control.minDistance, maxDistance: control.maxDistance,
@@ -202,4 +209,62 @@ it('removes the retained canvas when graphics are disposed before adoption', () 
   const f = mount(), graphics = f.view.handoff();
   expect(f.canvas.isConnected).toBe(true); graphics!.dispose();
   expect(f.canvas.isConnected).toBe(false); expect(f.renderer.dispose).toHaveBeenCalledOnce();
+});
+
+it('starts a fresh view with a real orthographic camera and restores a saved perspective camera', () => {
+  const fresh = mount();
+  expect(fresh.view.projection).toBe('orthographic');
+  expect(fresh.renderer.render.mock.calls.at(-1)![1]).toBeInstanceOf(OrthographicCamera);
+  const saved: NonNullable<NonNullable<Parameters<typeof mountGeometry>[3]>['camera']> = { projection: 'perspective', position: [9, 8, 7], target: [1, 2, 3], up: [0, 0, 1] };
+  const object = new Group(); object.add(new Mesh(new BoxGeometry(10, 10, 10), new MeshBasicMaterial()));
+  const element = document.createElement('div'); document.body.append(element);
+  Object.defineProperties(element, { clientWidth: { value: 640 }, clientHeight: { value: 480 } });
+  const changed = vi.fn(), view = mountGeometry(element, object, new Box3().setFromObject(object), { copyId: 'copy', camera: saved }, en, changed, vi.fn()); mounted.push(view); draw();
+  const camera = runtime.renderers.at(-1).render.mock.calls.at(-1)![1];
+  expect(camera).toBeInstanceOf(PerspectiveCamera); expect(view.projection).toBe('perspective');
+  const restored = changed.mock.lastCall![0].camera; expect(restored.target).toEqual(saved.target); expect(restored.up).toEqual(saved.up);
+  saved.position.forEach((value, index) => expect(restored.position[index]).toBeCloseTo(value, 12));
+  const before = camera.position.clone(), canvas = runtime.renderers.at(-1).domElement;
+  canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 300, clientY: 200, bubbles: true, cancelable: true }));
+  expect(camera.position.distanceTo(before)).toBeGreaterThan(0); expect(changed.mock.lastCall![0].camera.projection).toBe('perspective');
+});
+
+it('changes a perspective view to orthographic right and left through one axis action at a time', () => {
+  const f = mount(); f.view.setProjection('perspective'); f.view.fit('front'); draw();
+  expect(f.view.projection).toBe('perspective');
+  const axis = f.canvas.parentElement!.querySelector<SVGGElement>('[data-axis="X"]')!;
+  for (const sign of [1, -1]) {
+    f.changed.mockClear(); axis.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(f.changed).toHaveBeenCalledOnce(); const state = f.changed.mock.lastCall![0], camera = state.camera;
+    expect(camera.projection).toBe('orthographic'); expect(state.selected).toBe('0.1'); expect(state.hidden).toEqual([]);
+    expect((camera.position[0] - camera.target[0]) * sign).toBeGreaterThan(0);
+    expect(camera.position[1]).toBeCloseTo(camera.target[1], 8); expect(camera.position[2]).toBeCloseTo(camera.target[2], 8);
+    draw(); expect(f.renderer.render.mock.calls.at(-1)![1]).toBeInstanceOf(OrthographicCamera); expect(runtime.renderers).toHaveLength(1);
+    vi.advanceTimersByTime(1000); draw(); expect(f.changed).toHaveBeenCalledOnce();
+  }
+});
+
+it.each(['axis', 'aligned-axis', 'canvas', 'external', 'moved-focus'] as const)('retains %s ownership across native coarse-to-full handoff', async focus => {
+  const external = document.createElement('button'); document.body.append(external);
+  const ui = render(createElement(GeometryPreview, { bytes: new Uint8Array([1]), name: 'assembly.step', copyId: 'copy', signal: new AbortController().signal, current: () => true, viewState: {}, onViewStateChange: vi.fn(), onGeometryRetire: vi.fn(), releaseSource: () => { if (focus === 'moved-focus') external.focus(); } }));
+  const container = ui.container.querySelector('section > div')!;
+  Object.defineProperties(container, { clientWidth: { value: 640 }, clientHeight: { value: 480 } });
+  const makeScene = () => { const scene = new Group(); scene.add(new Mesh(new BoxGeometry(), new MeshBasicMaterial())); return { scene, bounds: new Box3().setFromObject(scene), dispose: vi.fn() }; };
+  act(() => { imports.cad[0].lod({ level: 0, ...makeScene() }); draw(); draw(); });
+  const canvas = container.querySelector('canvas')!, axis = container.querySelector<SVGGElement>('[data-axis="X"]')!;
+  const wantsAxis = focus === 'axis' || focus === 'aligned-axis' || focus === 'moved-focus';
+  if (wantsAxis) axis.focus(); else (focus === 'canvas' ? canvas : external).focus();
+  if (focus === 'aligned-axis') act(() => { axis.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+  expect(document.activeElement).toBe(wantsAxis ? axis : focus === 'canvas' ? canvas : external);
+  await act(async () => { imports.cad[0].resolve({ ...makeScene(), prepareStart: 0, ready: Promise.resolve() }); await vi.advanceTimersByTimeAsync(L.refineDelayMs); });
+  const nextAxis = container.querySelector<SVGGElement>('[data-axis="X"]')!;
+  expect(nextAxis).not.toBe(axis); expect(container.querySelector('canvas')).toBe(canvas); expect(runtime.renderers).toHaveLength(1);
+  if (focus === 'axis' || focus === 'aligned-axis') {
+    expect(document.activeElement).toBe(nextAxis);
+    const nextView = focus === 'aligned-axis' ? 'left' : 'right'; expect(nextAxis.dataset.geometryAxis).toBe(nextView);
+    // No intervening frame: adopted labels and Enter behavior already read the final camera.
+    act(() => { nextAxis.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); draw(); });
+    const camera = runtime.renderers[0].render.mock.calls.at(-1)![1]; expect(camera).toBeInstanceOf(OrthographicCamera);
+    expect(camera.position.x * (nextView === 'right' ? 1 : -1)).toBeGreaterThan(0);
+  } else expect(document.activeElement).toBe(focus === 'canvas' ? canvas : external);
 });
