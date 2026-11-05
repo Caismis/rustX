@@ -1,10 +1,11 @@
 /* Copyright (c) 2026 DeepSeek. MIT. WorkflowRunPanel adapted; see PROVENANCE.md. */
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { RuntimeClientInteractionHeader, WorkflowInstanceView, WorkflowNodeInstance, WorkflowRunView, WorkflowState } from '../../../../protocol/app-server/v63';
+import type { RuntimeClientInteractionHeader, WorkflowInstanceView, WorkflowNodeInstance, WorkflowRunView, WorkflowState } from '../../../../protocol/app-server/v70';
 import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
 import { StateDot } from '../../presentation/primitives/StateDot';
+import { KindIcon } from '../workflows/ui/icons';
 import { useSubagents } from './subagent-context';
 import { workflowChildren, workflowKey } from '../../bindings/workflow-children';
 import { workflowDot as dot, workflowStatus } from './workflow-state';
@@ -37,6 +38,7 @@ function StatusDisclosure({ state, count, title, summary, children }: {
     if (header?.contains(event.target as Node)) event.preventDefault();
   } : undefined}><DisclosureRow icon={<IconChevronRightOutline14/>} title={title} open={value.open} expandable expandOnRowClick previewChevron={false} keepContentWhenOpen
     rowClassName={css.runHeader} leadingClassName={css.leading} titleClassName={css.title}
+    contentClassName={css.headerContent} contentLayoutClassName={css.headerContentLayout}
     onToggle={() => setValue(previous => ({ ...previous, open: !previous.open, pending: false }))} collapsedContent={summary}>
     <div ref={content} className={css.nodes} onBlur={event => {
       if (!event.currentTarget.contains(event.relatedTarget)) setValue(previous => previous.pending ? { ...previous, open: false, pending: false } : previous);
@@ -80,14 +82,14 @@ export function WorkflowRunPanel({ run, pending = [] }: { run: WorkflowRunView; 
   const children = workflowChildren([run], run.id.conversation_id);
   return <section className={css.root} data-workflow-run-id={workflowKey(run.id)} data-run-status={run.state.type} aria-label={tx('common:activity.workflow-label', { id: run.workflow_id })}>
     <StatusDisclosure state={run.state} count={nodes.length} title={run.workflow_id} summary={<>
-      <span className={css.separator}/><span className={`${css.summary} ${children.length ? css.withChildren : ''}`}>
+      <span className={css.separator} aria-hidden="true"/><span className={`${css.summary} ${children.length ? css.withChildren : ''}`}>
         <span className={css.nodeCount}>{tx('common:workflow.nodes', { count: nodes.length })}{children.length > 0 && ' · '}</span>
         {children.length > 0 && tx(run.omitted_instances > 0 ? 'common:subagents.count-at-least' : 'common:subagents.count', { count: children.length })}
       </span>
       <span className={css.statusTail}><StateDot state={attention ? 'warning' : dot(run.state)}/>{attention ? waiting : label(run.state)}</span>
     </>}>
       {nodes.map(instance => <WorkflowMember instance={instance} key={nodeKey(instance)}>
-        <span className={css.dotSlot}><StateDot state={reviewing(instance) ? 'warning' : dot(instance.state)}/></span>
+        <span className={css.nodeIcon}><KindIcon kind={instance.kind === 'block' ? 'start' : instance.kind} size={14}/></span>
         <span className={css.memberCopy}><span className={css.memberLabel} title={instance.node!}>{instance.node}{instance.visit != null && instance.visit > 1 ? ` · ${instance.visit}` : ''}</span>
           {instance.kind === 'agent' ? <span className={css.kind}>{tx('common:workflow.agent-record')}</span> : <span className={css.kind}>{tx(`common:workflow.kind.${instance.kind}`)}
             {instance.iteration != null && <> · {tx('common:workflow.iteration', { current: instance.iteration, max: instance.iterations_max ?? '—' })}</>}
@@ -98,11 +100,10 @@ export function WorkflowRunPanel({ run, pending = [] }: { run: WorkflowRunView; 
             {instance.block.definition.blocks.join(' / ')} · {instance.block.invocations.slice(1).join('.')}
           </span>}
         </span>
-        <span className={css.memberStatus}>{reviewing(instance) ? waiting : label(instance.state)}</span>
+        <span className={css.memberStatus}><StateDot state={reviewing(instance) ? 'warning' : dot(instance.state)}/>{reviewing(instance) ? waiting : label(instance.state)}</span>
       </WorkflowMember>)}
       {!nodes.length && <span className={css.empty}>{tx('common:workflow.empty')}</span>}
       {run.omitted_instances > 0 && <span className={css.empty}>{tx('common:activity.omitted', { n: run.omitted_instances })}</span>}
-      <span className={css.budget}>{tx('common:activity.workflow-counts', { used: run.steps_consumed, max: run.steps_max, agents: run.agents_consumed, models: run.model_calls_consumed })}</span>
     </StatusDisclosure>
   </section>;
 }

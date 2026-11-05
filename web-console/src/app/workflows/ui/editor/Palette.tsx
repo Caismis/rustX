@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v63';
+import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v70';
 import { useTranslation } from '../../../../locale/react';
 import type { NodeKind } from '../../document/model';
 import { NodeChooser, type NodeChoice } from './NodeChooser';
@@ -18,9 +18,9 @@ export function Palette({ at, tools, omit, onChoose, onClose, insertion = false 
     document.addEventListener('pointerdown', outside, true);
     return () => document.removeEventListener('pointerdown', outside, true);
   }, [onClose]);
-  return <div ref={root} className={css.palette} style={{ left: at.x, top: at.y }} role="dialog" aria-label={tx('workflows:canvas.add')}
+  return <div ref={root} className={css.palette} style={{ left: at.x, top: at.y, maxHeight: `min(460px, calc(100% - ${at.y}px - 8px))` }} role="dialog" aria-label={tx('workflows:canvas.add')}
     onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.stopPropagation(); onClose(); } }}>
     {insertion && <p className={css.note}>{tx('workflows:canvas.insertion-note')}</p>}
-    <NodeChooser tools={tools} input={input} omit={insertion ? [...omit, 'branch', 'loop_end', 'return'] : omit} onChoose={choice => { if (!('id' in choice)) onChoose(choice); }} />
+    <NodeChooser tools={tools} input={input} omit={insertion ? [...omit, 'classifier', 'branch', 'review', 'loop_end', 'return'] : omit} onChoose={choice => { if (!('id' in choice)) onChoose(choice); }} />
   </div>;
 }

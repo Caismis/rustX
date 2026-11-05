@@ -11,6 +11,7 @@ mod owner_tests;
 mod pure_read_tests;
 mod settlement_tests;
 mod source_recovery_tests;
+mod workflow_trace_tests;
 #[test]
 fn permanent_agent_settlement_is_a_typed_non_retryable_error() {
     let id = crate::runtime::identity::AgentId::new("agent-unavailable");

@@ -1,5 +1,5 @@
 import { validateInteractionBody } from "../../../protocol/app-server/interaction.ts";
-import type { CheckpointPage, RuntimeClientInteractionHeader } from "../../../protocol/app-server/v63.ts";
+import type { CheckpointPage, RuntimeClientInteractionHeader } from "../../../protocol/app-server/v70.ts";
 import type { SizeValue } from "@earendil-works/pi-tui";
 import type { AppServerSession } from "../app-server/session.ts";
 import type { PreferenceChange } from "../commands/outcome.ts";

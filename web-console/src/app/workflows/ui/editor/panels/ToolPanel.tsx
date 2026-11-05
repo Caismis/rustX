@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { useEffect, useState } from 'react';
-import type { WorkflowToolChoice } from '../../../../../../../protocol/app-server/v63';
+import type { WorkflowToolChoice } from '../../../../../../../protocol/app-server/v70';
 import { useTranslation } from '../../../../../locale/react';
 import { IconChevronDownOutline14 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';
@@ -52,6 +52,7 @@ export function ToolPanel(props: PanelProps) {
     : catalog.state.status === 'ready' ? catalog.state.sources.find(item => item.source_id === source)?.tools.find(item => item.name === selector.name) : undefined;
   const fields = argumentFields(node.arguments);
   return <>
+    {selector.origin==='builtin' && selector.name==='bash' && <p className={css.note}>{tx('workflows:data.code-cwd')}</p>}
     {source !== undefined && catalog.state.status === 'loading' && <p className={css.note} role="status">{tx('workflows:tool.loading')}</p>}
     {!choice && <ToolSelection {...props} tool={tool} />}
     {choice && fields ? <ToolInputs {...props} tool={tool} choice={choice} fields={fields} />
@@ -141,6 +142,7 @@ function ToolArgument({ name, schema, required, value, set, tool, edit }: PanelP
     {value && value.type !== 'literal' && value.type !== 'reference' && !(kind === 'string' && value.type === 'template')
       ? <ValueEditor label={name} address={address} value={value} edit={edit} />
       : kind === 'string' ? <TemplateInput parts={templateParts(value)} address={address} edit={edit} label={name} badge={tx('workflows:tool.type-string')} invalid={required && !value}
+      multiline={name==='command' && tool.node.selector.origin==='builtin' && tool.node.selector.name==='bash'}
       onChange={(parts, session) => set(name, templateValue(parts), `${encodeField(address)}:${session}`)} />
       // As Dify's FormInputItem: a JSON constant's editor sits under the switch.
       : <div className={kind === 'json' && !variable ? css.toolArgumentStack : css.toolArgumentRow}>

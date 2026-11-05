@@ -487,7 +487,10 @@ impl ScheduledWorkflowPreparation {
                 | WorkflowNodeProgram::Branch { .. }
                 | WorkflowNodeProgram::Return { .. }
                 | WorkflowNodeProgram::LoopEnd
-                | WorkflowNodeProgram::Assigner { .. } => {}
+                | WorkflowNodeProgram::Assigner { .. }
+                | WorkflowNodeProgram::Template { .. }
+                | WorkflowNodeProgram::List { .. }
+                | WorkflowNodeProgram::Aggregate { .. } => {}
             }
         }
         Ok(())

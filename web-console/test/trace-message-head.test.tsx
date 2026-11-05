@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v63';
+import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v70';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {readTraceCollection} from '../src/client/trace-content';
 import {traceTool} from './trace-fixture';
@@ -33,7 +33,7 @@ it('compaction preserves its native operation lifecycle without exposing raw ide
  const original=cut(),native=record('compaction');native.fields=[{type:'value',field:'native_id',domain:'journal.295',item_offset:0,path:['event','operation_id'],encoded_bytes:'20'}];
  const page=head(original,'user',1);page.items[0].value=JSON.parse(JSON.stringify({id:native.id,kind:'compaction',record:native,content:{type:'lifecycle'}}));const reader=direct(original);
  render(<TrajectoryInspector {...props(native)} facet="overview" detailPage={page}/>);
- expect(screen.getByText('Completed')).toBeTruthy();expect(screen.queryByRole('button',{name:/Read original/})).toBeNull();expect(reader.value).not.toHaveBeenCalled();
+ expect(screen.getByText('settled')).toBeTruthy();expect(screen.queryByRole('button',{name:/Read original/})).toBeNull();expect(reader.value).not.toHaveBeenCalled();
 });
 it('message continuation keeps native ordinals and displays the complete batch without ID selection',async()=>{
  const original=cut(),reader=direct(original);render(<TrajectoryInspector {...props(record())} detailPage={head(original)} detailReader={reader.reader}/>);

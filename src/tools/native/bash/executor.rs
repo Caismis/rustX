@@ -620,6 +620,7 @@ async fn run_bash_unix(
         stdout_task = Some(tokio::spawn(capture_stream(
             pipe,
             stdout_capture.clone(),
+            context.stdout_capture.clone(),
             combined_tx.clone(),
             0,
             "stdout",
@@ -631,6 +632,7 @@ async fn run_bash_unix(
         stderr_task = Some(tokio::spawn(capture_stream(
             pipe,
             stderr_capture.clone(),
+            None,
             combined_tx.clone(),
             1,
             "stderr",

@@ -5,7 +5,8 @@ import type { ClientView, SessionView } from '../../client/contracts';
 import { interactionKey } from '../../client/contracts';
 import { json } from '../../bindings/projection';
 import { ApprovalTakeover } from '../../presentation/agent/ApprovalTakeover';
-import { Questionnaire } from './Questionnaire';
+import { Questionnaire, type QuestionnaireProps } from './Questionnaire';
+import { questionPanelKey, useQuestionPanels } from './QuestionPanels';
 import { Button } from '../../presentation/primitives/Button';
 export function Interactions({ client, state, view }: {
   client: AppServerClient; state: ClientView; view: SessionView;
@@ -14,6 +15,7 @@ export function Interactions({ client, state, view }: {
   const ownership=useRef({live:true,generation:0});
   const [failure, setFailure] = useState<{ key: string; message: string }>();
   const [loading,setLoading]=useState(false);
+  const [bodyRetry,setBodyRetry]=useState(0);
   const pending=client.pendingInteractions(view.id);
   const selected=pending===view.interactionPage?.rows?view.interactionPage:undefined;
   const cut=selected?.page.read_cut??view.checkpoint?.read_cut;
@@ -48,7 +50,7 @@ export function Interactions({ client, state, view }: {
     const key=interactionKey(pending[missingBody].interaction);
     void client.loadInteractionBody(view.id,missingBody,current).catch(error=>{if(current())setFailure({key,message:String(error).slice(0,512)});});
     return()=>{active=false;};
-  },[client,view.id,identity,missingBody]);
+  },[client,view.id,identity,missingBody,bodyRetry]);
   return <>{pending.map((item,index) => {
     const key = interactionKey(item.interaction);
     const operation = state.interactionOperations[key]?.status;
@@ -62,37 +64,34 @@ export function Interactions({ client, state, view }: {
       const response=(decision:'allow'|'deny')=>run(key,()=>client.answer(view.id,item.interaction,{type:'approval',decision:decision==='allow'?{type:'allow'}:{type:'deny',reason:'Denied by developer in rustX Web Console.'}}));
       return <div key={key} className="interaction">
         {failure?.key===key&&<p role="alert">{failure.message}</p>}
-        <ApprovalTakeover title={tx('interactions:interactions.value-value',{p0:approval.tool_name,p1:approval.reason})}
-          detail={<InteractionField client={client} view={view} index={index} identity={key} path={['request','kind','arguments']}/>} disabled={disabled} status={status} onAllow={()=>response('allow')} onDeny={()=>response('deny')}/>
-        <Button disabled={disabled} onClick={()=>run(key,()=>client.answer(view.id,item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>
+        <ApprovalTakeover title={approval.tool_name} description={approval.reason}
+          detail={<InteractionField client={client} view={view} index={index} identity={key} toolId={approval.tool_id} path={['request','kind','arguments']}/>} disabled={disabled} status={status} onAllow={()=>response('allow')} onDeny={()=>response('deny')}/>
       </div>;
     }
     if(!body)return <section key={key} className="interaction">
-      <p role="status">{tx('common:activity.loading')} · {item.kind}</p>
-      {failure?.key===key&&<p role="alert">{failure.message}</p>}
-
-      <Button disabled={disabled} onClick={()=>run(key,()=>client.answer(view.id,item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>
+      {failure?.key===key ? <><p role="alert">{failure.message}</p><Button disabled={disabled} onClick={()=>{setFailure(undefined);setBodyRetry(value=>value+1);}}>{tx('interactions:interactions.retry-details')}</Button></>
+        : <p role="status">{tx('common:activity.loading')}</p>}
     </section>;
     const kind = body.request.kind;
+    const panelKeys = [questionPanelKey(item.interaction.conversation_id, 'interaction', item.interaction.interaction_id)];
+    if (kind.type === 'questionnaire' && kind.invocation_id.caller === 'agent') panelKeys.push(questionPanelKey(item.interaction.conversation_id, 'call', kind.invocation_id.call_id));
     const response = (answer: Parameters<AppServerClient['answer']>[2]) => run(key, () => client.answer(view.id, item.interaction, answer));
     return <div key={key} className="interaction">
       {failure?.key === key && <p role="alert">{failure.message}</p>}
       {item.source.type === 'subagent' && <small className="inset muted">{tx('interactions:interactions.subagent-request')}</small>}
-      {kind.type === 'approval' ? <ApprovalTakeover title={tx('interactions:interactions.value-value', { p0: kind.tool_name, p1: kind.reason })} detail={<pre>{json(kind.arguments)}</pre>}
+      {kind.type === 'approval' ? <ApprovalTakeover title={kind.tool_name} description={kind.reason} detail={<pre>{approvalText(kind.tool_id,kind.arguments)}</pre>}
         disabled={disabled} status={status} onAllow={() => response({ type: 'approval', decision: { type: 'allow' } })}
         onDeny={() => response({ type: 'approval', decision: { type: 'deny', reason: 'Denied by developer in rustX Web Console.' } })} />
-        : kind.type === 'questionnaire' ? <Questionnaire key={key} questions={kind.questionnaire.questions} disabled={disabled}
+        : kind.type === 'questionnaire' ? <PendingQuestionnaire panelKeys={panelKeys} key={key} questions={kind.questionnaire.questions} disabled={disabled}
           status={operation || disabled ? status : undefined} submitting={operation === 'in-flight'}
           onSubmit={value => response({ type: 'questionnaire', response: { type: 'submitted', value } })}
           onDecline={() => response({ type: 'questionnaire', response: { type: 'declined' } })} />
           // A Workflow Human Input: its actions are the options; dismissing it cancels.
-          : <Questionnaire key={key} questions={kind.review.questionnaire.questions} disabled={disabled}
+          : <PendingQuestionnaire panelKeys={panelKeys} key={key} questions={kind.review.questionnaire.questions} disabled={disabled}
             form={{ eyebrow: `${kind.review.instance.block.definition.workflow_id} · ${kind.review.instance.node}`, title: tx('interactions:review.title') }}
             status={operation || disabled ? status : undefined} submitting={operation === 'in-flight'}
             onSubmit={submission => response({ type: 'review', response: { instance: kind.review.instance, subject_digest: kind.subject_digest, submission } })}
             onDecline={() => run(key, () => client.answer(view.id, item.interaction))} />}
-      {/* A questionnaire's own dismiss action is its decline. */}
-      {kind.type === 'approval' && <Button size="sm" disabled={disabled} onClick={() => run(key, () => client.answer(view.id, item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>}
     </div>;
   })}
   {failure?.key==='page'&&<p role="alert">{failure.message}</p>}
@@ -100,20 +99,32 @@ export function Interactions({ client, state, view }: {
   {next!=null&&<Button disabled={loading||!client.isAttachmentControlCurrent(view.id,view.attachmentObservation)} onClick={()=>page(Number(next))}>{tx('common:activity.next-interactions')}</Button>}
   </>;
 }
-function InteractionField({client,view,index,identity,path}:{client:AppServerClient;view:SessionView;index:number;identity:string;path:string[]}) {
+function PendingQuestionnaire({ panelKeys, ...props }: QuestionnaireProps & { panelKeys: string[] }) {
+  const panel = useRef<{ reveal: () => void }>(null), panels = useQuestionPanels();
+  const key = JSON.stringify(panelKeys), register = panels?.register;
+  useEffect(() => register?.(JSON.parse(key), () => panel.current?.reveal()), [register, key]);
+  return <Questionnaire {...props} ref={panel}/>;
+}
+function InteractionField({client,view,index,identity,toolId,path}:{client:AppServerClient;view:SessionView;index:number;identity:string;toolId?:string|null;path:string[]}) {
   const tx=useTranslation(),generation=useRef(0);
-  const [state,setState]=useState<{text?:string;loading?:boolean;error?:string}>({});
-  const key=JSON.stringify([view.target,view.checkpoint?.read_cut.domain_revisions.pending_interactions,view.interactionPage?.offset,index,identity,path]);
+  const owner=JSON.stringify([view.target,view.attachmentObservation,identity,toolId,path]);
+  const [state,setState]=useState<{owner:string;client:AppServerClient;text?:string;loading?:boolean;error?:string}>();
+  const shown=state?.owner===owner&&state.client===client?state:undefined;
+  const key=JSON.stringify([owner,view.checkpoint?.read_cut.domain_revisions.pending_interactions,view.interactionPage?.offset,index]);
   useEffect(()=>{
     const token=++generation.current,current=()=>generation.current===token;
     const decoder=new TextDecoder('utf-8',{ignoreBOM:true,fatal:true});
-    setState({loading:true});
+    setState(previous=>({owner,client,text:previous?.owner===owner&&previous.client===client?previous.text:undefined,loading:true}));
     void(async()=>{
       const parts:string[]=[];let offset:number|undefined=0;
       do {const chunk=await client.interactionValueChunk(view.id,index,path,offset,current);if(!current())return;parts.push(decoder.decode(chunk.bytes,{stream:chunk.next!==undefined}));offset=chunk.next;}while(offset!==undefined);
-      if(current())setState({text:parts.join('')});
-    })().catch(error=>{if(current())setState({error:String(error).slice(0,512)});});
+      if(current())setState({owner,client,text:approvalText(toolId,JSON.parse(parts.join('')))});
+    })().catch(error=>{if(current())setState(previous=>({owner,client,text:previous?.owner===owner&&previous.client===client?previous.text:undefined,error:String(error).slice(0,512)}));});
     return()=>{generation.current++;};
   },[key,client]);
-  return <>{state.loading&&<p role="status">{tx('common:activity.loading')}</p>}{state.text&&<pre>{state.text}</pre>}{state.error&&<p role="alert">{state.error}</p>}</>;
+  return <>{shown?.loading&&shown.text===undefined&&<p role="status">{tx('common:activity.loading')}</p>}{shown?.text!==undefined&&<pre aria-busy={shown.loading}>{shown.text}</pre>}{shown?.error&&<p role="alert">{shown.error}</p>}</>;
+}
+/** Harness ApprovalCommand applies only to the canonical native Bash identity. */
+function approvalText(toolId:string|null|undefined,value: unknown): string {
+  return toolId === 'tool-bash' && value !== null && typeof value === 'object' && 'command' in value && typeof value.command === 'string' ? value.command : json(value);
 }

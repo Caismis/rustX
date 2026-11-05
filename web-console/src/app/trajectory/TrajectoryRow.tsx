@@ -4,8 +4,13 @@ import { useTranslation } from '../../locale/react';
 import { CellContent, KindTag, cellKind, cellLabel, isErrorRecord, listText } from './TrajectoryCell';
 import type { InspectableDisplayItem, TrajectoryLedgerRow } from './layout';
 import css from './Trajectory.module.css';
+import type { TraceRecord } from '../../../../protocol/app-server/v70';
+import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
 
 export interface TrajectoryRowActions {
+  workflows?: ReadonlyMap<string, TraceRecord>;
+  openedWorkflows?: ReadonlySet<string>;
+  toggleWorkflow?: (id: string) => void;
   select: (item: InspectableDisplayItem) => void;
   toggleTurn: (id: string) => void;
   toggleCalls: (id: string) => void;
@@ -26,18 +31,24 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
   const tx = useTranslation();
   const item = row.item;
   const record = item?.record;
+  const workflow = item && item.type !== 'WorkflowNode' ? actions.workflows?.get(item.owner_record_id) : undefined;
+  const workflowOpen = !!workflow && actions.openedWorkflows?.has(workflow.id) === true;
+  const node = item?.type === 'WorkflowNode' ? item.workflowNode : undefined;
   const summary = row.kind === 'summary';
   // A Request is selected on its dot, never as a row, as in Harness.
   const selected = item !== undefined && item.type !== 'RequestBoundary' && activeKey === item.display_key;
   const turn = row.turn;
   // As in Harness, the promoted initial prompt precedes the Turn's rail.
   const initialSystem = item?.type === 'SystemPromptCell' && record?.request?.system_prompt.state === 'initial';
-  const error = record !== undefined && item?.type === 'RecordRow' && isErrorRecord(record);
+  const running = node ? ['running', 'waiting', 'draining'].includes(node.state.type) : record?.state === 'running';
+  const focusId = item?.type === 'WorkflowNode' ? item.parent_record_id : record?.id;
+  const error = node ? node.state.type === 'settled' && node.state.outcome === 'failed' : record !== undefined && item?.type === 'RecordRow' && isErrorRecord(record);
   const toggleSummary = () => {
     if (row.callsOwner) actions.toggleCalls(row.callsOwner);
     else if (turn) actions.toggleTurn(turn.ownerKey);
   };
   const onDoubleClick = (event: MouseEvent) => {
+    if (workflow) { event.preventDefault(); actions.toggleWorkflow?.(workflow.id); return; }
     if (summary || !item || item.type === 'RequestBoundary' || !turn || row.betweenTurns) return;
     if (folded.has(turn.ownerKey) && actions.foldableTurns.has(turn.ownerKey)) { event.preventDefault(); actions.toggleTurn(turn.ownerKey); return; }
     if (item.type === 'RecordRow' && actions.callOwners.has(item.owner_record_id)) { event.preventDefault(); actions.toggleCalls(item.owner_record_id); return; }
@@ -52,18 +63,21 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
       ? tx('trajectory:request.row-aria', { request: requestNumber === undefined ? '' : tx('trajectory:request.row-prefix', { request: requestNumber }), kind: cellLabel(tx, cellKind(item)), content: listText(tx, item) || tx('trajectory:request.no-content') })
       : turn?.label;
   return <div data-display-key={row.display_key} data-owner={item?.owner_record_id} data-trace-id={record?.id}
+    data-workflow-node={node?.id} data-workflow-instance={node?.instance.node} data-workflow-entry={workflow?.id}
+    data-workflow-open={workflowOpen || undefined} data-workflow-last={row.workflowLast || undefined}
     data-display-type={row.kind === 'structure' ? 'StructuralSeat' : row.kind === 'marker' ? 'MarkerSeat' : summary ? (row.callsOwner ? 'CallsSummary' : 'TurnSummary') : item?.type}
-    data-kind={item ? cellKind(item) : undefined} data-state={record?.state} data-attempt={turn?.attempt_id}
-    data-error={error || undefined} data-running={record?.state === 'running' || undefined}
+    data-kind={item ? cellKind(item) : undefined} data-state={node ? node.state.type === 'settled' ? node.state.outcome : node.state.type : record?.state} data-attempt={turn?.attempt_id}
+    data-error={error || undefined} data-running={running || undefined}
     data-between-turns={row.betweenTurns || undefined} data-selected={selected || undefined} data-turn-start={row.turnStart || undefined}
     data-collapsed-summary={summary ? (row.callsOwner ? 'assistant' : 'turn') : undefined}
-    data-timeline-focus={focusedIds && record ? focusedIds.has(record.id) ? 'inside' : 'outside' : undefined}
+    data-timeline-focus={focusedIds && focusId ? focusedIds.has(focusId) ? 'inside' : 'outside' : undefined}
     role="row" aria-rowindex={index + 1} aria-selected={selected} aria-label={label}
     tabIndex={(item && item.type !== 'RequestBoundary') || summary ? 0 : -1} className={css.record} style={style}
     onClick={() => { if (summary) toggleSummary(); else if (item && item.type !== 'RequestBoundary') actions.select(item); }}
     onDoubleClick={onDoubleClick}
     onKeyDown={event => {
       if (event.target !== event.currentTarget) return;
+      if (workflow && (event.key === 'ArrowRight' && !workflowOpen || event.key === 'ArrowLeft' && workflowOpen)) { event.preventDefault(); actions.toggleWorkflow?.(workflow.id); return; }
       if (summary && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); toggleSummary(); return; }
       if (event.key === 'Escape' || item) onKeyDown(event, item?.display_key ?? '');
     }}>
@@ -82,9 +96,13 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
         <span className={css.turnLabelFull} aria-hidden="true">{turn.label}</span>
         <span className={css.turnLabelCompact} aria-hidden="true">#{turn.ordinal}</span>
       </span>}
-      {row.kind === 'semantic' && item && <KindTag kind={cellKind(item)} />}
+      {row.kind === 'semantic' && item && !node && <KindTag kind={cellKind(item)} />}
     </span>
     <div role="cell" className={css.content}>
+      {workflow && <button type="button" className={css.workflowToggle} aria-expanded={workflowOpen} aria-label={tx(workflowOpen ? 'trajectory:workflow.collapse' : 'trajectory:workflow.expand')}
+        onClick={event => { event.stopPropagation(); actions.toggleWorkflow?.(workflow.id); }} onDoubleClick={event => event.stopPropagation()}>
+        <IconChevronRightOutline14/>
+      </button>}
       {summary
         ? <span className={css.collapsedTurnContent} title={row.summary}>
           <span className={css.collapsedTurnEllipsis}>…</span>

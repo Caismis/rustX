@@ -127,6 +127,12 @@ for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'b
     await page.locator('button[data-session-id="B"]').click();
     await expect(page.getByLabel('Session title')).toHaveText('Session B');
     await expect(page.locator('button[data-session-id="A"]')).not.toContainText('Working…');
+    const approval = page.getByRole('region', { name: 'Approval', exact: true });
+    await expect(approval.getByRole('group', { name: 'Approval details', exact: true }).locator('pre')).toHaveText('printf rustX');
+    await expect(approval.getByRole('button', { name: 'Deny', exact: true })).toBeVisible();
+    await expect(approval.getByRole('button', { name: 'Allow once', exact: true })).toBeVisible();
+    await expect(approval.getByRole('button')).toHaveCount(2);
+    await expect(page.getByRole('button', { name: 'Cancel interaction', exact: true })).toHaveCount(0);
   }
   if (mode === 'other-uncertain') {
     await expect(page.getByLabel('Session status')).toHaveCount(0);
@@ -441,7 +447,7 @@ for (const departure of ['drawer', 'User Settings', 'Workspace Settings'] as con
   await page.evaluate(() => window.sessionFixture.settleInput());
 });
 
-const nativeMutations = (requests: import('../../../protocol/app-server/v63').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
+const nativeMutations = (requests: import('../../../protocol/app-server/v70').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
 
 for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'failed', 'replacement', 'breakpoint', 'desktop'] as const) test(`sidebar attachment ownership: ${outcome}`, async ({ page }) => {
   await page.setViewportSize({ width: outcome === 'desktop' ? 1440 : 390, height: 844 });

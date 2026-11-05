@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createActor, waitFor } from 'xstate';
-import { addNode, connect, renameLoopVariable, renameNode, replaceNode } from '../src/app/workflows/document/commands';
+import { addNode, connect, nodeTemplate, renameLoopVariable, renameNode, replaceNode } from '../src/app/workflows/document/commands';
 import { rootBlock } from './workflow-root';
 import { copyFragment, duplicateFragment, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
 import { blockField, encodeField, nodeField, setField, type FieldAddress } from '../src/app/workflows/document/fields';
@@ -240,12 +240,12 @@ it('renames Start defaults and references in one history transaction', async () 
   oneTransaction(actor, before, after); actor.stop();
 });
 
-it.each([false, true])('atomically rejects copied descendants that shadow target outer IDs, nested=%s', nested => {
+it.each([false, true].flatMap(nested => (['loop', 'code', 'template', 'list', 'classifier', 'aggregate'] as const).map(kind => ({ nested, kind }))))('atomically rejects copied descendants that shadow target outer $kind IDs, nested=$nested', ({ nested, kind }) => {
   const source = fixture();
   source.block.nodes.repeat = { type: 'loop', loop_count: 1, body: { input: {}, nodes: { worker: { type: 'start' } }, edges: [] } };
   const fragment = parseFragment(copyFragment(source, 'source', [], ['repeat'], []));
   const target = fixture();
-  target.block.nodes.worker = { type: 'loop', loop_count: 1, body: { input: {}, nodes: { entry: { type: 'start' } }, edges: [] } };
+  target.block.nodes.worker = nodeTemplate(kind);
   target.block.nodes.target = { type: 'loop', loop_count: 1, body: { input: {}, nodes: { entry: { type: 'start' } }, edges: [] } };
   const before = structuredClone(target);
   expect(() => pasteFragment(target, 'target', nested ? [{ node: 'target' }] : [], fragment)).toThrow('duplicate_identifier');

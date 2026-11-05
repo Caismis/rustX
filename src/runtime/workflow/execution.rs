@@ -212,6 +212,13 @@ fn retained_bound(block: &WorkflowBlockProgram, loop_value_bytes: usize) -> usiz
         schema_value_bound(&block.input_schema) + schema_value_bound(&block.output_schema);
     for node in block.nodes.values() {
         bytes = bytes.saturating_add(match node {
+            WorkflowNodeProgram::Template { .. } => {
+                schema_value_bound(&super::transform::text_schema())
+            }
+            WorkflowNodeProgram::List { output_schema, .. }
+            | WorkflowNodeProgram::Aggregate { output_schema, .. } => {
+                schema_value_bound(output_schema)
+            }
             WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.value_schema()),
             WorkflowNodeProgram::Model(model) => schema_value_bound(&model.output.schema()),
             WorkflowNodeProgram::Tool { result, .. } => schema_value_bound(&result.schema()),
@@ -558,6 +565,9 @@ impl WorkflowRuntime {
         }
         let mut active = std::collections::BTreeSet::from([block.entry.clone()]);
         let mut ready = std::collections::BTreeSet::from([block.entry.clone()]);
+        // A handled failure keeps its diagnostic value for the fail branch,
+        // but does not publish the producer's successful output contract.
+        let mut failed_outputs = imbl::OrdSet::new();
         let admitting = std::sync::atomic::AtomicBool::new(true);
         let mut pending = FuturesUnordered::new();
         let mut failures = BTreeMap::new();
@@ -568,6 +578,7 @@ impl WorkflowRuntime {
                 && let Some(id) = ready.pop_first()
             {
                 let scope = values.clone();
+                let failed_outputs = failed_outputs.clone();
                 let admitting = &admitting;
                 pending.push(async move {
                     #[cfg(test)]
@@ -583,6 +594,7 @@ impl WorkflowRuntime {
                             context,
                             input,
                             scope,
+                            &failed_outputs,
                             &id,
                             cancellation,
                         )
@@ -621,6 +633,20 @@ impl WorkflowRuntime {
                         admitting.store(false, std::sync::atomic::Ordering::Release);
                     }
                     if assigner {
+                        self.emit_observability(
+                            run,
+                            RuntimeEvent::WorkflowNodeOutputRecorded {
+                                instance: WorkflowNodeInstance {
+                                    block: instance.clone(),
+                                    node: id.clone(),
+                                    visit: 0,
+                                },
+                                value: match &merged {
+                                    Ok(_) => node_trace_json(&TraceVariables(&values)),
+                                    Err(error) => node_trace_json(&error.to_string()),
+                                },
+                            },
+                        );
                         self.settle_node(
                             run,
                             WorkflowNodeInstance {
@@ -640,6 +666,9 @@ impl WorkflowRuntime {
                     }
                     if let Some(value) = value {
                         values.insert(id.clone(), value);
+                    }
+                    if port == WorkflowPort::Fail {
+                        failed_outputs.insert(id.clone());
                     }
                     if let Some(value) = result {
                         returned.insert(id.clone(), value);
@@ -775,6 +804,7 @@ impl WorkflowRuntime {
         context: &'a crate::runtime::subagent::NativeExecutionContext,
         input: &'a Value,
         mut values: imbl::OrdMap<String, Value>,
+        failed_outputs: &imbl::OrdSet<String>,
         node_id: &str,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<NodeCompletion<'a>, WorkflowRunError> {
@@ -817,6 +847,7 @@ impl WorkflowRuntime {
                 },
             );
             started = true;
+            self.record_node_input(run, &node_instance, node, input, &values);
             // This lease owns the complete admission/settlement future,
             // including approval or staged Agent cleanup. It retires only
             // after the native owner returned; it is not outcome authority.
@@ -1019,6 +1050,43 @@ impl WorkflowRuntime {
                     values.insert(node_id.to_owned(), value);
                     Ok(None)
                 }
+                WorkflowNodeProgram::Template { variables,template } => {
+                    let value = super::transform::render_isolated(template,variables,|part| evaluate_value(part,input,&values),cancellation).await?;
+                    validate_commit(&super::transform::text_schema(),&value)?;
+                    reservation.retain(&value)?;
+                    let _previous = cancellation.child_signal().with_active(|| values.insert(node_id.to_owned(),value))
+                        .ok_or_else(|| WorkflowRunError::from_cancellation(cancellation))?;
+                    Ok(None)
+                }
+                WorkflowNodeProgram::List {input:source,filter,sort,limit,extract,output_schema} => {
+                    let value = super::transform::list(evaluate_value(source,input,&values)?,filter.as_ref(),sort.as_ref(),*limit,extract.as_ref(),|part|evaluate_value(part,input,&values))?;
+                    validate_commit(output_schema,&value)?;
+                    reservation.retain(&value)?;
+                    values.insert(node_id.to_owned(),value);
+                    Ok(None)
+                }
+                WorkflowNodeProgram::Aggregate {groups,grouped,output_schema} => {
+                    let mut fields = std::collections::BTreeMap::new();
+                    for group in groups {
+                        let mut chosen = None;
+                        for path in &group.variables {
+                            let Some(producer) = path.first() else { return Err(WorkflowRunError::InvalidValue("empty aggregate selector".into())); };
+                            let source = if producer == "args" { Some(input) }
+                                else if failed_outputs.contains(producer) { None }
+                                else { values.get(producer) };
+                            if path[1..].iter().fold(source, |value, key| value.and_then(|value| value.get(key))).is_none() { continue; }
+                            chosen = Some(path.clone());
+                            break;
+                        }
+                        let source = super::WorkflowValue::Reference {path:chosen.ok_or_else(|| WorkflowRunError::InvalidValue("aggregate source is missing".into()))?};
+                        fields.insert(if *grouped {group.name.clone()}else{"output".into()},if *grouped {super::WorkflowValue::Object {fields:std::collections::BTreeMap::from([("output".into(),source)])}} else {source});
+                    }
+                    let value = evaluate_value(&super::WorkflowValue::Object {fields},input,&values)?;
+                    validate_commit(output_schema,&value)?;
+                    reservation.retain(&value)?;
+                    values.insert(node_id.to_owned(),value);
+                    Ok(None)
+                }
                 WorkflowNodeProgram::Model(model) => {
                     let prompt = super::model::render_prompt(&model.messages, |part| evaluate_value(part, input, &values))?;
                     let mut retries = 0;
@@ -1072,6 +1140,18 @@ impl WorkflowRuntime {
                         },
                     };
                     validate_commit(&schema, &value)?;
+                    let mut value = value;
+                    if !model.classes.is_empty() {
+                        let class_id = value.get("structured_output").and_then(|v| v.get("class_id")).and_then(Value::as_str).ok_or_else(|| WorkflowRunError::InvalidValue("Classifier returned no class ID".into()))?;
+                        let class = model.classes.iter().find(|class| class.id == class_id).ok_or_else(|| WorkflowRunError::InvalidValue("Classifier returned an unknown class ID".into()))?;
+                        selected = WorkflowPort::case(class_id);
+                        let name = super::model::render_parts(&class.description, |part| evaluate_value(part, input, &values))?;
+                        value = serde_json::json!({"class_id":class.id,"class_name":name,"class_label":class.label,"usage":value["usage"]});
+                        validate_commit(&super::transform::classifier_result_schema(), &value)?;
+                        for successor in block.outgoing[node_id].iter().filter(|edge| edge.port == selected) {
+                            self.emit_observability(run, RuntimeEvent::WorkflowBranchSelected {workflow_id:run.program.id.clone(),run_id:run.run_id.clone(),node_id:node_instance.clone(),port:selected.clone(),successor:successor.to.clone()});
+                        }
+                    }
                     reservation.retain(&value)?;
                     #[cfg(test)]
                     if let Some(capability) = &context.workflow_model {
@@ -1091,18 +1171,26 @@ impl WorkflowRuntime {
                     retry,
                     on_error,
                 } => {
-                    let arguments = evaluate_value(arguments, input, &values)?;
+                    let arguments = arguments.evaluate(input, &values)?;
                     let mut retries = 0;
                     // Only a proven-settled failure or timeout is retried or
                     // handled; anything else is projected and stops as before.
                     let outcome = loop {
+                        // The runner reserves stdout for its JSON return;
+                        // user logs go to stderr. Capture full bounded bytes
+                        // per invocation, independently of Bash's preview.
+                        let stdout = matches!(result, super::tool::WorkflowToolProjection::Code { .. })
+                            .then(|| crate::tools::output::BoundedStdoutCapture::new(super::MAX_VALUE_BYTES));
                         let (native, settled) = self
-                            .invoke_tool(run, context, &node_instance, selector, arguments.clone(), retries, cancellation)
+                            .invoke_tool(run, context, &node_instance, selector, arguments.clone(), stdout.clone(), retries, cancellation)
                             .await?;
+                        let projected = result.project(&native, &node_instance, stdout.as_ref());
+                        let output_error = matches!(result, super::tool::WorkflowToolProjection::Code { .. })
+                            && native.status == crate::tools::types::ToolExecutionStatus::Success && projected.is_err();
                         let handled = settled && !cancellation.is_cancelled()
-                            && matches!(native.status, crate::tools::types::ToolExecutionStatus::Failed { .. } | crate::tools::types::ToolExecutionStatus::TimedOut);
+                            && (output_error || matches!(native.status, crate::tools::types::ToolExecutionStatus::Failed { .. } | crate::tools::types::ToolExecutionStatus::TimedOut));
                         if !handled {
-                            break Ok(native);
+                            break Ok(projected?);
                         }
                         if let Some(retry) = retry && retries < retry.max_retries {
                             retries += 1;
@@ -1113,10 +1201,11 @@ impl WorkflowRuntime {
                             }
                             continue;
                         }
-                        break if on_error.is_stop() { Ok(native) } else { Err(native.status) };
+                        if on_error.is_stop() { break Ok(projected?); }
+                        break Err(if output_error { crate::tools::types::ToolExecutionStatus::Failed { error: super::bound_workflow_diagnostic(projected.unwrap_err().to_string()) } } else { native.status });
                     };
                     let (value, schema) = match (outcome, on_error) {
-                        (Ok(native), _) => (result.project(&native, &node_instance)?, result.schema()),
+                        (Ok(value), _) => (value, result.schema()),
                         (Err(_), super::WorkflowValueErrorStrategy::DefaultValue { value }) => (value.clone(), result.schema()),
                         (Err(status), _) => {
                             let (kind, message) = match status {
@@ -1216,6 +1305,7 @@ impl WorkflowRuntime {
         }
         // An Assigner's success is not final until the graph accepts its writes.
         if started && !(result.is_ok() && matches!(node, WorkflowNodeProgram::Assigner { .. })) {
+            self.record_node_output(run, &node_instance, &result);
             self.settle_node(run, node_instance, outcome(&result));
         }
         result
@@ -1231,6 +1321,73 @@ impl WorkflowRuntime {
             view.state = WorkflowState::Settled { outcome };
         });
         self.emit_observability(run, RuntimeEvent::WorkflowNodeSettled { instance, outcome });
+    }
+
+    fn record_node_input(
+        &self,
+        run: &WorkflowRun,
+        instance: &WorkflowNodeInstance,
+        node: &WorkflowNodeProgram,
+        input: &Value,
+        values: &imbl::OrdMap<String, Value>,
+    ) {
+        #[derive(serde::Serialize)]
+        struct Scope<'a> {
+            args: &'a Value,
+            variables: TraceVariables<'a>,
+        }
+        self.emit_observability(
+            run,
+            RuntimeEvent::WorkflowNodeInputRecorded {
+                instance: instance.clone(),
+                kind: WorkflowInstanceView::started(instance, node).kind,
+                value: node_trace_json(&Scope {
+                    args: input,
+                    variables: TraceVariables(values),
+                }),
+            },
+        );
+    }
+
+    fn record_node_output(
+        &self,
+        run: &WorkflowRun,
+        instance: &WorkflowNodeInstance,
+        result: &Result<NodeCompletion<'_>, WorkflowRunError>,
+    ) {
+        #[derive(serde::Serialize)]
+        struct Output<'a> {
+            value: &'a Option<Value>,
+            returned: &'a Option<Value>,
+            port: &'a WorkflowPort,
+        }
+        let value = match result {
+            Ok(output) => node_trace_json(&Output {
+                value: &output.value,
+                returned: &output.returned,
+                port: &output.port,
+            }),
+            Err(error) => node_trace_json(&error.execution_status()),
+        };
+        self.emit_observability(
+            run,
+            RuntimeEvent::WorkflowNodeOutputRecorded {
+                instance: instance.clone(),
+                value,
+            },
+        );
+    }
+}
+
+/// Diagnostic capture cannot exceed a bounded body or alter execution admission.
+fn node_trace_json(value: &impl serde::Serialize) -> Option<String> {
+    crate::observation::bounded::bounded_bytes(value, 65_536)
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+}
+struct TraceVariables<'a>(&'a imbl::OrdMap<String, Value>);
+impl serde::Serialize for TraceVariables<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(self.0.iter())
     }
 }
 

@@ -34,16 +34,21 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Deliver files explicitly');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(page.getByRole('region', { name: 'Approval', exact: true })).toContainText('write:');
+    const approval = page.getByRole('region', { name: 'Approval', exact: true });
+    await expect(approval.getByText('write', { exact: true })).toBeVisible();
+    await expect(approval).toContainText('"path": "报告 file.md"');
+    await expect(approval).toContainText('"content": "# Delivered report');
     await page.getByRole('button', { name: 'Allow once', exact: true }).click();
-    await expect(page.getByRole('region', { name: 'Approval', exact: true })).toContainText('bash:');
+    await expect(approval.getByText('bash', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Allow once', exact: true }).click();
     await fixture.gate('delivery-before-declaration');
     await expect(canonical.getByText('I created report.md and 报告 file.md.', { exact: true })).toBeVisible();
     await expect(canonical.locator('[data-delivery-card]')).toHaveCount(0);
     await expect(canonical.locator('a[download]')).toHaveCount(0);
     await fixture.release('delivery-before-declaration');
-    await expect(canonical.getByText('Delivery finished.', { exact: true })).toBeVisible(); await expectSettled(page, wire);
+    // Releasing the gate still leaves three native Tool/Request settlements;
+    // allow their bounded completion before checking the rendered final reply.
+    await expect(canonical.getByText('Delivery finished.', { exact: true })).toBeVisible({ timeout: 30_000 }); await expectSettled(page, wire);
     // Harness summary: one Turn row, latest declaration per path, four cards.
     await expect(canonical.locator('[data-delivery-card]')).toHaveCount(4);
     const all = canonical.getByRole('button', { name: 'Show all 6 delivered files', exact: true });
@@ -83,9 +88,9 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await download(panel.getByRole('button', { name: 'Download artifact', exact: true }), '报告 file.md', original);
     expect(deliveryRead).toBeDefined();
     const bypass = await page.evaluate(({ endpoint, token, read, cwd }) => new Promise<number>((resolve, reject) => {
-      const socket = new WebSocket(endpoint, ['rustx.app-server.v63', `rustx-token.${token}`]);
+      const socket = new WebSocket(endpoint, ['rustx.app-server.v70', `rustx-token.${token}`]);
       socket.onerror = () => reject(new Error('Browser ordinary connection failed'));
-      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 63, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
+      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 70, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
       socket.onmessage = event => {
         const reply = JSON.parse(event.data);
         if (reply.id === 4191) socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4192, method: 'session/fileRead', params: { ...read, allowed_roots: [cwd] } }));

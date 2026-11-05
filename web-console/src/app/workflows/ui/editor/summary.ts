@@ -21,12 +21,15 @@ export function valueText(value: Value): string {
   }
 }
 
+// i18n-raw: mathematical notation shared by the typed condition editors.
+export const comparisonSymbols: Record<string,string> = {equal:'=',not_equal:'≠',greater:'>',greater_equal:'≥',less:'<',less_equal:'≤'};
+
 export function predicateText(tx: Translate, predicate: Predicate): string {
   switch (predicate.type) {
     case 'boolean': return valueText(predicate.value);
-    case 'equal': case 'not_equal': case 'contains': case 'not_contains': case 'starts_with': case 'ends_with': {
+    case 'greater': case 'greater_equal': case 'less': case 'less_equal': case 'equal': case 'not_equal': case 'contains': case 'not_contains': case 'starts_with': case 'ends_with': {
       const left = valueText(predicate.left), right = valueText(predicate.right);
-      return left && right ? `${left} ${tx(`workflows:branch.${predicate.type}`)} ${right}` : tx('workflows:branch.unset');
+      return left && right ? `${left} ${['greater','greater_equal','less','less_equal'].includes(predicate.type)?comparisonSymbols[predicate.type]:tx(`workflows:branch.${predicate.type}`)} ${right}` : tx('workflows:branch.unset');
     }
     case 'empty': case 'not_empty': return `${valueText(predicate.value)} ${tx(`workflows:branch.${predicate.type}`)}`;
     case 'not': return `${tx('workflows:summary.not')} (${predicateText(tx, predicate.predicate)})`;
@@ -42,6 +45,10 @@ export function toolText(selector: Extract<NodeDefinition, { type: 'tool' }>['se
 /** Number of compact configuration rows a native node renders on its card. */
 export function previewRowCount(node: NodeDefinition): number {
   switch (node.type) {
+    case 'code': return 1 + Math.min(Object.keys(node.variables).length,2);
+    case 'template': return Object.keys(node.variables).length;
+    case 'list': case 'classifier': return 1;
+    case 'aggregate': return node.grouped?node.groups.length:1;
     case 'agent': return node.task.length ? 2 : 1;
     case 'model': return 1;
     case 'tool': return 1 + (node.arguments.type === 'object' ? Math.min(Object.keys(node.arguments.fields).length, 2) : 1);

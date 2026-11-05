@@ -44,9 +44,18 @@
   cursor: pointer;
 }
 
-.row:hover {
+.row:focus-visible {
   color: var(--dsw-alias-label-secondary);
+  outline: 2px solid var(--dsw-alias-button-info-fill);
+  outline-offset: -2px;
+  border-radius: var(--dsw-radius-sm);
 }
+
+@media (hover: hover) {
+  .row:hover { color: var(--dsw-alias-label-secondary); }
+}
+
+.content { flex: 1 1 auto; min-width: 0; }
 
 .leading {
   position: relative;
@@ -90,12 +99,17 @@ button.leading {
   transition: opacity 100ms ease;
 }
 
-.row:hover .iconIdle {
+.row:focus-visible .iconIdle {
   opacity: 0;
 }
 
-.row:hover .chevronHover {
+.row:focus-visible .chevronHover {
   opacity: 1;
+}
+
+@media (hover: hover) {
+  .row:hover .iconIdle { opacity: 0; }
+  .row:hover .chevronHover { opacity: 1; }
 }
 
 .title {

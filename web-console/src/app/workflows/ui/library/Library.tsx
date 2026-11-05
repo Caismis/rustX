@@ -2,12 +2,12 @@ import { presentationWarning } from '../../document/diagnostics';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
-import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v63';
+import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v70';
 import { useTranslation } from '../../../../locale/react';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Menu } from '../../../../presentation/primitives/Menu';
 import { Switch } from '../../../../presentation/primitives/Switch';
-import { IconChevronDownOutline14, IconCopyOutline16, IconEditOutline16, IconEllipsisOutline16, IconGlobeOutline14, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
+import { IconChevronDownOutline14, IconCopyOutline16, IconEditOutline16, IconEllipsisOutline16, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
 import type { WorkspaceAuthority } from '../../../../workspaces/authority';
 import type { LibraryOperation } from '../../machines/library';
 import type { WorkflowSurfaceActor } from '../../machines/surface';
@@ -144,6 +144,8 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
     </tr>)}</tbody>
   </table>;
 
+  const context = listing && !(showingWorkspace && !workspace) && <p className={css.context}>{scopeLabel}<span aria-hidden> · </span>{listing.files.length === 1 ? tx('workflows:library.count-one') : tx('workflows:library.count', { p0: listing.files.length })}</p>;
+
   return <section className={css.library} aria-labelledby="workflows-title">
     <header className={css.pageHead}>
       <div><h1 id="workflows-title">{tx('workflows:library.title')}</h1><p className={css.muted}>{tx('workflows:library.subtitle')}</p></div>
@@ -154,13 +156,12 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
         {tx(name === 'workspace' ? 'workflows:scope.workspace' : 'workflows:scope.global')}
       </button>)}
     </div>
-    <div className={css.controls}>
-      <div className={css.controlsLeft}>
-        <span className={css.subtle}>{tx(showingWorkspace ? 'workflows:scope.choose-workspace' : 'workflows:scope.file-scope')}</span>
-        {showingWorkspace
-          ? <WorkspaceChooser workspaces={workspaces} selected={workspace?.id} onSelect={id => select({ kind: 'workspace', workspaceId: id })} />
-          : <span className={css.chooser} aria-live="polite"><span className={css.chooserValue}><IconGlobeOutline14 />{tx('workflows:scope.global-files')}</span></span>}
-      </div>
+    <div className={clsx(css.controls, !showingWorkspace && css.globalControls)}>
+      {showingWorkspace && <div className={css.controlsLeft}>
+        <span className={css.subtle}>{tx('workflows:scope.choose-workspace')}</span>
+        <WorkspaceChooser workspaces={workspaces} selected={workspace?.id} onSelect={id => select({ kind: 'workspace', workspaceId: id })} />
+      </div>}
+      {!showingWorkspace && context}
       <div className={css.controlsRight}>
         <label className={css.search}><IconSearchOutline16 /><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('workflows:library.search')} aria-label={tx('workflows:library.search')} /></label>
         <div className={css.viewSwitch} role="group" aria-label={tx('workflows:library.view')}>
@@ -169,7 +170,7 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
         </div>
       </div>
     </div>
-    {listing && !(showingWorkspace && !workspace) && <p className={css.context}>{scopeLabel}<span aria-hidden> · </span>{listing.files.length === 1 ? tx('workflows:library.count-one') : tx('workflows:library.count', { p0: listing.files.length })}</p>}
+    {showingWorkspace && context}
     {operationFailure && <div className={css.banner} role="alert">
       {operationFailure.failure.kind === 'uncertain'
         ? tx('workflows:library.operation-uncertain', { p0: operationName(operationFailure.operation) })

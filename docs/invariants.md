@@ -562,11 +562,14 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 83 binds request fingerprints to the native JSON Schema capability
+SQLite schema 85 binds request fingerprints to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
-change fingerprints for text requests. Schema 82 also admits bounded native
-`WorkflowNodeWaiting` Journal facts and reserved Auxiliary Call identities.
-Stores from schema 81 or earlier fail with
+change fingerprints for text requests. Schema 84 also admits bounded native
+`WorkflowNodeWaiting` Journal facts and reserved Auxiliary Call identities, plus
+`WorkflowNodeInputRecorded` / `WorkflowNodeOutputRecorded` and their data-node kinds.
+Exact run/type/sequence and full-instance/type/sequence indexes bound Workflow
+trace lookups to the selected run and visit, including absent I/O and terminals.
+Stores from schema 83 or earlier fail with
 `SchemaVersionMismatch` at open, before historical reconstruction; no legacy
 fingerprint comparison, migration or compatibility reader is available.
 The Event envelope remains version 1; its framing did not change.
@@ -3219,6 +3222,13 @@ the launch-boundary policy inheritance.
   phase. A crash does not replay a nonterminal WorkflowRun; durable Workflow
   resume is intentionally absent. A future Canvas can edit the same canonical
   Definition without adding layout metadata.
+- **Historical node activity requires a live owner.** A Workflow node admission
+  without a durable terminal is `incomplete`, including recorded waits. Only
+  the exact resident runtime, current published read cut and complete node
+  instance identity may overlay running/waiting. Retained settled projections
+  cannot create activity or overwrite a persisted terminal or an older cut.
+  The overlay queries the complete immutable Workflow source retained by that
+  publication; finite display headers cannot establish absence of activity.
 
 ## CFG3 configuration, resource and Session authority
 
@@ -6316,7 +6326,7 @@ semantic normalization boundary. The frozen invariants:
   projection carrying the source repository root, repository-relative
   workspace, physical worktree root, base commit, branch, and parent dirty
   fact, and a retained handoff carries `logical_workspace` and
-  `physical_worktree_root` alongside its branch/base/head/dirty facts. v67
+  `physical_worktree_root` alongside its branch/base/head/dirty facts. v68
   retired this representation.
 - **Runtime Client protocol v12 adds the routed interaction projection.** The
   root-facing pending-interaction set carries Approval and Questionnaire

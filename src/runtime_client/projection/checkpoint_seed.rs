@@ -8,6 +8,19 @@ use super::{
 };
 
 impl CheckpointSeed {
+    /// Positive Workflow identities are meaningful only at this published cut.
+    /// Selected historic sources never borrow a later seed's activity labels.
+    pub(crate) fn live_workflows_at(
+        &self,
+        cut: &crate::observation::cut::CheckpointReadCut,
+    ) -> Option<&crate::observation::workflow_source::WorkflowReadSource> {
+        // The display header can omit instances by count or byte size. Keep
+        // the original immutable source captured with this publication instead.
+        (self.read_cut == *cut)
+            .then_some(self.workflow_source.as_ref())
+            .flatten()
+    }
+
     pub(super) fn checkpoint_read_cut(&self) -> crate::observation::cut::CheckpointReadCut {
         self.read_cut.clone()
     }

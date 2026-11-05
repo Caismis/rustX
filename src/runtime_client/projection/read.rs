@@ -28,6 +28,15 @@ impl RuntimeClientProjection {
     pub(super) fn capture_working_seed(&self) -> CheckpointSeed {
         CheckpointSeed {
             snapshot: self.snapshot.clone(),
+            workflow_source: self
+                .domain_sources
+                .get("workflows")
+                .and_then(|(source, _, _)| match source.as_ref() {
+                    super::super::domain::DomainSource::Workflow(value) => {
+                        Some(value.value().clone())
+                    }
+                    _ => None,
+                }),
             capability_head: self.capability_head.clone(),
             trace_head: self.trace_head.clone(),
             cursor: self.cursor,

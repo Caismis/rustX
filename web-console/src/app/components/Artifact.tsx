@@ -1,10 +1,9 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
-import type { ToolExecutionResult } from '../../../../protocol/app-server/v63';
+import type { ToolExecutionResult } from '../../../../protocol/app-server/v70';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
 import { PreviewContext } from './ArtifactPreview';
-import { Button } from '../../presentation/primitives/Button';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { MessageFile } from '../../presentation/agent/Message';
 import { PresentedFileCard, PresentedFiles } from '../../presentation/attachments/PresentedFileCard';
@@ -13,7 +12,6 @@ import { IconDownloadOutline16 } from '../../presentation/primitives/icons';
 import type { PresentedDelivery } from '../../bindings/present';
 export const ArtifactContext = createContext<ArtifactResources | undefined>(undefined);
 export function Artifact({ id, name = id, image = false, mimeType, messageAttachment = false }: { id: string; name?: string; image?: boolean; mimeType?: string; messageAttachment?: boolean }) {
-  const tx = useTranslation();
   const resources = useContext(ArtifactContext);
   const preview = useContext(PreviewContext);
   const [attempt, setAttempt] = useState(0);
@@ -21,7 +19,7 @@ export function Artifact({ id, name = id, image = false, mimeType, messageAttach
   const [error, setError] = useNotice();
   const [loading, setLoading] = useState(false);
   useEffect(() => {
-    if (!resources || !attempt) return;
+    if (!image || !resources || !attempt) return;
     let live = true;
     let owned: string | undefined;
     setLoading(true); setError(''); setUrl(undefined);
@@ -30,12 +28,13 @@ export function Artifact({ id, name = id, image = false, mimeType, messageAttach
       owned = value; setUrl(value);
     }).catch(cause => { if (live) setError(String(cause)); }).finally(() => { if (live) setLoading(false); });
     return () => { live = false; if (owned) resources.release(owned); };
-  }, [resources, id, mimeType, attempt]);
+  }, [resources, id, mimeType, image, attempt]);
   if (messageAttachment && !image) return <MessageFile name={name} onOpen={preview && resources ? () => preview.openPreview({ source: { kind: 'artifact', id }, name, image, mimeType }) : undefined}/>;
-  return <div><AttachmentCard name={name} image={image} url={url} error={error} loading={loading}
+  return <AttachmentCard name={name} image={image} url={url} error={error} loading={loading}
+    onOpen={preview && resources ? () => preview.openPreview({ source: { kind: 'artifact', id }, name, image, mimeType }) : undefined}
     onDownload={preview && resources ? () => preview.download({ source: { kind: 'artifact', id }, name, image, mimeType }) : undefined}
-    onLoad={resources ? () => setAttempt(value => value + 1) : undefined}
-    onDecodeError={() => { if (url) resources?.release(url); setUrl(undefined); setError(message('artifacts:copy.image-could-not-be-decoded')); }} />{preview && resources && <Button size="sm" onClick={() => preview.openPreview({ source: { kind: 'artifact', id }, name, image, mimeType })}>{tx('artifacts:artifact.preview')}{' '}{name}</Button>}</div>;
+    onLoad={image && resources ? () => setAttempt(value => value + 1) : undefined}
+    onDecodeError={() => { if (url) resources?.release(url); setUrl(undefined); setError(message('artifacts:copy.image-could-not-be-decoded')); }} />;
 }
 
 export function DeliveryCards({conversationId,deliveries,owned}:{conversationId:string;deliveries:PresentedDelivery[];owned?:()=>boolean}) {

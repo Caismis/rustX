@@ -630,6 +630,7 @@ async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() 
         .unwrap(),
     );
     let launch = paths(root.path(), workspace).resolve();
+    let submitted_at = tokio::time::Instant::now();
     let loading = tokio::spawn(async move {
         crate::local_runtime::HeadlessConversationRuntime::compose_and_submit(
             &launch,
@@ -644,9 +645,19 @@ async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() 
         .await
         .unwrap();
     tokio::time::pause();
-    tokio::time::advance(std::time::Duration::from_secs(10)).await;
+    let elapsed_wait = std::time::Duration::from_secs(10);
+    // Composition and real HTTP discovery already consumed the same native
+    // first-submission budget before the server reached its held tools/list.
+    // Advance only the remainder to ten seconds, rather than ten more seconds
+    // that can legitimately cross the fifteen-second initialization deadline.
+    tokio::time::advance(elapsed_wait.saturating_sub(submitted_at.elapsed())).await;
     tokio::task::yield_now().await;
-    assert!(!loading.is_finished());
+    assert!(submitted_at.elapsed() >= elapsed_wait);
+    assert!(
+        !loading.is_finished(),
+        "headless initialization settled before selected MCP discovery was released: {:?}",
+        loading.await
+    );
     assert!(provider.request_bodies().is_empty());
     tokio::time::resume();
     gate.release();

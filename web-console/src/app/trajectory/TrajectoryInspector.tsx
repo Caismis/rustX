@@ -23,7 +23,7 @@ import { recordedToolDetails } from '../../bindings/recorded-tool-details';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { BoundedNames, CheckpointReadCut, ContentRef, TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v63';
+import type { BoundedNames, CheckpointReadCut, ContentRef, TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v70';
 import { configurationDomainLabel, configurationNames } from '../../bindings/configuration-change';
 import { SourceContent } from '../agent/SourceContent';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
@@ -36,6 +36,8 @@ import { cellKind, cellLabel, isErrorRecord } from './TrajectoryCell';
 import { isBetweenTurnsItem, type InspectableDisplayItem, type TrajectoryFacet } from './layout';
 import { formatDurationMillis, formatDurationMs, formatStartedAt, instantMillis, wireCount } from './timeline';
 import css from './Trajectory.module.css';
+import { useWorkflowNodeContent } from './useWorkflowNodeContent';
+import { workflowStatus } from '../agent/workflow-state';
 
 type RecordState = 'complete' | 'running' | 'error';
 
@@ -72,6 +74,7 @@ const TAB_LABEL = {
 
 /** The Harness tab set for one selected item. */
 export function inspectorTabs(item: InspectableDisplayItem): TrajectoryFacet[] {
+  if (item.type === 'WorkflowNode') return ['overview', 'input', 'output', 'timing'];
   if (item.type === 'SystemPromptCell') return item.record.request?.system_prompt.state === 'changed' || item.record.request?.tool_catalog === 'changed' ? ['diff', 'system-prompt', 'tools'] : ['system-prompt', 'tools'];
   if (item.type === 'RequestBoundary') return ['overview', 'options', 'usage', 'timing'];
   if (item.type === 'ContextRow') return ['overview', 'rendered', 'raw', 'source'];
@@ -124,6 +127,24 @@ function DetailPending({ error, deferred }: { error: string | undefined; deferre
   return error
     ? <p role="alert" className={`${css.noPayload} ${css.error}`}>{error}</p>
     : <p role="status" className={css.noPayload}>{tx(deferred?'common:activity.loading':'trajectory:details.loading')}</p>;
+}
+
+/** Keep the selected visit available while its reader is pending or failed. */
+export function WorkflowNodeReadInspector({ node, error, onRetry, onClose }: { node: WorkflowNodeInstance; error?: string; onRetry: () => void; onClose: () => void }) {
+  const tx = useTranslation();
+  return <>
+    <div className={css.detailsHeader}>
+      <div className={css.detailsTitle}>
+        <span className={css.kindTag} data-role-kind="workflow_node">{cellLabel(tx, 'workflow_node')}</span>
+        <span className={css.detailsLocation}>{node.node}</span>
+      </div>
+      <button type="button" className={css.close} aria-label={tx('trajectory:details.close')} onClick={onClose}><span aria-hidden="true">×</span></button>
+    </div>
+    {error ? <div className={css.detailBody}>
+      <DetailPending error={error} />
+      <Button onClick={onRetry}>{tx('interactions:interactions.retry-details')}</Button>
+    </div> : <div className={css.detailBody} role="status" aria-busy="true" aria-label={tx('trajectory:details.loading')} />}
+  </>;
 }
 
 function Json({ value, label, preview = false, error = false }: { value: unknown; label: string; preview?: boolean; error?: boolean }) {
@@ -545,7 +566,7 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v63').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v70').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
   stale?: boolean;
@@ -591,10 +612,19 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   // The selected durable content head never replaces the outer live lifecycle.
   const sourceRecord=inspection?.record??record;
   useEffect(() => {
-    if (record.has_detail && (stale || !detail && !detailPage) && !loading && !error) onLoadDetail(record.id);
-  }, [record.id, record.has_detail, detail, detailPage,loading, stale, error, onLoadDetail]);
+    if (item.type !== 'WorkflowNode' && record.has_detail && (stale || !detail && !detailPage) && !loading && !error) onLoadDetail(record.id);
+  }, [item.type, record.id, record.has_detail, detail, detailPage,loading, stale, error, onLoadDetail]);
   const tabs = inspectorTabs(item);
   const active = tabs.includes(facet) ? facet : tabs[0]!;
+  const workflowNode = item.type === 'WorkflowNode' ? item.workflowNode : undefined;
+  const nodeContent = useWorkflowNodeContent(item, active);
+  const nodeBody = (field: 'input' | 'output', preview = false) => {
+    if (!workflowNode) return null;
+    if (!workflowNode[field]) return <NoPayload>{tx(workflowNode[`${field}_omitted`] ? 'trajectory:workflow.body-omitted' : field === 'input' ? 'trajectory:workflow.input-not-recorded' : 'trajectory:workflow.output-not-recorded')}</NoPayload>;
+    if (nodeContent?.error) return <DetailPending error={nodeContent.error}/>;
+    if (!nodeContent?.values) return <DetailPending error={undefined}/>;
+    return <Json value={nodeContent.values[field]} label={tx(field === 'input' ? 'trajectory:tab.payload' : 'trajectory:tab.result')} preview={preview}/>;
+  };
   const predecessor=record.request?.predecessor;
   const previous=predecessor?.availability==='available'?records.find(row=>row.request&&(predecessor.request_id!=null?row.request.request_id===predecessor.request_id:predecessor.request_id_source!=null&&row.request.request_id_source!=null&&traceFieldKey(predecessor.request_id_source)===traceFieldKey(row.request.request_id_source))):undefined;
   const previousSequence=previous&&/^trace:(0|[1-9][0-9]*)$/.exec(previous.id)?.[1];
@@ -675,6 +705,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     </>
     : <>
       <span className={css.kindTag} data-role-kind={kind}>{cellLabel(tx, kind)}</span>
+      {workflowNode && <span className={css.detailsLocation}>{workflowNode.instance.node}</span>}
       {record.kind === 'tool' && (toolDetail?.name ?? sourceRecord.tool?.name) != null && <span className={css.detailsLocation} title={toolDetail?.name ?? sourceRecord.tool?.name ?? undefined}>{toolDetail?.name ?? sourceRecord.tool?.name}</span>}
       {detailLocation && <span className={css.detailsLocation}>{detailLocation}</span>}
     </>;
@@ -732,7 +763,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     if (record.kind === 'compaction') {
       return <>
         <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
-          <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} /></div>
+          <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} nativeState={record.state} /></div>
           <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms))}</dd></div>
           <div><dt>{tx('trajectory:usage.tokens')}</dt><dd>—</dd></div>
         </dl>
@@ -779,6 +810,19 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   };
 
   const body = () => {
+    if (workflowNode) {
+      if (active === 'input') return nodeBody('input');
+      if (active === 'output') return nodeBody('output');
+      if (active === 'timing') return <RecordTiming record={{ ...record, timing: workflowNode.timing }}/>;
+      return <><dl className={css.overview}>
+        {workflowNode.kind && <div><dt>{tx('trajectory:workflow.node-kind')}</dt><dd>{tx(`common:workflow.kind.${workflowNode.kind}`)}</dd></div>}
+        <div><dt>{tx('trajectory:workflow.node-state')}</dt><dd>{workflowStatus(workflowNode.state, tx)}</dd></div>
+        <div><dt>{tx('trajectory:workflow.node-path')}</dt><dd>{[...workflowNode.instance.block.definition.blocks, ...workflowNode.instance.block.invocations.map(String), workflowNode.instance.node].join(' / ')}</dd></div>
+      </dl><div className={css.overviewSections}>
+        <OverviewSection label={tx('trajectory:tab.payload')} onOpen={() => onFacet('input')}>{nodeBody('input', true)}</OverviewSection>
+        <OverviewSection label={tx('trajectory:tab.result')} onOpen={() => onFacet('output')}>{nodeBody('output', true)}</OverviewSection>
+      </div></>;
+    }
     switch (active) {
       case 'overview': return overview();
       case 'system-prompt': {

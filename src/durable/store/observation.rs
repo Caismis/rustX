@@ -10,6 +10,13 @@ use crate::durable::{ConversationStoreError, NativeTodoObservation, TranscriptCu
 /// frontiers those reads are admitted against.
 #[allow(clippy::missing_errors_doc)]
 pub trait ObservationStore: Send + Sync + 'static {
+    fn observation_workflow_nodes(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        start: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::WorkflowTraceNodes, ConversationStoreError>;
     /// Finite typed facts from original native J rows at one authentic cut.
     fn observation_trace_facts(
         &self,

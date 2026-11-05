@@ -1,12 +1,13 @@
+import { promptText } from './summary';
 import { branchGeometry, conditionsOf } from '../../document/branch';
-import { createContext, memo, useContext, type CSSProperties } from 'react';
-import { Handle, NodeResizer, Position, useNodeConnections, type NodeProps, type ResizeParams } from '@xyflow/react';
+import { createContext, memo, useContext, useEffect, type CSSProperties } from 'react';
+import { Handle, NodeResizer, Position, useNodeConnections, useUpdateNodeInternals, type NodeProps, type ResizeParams } from '@xyflow/react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
 import { IconEllipsisOutline16 } from '../../../../presentation/primitives/icons';
 import { NoteNode } from './note/NoteNode';
 import { portsOf, TIMEOUT_PORT, type ControlPort, type BuiltinPort } from '../../document/ports';
-import { KindIcon, IconEntry, IconHome, IconPlus } from '../icons';
+import { KindIcon, IconEntry, IconHome, IconPlus, nodeIconKind } from '../icons';
 import { predicateText } from './summary';
 import { NodePreview } from './NodePreview';
 import { PredicateView } from './VariableLabel';
@@ -45,6 +46,10 @@ function SourcePort({ id, port, label, title, adding, connected, outcome, classN
 export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isConnectable }: NodeProps<SceneNode>) {
   const tx = useTranslation(), actions = useContext(CanvasActions), connections = useNodeConnections();
   const node = data.definition, ports = node ? portsOf(node) : data.view === 'start' ? ['next'] as const : [];
+  const updateNodeInternals = useUpdateNodeInternals();
+  // Port identities and row positions can change without resizing the card.
+  // Keep React Flow's hit-testing bounds in sync after semantic node edits.
+  useEffect(() => { if (node) updateNodeInternals(id); }, [id, node, updateNodeInternals]);
   const container = data.container, branch = node?.type === 'branch' ? branchGeometry(node) : undefined;
   if (data.view === 'note' && data.note) return <NoteNode id={id} note={data.note} selected={selected}
     resizer={<NodeResizer isVisible={selected} minWidth={240} minHeight={88} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />} />;
@@ -58,7 +63,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
   </div>;
   // A fail branch's port sits on the card's error row and each Agent route's
   // on its own row, not beside the head.
-  const routes = node?.type === 'agent' ? node.routes ?? [] : [];
+  const routes = node?.type === 'agent' ? node.routes ?? [] : node?.type === 'classifier' ? node.classes : [];
   const choices = node?.type === 'review' ? [...node.actions.map(action => action.id), TIMEOUT_PORT] : [];
   const exits = ports.filter(port => port !== 'fail' && !routes.some(route => route.id === port) && !choices.includes(port));
   const card = <div className={clsx(css.node, container && css.containerNode, node?.type === 'branch' && css.branchCard, selected && css.nodeSelected)} title={data.description}>
@@ -68,7 +73,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
       {adding && !entered && <button type="button" className={clsx(css.handleAdd, 'nodrag nopan')} aria-label={tx('workflows:canvas.add-before', { p0: data.local })} onClick={event => { event.stopPropagation(); actions.addBefore(id, event.currentTarget); }}><IconPlus size={10} /></button>}
     </Handle>}
     <div className={clsx(css.nodeHead, container && css.containerHead)}>
-      <span className={clsx(css.nodeIcon, node ? css[`kind_${node.type}`] : css.startIcon)}>{node ? <KindIcon kind={node.type} size={17} /> : <IconEntry size={17} />}</span>
+      <span className={clsx(css.nodeIcon, node ? css[`kind_${node.type}`] : css.startIcon)}>{node ? <KindIcon kind={nodeIconKind(node)} size={17} /> : <IconEntry size={17} />}</span>
       <span className={css.nodeText}><span className={css.nodeTitle}>{data.view === 'start' ? data.title || tx(data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : data.title}</span></span>
       <button type="button" className={clsx(css.iconButton, css.nodeMenu, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local || tx('workflows:canvas.start') })} onClick={event => { event.stopPropagation(); data.view === 'start' ? actions.addIn(id, event.currentTarget) : actions.menu(id, event.currentTarget); }}><IconEllipsisOutline16 /></button>
     </div>
@@ -94,9 +99,9 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
 
       {!!data.fields?.length && <div className={css.nodeFields}>{data.fields.map(field => <div key={field.name}><b aria-hidden>{'{x}'}</b><span>{field.name}</span>{data.view === 'start' && field.required && <small>{tx('workflows:schema.required')}</small>}<code>{field.type}</code></div>)}</div>}
       {/* As Dify's Agent output routes: one row and exit per route. */}
-      {!!routes.length && <div className={css.routeRows}>{routes.map(route => <div key={route.id} className={css.routeRow} title={route.description}>
-        <b>{route.id}</b><span>{route.description}</span>
-        <SourcePort id={id} port={route.id} label={route.id} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === route.id)} title={data.local} className={css.routeHandle} />
+      {!!routes.length && <div className={css.routeRows}>{routes.map(route => <div key={route.id} className={css.routeRow} title={typeof route.description === 'string' ? route.description : promptText(route.description)}>
+        <b>{'label' in route ? route.label : route.id}</b><span>{typeof route.description === 'string' ? route.description : promptText(route.description)}</span>
+        <SourcePort id={id} port={route.id} label={node?.type === 'classifier' && 'label' in route ? route.label : route.id} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === route.id)} title={data.local} className={css.routeHandle} />
       </div>)}</div>}
       {/* As Dify's Human Input card: one row and exit per action, then Timeout. */}
       {!!choices.length && <div className={css.actionRows}>{choices.map(port => <div key={port} className={css.actionRow}>
@@ -104,7 +109,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
         <SourcePort id={id} port={port} label={port === TIMEOUT_PORT ? tx('workflows:port.timeout') : port} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === port)} title={data.local} className={css.routeHandle} />
       </div>)}</div>}
       {/* As Dify's ErrorHandleOnNode: the strategy, and the fail branch's port. */}
-      {(node?.type === 'model' || node?.type === 'tool' || node?.type === 'agent') && node.on_error && node.on_error.type !== 'stop' && <div className={css.errorRow}>
+      {(node?.type === 'model' || node?.type === 'tool' || node?.type === 'code' || node?.type === 'agent') && node.on_error && node.on_error.type !== 'stop' && <div className={css.errorRow}>
         <small>{tx('workflows:port.fail')}</small>
         <span>{tx(node.on_error.type === 'fail_branch' ? 'workflows:failure.branch' : 'workflows:failure.default-output')}</span>
         {node.on_error.type === 'fail_branch' && <SourcePort id={id} port="fail" label={tx('workflows:port.fail')} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === 'fail')} title={data.local} className={css.errorHandle} />}

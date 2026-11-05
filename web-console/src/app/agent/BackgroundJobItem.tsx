@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. JobListAction task rows adapted to native Jobs; see PROVENANCE.md. */
 import { useEffect, useRef, useState } from 'react';
-import type { RuntimeClientJob, TraceTiming } from '../../../../protocol/app-server/v63';
+import type { RuntimeClientJob, TraceTiming } from '../../../../protocol/app-server/v70';
 import { domainOriginalValue } from '../../../../protocol/app-server/domain-observation';
 import type { AppServerClient } from '../../client/app-server';
 import { jobResultOutput } from '../../bindings/jobs';
@@ -31,7 +31,7 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
   const tx = useTranslation(), source = useRef(job); source.current = job;
   const stop = useActivityRequest({ client, sessionId });
   const [readError, setReadError] = useState<{ source: RuntimeClientJob; message: string }>();
-  const [loaded, setLoaded] = useState<{ source: RuntimeClientJob; value: RuntimeClientJob; current: () => boolean }>();
+  const [loaded, setLoaded] = useState<{ client: AppServerClient; sessionId: string; value: RuntimeClientJob; current: () => boolean }>();
   const [retry, setRetry] = useState(0), [showFailure, setShowFailure] = useState(false);
   useEffect(() => {
     setShowFailure(!!stop.error);
@@ -39,15 +39,18 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
     const timer = setTimeout(() => setShowFailure(false), 4000);
     return () => clearTimeout(timer);
   }, [stop.error]);
-  const value = loaded?.source === job && loaded.current() ? loaded.value : job;
+  const retained = loaded && loaded.client === client && loaded.sessionId === sessionId && loaded.value.job_id === job.job_id && loaded.current() ? loaded.value : undefined;
+  const value = job.deferred_fields?.length ? retained ?? job : job;
   const deferred = !!value.deferred_fields?.length;
   useEffect(() => {
-    if (!expanded || !deferred || !client || !sessionId) return;
+    if (!client || !sessionId) return;
     const proof = client.getSnapshot().views[sessionId]?.attachmentObservation;
     if (!client.isAttachmentObservationCurrent(sessionId, proof)) return;
+    const current = () => client.isAttachmentObservationCurrent(sessionId, proof);
+    if (!job.deferred_fields?.length) { setLoaded({ client, sessionId, value: job, current }); return; }
+    if (!expanded) return;
     const target = client.target(sessionId);
     let observing = true;
-    const current = () => client.isAttachmentObservationCurrent(sessionId, proof);
     const owned = () => observing && current() && source.current === job;
     setReadError(undefined);
     void (async () => {
@@ -55,7 +58,7 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
       if (page.domain !== `jobs.${job.job_id}` || page.read_cut.conversation_id !== target.conversation_id) throw new Error('Job details source changed.');
       const original = await domainOriginalValue<RuntimeClientJob>(page, client.reads.domainReader(target, owned));
       if (original.job_id !== job.job_id) throw new Error('Job details named another native execution.');
-      if (owned()) setLoaded({ source: job, value: original, current });
+      if (owned()) setLoaded({ client, sessionId, value: original, current });
     })().catch(cause => { if (owned()) setReadError({ source: job, message: cause instanceof Error ? cause.message : String(cause) }); });
     return () => { observing = false; };
   }, [expanded, job, client, sessionId, retry]);
@@ -68,6 +71,7 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
   const diagnostic = value.result && value.result.status.type !== 'cancelled' ? jobResultOutput({ status: value.result.status }) : undefined;
   const observable = live || deferred || !!output || !!diagnostic || !!value.result?.artifacts?.length || !!value.result?.managed_output;
   const pending = stop.pending || stopping;
+  const detailError = readError?.source === job ? readError.message : undefined;
   const canStop = job.state === 'starting' || job.state === 'running';
   const failure = canStop && showFailure ? stop.error : undefined;
   const stopLabel = armed ? tx('common:activity.job-stop-confirm') : failure ? tx('common:activity.job-stop-failed') : tx('common:activity.job-stop', { label });
@@ -100,8 +104,9 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
     </div>
     {failure && <p role="alert" className={`${css.notice} ${css.noticeError}`}>{displayText(tx, failure)}</p>}
     {expanded && observable && <div className={css.panel}>
-      {deferred ? <div className={css.notice}>{readError?.source === job ? <><span role="alert">{readError.message}</span><button type="button" className={css.sectionClear} onClick={() => setRetry(value => value + 1)}>{tx('common:activity.job-details')}</button></> : tx('common:activity.loading')}</div> : <>
-        <TerminalBlock command={label} output={output} running={live} copyText={label} runStateDot={false} maxLines={Infinity} lifecycle={{ state: jobDot(job.state), label: status }} labels={{
+      {detailError && <div className={css.notice}><span role="alert">{detailError}</span><button type="button" className={css.sectionClear} onClick={() => setRetry(value => value + 1)}>{tx('common:activity.job-details')}</button></div>}
+      {deferred ? !detailError && <div className={css.notice}>{tx('common:activity.loading')}</div> : <>
+        <TerminalBlock command={label} output={output} running={jobActive(value)} copyText={label} runStateDot={false} maxLines={Infinity} lifecycle={{ state: jobDot(job.state), label: status }} labels={{
           copy: tx('tools:tool-card.copy'), copied: tx('tools:tool-card.copied'), signal: signal => tx('tools:copy.signal-value', { p0: signal }), exitCode: code => tx('tools:copy.exit-value', { p0: code }), noExitCode: tx('tools:tool-card.exit-status-unavailable'),
           running: tx('tools:tool-card.running'), failed: tx('tools:tool-card.failed'), done: tx('tools:tool-card.done'), noOutput: tx(value.result?.managed_output ? 'common:activity.job-output-retained' : 'tools:tool-card.no-output'), collapseAria: tx('tools:tool-card.collapse-output'), collapse: tx('tools:tool-card.collapse'), expandAria: n => tx('tools:tool-card.show-value-more-lines', { p0: n }), expand: n => tx('tools:tool-card.show-value-more-lines', { p0: n }),
         }}/>

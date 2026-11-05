@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v63';
+import type { RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v70';
 import { App } from '../src/app/App';
 import { ComposerContextStack } from '../src/app/composer/ComposerContextStack';
 import { GoalDock } from '../src/app/composer/GoalDock';
@@ -553,7 +553,7 @@ describe('Queue dock binds the native inbound mailbox', () => {
     server.held.add('turn/start');
     await sendQueued('Queued draft');
     const turn = await server.waitFor('turn/start', 1);
-    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Sending…' })).toHaveProperty('disabled', true);
     expect(screen.queryByText('Awaiting acknowledgement…')).toBeNull();
     expect(screen.getByRole('textbox', { name: 'Message' }).closest('[data-composer-card]')?.getAttribute('aria-busy')).toBe('true');
     // No count header: the in-flight request is not counted as queued.

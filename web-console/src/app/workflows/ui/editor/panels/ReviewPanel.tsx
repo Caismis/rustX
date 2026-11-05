@@ -78,9 +78,9 @@ function ReviewActions(props: PanelProps) {
     {!node.actions.length && <p className={css.reviewEmpty}>{tx('workflows:review.actions-empty')}</p>}
     <div className={css.reviewActions}>
       {node.actions.map((action, index) => <div key={action.id} className={css.reviewAction}>
-        <RouteId value={action.id} address={at('actions', index, 'id')} label={tx('workflows:review.action-id')} className={css.reviewActionId}
-          rename={(document, from, to) => renameExit(document, props.block, props.id, from, to)} />
-        <div className={css.reviewActionTitle}><DraftTextField value={action.title} label={tx('workflows:review.action-title')} address={at('actions', index, 'title')} /></div>
+        <div className={css.reviewActionId}><RouteId value={action.id} address={at('actions', index, 'id')} label={tx('workflows:review.action-id')}
+          rename={(document, from, to) => renameExit(document, props.block, props.id, from, to)} /></div>
+        <div className={css.reviewActionTitle}><DraftTextField value={action.title} label={tx('workflows:review.action-title')} placeholder={tx('workflows:review.action-title')} address={at('actions', index, 'title')} /></div>
         <button type="button" className={css.iconButton} aria-label={tx('workflows:review.remove-action', { p0: action.id })} title={tx('workflows:review.remove-action', { p0: action.id })}
           onClick={() => exits(review => ({ ...review, actions: review.actions.filter(item => item.id !== action.id) }), { array: at('actions'), removed: index })}><IconTrashOutline16 /></button>
       </div>)}

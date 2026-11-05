@@ -52,7 +52,6 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onExpand, body,
    {tool.output && !tool.background && <div className={css.ioSection}><span className={css.ioLabel}>{tx('tools:tool-card.out')}</span><span className={css.ioText} data-error={state === 'error' || undefined}>{tool.output}</span></div>}
  </div>)}
  {(tool.variant !== 'image' || tool.state !== 'success') && tool.artifacts}
- {tool.jobId && <small>{tx('common:activity.job-title', { id: tool.jobId })}</small>}
  {inspect && <ToolInspectionButton inspect={inspect}/>}
  </div></DisclosureRow>
  <span className={css.visuallyHidden} aria-label={tx('tools:tool-card.tool-status')}>{tool.background ? tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting') : tx(`common:state.${tool.state}`)}</span>

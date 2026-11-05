@@ -111,7 +111,7 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
             <span aria-hidden="true">{loading ? tx('trajectory:history.loading-earlier') : tx('trajectory:history.load-earlier')}</span>
           </button>
         </div>;
-        return <TrajectoryRow key={row.display_key} {...{ row, index, style, activeKey, activeTurn, folded, focusedIds, actions }} onKeyDown={(event, key) => {
+        return <TrajectoryRow key={row.display_key} {...{ row, index, style, activeKey, activeTurn, folded, focusedIds }} actions={{ ...actions, toggleWorkflow: id => { followsTail.current = false; actions.toggleWorkflow?.(id); } }} onKeyDown={(event, key) => {
           if (event.key === 'Escape') { event.stopPropagation(); close(); return; }
           const current = targets.findIndex(target => target.display_key === key);
           if (current < 0) return;

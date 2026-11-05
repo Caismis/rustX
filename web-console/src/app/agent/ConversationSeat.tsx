@@ -11,7 +11,7 @@ import { useClientSelector, sameValue, transportSelection } from '../../client/s
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
-import type { UserInputBlock } from '../../../../protocol/app-server/v63';
+import type { UserInputBlock } from '../../../../protocol/app-server/v70';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { goalDock } from '../../bindings/composer-context';
 import { deriveSessionProductState, type SessionRecovery, type SessionTransition } from '../../bindings/session-product';
@@ -22,6 +22,7 @@ import { Interactions } from './Interactions';
 import type { CommandId } from '../commands/registry';
 import type { ComposerDraft } from '../composer/draft';
 import { ComposerSeat } from './ComposerSeat';
+import { RecordedQuestionPanel, useQuestionPanels } from './QuestionPanels';
 
 export function ConversationStatus({ client, sessionId, recover, transition }: { client: AppServerClient; sessionId: string; recover: (action: SessionRecovery) => void; transition?: SessionTransition }) {
   const tx = useTranslation();
@@ -41,6 +42,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   restored?: { conversation: string; content: UserInputBlock[] }; preparePublication: () => ((id: string) => (() => boolean) | void);
   onCommand: (id: CommandId) => void;
 }) {
+  const panels = useQuestionPanels();
   const state = useClientSelector(client, state => ({ ...transportSelection(state), composer: composerFacts(sessionId ? state.views[sessionId] : undefined) }), sameValue);
   const view = sessionId ? client.getSnapshot().views[sessionId] : undefined;
   const owner = JSON.stringify([state.generation, sessionId, binding]);
@@ -53,7 +55,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const attached = state.connection === 'connected' && !!view && client.isAttachmentControlCurrent(view.id, view.attachmentObservation);
   const disabled = transitioning || !attached || !executable || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <ComposerSeat>
-    <div hidden={view?.observationState === 'following' && !!view.snapshot?.pending_interactions?.length}>
+    <div hidden={view?.observationState === 'following' && !!view.snapshot?.pending_interactions?.length || !!panels?.record}>
       <ConversationComposer intakeCommitted={intakeCommitted} draftOwner={draftOwner} client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}
         context={view && <ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/>}
         active={view ? {
@@ -88,7 +90,8 @@ export function ConversationSeat({ client, host, authority, associations, sessio
       {error && <Toast key={failure?.sequence} text={error} holdMs={6000} icon={<IconWarningOutline16/>} onDone={() => setFailure('')}/>}
       {view && <ConversationTotals client={client} sessionId={view.id}/>}
     </div>
-    {sessionId && <LiveInteractions key={owner} client={client} sessionId={sessionId}/>}
+    <div hidden={!!panels?.record}>{sessionId && <LiveInteractions key={owner} client={client} sessionId={sessionId}/>}</div>
+    <RecordedQuestionPanel/>
   </ComposerSeat>;
 }
 function composerFacts(view: ReturnType<AppServerClient['getSnapshot']>['views'][string] | undefined) {

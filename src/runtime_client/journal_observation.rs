@@ -32,6 +32,11 @@ fn authorize(
         .ok_or(RuntimeClientError::ReadCutExpired)?;
     let normalized_failure = path == ["normalized_failure"] && event_kind == "attempt_failed";
     let finish_reason = path == ["event", "finish_reason"] && event_kind == "attempt_completed";
+    let workflow_io = path == ["event", "value"]
+        && matches!(
+            event_kind.as_str(),
+            "workflow_node_input_recorded" | "workflow_node_output_recorded"
+        );
     let tool_field = path.len() >= 2
         && path[0] == "event"
         && matches!(path[1].as_str(), "result" | "error")
@@ -51,7 +56,7 @@ fn authorize(
                 | "attempt_timed_out"
                 | "attempt_limit_exceeded"
         );
-    if normalized_failure || finish_reason || tool_field || attempt_identity {
+    if normalized_failure || finish_reason || tool_field || attempt_identity || workflow_io {
         return Ok(());
     }
     let trace_field = if let Some(kind) =

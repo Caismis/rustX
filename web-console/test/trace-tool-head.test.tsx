@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceRecord,TraceToolDefinitionSelection,TraceInspectionHead} from '../../protocol/app-server/v63';
+import type {CheckpointPage,CheckpointReadCut,TraceRecord,TraceToolDefinitionSelection,TraceInspectionHead} from '../../protocol/app-server/v70';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {ArtifactContext} from '../src/app/components/Artifact';
 import {PreviewContext} from '../src/app/components/ArtifactPreview';
@@ -29,7 +29,7 @@ it.each([undefined,'agent-child'])('keeps a native Tool name and protected artif
  fireEvent.click(screen.getByRole('button',{name:'Preview artifact_1'}));
  expect(intents.openPreview).toHaveBeenCalledExactlyOnceWith({source:{kind:'artifact',id:'artifact_1'},name:'artifact_1',image:true,mimeType:'image/png'});expect(reads()).toHaveLength(0);
  const method=agentId?'agent/artifactRead':'artifact/read';server.held.add(method);
- fireEvent.click(screen.getByRole('button',{name:'Load attachment'}));const request=await server.waitFor(method,1);
+ fireEvent.click(screen.getByRole('button',{name:/^Load attachment /}));const request=await server.waitFor(method,1);
  expect(request.params).toEqual({target:server.client.target('A'),...(agentId?{agent_id:agentId}:{}),artifact_id:'artifact_1'});
  // The existing protected owner still fences a reply after its view is retired.
  owner.dispose();server.socket.success(request,{type:'artifact_bytes',data:'aGk='});await waitFor(()=>expect(screen.getByText(/Obsolete artifact/)).toBeTruthy());expect(create).not.toHaveBeenCalled();

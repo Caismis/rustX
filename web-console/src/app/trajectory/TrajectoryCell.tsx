@@ -2,19 +2,21 @@ import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness TrajectoryTable.tsx semantic cells; see PROVENANCE.md. */
 import type { ReactNode } from 'react';
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v63';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v70';
 import { IconSettingsOutline16, IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { recordLabel, type InspectableDisplayItem } from './layout';
 import { markdownPreviewText } from '../../presentation/markdown/preview';
 import { traceStateLabel } from '../../bindings/status-labels';
 import css from './Trajectory.module.css';
+import { isWorkflowCall } from './workflow';
+import { workflowStatus } from '../agent/workflow-state';
 
 /** The ledger's role vocabulary: native kinds plus the two input cells. */
-export type CellKind = TraceKind | 'system' | 'context';
+export type CellKind = TraceKind | 'system' | 'context' | 'workflow_node';
 
 export function cellKind(item: InspectableDisplayItem): CellKind {
-  return item.type === 'SystemPromptCell' ? 'system' : item.type === 'ContextRow' ? 'context' : item.record.kind;
+  return item.type === 'WorkflowNode' ? 'workflow_node' : item.type === 'SystemPromptCell' ? 'system' : item.type === 'ContextRow' ? 'context' : isWorkflowCall(item.record) ? 'workflow' : item.record.kind;
 }
 
 /** Harness role labels; a compaction record is shown as its Compacted result. */
@@ -38,6 +40,7 @@ function narrowLabel(tx: Translate, kind: CellKind): string | undefined {
   switch (kind) {
     case 'background': return tx('trajectory:short.background');
     case 'workflow': return tx('trajectory:short.workflow');
+    case 'workflow_node': return tx('trajectory:short.workflow-node');
     case 'interaction': return tx('trajectory:short.interaction');
     default: return undefined;
   }
@@ -60,9 +63,9 @@ function CellIcon({ kind }: { kind: CellKind }) {
 }
 
 /** The Harness role tag: a word, or its glyph once the ledger is too narrow. */
-export function KindTag({ kind }: { kind: CellKind }) {
+export function KindTag({ kind, label: suppliedLabel }: { kind: CellKind; label?: string }) {
   const tx = useTranslation();
-  const label = cellLabel(tx, kind);
+  const label = suppliedLabel ?? cellLabel(tx, kind);
   const short = narrowLabel(tx, kind);
   return <span className={css.kindSlot}>
     <span className={css.kindTag} data-role-kind={kind}>
@@ -103,6 +106,7 @@ export function recordText(tx: Translate, record: TraceRecord): string {
 /** The text a row lists, as Harness's row label names it: a Tool's call, a record's display text. */
 export function listText(tx: Translate, item: InspectableDisplayItem): string {
   const record = item.record;
+  if (item.type === 'WorkflowNode') return [item.workflowNode.instance.node, item.workflowNode.input_preview, item.workflowNode.output_preview].filter(Boolean).join(' → ');
   if (item.type === 'SystemPromptCell') return item.label;
   if (item.type === 'ContextRow') return item.context.preview?.text ? markdownPreviewText(item.context.preview.text) : '';
   if (record.tool) return [record.tool.name ?? record.tool.tool_id, record.tool.arguments?.text].filter(Boolean).join(' ');
@@ -114,6 +118,20 @@ export function listText(tx: Translate, item: InspectableDisplayItem): string {
 export function CellContent({ item }: { item: InspectableDisplayItem }) {
   const tx = useTranslation();
   const record = item.record;
+  if (item.type === 'WorkflowNode') {
+    const node = item.workflowNode, path = [...node.instance.block.definition.blocks, ...node.instance.block.invocations.map(String), node.instance.node].join(' / ');
+    const kind = node.kind ? tx(`common:workflow.kind.${node.kind}`) : cellLabel(tx, 'workflow_node');
+    return <span className={css.resultPreview} title={path}>
+      <span className={`${css.resultRequest} ${css.workflowNodeRequest}`}>
+        <span className={css.workflowNodeKind} data-node-kind={node.kind ?? undefined} title={kind}>{kind}</span>
+        <span className={css.workflowNodeInput}><span className={css.toolCallNameTypeface}>{node.instance.node}</span>
+          {node.instance.block.invocations.length > 0 && <span className={css.workflowPath}>[{node.instance.block.invocations.join('/')}]</span>}
+          <span className={css.toolCallPayload}>{node.input_preview ?? tx(node.input_omitted ? 'trajectory:workflow.body-omitted' : 'trajectory:workflow.input-not-recorded')}</span>
+        </span>
+      </span>
+      <span className={css.inlineResult}><span className={css.arrow}>→</span><span className={css.inlineResultText}>{node.output_preview ?? (node.state.type === 'settled' ? tx(node.output_omitted ? 'trajectory:workflow.body-omitted' : 'trajectory:workflow.output-not-recorded') : workflowStatus(node.state, tx))}</span></span>
+    </span>;
+  }
   if (item.type === 'SystemPromptCell') {
     // As in Harness, the row names the change; the prompt itself is inspected.
     return <span className={css.contentText} title={item.label} data-system-prompt-state={record.request?.system_prompt.state} data-tool-catalog-state={record.request?.tool_catalog}>{item.label}</span>;

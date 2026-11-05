@@ -2,13 +2,13 @@ import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react
 import { createPortal } from 'react-dom';
 import { useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useSelector } from '@xstate/react';
-import type { WorkflowAnalysisQuery, WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v63';
+import type { WorkflowAnalysisQuery, WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v70';
 import { useTranslation } from '../../../../../locale/react';
 import { consumerAddress } from '../../../document/analysis';
 import { encodeField, setField, type FieldAddress } from '../../../document/fields';
 import { nodePresentation } from '../../../document/geometry';
 import { blockAt, nodeAt, startOf, type BlockPath, type WorkflowDocument } from '../../../document/model';
-import { IconEntry, KindIcon } from '../../icons';
+import { IconEntry, IconPlus, KindIcon } from '../../icons';
 import { DraftOwner } from './drafts';
 import { useCandidateAnalysis } from './analysis';
 import css from '../Editor.module.css';
@@ -17,24 +17,25 @@ import css from '../Editor.module.css';
  * decide availability, compatibility or lexical reference paths. `token`
  * shows Dify's variable token and floating popup, listing only usable
  * choices; a condition's token asks for the condition-variable scope. */
-export function ReferencePicker({ address, path, edit, initiallyOpen = false, onChoose, onClose, placeholder, token = false }: {
+export function ReferencePicker({ address, path, edit, initiallyOpen = false, onChoose, onClose, placeholder, token = false, anchor, addLabel, disabled }: {
   address: FieldAddress; path: readonly string[]; edit: (apply: (document: WorkflowDocument) => WorkflowDocument) => void;
-  token?: boolean; initiallyOpen?: boolean; onChoose?: (choice: WorkflowReferenceChoice) => void; onClose?: () => void; placeholder?: string;
+  token?: boolean; initiallyOpen?: boolean; onChoose?: (choice: WorkflowReferenceChoice) => void; onClose?: (restoreFocus: boolean) => void; placeholder?: string; anchor?: DOMRect; addLabel?:string; disabled?:boolean;
 }) {
   const tx = useTranslation(), owner = useContext(DraftOwner)!;
   const document = useSelector(owner.editor, snapshot => snapshot.context.document);
   const [open, setOpen] = useState(initiallyOpen), [search, setSearch] = useState('');
   const popup = useRef<HTMLDivElement>(null);
   const { refs, floatingStyles } = useFloating({ open, placement: 'bottom-start', strategy: 'fixed', whileElementsMounted: autoUpdate, middleware: [offset(6), flip(), shift({ padding: 12 })] });
+  useEffect(()=>{if(anchor)refs.setReference({getBoundingClientRect:()=>anchor});},[anchor,refs.setReference]);
   const root = useRef<HTMLDivElement>(null), trigger = useRef<HTMLButtonElement>(null), searchInput = useRef<HTMLInputElement>(null), id = useId();
   const field = encodeField(address);
   useEffect(() => { setOpen(initiallyOpen); setSearch(''); }, [field, initiallyOpen]);
-  const wasOpen = useRef(open);
-  useEffect(() => { if (wasOpen.current && !open) onClose?.(); wasOpen.current = open; }, [open]);
+  const wasOpen = useRef(open), returnFocus = useRef(false);
+  useEffect(() => { if (wasOpen.current && !open) onClose?.(returnFocus.current); wasOpen.current = open; }, [open]);
   useEffect(() => {
     if (!open) return;
     searchInput.current?.focus();
-    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node) && !popup.current?.contains(event.target as Node)) setOpen(false); };
+    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node) && !popup.current?.contains(event.target as Node)) { returnFocus.current = false; setOpen(false); } };
     window.document.addEventListener('pointerdown', outside, true);
     return () => window.document.removeEventListener('pointerdown', outside, true);
   }, [open]);
@@ -44,8 +45,9 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
     const original = document && consumerAddress(document, address);
     // A condition's token lists every comparable variable, whatever the
     // other side holds now.
-    const consumer = original && token && original.field.kind === 'condition' ? { ...original, field: { ...original.field, kind: 'condition_variable' as const } }
-      : original && token && original.field.kind === 'break_condition' ? { ...original, field: { kind: 'break_condition_variable' as const } } : original;
+    const variableSide = original?.path?.at(-1)?.kind==='left'||original?.path?.at(-1)?.kind==='value';
+    const consumer = original && token && variableSide && original.field.kind === 'condition' ? { ...original, field: { ...original.field, kind: 'condition_variable' as const } }
+      : original && token && variableSide && original.field.kind === 'break_condition' ? { ...original, field: { kind: 'break_condition_variable' as const } } : original;
     return consumer ? { consumer, reference: path.length ? [...path] : undefined, search, limit: 128 } : undefined;
   }, [document, field, path, search, token]);
   const result = useCandidateAnalysis(query, open && !!query), report = result?.report?.analysis;
@@ -58,7 +60,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
     const key = choice.path[0], group = groups.get(key) ?? [];
     group.push(choice); groups.set(key, group);
   }
-  const close = () => { setOpen(false); trigger.current?.focus(); };
+  const close = () => { returnFocus.current = true; setOpen(false); trigger.current?.focus(); };
   // The workflow input belongs to the root Start, also inside a body.
   const startTitle = () => { const start = document && startOf(document.block); return (start && document && nodePresentation(document, [], start)?.title) || tx('workflows:canvas.start-title'); };
   // A producer is in this block, a block around it, or the body this
@@ -71,8 +73,8 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx('workflows:value.whole');
   const present = (content: import('react').ReactNode) => token ? createPortal(content, window.document.body) : content;
   return <div ref={root} className={css.referencePicker}>
-    <button ref={element => { trigger.current = element; refs.setReference(element); }} data-workflow-field={field} type="button" className={token ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
-      {token && path.length ? <span className={css.branchVariableToken}>
+    <button style={anchor?{display:'none'}:undefined} hidden={!!anchor} ref={element => { trigger.current = element; if(!anchor)refs.setReference(element); }} data-workflow-field={field} type="button" disabled={disabled} title={path.length?`${currentTitle} / ${currentValue}`:undefined} className={addLabel ? css.iconButton : token ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={addLabel??tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => { returnFocus.current = open; setOpen(value => !value); }}>
+      {addLabel?<IconPlus size={14}/>:token && path.length ? <span className={css.branchVariableToken}>
         {producer === 'args' ? <IconEntry size={13} /> : currentNode ? <KindIcon kind={currentNode.type} size={13} /> : null}
         <span className={css.branchVariableSource}>{currentTitle}</span><span className={css.branchVariableSlash}>/</span><b><span aria-hidden>{'{x}'}</span> {currentValue}</b>
       </span> : <span>{currentTitle || placeholder || tx('workflows:value.pick')}{path.length > 1 ? ` / ${path.slice(1).join(' / ')}` : ''}</span>}

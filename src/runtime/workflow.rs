@@ -28,11 +28,25 @@ use super::subagent::SubagentName;
 
 mod admission;
 pub mod authoring;
+mod code;
 pub use authoring::{WorkflowModelPolicy, WorkflowToolSelector};
+pub use code::WorkflowCodeLanguage;
+
+/// Internal entry point of the resource-bounded Template renderer binary.
+#[doc(hidden)]
+#[must_use]
+pub fn run_template_renderer() -> i32 {
+    transform::run_worker()
+}
 mod defaults;
 pub(crate) use defaults::apply_schema_defaults;
 mod execution;
 mod flow;
+mod transform;
+pub use transform::{
+    WorkflowAggregateGroup, WorkflowListFilter, WorkflowListOperator, WorkflowListSort,
+    WorkflowSortOrder,
+};
 pub mod inspection;
 pub mod read_model;
 mod references;
@@ -419,6 +433,48 @@ pub struct WorkflowBlock {
 pub enum WorkflowNodeDefinition {
     /// The block's real Start node. Its input is the block input contract.
     Start {},
+    /// Jinja-style text transformation with explicit lexical inputs.
+    Template {
+        variables: BTreeMap<String, WorkflowValue>,
+        template: String,
+    },
+    /// Pure filter, stable sort and selection over an array.
+    List {
+        input: WorkflowValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<WorkflowListFilter>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sort: Option<WorkflowListSort>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extract: Option<WorkflowValue>,
+    },
+    /// One tool-free classification Call with an exit per class.
+    Classifier {
+        #[serde(default)]
+        model: WorkflowModelPolicy,
+        input: WorkflowValue,
+        #[serde(default)]
+        instruction: Vec<WorkflowValue>,
+        classes: Vec<WorkflowClassifierClass>,
+    },
+    /// A Python/JavaScript main function executed through workspace Bash.
+    Code {
+        code_language: WorkflowCodeLanguage,
+        variables: BTreeMap<String, WorkflowValue>,
+        code: String,
+        outputs: BTreeMap<String, WorkflowVarType>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry: Option<WorkflowRetry>,
+        #[serde(default)]
+        on_error: WorkflowValueErrorStrategy,
+    },
+    /// Select the first available source per output, optionally grouped.
+    Aggregate {
+        grouped: bool,
+        groups: Vec<WorkflowAggregateGroup>,
+    },
     /// One tool-free logical Auxiliary Call using the invoking Attempt's authority.
     Model {
         #[serde(default)]
@@ -808,6 +864,15 @@ pub struct WorkflowAgentRoute {
     pub description: String,
 }
 
+/// A classifier's stable exit, display label and variable-aware topic.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowClassifierClass {
+    pub id: String,
+    pub label: String,
+    pub description: Vec<WorkflowValue>,
+}
+
 /// The reserved field through which a routed child picks its exit.
 pub const AGENT_ROUTE_FIELD: &str = "switch";
 pub const MAX_AGENT_ROUTES: usize = 32;
@@ -999,7 +1064,23 @@ pub enum WorkflowPredicate {
         left: WorkflowValue,
         right: WorkflowValue,
     },
-    /// String containment, without coercion.
+    Greater {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    GreaterEqual {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    Less {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    LessEqual {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    /// String or typed-array containment, without coercion.
     Contains {
         left: WorkflowValue,
         right: WorkflowValue,
@@ -1016,7 +1097,7 @@ pub enum WorkflowPredicate {
         left: WorkflowValue,
         right: WorkflowValue,
     },
-    /// Whether a string is empty.
+    /// Explicit emptiness of a JSON value, as Dify tests it.
     Empty {
         value: WorkflowValue,
     },
@@ -1251,6 +1332,23 @@ impl WorkflowProgram {
 #[derive(Debug, Clone)]
 pub enum WorkflowNodeProgram {
     Start,
+    Template {
+        variables: BTreeMap<String, WorkflowValue>,
+        template: String,
+    },
+    List {
+        input: WorkflowValue,
+        filter: Option<WorkflowListFilter>,
+        sort: Option<WorkflowListSort>,
+        limit: Option<u32>,
+        extract: Option<WorkflowValue>,
+        output_schema: Value,
+    },
+    Aggregate {
+        grouped: bool,
+        groups: Vec<WorkflowAggregateGroup>,
+        output_schema: Value,
+    },
     /// One immutable, tool-free Auxiliary Call template.
     Model(WorkflowModelProgram),
     Loop {
@@ -1283,8 +1381,8 @@ pub enum WorkflowNodeProgram {
     },
     Tool {
         selector: crate::capabilities::selection::ExactToolSelector,
-        arguments: WorkflowValue,
-        result: WorkflowToolResult,
+        arguments: tool::WorkflowToolArguments,
+        result: tool::WorkflowToolProjection,
         retry: Option<WorkflowRetry>,
         on_error: WorkflowValueErrorStrategy,
     },
@@ -1303,6 +1401,8 @@ pub enum WorkflowNodeProgram {
 /// Static Model intent; actual invocation resolution uses frozen Attempt resources.
 #[derive(Debug, Clone)]
 pub struct WorkflowModelProgram {
+    /// Classifier exits; ordinary Model calls have none.
+    pub classes: Vec<WorkflowClassifierClass>,
     pub model: crate::model::session::AuxiliaryModelPolicy,
     pub messages: Vec<WorkflowModelMessage>,
     pub output: WorkflowModelOutput,
@@ -1822,11 +1922,64 @@ fn compile_block(
             .nodes
             .get(&node_id)
             .expect("topological node exists");
-        let available_before = scopes.scope(&node_id, &available_after, &base);
+        let available_before = if matches!(node, WorkflowNodeDefinition::Aggregate { .. }) {
+            scopes.potential_scope(&node_id, &available_after, &base)
+        } else {
+            scopes.scope(&node_id, &available_after, &base)
+        };
         let compiled = (|| { Ok(match node {
             WorkflowNodeDefinition::Start {} => {
                 available_after.insert(node_id.clone(), available_before.clone());
                 WorkflowNodeProgram::Start
+            }
+            WorkflowNodeDefinition::Template { variables, template } => {
+                transform::validate_template(template, variables)?;
+                for (name,value) in variables { value_schema(value,&available_before,&node_id,0).map_err(|e| e.at(format!("variables.{name}")))?; }
+                available_after.insert(node_id.clone(), available_before.with_prefix(&node_id,&transform::text_schema()));
+                WorkflowNodeProgram::Template { variables:variables.clone(), template:template.clone() }
+            }
+            WorkflowNodeDefinition::List { input, filter, sort, limit, extract } => {
+                let array = value_schema(input,&available_before,&node_id,0).map_err(|e| e.at("input"))?;
+                transform::validate_list_values(&array, filter.as_ref(), extract.as_ref(), &available_before, &node_id)?;
+                let output_schema = transform::list_schema(&array,filter.as_ref(),sort.as_ref(),*limit)?;
+                available_after.insert(node_id.clone(),available_before.with_prefix(&node_id,&output_schema));
+                WorkflowNodeProgram::List { input:input.clone(),filter:filter.clone(),sort:sort.clone(),limit:*limit,extract:extract.clone(),output_schema }
+            }
+            WorkflowNodeDefinition::Classifier { model,input,instruction,classes } => {
+                let model = transform::classifier(model,input,instruction,classes,&available_before,&node_id)?;
+                if container.is_none() && classes.iter().any(|class| !outgoing[&node_id].iter().any(|edge| edge.port == WorkflowPort::case(&class.id))) { return Err(WorkflowCompileError::InvalidBranch("Classifier requires a successor per class".into())); }
+                available_after.insert(node_id.clone(),available_before.with_prefix(&node_id,&transform::classifier_result_schema()));
+                WorkflowNodeProgram::Model(model)
+            }
+            WorkflowNodeDefinition::Code { code_language, variables, code: script, outputs, retry, on_error } => {
+                code::validate(variables, script, &available_before, &node_id)?;
+                let schema = code::output_schema(outputs)?;
+                validate_workflow_schema(&schema, "Code outputs")?;
+                validate_retry(retry.as_ref(), "Code", &node_id)?;
+                if let WorkflowValueErrorStrategy::DefaultValue { value } = on_error
+                    && !jsonschema::Validator::new(&schema).is_ok_and(|validator| validator.is_valid(value)) {
+                    return Err(WorkflowCompileError::InvalidField("Code default value must satisfy its outputs".into()).at("on_error.value"));
+                }
+                available_after.insert(node_id.clone(), available_before.with_prefix(&node_id, &schema));
+                WorkflowNodeProgram::Tool {
+                    selector: crate::capabilities::selection::ExactToolSelector::Builtin { name: "bash".into() },
+                    arguments: tool::WorkflowToolArguments::Code { language: *code_language, variables: variables.clone(), code: script.clone() },
+                    result: tool::WorkflowToolProjection::Code { schema }, retry: *retry, on_error: on_error.clone(),
+                }
+            }
+            WorkflowNodeDefinition::Aggregate { groups, grouped } => {
+                transform::validate_groups(groups,*grouped)?;
+                let active=transform::active_groups(groups,*grouped);
+                for (index,group) in active.iter().enumerate() {
+                    scopes.validate_aggregate(&node_id,&group.variables,&base).map_err(|e| e.at(format!("groups.{index}.variables")))?;
+                    for (position,path) in group.variables.iter().enumerate() {
+                        let actual = value_schema(&WorkflowValue::Reference {path:path.clone()},&available_before,&node_id,0).map_err(|e| e.at(format!("groups.{index}.variables.{position}")))?;
+                        if !schemas_compatible(&actual,&group.output_type.ok_or_else(|| WorkflowCompileError::InvalidField("aggregate type is not selected".into()))?.schema()) { return Err(WorkflowCompileError::IncompatibleReference("aggregate source type does not match the output group".into()).at(format!("groups.{index}.variables.{position}"))); }
+                    }
+                }
+                let output_schema = transform::aggregate_schema(groups,*grouped)?;
+                available_after.insert(node_id.clone(),available_before.with_prefix(&node_id,&output_schema));
+                WorkflowNodeProgram::Aggregate {groups:active.to_vec(),grouped:*grouped,output_schema}
             }
             WorkflowNodeDefinition::Model { model, messages, output, retry, on_error } => {
                 let model = model.lower().map_err(|error| error.at("model"))?;
@@ -1837,6 +1990,7 @@ fn compile_block(
                     available_before.with_prefix(&node_id, &output.schema()),
                 );
                 WorkflowNodeProgram::Model(WorkflowModelProgram {
+                    classes: Vec::new(),
                     model,
                     messages: messages.clone(),
                     output: output.clone(),
@@ -2063,8 +2217,8 @@ fn compile_block(
                 );
                 WorkflowNodeProgram::Tool {
                     selector,
-                    arguments: arguments.clone(),
-                    result: result.clone(),
+                    arguments: tool::WorkflowToolArguments::Value(arguments.clone()),
+                    result: tool::WorkflowToolProjection::Native(result.clone()),
                     retry: *retry,
                     on_error: on_error.clone(),
                 }
@@ -2140,6 +2294,7 @@ fn compile_block(
             | WorkflowNodeProgram::Branch { .. }
             | WorkflowNodeProgram::Review { .. } => {}
             WorkflowNodeProgram::Agent(agent) if !agent.routes.is_empty() => {}
+            WorkflowNodeProgram::Model(model) if !model.classes.is_empty() => {}
             _ if container.is_none()
                 && !edges.iter().any(|edge| edge.port == WorkflowPort::Next) =>
             {
@@ -2267,6 +2422,19 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
         }
         let node = definition.nodes.get(&edge.from).expect("checked above");
         let port = match (node, edge.port.clone()) {
+            (WorkflowNodeDefinition::Classifier { classes, .. }, Some(port))
+                if classes
+                    .iter()
+                    .any(|class| WorkflowPort::case(&class.id) == port) =>
+            {
+                port
+            }
+            (WorkflowNodeDefinition::Classifier { .. }, _) => {
+                return Err(WorkflowCompileError::InvalidBranch(
+                    "Classifier edge must name a class ID".into(),
+                )
+                .at(format!("edges.{edge_index}.port")));
+            }
             (WorkflowNodeDefinition::Branch { cases }, Some(port))
                 if port == WorkflowPort::False
                     || cases
@@ -2292,6 +2460,10 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
                     ..
                 }
                 | WorkflowNodeDefinition::Tool {
+                    on_error: WorkflowValueErrorStrategy::FailBranch,
+                    ..
+                }
+                | WorkflowNodeDefinition::Code {
                     on_error: WorkflowValueErrorStrategy::FailBranch,
                     ..
                 },
@@ -2368,6 +2540,9 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
                 on_error: WorkflowValueErrorStrategy::FailBranch,
                 ..
             } | WorkflowNodeDefinition::Tool {
+                on_error: WorkflowValueErrorStrategy::FailBranch,
+                ..
+            } | WorkflowNodeDefinition::Code {
                 on_error: WorkflowValueErrorStrategy::FailBranch,
                 ..
             }
@@ -3327,6 +3502,20 @@ fn schemas_compatible(actual: &Value, expected: &Value) -> bool {
     .unwrap_or_else(|error| match error {})
 }
 
+/// Derived contracts use a pure union for values such as List's nullable
+/// first/last record. User-written schemas still use the closed vocabulary
+/// admitted by `validate_workflow_schema`; union siblings are not discarded.
+fn schema_alternatives(schema: &Value) -> Option<&[Value]> {
+    let object = schema.as_object()?;
+    if object.len() != 1 {
+        return None;
+    }
+    object
+        .get("anyOf")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+}
+
 /// Every recursive proof and finite-value validation is admitted before work.
 /// Compilation supplies an unlimited policy; authoring uses its request budget.
 #[allow(clippy::too_many_lines)]
@@ -3351,6 +3540,25 @@ fn schemas_compatible_with<E>(
             }
         }
         return Ok(true);
+    }
+    if let Some(alternatives) = schema_alternatives(actual) {
+        if alternatives.is_empty() {
+            return Ok(false);
+        }
+        for alternative in alternatives {
+            if !schemas_compatible_with(alternative, expected, admit)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+    if let Some(alternatives) = schema_alternatives(expected) {
+        for alternative in alternatives {
+            if schemas_compatible_with(actual, alternative, admit)? {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
     }
     if finite_schema_values(expected).is_some() {
         return Ok(false);
@@ -4573,6 +4781,7 @@ mod tests {
     mod agents;
     mod authored_paths;
     mod compiler_models;
+    mod data_nodes;
     mod graph;
     #[cfg(unix)]
     #[path = "model.rs"]

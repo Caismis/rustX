@@ -18,8 +18,208 @@ use tokio::sync::{mpsc, oneshot};
 
 #[path = "model_capacity.rs"]
 mod capacity_admission;
+#[path = "model_inspection.rs"]
+mod inspection;
 #[path = "model_publication.rs"]
 mod publication;
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One complete native call and routing proof.
+async fn classifier_uses_one_auxiliary_call_and_only_the_validated_class_path() {
+    for (class, expected) in [
+        ("support", Some("Support")),
+        ("other", Some("Other")),
+        ("invalid", None),
+    ] {
+        let plane = workflow_test_plane(1);
+        let template = |text: &str| WorkflowNodeDefinition::Template {
+            variables: BTreeMap::new(),
+            template: text.into(),
+        };
+        let definition = base_definition(
+            "classify",
+            BTreeMap::from([
+                (
+                    "classify".into(),
+                    WorkflowNodeDefinition::Classifier {
+                        model: WorkflowModelPolicy::Session,
+                        input: reference("args.task"),
+                        instruction: vec![WorkflowValue::Literal {
+                            value: json!("Route the request."),
+                        }],
+                        classes: vec![
+                            WorkflowClassifierClass {
+                                id: "support".into(),
+                                label: "售后支持".into(),
+                                description: vec![
+                                    WorkflowValue::Literal {
+                                        value: json!("Support requests: "),
+                                    },
+                                    reference("args.task"),
+                                ],
+                            },
+                            WorkflowClassifierClass {
+                                id: "other".into(),
+                                label: "Other".into(),
+                                description: vec![WorkflowValue::Literal {
+                                    value: json!("Other questions"),
+                                }],
+                            },
+                        ],
+                    },
+                ),
+                ("support".into(), template("Support")),
+                ("other".into(), template("Other")),
+                (
+                    "merge".into(),
+                    WorkflowNodeDefinition::Aggregate {
+                        grouped: false,
+                        groups: vec![super::super::WorkflowAggregateGroup {
+                            name: "output".into(),
+                            output_type: Some(super::super::WorkflowVarType::String),
+                            variables: vec![
+                                vec!["support".into(), "output".into()],
+                                vec!["other".into(), "output".into()],
+                            ],
+                        }],
+                    },
+                ),
+                (
+                    "done".into(),
+                    return_node(BTreeMap::from([
+                        ("answer".into(), reference("merge.output")),
+                        ("class_name".into(), reference("classify.class_name")),
+                        ("class_label".into(), reference("classify.class_label")),
+                        ("usage".into(), reference("classify.usage")),
+                    ])),
+                ),
+            ]),
+            vec![
+                branch_edge("classify", "support", WorkflowPort::case("support")),
+                branch_edge("classify", "other", WorkflowPort::case("other")),
+                edge("support", "merge"),
+                edge("other", "merge"),
+                edge("merge", "done"),
+            ],
+        );
+        let program = compile_test(definition).unwrap();
+        let (context, executor, mut entries, _) = setup(
+            &plane,
+            &program,
+            completed(
+                &json!({"class_id":class}).to_string(),
+                ModelFinishReason::Stop,
+            ),
+            true,
+        );
+        let runtime = workflow_runtime(&plane);
+        let run = start(&runtime, context, workflow_cancellation().1);
+        let request = entry(&mut entries).await;
+        assert!(request.request.tools.is_empty());
+        request.release.send(()).unwrap();
+        let result = run.await.unwrap();
+        if let Some(expected) = expected {
+            let result = result.unwrap();
+            assert_eq!(result["answer"], expected);
+            assert_eq!(
+                result["class_label"],
+                if class == "support" {
+                    "售后支持"
+                } else {
+                    "Other"
+                }
+            );
+            assert_eq!(
+                result["class_name"],
+                if class == "support" {
+                    "Support requests: the input"
+                } else {
+                    "Other questions"
+                }
+            );
+            assert!(result["usage"]["total_tokens"].is_u64());
+        } else {
+            assert!(result.is_err());
+            assert!(
+                !runtime.read_model.snapshot().runs[0]
+                    .instances
+                    .iter()
+                    .any(|row| row.node.as_deref() == Some("merge"))
+            );
+        }
+        assert!(entries.try_recv().is_err());
+        executor.drain().await;
+    }
+}
+
+#[tokio::test]
+async fn classifier_renders_numeric_input_and_topic_variables_in_one_native_call() {
+    let plane = workflow_test_plane(1);
+    let mut definition = base_definition(
+        "classify",
+        BTreeMap::from([
+            (
+                "classify".into(),
+                WorkflowNodeDefinition::Classifier {
+                    model: WorkflowModelPolicy::Session,
+                    input: reference("args.task"),
+                    instruction: vec![reference("args.task")],
+                    classes: vec![WorkflowClassifierClass {
+                        id: "priority".into(),
+                        label: "优先级".into(),
+                        description: vec![
+                            WorkflowValue::Literal {
+                                value: json!("Priority "),
+                            },
+                            reference("args.task"),
+                        ],
+                    }],
+                },
+            ),
+            (
+                "done".into(),
+                return_node(BTreeMap::from([
+                    ("result".into(), reference("classify.class_name")),
+                    ("label".into(), reference("classify.class_label")),
+                ])),
+            ),
+        ]),
+        vec![branch_edge(
+            "classify",
+            "done",
+            WorkflowPort::case("priority"),
+        )],
+    );
+    definition.block.input = schema(json!({"task":{"type":"number"}}), &["task"]);
+    let program = compile_test(definition).unwrap();
+    let (context, executor, mut entries, _) = setup(
+        &plane,
+        &program,
+        completed(r#"{"class_id":"priority"}"#, ModelFinishReason::Stop),
+        true,
+    );
+    let runtime = workflow_runtime(&plane);
+    let program = Arc::new(program);
+    let operation = tokio::spawn(async move {
+        runtime
+            .run_test_foreground(
+                program,
+                ToolCallId::new("numeric-classification"),
+                context,
+                json!({"task":7}),
+                workflow_cancellation().1,
+            )
+            .await
+    });
+    let request = entry(&mut entries).await;
+    request.release.send(()).unwrap();
+    assert_eq!(
+        operation.await.unwrap().unwrap(),
+        json!({"result":"Priority 7","label":"优先级"})
+    );
+    assert!(entries.try_recv().is_err());
+    executor.drain().await;
+}
 
 struct Entry {
     request: ModelRequest,

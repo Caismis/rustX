@@ -14,6 +14,9 @@
 //! [`crate::tools::types::ToolExecutionResult::model_facing_projection`] is the
 //! single aggregate model-facing projection that combines those facts with
 //! status and tool-owned content.
+//! A native runtime consumer may additionally request a complete, separately
+//! bounded stdout channel; it never consumes a preview or multiplexed spill
+//! as the original structured return value.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -21,6 +24,9 @@ use std::path::PathBuf;
 use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
 use crate::tools::managed_output::{BackgroundOutput, ManagedToolOutput, ResultSpill};
 use crate::tools::types::{ManagedOutputContinuation, TruncationState};
+
+mod stdout;
+pub(crate) use stdout::BoundedStdoutCapture;
 
 /// Test-only observation seam for committed background appends.
 #[cfg(test)]

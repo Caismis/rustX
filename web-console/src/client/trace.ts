@@ -1,7 +1,7 @@
 export {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import type {TraceValueSelector} from '../../../protocol/app-server/trace-field';
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v63';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v70';
 
 /** Records requested per older page. */
 export const TRACE_PAGE_SIZE = 32;
@@ -30,8 +30,8 @@ export interface TraceDetailEntry {
   /** One in-flight read; lifecycle refreshes may mark its result stale without cancelling it. */
   readonly read?: object;
   readonly stale?: boolean;
-  readonly content?:import('../../../protocol/app-server/v63').ContentBinding[];
-  readonly readContent?:(ref:import('../../../protocol/app-server/v63').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v63').ContentChunk>;
+  readonly content?:import('../../../protocol/app-server/v70').ContentBinding[];
+  readonly readContent?:(ref:import('../../../protocol/app-server/v70').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v70').ContentChunk>;
   /** A positive finite descriptor is not a complete TraceDetail. */
   readonly page?: CheckpointPage;
   readonly reader?: TraceFieldReader;
@@ -58,7 +58,7 @@ export interface TraceCache {
   /** A native tool landing retains its historical interval until explicitly released. */
   located?: true;
   page: TracePage;
-  /** Captured per represented row, never replaced with the latest checkpoint. */
+  /** Issued for each represented row; renewed only by that row's native head. */
   readCuts?:Readonly<Record<string,CheckpointReadCut>>;
   fields?:TraceFieldReader;
   epoch: number;
@@ -295,7 +295,10 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
   // Keep the original reader while the same native content remains represented.
   // A changed body is refreshed in the background; it never blanks the inspector.
   const unchanged = (id: string) => old.get(id) === latest.get(id) || contentIdentity(old.get(id)) === contentIdentity(latest.get(id));
-  for (const id of Object.keys(readCuts)) if (previous.readCuts?.[id] && unchanged(id)) readCuts[id] = previous.readCuts[id];
+  // Workflow collections are opened lazily through the live reader, rather
+  // than an independently retained detail page. A freshly advertised native
+  // head renews that row's cut even when its node extent is unchanged.
+  for (const id of Object.keys(readCuts)) if (previous.readCuts?.[id] && unchanged(id) && latest.get(id)?.kind !== 'workflow') readCuts[id] = previous.readCuts[id];
   const details = Object.fromEntries(Object.entries(previous.details).map(([id, entry]) =>
     [id, unchanged(id) && !(entry.error && old.get(id)?.state !== latest.get(id)?.state)
       ? entry : { ...entry, stale: true, error: undefined }],

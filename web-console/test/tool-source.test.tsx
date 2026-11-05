@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { ContentChunk, ContentRef, ForegroundToolExecution } from '../../protocol/app-server/v63';
+import type { ContentChunk, ContentRef, ForegroundToolExecution } from '../../protocol/app-server/v70';
 import { Content } from '../src/app/agent/Message';
 import { Tool } from '../src/app/agent/Tool';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
@@ -42,6 +42,15 @@ it('reads deferred write arguments only on expansion, preserves exact content an
     expect(read).toHaveBeenCalledTimes(requests);
     expect(JSON.stringify(deferred)).toBe(frozen);
   } finally { server.client.disconnect(); }
+});
+it('a streamed proposal reserves no assembly-text row before its native Tool header arrives', () => {
+  const blocks = [{ type: 'tool_call' as const, id: original.call_id!, tool_id: 'tool-write', name: 'write', arguments: {} }];
+  const ui = render(<Content messageId={original.message_id!} blocks={blocks} streaming/>);
+  expect(ui.container.childElementCount).toBe(0);
+  expect(ui.container.textContent).toBe('');
+  ui.rerender(<Content messageId={original.message_id!} blocks={blocks} tools={[original]} streaming/>);
+  expect(ui.getByRole('button', { expanded: false })).toBeTruthy();
+  expect(ui.queryByText(/Assembling/)).toBeNull();
 });
 it('an accepted canonical call reads its omitted native descriptor instead of claiming it is assembling', async () => {
   const { server, source } = await fixture();

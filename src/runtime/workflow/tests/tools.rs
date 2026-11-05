@@ -143,6 +143,15 @@ fn context_with_registration(
     registration: ToolRegistration,
     lifecycle: crate::agent::AttemptLifecycle,
 ) -> crate::runtime::subagent::NativeExecutionContext {
+    context_with_environment(plane, registration, lifecycle, ToolEnvironment::new())
+}
+
+fn context_with_environment(
+    plane: &WorkflowTestPlane,
+    registration: ToolRegistration,
+    lifecycle: crate::agent::AttemptLifecycle,
+    environment: ToolEnvironment,
+) -> crate::runtime::subagent::NativeExecutionContext {
     let model_catalog = ModelCatalog::from_toml_slice(WORKFLOW_TEST_MODELS.as_bytes()).unwrap();
     let models = ModelBindingRegistry::new(
         model_catalog
@@ -162,7 +171,7 @@ fn context_with_registration(
         Arc::new(SkillSnapshot::new(Vec::new())),
         None,
         None,
-        ToolEnvironment::new(),
+        environment,
         Arc::new(McpRuntimeLeaseAuthority::empty()),
         Arc::new(BTreeMap::new()),
     ));
@@ -1128,6 +1137,55 @@ async fn a_failed_tool_is_retried_as_new_invocations_then_handled() {
     );
     let (value, _) = run_flaky(0, &branch).await;
     assert_eq!(value.unwrap(), json!({"passed": true}));
+}
+
+#[tokio::test]
+async fn aggregate_skips_failed_producers_even_when_their_diagnostics_match_the_output_path() {
+    for field in ["result", "error_message"] {
+        let definition: WorkflowDefinition = serde_json::from_value(json!({
+            "description":"Converge successful or handled Tool output",
+            "block":{
+                "nodes":{
+                    "start":{"type":"start"},
+                    "check":{"type":"tool","selector":{"origin":"builtin","name":"check"},
+                        "arguments":{"type":"literal","value":{"passed":true,"label":"fixed"}},
+                        "result":{"type":"json","schema":schema(json!({(field):{"type":"string"}}),&[field])},
+                        "on_error":{"type":"fail_branch"}},
+                    "fallback":{"type":"template","variables":{},"template":"Handled fallback"},
+                    "merge":{"type":"aggregate","grouped":false,"groups":[{"name":"output","output_type":"string","variables":[["check",field],["fallback","output"]]}]},
+                    "done":{"type":"return","outputs":[{"variable":"result","value_selector":["merge","output"]}]}
+                },
+                "edges":[{"from":"start","to":"check"},{"from":"check","to":"merge"},
+                    {"from":"check","to":"fallback","port":"fail"},{"from":"fallback","to":"merge"},{"from":"merge","to":"done"}]
+            }
+        })).unwrap();
+        let plane = workflow_test_plane(1);
+        let probe = Probe::new(ToolExecutionStatus::Failed {
+            error: "original failure diagnostic".into(),
+        });
+        let context = context(
+            &plane,
+            probe.clone(),
+            crate::agent::AttemptLifecycle::default(),
+        );
+        let (_, cancellation) = workflow_cancellation();
+        let value = workflow_runtime(&plane)
+            .run_test_foreground(
+                Arc::new(compile_test(definition).unwrap()),
+                ToolCallId::new("aggregate-fail-branch"),
+                context,
+                json!({}),
+                cancellation,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            value,
+            json!({"result":"Handled fallback"}),
+            "selector {field}"
+        );
+        assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
+    }
 }
 
 #[test]

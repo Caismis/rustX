@@ -308,10 +308,12 @@ fn count_conversation_store_open() {
 /// Version 79 combined Scheduler contracts with structured request fingerprints.
 /// Version 80 also includes Workflow node-wait Journal and Auxiliary Call identities.
 /// Version 82 combines Scheduler and physical lifecycle contracts with reasoning-free
-/// model invocations, workspace changes and MCP draft preparation.
-/// Version 83 records Session configuration commits as Journal facts with
-/// their own transcript positions. Earlier stores are rejected.
-pub const SQLITE_SCHEMA_VERSION: i64 = 83;
+/// model invocations, workspace changes and MCP draft preparation. Earlier stores are rejected.
+/// Version 83 adds original Workflow node input/output Journal facts and data-node kinds.
+/// Version 84 requires exact Workflow run/instance indexes for bounded historical reads.
+/// Version 85 records Session configuration commits as Journal facts with
+/// their own transcript positions.
+pub const SQLITE_SCHEMA_VERSION: i64 = 85;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1219,6 +1221,7 @@ mod observation_request_summary;
 mod observation_state;
 mod observation_tools;
 mod observation_trace;
+mod workflow_trace;
 
 /// Optional immutable read layout belongs to the native source transaction.
 /// Only a failure contained by its savepoint may retire the optional layout.

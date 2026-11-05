@@ -18,6 +18,28 @@ impl WorkflowReadSource {
     pub(crate) fn revision(&self) -> crate::runtime::workflow::read_model::WorkflowRevision {
         self.original.revision
     }
+    /// Query this immutable native cut, independently of its finite display header.
+    pub(crate) fn active_node_state(
+        &self,
+        node: &crate::runtime::workflow::WorkflowNodeInstance,
+    ) -> Option<&crate::runtime::workflow::read_model::WorkflowState> {
+        use crate::runtime::workflow::read_model::WorkflowState;
+        self.original
+            .runs
+            .iter()
+            .find(|run| {
+                run.id == node.block.run && !matches!(run.state, WorkflowState::Settled { .. })
+            })?
+            .instances
+            .iter()
+            .find(|current| {
+                current.block == node.block
+                    && current.node.as_ref() == Some(&node.node)
+                    && current.visit == Some(node.visit)
+                    && !matches!(current.state, WorkflowState::Settled { .. })
+            })
+            .map(|current| &current.state)
+    }
     pub(crate) fn prepare(&self) {
         self.prepared.get_or_init(|| {
             let mut runs = Vec::with_capacity(self.original.runs.len());

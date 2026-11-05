@@ -4,12 +4,31 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { rootBlock } from './workflow-root';
 import { nodePresentation } from '../src/app/workflows/document/geometry';
 import type { WorkflowDocument } from '../src/app/workflows/document/model';
-import type { WorkflowToolSource } from '../../protocol/app-server/v63';
+import type { WorkflowToolSource } from '../../protocol/app-server/v70';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { NextStep } from '../src/app/workflows/ui/editor/NextStep';
 import { ToolCatalogProvider } from '../src/app/workflows/ui/editor/toolCatalog';
+import { Palette } from '../src/app/workflows/ui/editor/Palette';
+import { insertNode } from '../src/app/workflows/document/commands';
+import type { NodeChoice } from '../src/app/workflows/ui/editor/NodeChooser';
 
 afterEach(cleanup);
+
+it('inserts single-exit nodes on an edge and reserves routing nodes for ordinary creation', () => {
+  const document: WorkflowDocument = { description: 'Insert on an existing edge', block: rootBlock() };
+  let current = document;
+  const onChoose = vi.fn((choice: NodeChoice) => { current = insertNode(document, [], 0, choice.kind, 'inserted'); });
+  const ui = render(<Palette at={{ x: 0, y: 0 }} tools={[]} omit={[]} insertion onChoose={onChoose} onClose={vi.fn()} />);
+  for (const name of ['Question Classifier', 'Branch', 'Human Input']) {
+    expect(screen.queryByRole('option', { name })).toBeNull();
+  }
+  fireEvent.click(screen.getByRole('option', { name: 'Template' }));
+  expect(current.block.edges).toEqual([{ from: 'start', to: 'inserted' }, { from: 'inserted', to: 'done' }]);
+  expect(current.block.nodes.inserted.type).toBe('template');
+  ui.rerender(<Palette at={{ x: 0, y: 0 }} tools={[]} omit={[]} onChoose={onChoose} onClose={vi.fn()} />);
+  expect(screen.getByRole('option', { name: 'Question Classifier' })).toBeTruthy();
+  expect(screen.getByRole('option', { name: 'Human Input' })).toBeTruthy();
+});
 
 it('keeps a dangling authored successor removable without hiding its valid sibling', () => {
   const initial: WorkflowDocument = { description: 'Repair an incomplete graph', block: rootBlock() };

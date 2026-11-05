@@ -1,4 +1,4 @@
-import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v63';
+import type { WorkflowEditorMetadata } from '../../../../../protocol/app-server/v70';
 import { readJson } from '../../../../shared/json-numbers';
 import { boundedDocument, CommandRejected, freshNodeId, validLocalKey, validNodeId } from './commands';
 import { blockAt, deepNodeCount, edgesOf, sameBlockPath, sameDocument, updateBlock, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from './model';
@@ -92,7 +92,7 @@ function predicate(input: unknown): void {
   const record = object(input);
   switch (record.type) {
     case 'boolean': keys(record, ['type', 'value']); value(record.value); return;
-    case 'equal': case 'not_equal': case 'contains': case 'not_contains': case 'starts_with': case 'ends_with': keys(record, ['type', 'left', 'right']); value(record.left); value(record.right); return;
+    case 'greater': case 'greater_equal': case 'less': case 'less_equal': case 'equal': case 'not_equal': case 'contains': case 'not_contains': case 'starts_with': case 'ends_with': keys(record, ['type', 'left', 'right']); value(record.left); value(record.right); return;
     case 'empty': case 'not_empty': keys(record, ['type', 'value']); value(record.value); return;
     case 'not': keys(record, ['type', 'predicate']); predicate(record.predicate); return;
     case 'and': case 'or': keys(record, ['type', 'predicates']); array(record.predicates).forEach(predicate); return;
@@ -103,6 +103,30 @@ function node(input: unknown): void {
   const record = object(input);
   switch (record.type) {
     case 'start': keys(record, ['type']); return;
+    case 'template':
+      keys(record,['type','variables','template']); text(record.template);
+      for (const item of Object.values(object(record.variables))) value(item); return;
+    case 'list': {
+      keys(record,['type','input','filter','sort','limit','extract']); value(record.input);
+      if (record.filter != null) { const filter=keys(record.filter,['path','operator','value']); array(filter.path).forEach(text); if (!['equal','not_equal','contains','not_contains','starts_with','ends_with','greater','greater_equal','less','less_equal','empty','not_empty','in','not_in'].includes(filter.operator as string) || !Object.hasOwn(filter,'value')) fail(); value(filter.value); }
+      if (record.sort != null) { const sort=keys(record.sort,['path','order']); array(sort.path).forEach(text); if (sort.order!=='asc' && sort.order!=='desc') fail(); }
+      if(record.extract!=null)value(record.extract);
+      if (record.limit != null) unsigned(record.limit); return;
+    }
+    case 'classifier':
+      keys(record,['type','model','input','instruction','classes']); modelPolicy(record.model); value(record.input); if (record.instruction !== undefined) array(record.instruction).forEach(value);
+      for (const item of array(record.classes)) { const entry=keys(item,['id','label','description']); text(entry.id); text(entry.label); array(entry.description).forEach(value); } return;
+    case 'code':
+      keys(record,['type','code_language','variables','code','outputs','retry','on_error']); text(record.code);
+      if(record.code_language!=='python3'&&record.code_language!=='javascript')fail();
+      Object.values(object(record.variables)).forEach(value);
+      for(const kind of Object.values(object(record.outputs)))if(!VAR_TYPES.includes(kind as string))fail();
+      retry(record.retry); valueStrategy(record.on_error); return;
+    case 'aggregate':
+      keys(record,['type','groups','grouped']);if(typeof record.grouped!=='boolean')fail(); for (const item of array(record.groups)) {
+        const group=keys(item,['name','output_type','variables']); text(group.name); if (group.output_type!=null&&!VAR_TYPES.includes(group.output_type as string)) fail();
+        for (const path of array(group.variables)) array(path).forEach(text);
+      } return;
     case 'agent':
       keys(record, ['type', 'profile', 'task', 'output', 'routes', 'on_error']); text(record.profile); array(record.task).forEach(value); output(record.output); valueStrategy(record.on_error);
       if (record.routes !== undefined) {
@@ -127,12 +151,7 @@ function node(input: unknown): void {
         if (entry.role !== 'system' && entry.role !== 'user' && entry.role !== 'assistant') fail();
         if (entry.content !== undefined) array(entry.content).forEach(value);
       }
-      if (record.model !== undefined) {
-        const policy = object(record.model);
-        if (policy.mode === 'session') keys(policy, ['mode']);
-        else if (policy.mode === 'explicit') { keys(policy, ['mode', 'model', 'profile', 'request_params', 'max_output_tokens']); text(policy.model); if (policy.profile != null) text(policy.profile); if (policy.request_params !== undefined) object(policy.request_params); if (policy.max_output_tokens != null) unsigned(policy.max_output_tokens); }
-        else fail();
-      }
+      modelPolicy(record.model);
       output(record.output); return;
     }
     case 'tool': {
@@ -193,6 +212,13 @@ function node(input: unknown): void {
       return;
     default: fail();
   }
+}
+function modelPolicy(value: unknown) {
+  if (value === undefined) return;
+  const policy=object(value);
+  if (policy.mode==='session') keys(policy,['mode']);
+  else if (policy.mode==='explicit') { keys(policy,['mode','model','profile','request_params','max_output_tokens']); text(policy.model); if (policy.profile!=null) text(policy.profile); if (policy.request_params!==undefined) object(policy.request_params); if (policy.max_output_tokens!=null) unsigned(policy.max_output_tokens); }
+  else fail();
 }
 function edges(input: unknown): void { for (const item of array(input ?? [])) { const edge = keys(item, ['from', 'to', 'port']); text(edge.from); text(edge.to); if (edge.port != null && typeof edge.port !== 'boolean' && (typeof edge.port !== 'string' || validLocalKey(edge.port))) fail(); } }
 function nodes(input: unknown): void { for (const [id, item] of Object.entries(object(input))) { if (validNodeId(id)) fail(); node(item); } }
@@ -278,7 +304,7 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
   }
   // A copied descendant must not shadow any variable around its new body.
   // Check the complete subtree before accepting the paste transaction.
-  const produces = (node: NodeDefinition) => ['agent', 'model', 'tool', 'loop', 'iteration', 'review'].includes(node.type);
+  const produces = (node: NodeDefinition) => ['agent', 'model', 'tool', 'code', 'template', 'list', 'classifier', 'aggregate', 'loop', 'iteration', 'review'].includes(node.type);
   const outer = new Set(['args', ...[...names].filter(([id]) => produces(fragment.nodes[id])).map(([, name]) => name)]);
   for (let depth = 0; depth <= path.length; depth++)
     for (const [id, node] of Object.entries(blockAt(document, path.slice(0, depth))?.nodes ?? {})) if (produces(node)) outer.add(id);

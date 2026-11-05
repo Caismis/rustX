@@ -53,7 +53,7 @@
 
 .moreButton { width: 32px; height: 32px; }
 .iconButton:hover, .moreButton:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.iconButton:focus-visible, .moreButton:focus-visible, .tool:focus-visible, .crumb:focus-visible, .smallButton:focus-visible, .linkButton:focus-visible, .chip:focus-visible, .zoom button:focus-visible {
+.iconButton:focus-visible, .moreButton:focus-visible, .tool:focus-visible, .smallButton:focus-visible, .linkButton:focus-visible, .chip:focus-visible, .zoom button:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 1px;
 }
@@ -87,29 +87,6 @@
 .body { display: flex; flex: 1; min-height: 0; position: relative; }
 .stage { position: relative; flex: 1; min-width: 0; }
 
-.crumbs {
-  position: absolute;
-  z-index: 5;
-  top: 16px;
-  left: 20px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  max-width: calc(100% - 40px);
-  padding: 6px 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 7px;
-  background: var(--dsw-alias-bg-layer-1);
-  font-size: 12px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.crumbStep { display: inline-flex; align-items: center; gap: 6px; }
-.crumb { padding: 0; border: 0; background: none; color: var(--dsw-alias-label-secondary); font: inherit; cursor: pointer; }
-.crumb[aria-current] { color: var(--dsw-alias-label-primary); }
-.crumbFile { color: var(--dsw-alias-label-secondary); }
-
 .canvas { position: absolute; inset: 0; background: var(--dsw-alias-bg-base); }
 .canvas :global(.react-flow__pane) { cursor: default; }
 .canvas :global(.react-flow__node:focus-visible) { outline: none; }
@@ -120,7 +97,7 @@
 .rail {
   position: absolute;
   z-index: 5;
-  top: 74px;
+  top: 16px;
   left: 16px;
   display: flex;
   flex-direction: column;
@@ -187,6 +164,7 @@
   position: absolute;
   z-index: 30;
   width: 300px;
+  max-width: calc(100% - 16px);
   max-height: 460px;
   display: flex;
   flex-direction: column;
@@ -290,6 +268,12 @@
 .kind_loop, .kind_iteration, .kind_loop_end { --node-kind-color: #35a8c6; }
 .kind_assigner { --node-kind-color: #4c83df; }
 .kind_return { --node-kind-color: #e39625; }
+.kind_code, .kind_template, .kind_list, .kind_aggregate { --node-kind-color: #4c83df; }
+.kind_classifier { --node-kind-color: #43a4c8; }
+.dataRow { display: grid; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--dsw-alias-border-l3); }
+.dataRowHead { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dataRowHead > :first-child { flex: 1; min-width: 0; }
+.scriptInput { min-height: 200px; font-family: var(--ds-font-family-code); line-height: 1.6; tab-size: 2; align-items: stretch; overflow: auto; }
 .nodeText { display: flex; flex-direction: column; min-width: 0; }
 .nodeTitle { font-size: 13px; font-weight: 570; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nodePreview { display: grid; gap: 3px; margin-top: 11px; }
@@ -530,7 +514,7 @@
 }
 .startIcon { --node-kind-color: #39ad74; }
 @container workflow-editor (max-width: 900px) {
-  .rail { top: 58px; flex-direction: row; max-width: calc(100% - 32px); overflow-x: auto; gap: 3px; }
+  .rail { flex-direction: row; max-width: calc(100% - 32px); overflow-x: auto; gap: 3px; }
   .railSeparator { width: 0.5px; height: 14px; margin: 0 4px; }
   .body:has(.inspector) .zoom, .body:has(.inspector) .canvasStatus { bottom: calc(60% + 12px); }
   .body:has(.inspector) .nodeSearch { max-height: calc(40% - 100px); }
@@ -622,7 +606,7 @@
 .branchVariableToken { display: inline-flex; align-items: center; max-width: 100%; gap: 4px; padding: 4px 6px; border-radius: 6px; background: var(--dsw-alias-bg-layer-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .branchVariableSource { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .branchVariableSlash { color: var(--dsw-alias-label-tertiary); }
-.branchVariableToken b { display: inline-flex; align-items: center; gap: 3px; min-width: 0; color: var(--dsw-alias-state-business-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.branchVariableToken b { flex-shrink: 0; max-width: 65%; display: inline-flex; align-items: center; gap: 3px; min-width: 0; color: var(--dsw-alias-state-business-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .branchOperatorDivider { width: 1px; height: 16px; margin: 0 5px; background: var(--dsw-alias-border-l2); }
 .branchOperator { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 66px; min-height: 27px; padding: 3px 6px; border: 0; border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
 .branchOperator:disabled { opacity: .55; cursor: default; }
@@ -635,7 +619,6 @@
 .branchConditionValue .fieldLabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .branchConditionValue .input { width: 100%; min-height: 25px; padding: 2px 0; border: 0; background: transparent; box-shadow: none; font-size: 12px; }
 .branchRemoveCondition { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 22px; width: 22px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
-.branchNull { padding: 6px; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
 .branchNextFlow .nextPort { padding: 6px 6px 6px 10px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
 .branchNextFlow .nextPortLabel { margin: 0 0 4px; font-size: 10px; }
 
@@ -661,6 +644,8 @@
 
 .promptMessages { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .promptCard { border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
+.promptCardExpanded { position: fixed; z-index: 80; display: flex; flex-direction: column; box-sizing: border-box; padding: 12px; border-radius: 10px; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 0 12px -4px rgb(16 24 40 / 12%); overscroll-behavior: contain; }
+.promptCardExpanded .promptBody { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .promptCard:focus-within { box-shadow: inset 0 0 0 1px var(--dsw-alias-state-business-primary); }
 .promptHead { display: flex; align-items: center; gap: 4px; min-height: 30px; padding: 4px 6px 0 12px; }
 .promptHint { display: inline-flex; color: var(--dsw-alias-label-tertiary); cursor: help; }
@@ -681,6 +666,7 @@
 .promptPlaceholder { position: absolute; top: 2px; left: 0; color: var(--dsw-alias-label-tertiary); font-size: 13px; line-height: 1.7; pointer-events: none; user-select: none; }
 /* A variable token sits in the text like Dify's variable block. */
 .promptVariable { display: inline-block; margin: 0 1px; vertical-align: middle; }
+.promptVariable .referencePicker { margin: 0; }
 .promptVariable .referenceTrigger { width: auto; min-height: 22px; padding: 0 2px; border: 0; background: transparent; }
 .promptVariable .branchVariableToken { padding: 1px 5px; font-size: 12px; line-height: 18px; }
 .promptVariableIcon { font-family: var(--ds-font-family-code); font-size: 11px; font-weight: 600; }
@@ -732,11 +718,16 @@
 .panelDivider { height: 1px; margin: 4px 0 20px; background: var(--dsw-alias-border-l1); }
 .reviewActions { display: flex; flex-direction: column; gap: 8px; }
 .reviewEmpty { margin: 0; padding: 12px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--dsw-alias-label-tertiary); font-size: 12px; text-align: center; }
-.reviewAction { display: flex; align-items: center; gap: 4px; }
+/* Dify's action row has two inputs and a delete control on one line.
+   Keep each field's errors in its own column below the aligned controls. */
+.reviewAction { display: grid; grid-template-columns: minmax(0, 120px) minmax(0, 1fr) 32px; align-items: start; gap: 4px; }
 .reviewAction .routeIdInput { height: 32px; padding: 0 10px; border-color: transparent; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); font-size: 13px; }
 .reviewAction .routeIdInput:hover { border-color: var(--dsw-alias-border-l3); }
-.reviewActionId { flex: 0 0 120px; }
-.reviewActionTitle { font-family: inherit !important; }
+.reviewActionId, .reviewActionTitle { min-width: 0; }
+.reviewActionId .routeIdInput { width: 100%; }
+.reviewActionTitle > .field { gap: 0; margin: 0; }
+.reviewActionTitle .fieldLabel { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.reviewActionTitle .input { height: 32px; min-height: 32px; }
 .reviewAction .iconButton { flex: none; width: 32px; height: 32px; }
 .endOutput { display: flex; align-items: center; gap: 4px; }
 .endOutput .routeIdInput { height: 32px; padding: 0 10px; border-color: transparent; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); font-size: 13px; }
@@ -807,6 +798,7 @@
 .templateInput:hover { border-color: var(--dsw-alias-border-l3); }
 .templateInput:focus-within { border-color: var(--dsw-alias-state-business-primary); }
 .templateInput[aria-invalid='true'] { border-color: var(--dsw-alias-state-warn-primary); }
+.templateInput .promptInputCompact { min-height: 22px; line-height: 22px; padding: 0; }
 .templateInput .promptEditor { flex: 1; min-width: 0; }
 .typeBadge { flex: none; margin-top: 2px; padding: 0 5px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 5px; color: var(--dsw-alias-label-tertiary); font-size: 10.5px; font-weight: 500; line-height: 18px; }
 .typeSwitch { display: inline-flex; flex: none; gap: 2px; padding: 2px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
@@ -826,13 +818,15 @@
 .chooserNested { padding-left: 22px; }
 .chooserNote { display: flex; align-items: center; gap: 8px; margin: 8px; color: var(--dsw-alias-label-tertiary); font-size: 11.5px; line-height: 17px; }
 .chooserRetry { margin-left: auto; padding: 2px 8px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 6px; background: none; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; cursor: pointer; }
-/* As Dify's loop variable and assigner rows: name or variable, then type,
-   mode or operation and remove on one line, the value below. */
+/* Keep names and types readable even in the mobile inspector. */
 .loopVariable { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; padding: 8px; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); }
-.loopVariableHead { display: flex; align-items: center; gap: 6px; }
-.loopVariableHead > :first-child { flex: 1 1 auto; min-width: 0; }
-.loopVariableHead > select { flex: 0 0 96px; }
-.loopVariableHead > button { flex: none; }
+.loopVariableHead, .assignmentHead { display: grid; grid-template-columns: minmax(0,1fr) minmax(80px,96px) 28px; align-items: center; gap: 6px; }
+.loopVariableHead > *, .assignmentHead > * { min-width: 0; }
+.loopVariableHead .titleInput { width: 100%; box-sizing: border-box; }
+.assignmentHead .input { min-width: 0; }
+.operandMode { display: flex; align-self: flex-start; gap: 2px; padding: 2px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
+.operandMode button { min-height: 28px; padding: 2px 10px; border: 0; border-radius: 6px; background: none; color: var(--dsw-alias-label-tertiary); font: inherit; font-size: 12px; cursor: pointer; }
+.operandMode button[aria-checked='true'] { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); box-shadow: 0 1px 2px rgb(0 0 0 / 10%); }
 /* A variable value fills the line a constant's input does. */
 .loopVariable > .referencePicker { margin: 0; }
 .loopVariable .branchVariableTrigger { min-height: 32px; padding: 0 8px; border: 1px solid var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-layer-2); }
