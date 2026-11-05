@@ -59,7 +59,7 @@ All clients upgrade together; Rust DTOs generate the sole supported vocabulary.
 
 App Server v71 adds native Workflow `template`, `list`, `classifier` and
 `aggregate` definitions and consumer addresses for their inputs. Runtime Client
-v82 exposes their observation kinds. Classifier execution uses the existing
+v83 exposes their observation kinds. Classifier execution uses the existing
 Auxiliary Model call contract; Code Execution lowers to the existing builtin Bash
 Tool. See [data processing nodes](workflow-programs.md#data-processing-nodes).
 
@@ -2137,7 +2137,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
 explicit recovery action. These recovery semantics remain in App Server v71;
-native Runtime Client is v82.
+native Runtime Client is v83.
 
 ## Rich historical Trace inspection (#364)
 
@@ -2526,7 +2526,7 @@ it. An accepted response is never retracted. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients) for
 the synchronization.
 
-The internal Runtime Client vocabulary is v82. Only App Server v71 clients
+The internal Runtime Client vocabulary is v83. Only App Server v71 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
 decoder. The current storage/control formats are Event envelope 1, SQLite 85, Session
 catalog 18 and subagent IPC v37. The child specification freezes MCP Resource source

@@ -5293,7 +5293,7 @@ configure/clear controls and keyboard-operable moves, inspired by ZCode's ordere
 reasoning control. No upstream mapping code or dependencies are imported. Profile
 identities remain stable keys, and the existing JSON editor and native whole-Model
 transaction retain parameter validation, scope and revision ownership. The mandatory
-App Server v71 imports are regenerated from Rust; Runtime Client is v82. Updated
+App Server v71 imports are regenerated from Rust; Runtime Client is v83. Updated
 local hashes and import inventories record these adaptations against the unchanged
 upstream baselines. Browser plugin is unavailable; validation uses the repository's
 pinned Playwright container and production native API path.
