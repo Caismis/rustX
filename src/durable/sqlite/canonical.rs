@@ -873,7 +873,7 @@ impl CanonicalStore for SqliteConversationStore {
              OR (t.reference_kind='publication_audit' AND
                (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?3))))
              OR (t.reference_kind='inherited_turn' AND t.position<=?1)
-             OR (t.reference_kind IN ('interaction_event','attempt_terminal') AND EXISTS
+             OR (t.reference_kind IN ('interaction_event','configuration_event','attempt_terminal') AND EXISTS
                (SELECT 1 FROM events e WHERE e.event_id=t.reference_id AND e.sequence<=?4))
              ORDER BY t.position DESC LIMIT ?5",
             )

@@ -54,8 +54,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: "/session",
-    argumentHint: "[settings | adopt]",
-    description: "Show Session metadata, settings, or explicitly adopt the inspected candidate.",
+    argumentHint: "[settings]",
+    description: "Show Session metadata or inspect its configuration application.",
   },
   {
     name: "/name",

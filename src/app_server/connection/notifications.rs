@@ -5,12 +5,26 @@ use std::sync::Arc;
 
 use super::{AppServerConnection, Route, release_route};
 use crate::app_server::protocol::{JsonRpcVersion, Method, Notification, NotificationMethod};
+use crate::local_runtime::configuration::application::ApplicationRead;
 use crate::runtime_client::host::EventDelivery;
 
 #[allow(clippy::large_enum_variant)] // The existing bounded Projection event stays inline through fan-in.
 enum RoutedDelivery {
     Projection(EventDelivery),
     Auxiliary(crate::runtime::auxiliary::observer::AuxiliarySegment),
+}
+
+/// One application read survives cancelled transport select turns. Keeping
+/// its handle here bounds physical lock waiters to one per connection.
+#[derive(Default)]
+pub(super) struct ConfigurationInterest {
+    versions: std::collections::BTreeMap<String, u64>,
+    read_version: u64,
+    reading: Option<
+        tokio::task::JoinHandle<
+            Option<crate::local_runtime::configuration::application::ConfigurationApplication>,
+        >,
+    >,
 }
 
 /// Which source repair observations one connection may see.
@@ -145,7 +159,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v71 notice reaches only a connection that negotiated v71.
+        // A v72 notice reaches only a connection that negotiated v72.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }
@@ -201,19 +215,43 @@ impl AppServerConnection {
     ///
     /// Level-triggered against the manager's current applications and this
     /// connection's per-scope version cursor.
-    fn next_configuration_change(&self) -> Option<NotificationMethod> {
-        let mut versions = self
-            .configuration_versions
-            .lock()
-            .expect("configuration notification versions");
-        let application = self
-            .host
-            .manager()
-            .next_configuration_application(&versions)?;
+    async fn next_configuration_change(&self) -> Option<NotificationMethod> {
+        let mut interest = self.configuration_interest.lock().await;
+        // Source capture holds the application owner while reading authored
+        // bytes. Waiting for that owner must not occupy a transport worker.
+        // Advance the connection cursor only after this cancellable read returns.
+        let application = loop {
+            if interest.reading.is_none() {
+                let manager = self.host.manager().clone();
+                match manager.try_next_configuration_application(&interest.versions) {
+                    ApplicationRead::Ready(Some(application)) => break application,
+                    ApplicationRead::Ready(None) => return None,
+                    ApplicationRead::Busy => {}
+                }
+                let versions = interest.versions.clone();
+                interest.read_version = *manager.configuration_changes().borrow();
+                interest.reading = Some(tokio::task::spawn_blocking(move || {
+                    manager.next_configuration_application(&versions)
+                }));
+            }
+            let result = interest.reading.as_mut().expect("application read").await;
+            interest.reading = None;
+            if let Some(application) = result.ok()? {
+                break application;
+            }
+            // A cancelled poll can leave a completed empty read behind.
+            // Recheck it against publications predating this reader's watch
+            // subscription before allowing the reader to park again.
+            if interest.read_version == *self.host.manager().configuration_changes().borrow() {
+                return None;
+            }
+        };
         let projection =
             crate::local_runtime::configuration::observation::session_application(&application)
                 .ok()?;
-        versions.insert(application.scope, application.version);
+        interest
+            .versions
+            .insert(application.scope, application.version);
         Some(NotificationMethod::ConfigurationChanged {
             application: projection,
         })
@@ -251,10 +289,15 @@ impl AppServerConnection {
     /// The next level-triggered notification owed outside any attachment, in
     /// priority order: Session metadata, configuration application, then
     /// configuration source repair.
-    fn next_level_notification(&self) -> Option<NotificationMethod> {
-        self.next_ownership_invalidation()
+    async fn next_level_notification(&self) -> Option<NotificationMethod> {
+        if let Some(notification) = self
+            .next_ownership_invalidation()
             .or_else(|| self.next_summary_invalidation())
-            .or_else(|| self.next_configuration_change())
+        {
+            return Some(notification);
+        }
+        self.next_configuration_change()
+            .await
             .or_else(|| self.next_source_repair())
             .or_else(|| self.next_schedule_change())
     }
@@ -306,16 +349,27 @@ impl AppServerConnection {
             .lock()
             .expect("task catalog changes")
             .clone();
+        let level_notification = |notification| {
+            (
+                Notification {
+                    jsonrpc: JsonRpcVersion::V2,
+                    notification,
+                },
+                None,
+            )
+        };
         loop {
-            if let Some(notification) = self.next_level_notification() {
-                return (
-                    Notification {
-                        jsonrpc: JsonRpcVersion::V2,
-                        notification,
-                    },
-                    None,
-                );
-            }
+            let levels = self.next_level_notification();
+            tokio::pin!(levels);
+            // A large source capture can delay an application read. Its
+            // pending notification must not hold up ready attachment events.
+            let levels_pending = match futures_util::poll!(&mut levels) {
+                std::task::Poll::Ready(Some(notification)) => {
+                    return level_notification(notification);
+                }
+                std::task::Poll::Ready(None) => false,
+                std::task::Poll::Pending => true,
+            };
             let changed = self.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
@@ -329,6 +383,11 @@ impl AppServerConnection {
                 .collect();
             if routes.is_empty() {
                 tokio::select! {
+                    notification = &mut levels, if levels_pending => {
+                        if let Some(notification) = notification {
+                            return level_notification(notification);
+                        }
+                    },
                     () = &mut changed => {},
                     _ = configuration_changes.changed() => {},
                     _ = summary_invalidations.changed() => {},
@@ -365,6 +424,12 @@ impl AppServerConnection {
                 })
                 .collect();
             let (route, delivery, observed, registration) = tokio::select! {
+                notification = &mut levels, if levels_pending => {
+                    if let Some(notification) = notification {
+                        return level_notification(notification);
+                    }
+                    continue;
+                },
                 () = &mut changed => continue,
                 _ = configuration_changes.changed() => continue,
                 _ = summary_invalidations.changed() => continue,

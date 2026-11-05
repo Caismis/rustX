@@ -217,7 +217,7 @@ pub struct EffectiveConfiguration {
     pub available_tools: Vec<crate::tools::types::ToolDefinition>,
     pub session_model: Option<crate::model::session::SessionModelConfig>,
     pub effective_model: crate::model::session::SessionModelView,
-    pub admitted_attempt: Option<crate::runtime::adoption::AdmittedConfiguration>,
+    pub admitted_attempt: Option<crate::runtime::configuration_commit::AdmittedConfiguration>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

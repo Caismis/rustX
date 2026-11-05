@@ -458,7 +458,10 @@ pub(in crate::durable::sqlite) fn store_transcript_header(
             "native transcript identity exceeds finite descriptor budget",
         ));
     };
-    let journal: u64 = if matches!(kind, "attempt_terminal" | "interaction_event") {
+    let journal: u64 = if matches!(
+        kind,
+        "attempt_terminal" | "interaction_event" | "configuration_event"
+    ) {
         connection
             .query_row(
                 "SELECT sequence FROM events WHERE event_id=?1",
@@ -525,6 +528,9 @@ pub(in crate::durable::sqlite) fn index_native_event(
         }
         crate::events::types::RuntimeEvent::InteractionSettled { .. } => {
             crate::durable::TranscriptItem::InteractionSettled { event: event_copy }
+        }
+        crate::events::types::RuntimeEvent::ConfigurationApplied { .. } => {
+            crate::durable::TranscriptItem::ConfigurationApplied { event: event_copy }
         }
         _ => crate::durable::TranscriptItem::AttemptTerminal { event: event_copy },
     };

@@ -2,7 +2,7 @@ import { checkpointSnapshot, foldRuntimeEvent, statusIdentity } from '../../prot
 import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v71';
+import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v72';
 import { App } from '../src/app/App';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { agentStatusFacets, agentStatusAnchor, agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../src/bindings/agent-status';
@@ -163,9 +163,9 @@ describe('Agent Status has one representation, and current Todo is never read fr
     expect(isRuntimeStatusContext(environment)).toBe(false);
     const base = withTranscript(CONVERSATION(), [status('s1', fresh('u1'), [todoSection('Todo A')])]);
     const ui = render(<AgentTranscript snapshot={{ ...base, messages: [agentStatusMessage, environment] }} />);
-    const current = screen.getByText('Current context').parentElement as HTMLElement;
-    expect(current.textContent).toContain('Environment context');
-    expect(current.textContent).not.toContain('Todo A is in progress');
+    // Ordinary Context is a hidden row too: neither appears as current context.
+    expect(screen.queryByText('Current context')).toBeNull();
+    expect(ui.container.textContent).not.toContain('Environment context');
     // Exactly one representation of the composition: the anchored annotation.
     expect(annotations(ui.container)).toEqual([['s1', 'message:u1']]);
     expect(ui.container.textContent).not.toContain('Todo A is in progress');

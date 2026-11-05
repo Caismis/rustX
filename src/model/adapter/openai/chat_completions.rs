@@ -1426,22 +1426,11 @@ pub(crate) fn translate_request(request: &ModelRequest) -> Result<serde_json::Va
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
-    construct_request(request, true)
+    construct_request(request)
 }
 
-/// Configuration comparison uses the real constructor with history omitted.
-/// This evidence is never submitted to the provider or canonical history.
-pub(crate) fn configuration_request(
-    request: &ModelRequest,
-) -> Result<serde_json::Value, ModelError> {
-    construct_request(request, false)
-}
-
-fn construct_request(
-    request: &ModelRequest,
-    require_history: bool,
-) -> Result<serde_json::Value, ModelError> {
-    let messages = translate_messages(request, require_history)?;
+fn construct_request(request: &ModelRequest) -> Result<serde_json::Value, ModelError> {
+    let messages = translate_messages(request)?;
     let assistant_reasoning: Vec<Option<String>> = messages
         .iter()
         .map(|message| message.reasoning.clone())
@@ -1564,10 +1553,7 @@ struct TranslatedChatMessage {
     reasoning: Option<String>,
 }
 
-fn translate_messages(
-    request: &ModelRequest,
-    require_history: bool,
-) -> Result<Vec<TranslatedChatMessage>, ModelError> {
+fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessage>, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = crate::model::adapter::profile::phase(
         crate::model::adapter::profile::Phase::TranslateMessages,
@@ -1640,7 +1626,7 @@ fn translate_messages(
     }
     let mut messages = system_messages;
     messages.extend(transcript_messages);
-    if require_history && messages.is_empty() {
+    if messages.is_empty() {
         return Err(invalid_request(
             "a Chat Completions request requires at least one message",
         ));

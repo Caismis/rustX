@@ -680,6 +680,9 @@ fn data(
         | E::SubagentTerminalPublished { .. }
         | E::SubagentTerminalSettled { .. }
         | E::InteractionSettled { .. } => foreign_terminal_data(event),
+        E::ConfigurationApplied { change } => Ok(TraceFactData::Configuration {
+            change: change.clone(),
+        }),
         _ => terminal_data(connection, event, fields),
     }
 }

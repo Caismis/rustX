@@ -1,3 +1,25 @@
+## Issue #518 — automatic Session configuration commit
+
+Read-only references, inspected outside rustX and never vendored:
+`deepseek-ai/deepseek-harness` at `ce7073d51254c26cd63b22a60835b8f948deb447`
+(supersedes older Harness pins for this surface only), `earendil-works/pi` at
+`9c9ce8547e5a88cbe834a53e9a6d83a789d08e47` and `openai/codex` at
+`c60cda34a3ba6975f698d63da9e8ca8a1616f0c9`.
+
+| Pinned source / component | rustX component | Preserved interactions | Necessary semantic adaptations |
+| --- | --- | --- | --- |
+| Harness `ui-chat/README.md` — Hidden Chat rows | `src/app/agent/AgentTranscript.tsx` (`audit`, `hasInlineBody`) | System-prompt and ordinary Context rows are hidden from Chat; Tool add/remove rows stay visible | Rows come only from a committed native `configuration_applied` fact, never from a browser diff of request snapshots; the request-diff `SystemChanges` surface is removed |
+| Harness `ui-chat/.../ContextInjectionRow.tsx` + `.module.css` | `src/app/agent/ConfigurationChangeRow.tsx` + `.module.css` | 24px DisclosureRow header, separator and count summary, expanded added/removed groups in the 141px opaque scrollport | A single Tool is one non-expandable row; names are native-bounded (16 per list) with exact totals ("and N more"); names wrap on narrow Sessions; same-name definition changes stay Trace-only |
+| Harness `ui-primitives/src/DisclosureRow.tsx` | existing `src/presentation/primitives/DisclosureRow.tsx` | Row-click expansion, keyboard disclosure, keep-content-when-open | None; reused unchanged, no second design system |
+| Harness `ui-trajectory/README.md`, `TrajectoryTable.tsx` and inspector | `src/app/trajectory/layout.ts`, `TrajectoryInspector.tsx`, `protocol/app-server/trace-inspection.ts` | A Session-level record in table order with its own row and an inspector details block | Native `TraceKind::Configuration` record with zero duration, no owning Attempt, and the typed change (domains, bounded names) as its detail |
+| Pi `interactive-mode.ts` `showStatus()` | `tui/src/ui/components/status.ts` `configurationSegment` | Dim transient status that replaces itself rather than stacking lines | State-derived footer segment from the native application (preparing / applies after current work / failed · previous kept / needs restart); silent once applied |
+| Codex `history_cell/notices.rs` `new_info_event()` | `tui/src/ui/components/transcript.ts` `renderConfigurationApplied` | One `•` info line with dim detail, separate from diagnostics | Rendered from the durable transcript row, so live and paged history agree; `/session settings` keeps detailed inspection; `/session adopt` is removed |
+
+Web Session banner (`src/app/SessionConfiguration.tsx`) keeps only compact
+pending/failure status; nothing in the browser confirms, schedules or replays a
+commit. No Harness backend, Cordis dependency or reference repository is
+introduced.
+
 ## List Operator and Variable Aggregator alignment (2026-11-04)
 
 Read-only study uses sibling Dify `ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0`:
@@ -3018,7 +3040,7 @@ icons remain stable on failure, summaries use native failure/stopped tones and
 lifecycle announcements are visually hidden. Keyboard expansion and running copy
 visibility follow the upstream flow.
 
-The Inspect pill is pure presentation. App Server v50 / Runtime Client v71 native
+The Inspect pill is pure presentation. App Server v50 / Runtime Client v72 native
 readers locate the canonical occurrence across the complete indexed Journal,
 including historical and exited child stores. RustX supplies bounded continuous
 windows, exact record IDs and lifecycle repairs, replacing Harness runtime/store
@@ -3157,7 +3179,7 @@ The integration keeps PR #461's native child conversation, Trace, attachment
 and file-delivery presentation. Agent workspace values now carry the frozen
 Session path, and retired worktree disposal and Candidate controls are absent.
 The historical entries above retain the versions reviewed at those snapshots.
-The combined current contracts are App Server v50, Runtime Client v71, SQLite 61,
+The combined current contracts are App Server v50, Runtime Client v72, SQLite 61,
 Session catalog16, Runtime Event1, Child IPC33 and Product Host file-read4; see the [format inventory](../docs/agent-workflow-shared-workspace.md#format-and-version-inventory)
 for owners and rejection behavior. Imports and generated client contracts use
 App Server v50. The source inventory
@@ -3238,7 +3260,7 @@ Session Lifecycle retains every dispatched Switch transaction. Fresh Host author
 
 Four dark shell references deliberately retained the enabled Stop control in the preceding repair: settings-shell-dark, desktop-expanded-dark, mobile-rail-dark and mobile-expanded-dark. Their reference/actual/diff inspection showed 952 changed pixels per reference confined to Stop, with identical dimensions and surrounding pixels. This refactor retains that control contract. Screenshot comparator, noise, stabilization, timeout and retry policies remain unchanged.
 
-Session tree metadata uses App Server v50 `session/node`, which reuses the native Session catalog's exact node map lookup. Immutable source identity and inherited transcript placement remain native facts. The matching Runtime Client v71 and SQLite v58 contracts reject prior peers/stores before dependent work. Current generated imports and local provenance hashes are synchronized.
+Session tree metadata uses App Server v50 `session/node`, which reuses the native Session catalog's exact node map lookup. Immutable source identity and inherited transcript placement remain native facts. The matching Runtime Client v72 and SQLite v58 contracts reject prior peers/stores before dependent work. Current generated imports and local provenance hashes are synchronized.
 
 The intentional `mobile-settings-dark-linux.png` reference change removes the obsolete sidebar backdrop beneath the Settings modal after successful Settings navigation. The reference, actual and diff were inspected: modal content and geometry are identical, and the changed pixels are the surrounding backdrop. The pinned browser generator updates this one changed reference; screenshot thresholds, noise policy and stabilization are unchanged.
 
@@ -3434,7 +3456,7 @@ exercise workspace bytes, source/fork ownership and more than the old file limit
 The upload capability change is mandatory App Server v54. All current Web/TUI
 DTO imports and the binary carrier's control negotiation use v54; v50 artifacts
 are removed and old peers are rejected. This is a native protocol update only
-for other derived presentation files. Runtime Client v71 and TUI interactions
+for other derived presentation files. Runtime Client v72 and TUI interactions
 remain unchanged. The two old narrow attachment-card rasterizer-noise entries
 were removed along with that card. All four new attachment references compare
 exactly; no screenshot tolerance was expanded.
@@ -5142,7 +5164,7 @@ conditions, reuse exact numeric comparison, preserve prompt editor DOM during
 bounded expansion, correct inline variable spacing and narrow Loop/Assigner
 rows, and avoid automatic Output-name collisions. Dify's stores, component
 source and assets are not copied. No dependencies are added. Vision and AI
-generation controls are omitted. App Server v71 is the sole wire contract;
+generation controls are omitted. App Server v72 is the sole wire contract;
 v67 artifacts are removed. Runtime Client v81 is unchanged.
 
 Actual desktop and touch browser checks use the repository's exact pinned
@@ -5271,7 +5293,7 @@ configure/clear controls and keyboard-operable moves, inspired by ZCode's ordere
 reasoning control. No upstream mapping code or dependencies are imported. Profile
 identities remain stable keys, and the existing JSON editor and native whole-Model
 transaction retain parameter validation, scope and revision ownership. The mandatory
-App Server v71 imports are regenerated from Rust; Runtime Client is v82. Updated
+App Server v72 imports are regenerated from Rust; Runtime Client is v83. Updated
 local hashes and import inventories record these adaptations against the unchanged
 upstream baselines. Browser plugin is unavailable; validation uses the repository's
 pinned Playwright container and production native API path.

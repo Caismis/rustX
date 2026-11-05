@@ -153,7 +153,7 @@ pub struct AppServerConnection {
     changed: Arc<tokio::sync::Notify>,
     reader: Arc<tokio::sync::Mutex<()>>,
     next_route: Arc<std::sync::atomic::AtomicUsize>,
-    configuration_versions: Arc<Mutex<std::collections::BTreeMap<String, u64>>>,
+    configuration_interest: Arc<tokio::sync::Mutex<notifications::ConfigurationInterest>>,
     /// The native Session-metadata invalidation log (Issue #386) and this
     /// connection's cursor into it.
     ///
@@ -346,7 +346,7 @@ impl AppServerConnection {
             routes: Arc::new(Mutex::new(RouteTable::default())),
             changed: Arc::new(tokio::sync::Notify::new()),
             reader: Arc::new(tokio::sync::Mutex::new(())),
-            configuration_versions: Arc::default(),
+            configuration_interest: Arc::default(),
             source_repairs: Arc::default(),
             next_route: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             delivery_access: None,
@@ -855,7 +855,6 @@ impl AppServerConnection {
                 | Method::SessionApplicationValueRead { .. }
                 | Method::SessionConfiguration { .. }
                 | Method::ConfigurationReconcile { .. }
-                | Method::AdoptConfiguration { .. }
         ) {
             let connection = self.clone();
             tokio::spawn(async move {
@@ -1131,6 +1130,23 @@ impl AppServerConnection {
             .map_err(|_| domain(ErrorData::OperationFailed))?
     }
 
+    /// Read the application owner without blocking a transport worker on
+    /// concurrent source ingestion.
+    async fn configuration_revision(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<u64>, RpcError> {
+        let manager = self.host.manager().clone();
+        let session_id = session_id.clone();
+        tokio::task::spawn_blocking(move || {
+            manager
+                .configuration_application(&session_id)
+                .map(|application| application.version)
+        })
+        .await
+        .map_err(|_| domain(ErrorData::OperationFailed))
+    }
+
     /// This connection's attachment relationships. Attach reserves the
     /// Session's slot under the route-table lock, loads outside it, and
     /// publishes the route under the same close boundary.
@@ -1153,11 +1169,7 @@ impl AppServerConnection {
                     .map(|route| route.target.clone());
                 Ok(MethodResult::AttachmentStatus {
                     target,
-                    configuration_revision: self
-                        .host
-                        .manager()
-                        .configuration_application(&session_id)
-                        .map(|application| application.version),
+                    configuration_revision: self.configuration_revision(&session_id).await?,
                 })
             }
             Method::SessionAttach {
@@ -1174,6 +1186,7 @@ impl AppServerConnection {
                     .load(&session_id, node_id.as_ref())
                     .await
                     .map_err(manager_error)?;
+                let configuration_revision = self.configuration_revision(&session_id).await?;
                 let result = reservation.commit(|| {
                     let client = runtime.client();
                     let (attachment, external) = client.attach().map_err(manager_error)?;
@@ -1193,11 +1206,7 @@ impl AppServerConnection {
                             capacity,
                         }),
                         MethodResult::Attached {
-                            configuration_revision: self
-                                .host
-                                .manager()
-                                .configuration_application(&session_id)
-                                .map(|application| application.version),
+                            configuration_revision,
                             attachment_kind: super::protocol::AttachmentKind::Controller,
                             observation_source: super::protocol::ObservationSource::Live,
                             target,

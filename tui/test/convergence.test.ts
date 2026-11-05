@@ -244,30 +244,15 @@ test("partial response usage shows observed fields without inventing a total", (
   assert.doesNotMatch(rendered, /↑0|\n0 tok/);
 });
 
-test("T12/T16 native application notifications reject reorder and adoption sends the inspected identity", async () => {
+test("T12/T16 native application notifications reject reorder", async () => {
   const h = await harness();
-  const candidate = { identity: { input_revision: "input", attempt: "4" }, expected_binding: "2", impact: "prefix_changed" as const };
   // A Session application scope is the Session identity; its authored source
   // owners are a separate native fact.
-  const application = { scope: h.session.sessionId, sources: [{ kind: "user" as const }, { kind: "workspace" as const, directory: "/workspace/A" }], version: "9007199254740993", desired: candidate.identity,
-    units: { execution_policy: { status: "applied" as const }, instructions: { status: "ready" as const, impact: "prefix_changed" as const } }, candidate };
+  const application = { scope: h.session.sessionId, sources: [{ kind: "user" as const }, { kind: "workspace" as const, directory: "/workspace/A" }], version: "9007199254740993", desired: { input_revision: "input", attempt: "4" },
+    units: { execution_policy: { status: "applied" as const }, instructions: { status: "ready" as const } } };
   h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application:applicationReceipt(application) } });
-  h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application: (applicationReceipt(({ ...application, version: "9", candidate: null }))) } });
+  h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application: applicationReceipt({ ...application, version: "9", units: { execution_policy: { status: "applied" as const }, instructions: { status: "applied" as const } } }) } });
   assert.deepEqual(h.session.application, application);
-  const adopting = h.session.adoptConfiguration(candidate);
-  const request = await nextRequest(h, "session/adoptConfiguration", 0);
-  assert.deepEqual(request.params, { session_id: h.session.sessionId, candidate: candidate.identity, expected_binding: candidate.expected_binding });
-  h.transport.respond(request.id, {type:'configuration_receipt',scope:({ ...application, version: "9007199254740994", candidate: null })?.scope??'configuration',version:({ ...application, version: "9007199254740994", candidate: null })?.version??'0'});
-  const adoptionRead = await nextRequest(h,"session/configuration");
-  h.transport.respond(adoptionRead.id,{type:"session_configuration",projection:applicationReceipt(application)});
-  await adopting;
-  assert.deepEqual(h.session.application?.candidate, candidate, "acknowledgement alone cannot clear pending state");
-  const reading = h.session.readConfiguration();
-  const read = await nextRequest(h, "session/configuration", 0);
-  h.transport.respond(read.id, { type: "session_configuration", projection:(applicationReceipt(({ ...application, version: "9007199254740994", candidate: null }))) });
-  await reading;
-  assert.equal(h.session.application?.candidate, null);
-  assert.equal(h.transport.transportCount("session/adoptConfiguration"), 1);
   h.client.close();
 });
 

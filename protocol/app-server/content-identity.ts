@@ -1,4 +1,4 @@
-import type { CanonicalContentLocator, CheckpointReadCut, ContentRef, ContentSource, ObservationReadCut } from './v71.ts';
+import type { CanonicalContentLocator, CheckpointReadCut, ContentRef, ContentSource, ObservationReadCut } from './v72.ts';
 
 /** Closed native identities are independent of JSON object property order. */
 export function canonicalLocatorKey(locator: CanonicalContentLocator): string {
@@ -7,8 +7,19 @@ export function canonicalLocatorKey(locator: CanonicalContentLocator): string {
     : ['by_ledger_position', locator.position]);
 }
 
+/** Every content source a message, audit or live publication owns. */
+export type MessageContentSource = Exclude<ContentSource, { type: 'configuration_instructions' | 'configuration_catalog' }>;
+
+/** The message-owned source, or undefined for a configuration fact's retained content. */
+export function messageSource(source: ContentSource): MessageContentSource | undefined {
+  return source.type === 'configuration_instructions' || source.type === 'configuration_catalog' ? undefined : source;
+}
+
 function sourceIdentity(source: ContentSource): readonly unknown[] {
   switch (source.type) {
+    case 'configuration_instructions':
+    case 'configuration_catalog':
+      return [source.type, source.journal_sequence];
     case 'canonical_message_block':
       return [source.type, source.component, canonicalLocatorKey(source.locator), source.block_index];
     case 'durable_transcript_audit':

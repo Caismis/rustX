@@ -4,7 +4,8 @@ import { SourceContent } from '../src/app/agent/SourceContent';
 import { Server } from './fixture';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { Message } from '../src/app/agent/Message';
-import type { ContentBinding, ContentChunk, ContentRef } from '../../protocol/app-server/v71';
+import type { ContentBinding, ContentChunk, ContentRef } from '../../protocol/app-server/v72';
+import { messageSource } from '../../protocol/app-server/content-identity';
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
 const reference=(id:string,bytes:number):ContentRef=>({conversation_id:'conversation-A',source:{type:'live_publication_prefix',component:'payload',stream_id:'stream-A',message_id:id,attempt_id:'attempt-A',turn_id:'turn-A',publication_request_id:'request-A',block_index:0},representation:'utf8_text',version:1,content_revision:1,readable_end:bytes});
 const binding=(ref:ContentRef):ContentBinding=>({path:['messages','0','content','0','text'],content_ref:ref,deferred:true});
@@ -248,8 +249,8 @@ it('streaming text uses its sparse native block index rather than its array posi
  const {Server}=await import('./fixture'),{JournalSourceProvider}=await import('../src/app/agent/ObservationSource'),{Message}=await import('../src/app/agent/Message');
  const server=new Server();await server.attached('A');
  try {
-  const text='Complete sparse streaming body',bytes=new TextEncoder().encode(text),base=reference('stream-message',bytes.length),ref:ContentRef={...base,source:{...base.source,block_index:7}};
-  server.handlers.set('conversation/contentRead',request=>{if(request.method!=='conversation/contentRead')throw Error('method');expect(request.params.content_ref.source.block_index).toBe(7);return {type:'content_chunk',chunk:chunk(ref,bytes)};});
+  const text='Complete sparse streaming body',bytes=new TextEncoder().encode(text),base=reference('stream-message',bytes.length),ref:ContentRef={...base,source:{...messageSource(base.source)!,block_index:7}};
+  server.handlers.set('conversation/contentRead',request=>{if(request.method!=='conversation/contentRead')throw Error('method');expect(messageSource(request.params.content_ref.source)?.block_index).toBe(7);return {type:'content_chunk',chunk:chunk(ref,bytes)};});
   const ui=render(<JournalSourceProvider source={{client:server.client,target:server.target('A'),cut:()=>undefined,owned:()=>true}} content={[binding(ref)]}><Message message={{id:'stream-message',role:'assistant',content:[]}} blocks={[{type:'text',block_index:7,text:'preview'}]} include={[7]} streaming/></JournalSourceProvider>);
   await ui.findByText(text);expect(ui.queryByText('preview')).toBeNull();
  }finally{cleanup();server.client.disconnect();}

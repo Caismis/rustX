@@ -28,9 +28,6 @@
           "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
           "shutting_down": false,
           "effective_approval_mode": "policy",
-          "configuration_adoption_eligibility": {
-            "status": "eligible"
-          },
           "messages": [],
           "message_descriptors": [],
           "publication_settlements": [],
@@ -1250,9 +1247,6 @@
                   "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
                   "shutting_down": false,
                   "effective_approval_mode": "policy",
-                  "configuration_adoption_eligibility": {
-                    "status": "eligible"
-                  },
                   "messages": [
                     {
                       "role": "user",
@@ -2273,14 +2267,7 @@
         "cursor": "6",
         "event": {
           "type": "projection_transition",
-          "events": [
-            {
-              "type": "configuration_adoption_eligibility_changed",
-              "eligibility": {
-                "status": "busy"
-              }
-            }
-          ],
+          "events": [],
           "metadata": {
             "read_cut": {
               "canonical_foreground": null,
@@ -14450,14 +14437,7 @@
         "cursor": "26",
         "event": {
           "type": "projection_transition",
-          "events": [
-            {
-              "type": "configuration_adoption_eligibility_changed",
-              "eligibility": {
-                "status": "eligible"
-              }
-            }
-          ],
+          "events": [],
           "metadata": {
             "read_cut": {
               "canonical_foreground": {
@@ -16773,9 +16753,6 @@
           "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
           "shutting_down": false,
           "effective_approval_mode": "policy",
-          "configuration_adoption_eligibility": {
-            "status": "eligible"
-          },
           "messages": [
             {
               "role": "user",

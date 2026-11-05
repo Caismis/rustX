@@ -737,6 +737,35 @@ pub(crate) struct FrozenAgentComposition {
 }
 
 impl FrozenAgentComposition {
+    /// The Named Agent definition this froze.
+    pub(crate) const fn definition(&self) -> &NamedAgentDefinition {
+        &self.definition
+    }
+
+    /// Every Tool definition this composition froze.
+    pub(crate) fn tool_definitions(&self) -> impl Iterator<Item = &ToolDefinition> {
+        self.tools.iter().map(|tool| match tool {
+            ResolvedSubagentTool::Builtin { definition, .. }
+            | ResolvedSubagentTool::Source { definition, .. } => definition,
+        })
+    }
+
+    /// Every Tool source it runs or reads resources from.
+    pub(crate) fn sources(&self) -> impl Iterator<Item = &crate::capabilities::ToolSourceId> {
+        self.resource_sources
+            .iter()
+            .chain(self.materialization.sources.keys())
+    }
+
+    /// Every Skill it froze, with its content version.
+    pub(crate) fn skills(
+        &self,
+    ) -> impl Iterator<Item = (&str, &crate::runtime::identity::SkillVersionId)> {
+        self.skills
+            .iter()
+            .map(|skill| (skill.catalog_entry.name.as_str(), &skill.binding.version_id))
+    }
+
     pub(crate) fn freeze(
         definition: &NamedAgentDefinition,
         profile: &crate::runtime::agent_profile::ResolvedAgentProfile,
@@ -1195,7 +1224,7 @@ fn resolve_model(
 /// own deterministic root-to-leaf order, before the definition's explicit
 /// files in configured order. `inherit = false` freezes the explicit files
 /// only. The child performs no ancestor discovery of its own in either case.
-fn resolve_project_instructions(
+pub(crate) fn resolve_project_instructions(
     definition: &NamedAgentDefinition,
     resources: &RuntimeResourceSnapshot,
 ) -> Vec<ProjectContextFile> {

@@ -2191,6 +2191,7 @@ impl CapabilityCoordinator {
     /// project instruction files. The committed pair is returned so the
     /// runtime can publish the complete generation as one observation.
     /// Every other commit path still observes itself.
+    #[cfg(test)]
     pub(crate) fn commit_runtime(
         &self,
         publication: &RuntimeCapabilityPublication,

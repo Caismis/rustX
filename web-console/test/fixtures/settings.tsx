@@ -5,10 +5,10 @@ import { boundedSettings } from "../fixture";
 // Deterministic generated-protocol projection, never imported by production.
 import { createRoot } from 'react-dom/client';
 import { App } from '../../src/app/App';
-import { Server, endpoint, snapshot } from '../fixture';
+import { Server, endpoint } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/errors';
-import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v71';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v72';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -26,7 +26,7 @@ const server = new Server(), source = cfg3Source(), effective = cfg3Effective();
 //   write=held           every source write commits only once the page calls
 //                        `rustxReleaseWrites()`, so the browser is observed
 //                        while the write is in flight
-//   session=preparing|ready|blocked|failed  the focused Session's application
+//   session=preparing|ready|failed  the focused Session's application
 const variant = new URLSearchParams(location.search);
 // Long identities, endpoints, paths and native diagnostics are part of the
 // reference data: narrow layouts are proven against them, never only against
@@ -66,18 +66,14 @@ if (variant.get('scenario') === 'conflict') server.handlers.set('configuration/s
   throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: request.params.expected_revision, actual: source.user.revision } });
 });
 const session = variant.get('session');
-// After an explicit adoption native reports the candidate adopted; the
-// browser learns that only from the authoritative reread the adoption owes.
-let adopted = false;
-if (session) server.handlers.set('session/configuration', () => ({ type: 'session_configuration', projection: applicationReceipt(adopted ? { ...sessionApplication(session), candidate: null } : sessionApplication(session)) }));
-if (session) server.handlers.set('session/adoptConfiguration', () => { adopted = true; return {type:'configuration_receipt',scope:({ ...sessionApplication(session), candidate: null })?.scope??'configuration',version:({ ...sessionApplication(session), candidate: null })?.version??'0'}; });
+if (session) server.handlers.set('session/configuration', () => ({ type: 'session_configuration', projection: applicationReceipt(sessionApplication(session)) }));
 /** The focused Session's native application in one banner state. */
 function sessionApplication(state: string): ConfigurationApplication {
   const application = cfg3Application();
-  if (state === 'preparing') return { ...application, candidate: null, units: { capabilities: { status: 'preparing' }, provider: { status: 'preparing' } } };
+  if (state === 'preparing') return { ...application, units: { capabilities: { status: 'preparing' }, provider: { status: 'preparing' } } };
   // The failed unit is authored by User and by Workspace B, while the focused
   // Session lives in /workspace/A: owner navigation must open exactly B.
-  if (state === 'failed') return { ...application, candidate: null, sources: [{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/B' }], units: { capabilities: { status: 'failed', diagnostic: 'MCP server repository-index failed to start: /usr/local/bin/repository-index-mcp exited with status 127 (command not found) before completing the initialize handshake' }, execution_policy: { status: 'applied'} } };
+  if (state === 'failed') return { ...application, sources: [{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/B' }], units: { capabilities: { status: 'failed', diagnostic: 'MCP server repository-index failed to start: /usr/local/bin/repository-index-mcp exited with status 127 (command not found) before completing the initialize handshake' }, execution_policy: { status: 'applied'} } };
   return application;
 }
 // A draft conversation needs the native Session model catalog and prospective
@@ -176,9 +172,6 @@ server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_
   }
   await new Promise(resolve => setTimeout(resolve));
 };
-// A blocked banner is the runtime's own published Busy eligibility, never a
-// configuration application fact.
-if (session === 'blocked') server.snapshots.set('A', { ...snapshot('A'), configuration_adoption_eligibility: { status: 'busy' } });
 
 if (variant.get('scenario') === 'mcp-probe') {
   for (const scope of ['user', 'workspace'] as const) {

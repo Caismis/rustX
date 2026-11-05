@@ -2,7 +2,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn t08_t14_t20_initial_checkpoint_pages_survive_unrelated_publication() {
+async fn t08_t14_t20_initial_checkpoint_pages_survive_activation() {
     let (_adapter, fixture) = host_fixture_before_activation(
         Vec::new(),
         ToolRegistry::new(),
@@ -24,7 +24,6 @@ async fn t08_t14_t20_initial_checkpoint_pages_survive_unrelated_publication() {
     await_fixture_activation(&fixture.host).await;
     inner.park_projection_worker();
     let published = fixture.host.checkpoint().unwrap();
-    assert!(published.cursor.get() > 0);
     assert_eq!(
         published.read_cut.domain_revisions.get("capabilities"),
         initial.read_cut.domain_revisions.get("capabilities")

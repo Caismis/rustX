@@ -31,6 +31,7 @@ mod schedule_catalog;
 mod schedule_driver;
 pub use schedule_catalog::{ScheduleCatalogCursor, ScheduleCatalogEntry, ScheduleCatalogPage};
 mod sessions;
+mod source_watch;
 
 pub(crate) use client::ConfigurationObservationSource;
 pub use client::ManagedRuntimeClient;
@@ -442,6 +443,7 @@ enum Entry {
     },
 }
 #[derive(Debug)]
+#[cfg_attr(test, allow(clippy::struct_excessive_bools))] // independent test hooks
 struct RegistryState {
     entries: HashMap<ConversationId, Entry>,
     // WriterAbsent results are observation receipts, never residency owners.
@@ -470,6 +472,33 @@ struct RegistryState {
     probes: HashMap<ConversationId, Arc<tests::Probe>>,
     #[cfg(test)]
     schedule_scan_done: Arc<tests::AsyncGate>,
+    #[cfg(test)]
+    source_watch_captured: Arc<tests::AsyncGate>,
+    #[cfg(test)]
+    source_watch_signals: Option<Arc<source_watch::Pending>>,
+    /// Treats every case variant as the entry the loaders open, as a
+    /// case-folding volume does.
+    #[cfg(test)]
+    source_watch_case_aliases: bool,
+    /// Whether the source watch registers platform watches; without them only
+    /// injected notifications arrive.
+    #[cfg(test)]
+    source_watch_platform: bool,
+    /// Counts the source watch's settled passes: every watch registered and
+    /// every newly found input captured again.
+    #[cfg(test)]
+    source_watch_settled: tokio::sync::watch::Sender<u64>,
+    /// Parks the catalog observer between its cut of the runtime's binding
+    /// revision and its write of the retained binding. Consumed by the next
+    /// observer; the test's scoped release also unblocks assertion unwinding.
+    #[cfg(test)]
+    catalog_rebase_cut: Option<Arc<crate::runtime::conversation_runtime::Gate>>,
+    #[cfg(test)]
+    configuration_settlement: Arc<tests::AsyncGate>,
+    #[cfg(test)]
+    resident_attach: Arc<tests::AsyncGate>,
+    #[cfg(test)]
+    configuration_resident: Arc<tests::AsyncGate>,
     #[cfg(test)]
     schedule_activation_started: watch::Sender<Option<ConversationId>>,
     #[cfg(test)]
@@ -755,6 +784,24 @@ impl SessionRuntimeManager {
                 probes: HashMap::new(),
                 #[cfg(test)]
                 schedule_scan_done: Arc::default(),
+                #[cfg(test)]
+                source_watch_captured: Arc::default(),
+                #[cfg(test)]
+                source_watch_signals: None,
+                #[cfg(test)]
+                source_watch_case_aliases: false,
+                #[cfg(test)]
+                source_watch_platform: true,
+                #[cfg(test)]
+                source_watch_settled: tokio::sync::watch::Sender::new(0),
+                #[cfg(test)]
+                catalog_rebase_cut: None,
+                #[cfg(test)]
+                configuration_settlement: Arc::default(),
+                #[cfg(test)]
+                resident_attach: Arc::default(),
+                #[cfg(test)]
+                configuration_resident: Arc::default(),
                 #[cfg(test)]
                 schedule_activation_started: watch::channel(None).0,
                 #[cfg(test)]

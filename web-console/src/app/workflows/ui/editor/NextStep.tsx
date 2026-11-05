@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
-import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v71';
+import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v72';
 import { IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import { addNode, connect, disconnect, freshNodeId } from '../../document/commands';
 import { nodePresentation, setNodePresentation } from '../../document/geometry';

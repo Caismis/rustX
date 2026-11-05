@@ -1,10 +1,11 @@
 import {act,cleanup,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,ContentChunk,ContentRef,TraceInspectionHead,TraceRecord} from '../../protocol/app-server/v71';
+import type {CheckpointPage,ContentChunk,ContentRef,TraceInspectionHead,TraceRecord} from '../../protocol/app-server/v72';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {bindTraceDetailReader} from '../src/client/trace';
 import {traceTool} from './trace-fixture';
 import {checkpoint,snapshot} from './fixture';
+import { messageSource } from '../../protocol/app-server/content-identity';
 afterEach(cleanup);
 const cut=()=>({...checkpoint(snapshot()).read_cut,revision:'9',through:'300'});
 function fixture(){
@@ -34,7 +35,7 @@ it.each(['field','collection'] as const)('same-owner rerenders preserve held %s 
  const f=fixture(),raw=mode==='field'?' {"result":{"status":{"type":"success"},"original":"'+'x'.repeat(66000)+'","opaque":18446744073709551615}} ':' {"original":"'+'x'.repeat(66000)+'","opaque":18446744073709551615} ',bytes=new TextEncoder().encode(raw);let finish!:(value:ContentChunk)=>void;
  only(f,mode);const head=f.page.items[0].value as unknown as TraceInspectionHead;
  if(mode==='field'){const field=head.record.fields[0];if(field.type!=='content')throw Error('fixture');field.binding.content_ref.readable_end=bytes.length;}
- else {f.imageRef.readable_end=bytes.length;f.imageRef.source={...f.imageRef.source,component:'payload'};f.readPage.mockResolvedValue({read_cut:f.original,cursor:f.original.revision,domain:f.record.collections[0].domain,total:'1',next_offset:null,collections:[],items:[{offset:'0',identity:'json',key:null,value:null,content:[{path:['value'],source_path:null,content_ref:f.imageRef,deferred:true}],deferred:true,body_complete:null}]});}
+ else {f.imageRef.readable_end=bytes.length;f.imageRef.source={...messageSource(f.imageRef.source)!,component:'payload'};f.readPage.mockResolvedValue({read_cut:f.original,cursor:f.original.revision,domain:f.record.collections[0].domain,total:'1',next_offset:null,collections:[],items:[{offset:'0',identity:'json',key:null,value:null,content:[{path:['value'],source_path:null,content_ref:f.imageRef,deferred:true}],deferred:true,body_complete:null}]});}
  f.content.mockImplementation(async(_cut,reference,offset)=>offset?chunk(reference,raw,offset):new Promise(resolve=>{finish=resolve;}));
  const ui=render(<TrajectoryInspector {...props(f.record)} detailPage={f.page} detailReader={f.reader}/>);
  await waitFor(()=>expect(f.content).toHaveBeenCalledTimes(1));const reference=f.content.mock.calls[0][1];

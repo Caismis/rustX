@@ -128,7 +128,8 @@ async fn session_owned_model_selection_rejects_runtime_client_bypass_without_div
             .await
             .unwrap();
         let published = super::configuration::settled(&f, 0).await;
-        assert!(published.candidate.is_none());
+        assert!(published.units.values().all(|unit| *unit
+            != crate::local_runtime::configuration::application::UnitApplication::Ready));
         assert!(
             runtime
                 .model_catalog()

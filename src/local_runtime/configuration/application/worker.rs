@@ -1,11 +1,9 @@
 //! The finite native preparation loop. One active preparation, latest pending
 //! input per scope. Source commits and final publication use the parent's lock.
 use super::{
-    ApplicationIdentity, ApplyUnit, AvailableConfiguration, CapturedApplication,
-    ConfigurationApplication, ConfigurationApplications, ReadyConfiguration, UnitApplication,
+    ApplicationIdentity, ApplyUnit, CapturedApplication, ConfigurationApplications, UnitApplication,
 };
 use crate::local_runtime::session_runtime_manager::SessionRuntimeManager;
-use crate::runtime::adoption::AdoptionError;
 use crate::runtime::identity::SessionId;
 
 impl ConfigurationApplications {
@@ -112,14 +110,17 @@ impl ConfigurationApplications {
             .reach("configuration_policy_prepared");
         // The runtime and the resource preparation it was composed with are
         // taken from one resident composition, never from two lookups.
-        let (runtime, resource_loader) = manager
-            .configuration_preparation(&session)
-            .map_or((None, None), |(runtime, loader)| {
-                (Some(runtime), Some(loader))
-            });
+        let (resident, prepared) = manager.configuration_preparation(&session);
+        let (runtime, resource_loader) = prepared.map_or((None, None), |(runtime, loader)| {
+            (Some(runtime), Some(loader))
+        });
+        #[cfg(test)]
+        manager.park_configuration_resident().await;
         {
             let mut state = self.lock();
-            if !state.current(scope, identity) {
+            if !state.current(scope, identity)
+                || !state.still_resident(manager, &session, identity, resident)
+            {
                 return;
             }
             // One process owner performs the change; Session views only project
@@ -146,6 +147,9 @@ impl ConfigurationApplications {
                 }
                 UnitApplication::Applied
             });
+            if let Some(runtime) = &runtime {
+                state.attach(scope, runtime);
+            }
             state.publish(
                 scope,
                 identity,
@@ -158,11 +162,19 @@ impl ConfigurationApplications {
                     })
                 }) {
                     Some(Err(diagnostic)) => UnitApplication::Failed { diagnostic },
+                    Some(Ok(crate::runtime::configuration_commit::StagedOutcome::Uncertain {
+                        diagnostic,
+                    })) => UnitApplication::Uncertain { diagnostic },
                     _ => UnitApplication::Applied,
                 },
             );
             for unit in [ApplyUnit::ExecutionPolicy, ApplyUnit::SharedCapacity] {
-                if state.scopes[scope].units[&unit] != UnitApplication::Applied {
+                // A published unit is retained whether or not its change fact
+                // was recorded: the runtime already runs it.
+                if !matches!(
+                    state.scopes[scope].units[&unit],
+                    UnitApplication::Applied | UnitApplication::Uncertain { .. }
+                ) {
                     continue;
                 }
                 let mut bindings = manager
@@ -242,7 +254,7 @@ impl ConfigurationApplications {
                 return;
             }
             if let Some(old) = &adopted
-                && capture.preserves_adopted_agent_models(old)
+                && capture.preserves_adopted_models(old)
                 && (capture.same_session_model(old) || capture.selection_unavailable().is_some())
             {
                 let others_unchanged = capture.same_capabilities(old) && capture.same_context(old);
@@ -324,7 +336,9 @@ impl ConfigurationApplications {
         }
         let Some(runtime) = runtime else {
             let mut state = self.lock();
-            if state.current(scope, identity) {
+            if state.current(scope, identity)
+                && state.still_resident(manager, &session, identity, resident)
+            {
                 state.deferred.insert(scope.to_owned());
                 // A source-only context/provider edit can be prepared against
                 // the retained, already available capability definitions. New
@@ -351,7 +365,7 @@ impl ConfigurationApplications {
             self.notify(&state);
             return;
         };
-        let mut context_only = adopted
+        let context_only = adopted
             .as_ref()
             .is_some_and(|old| capture.same_capabilities(old));
         let bindings = |capture: &crate::local_runtime::configuration::ProspectiveSessionConfig| {
@@ -390,10 +404,6 @@ impl ConfigurationApplications {
                     })
             }
         } else {
-            let capability_capture = adopted.as_ref().map_or_else(
-                || capture.clone(),
-                |old| capture.clone().retaining_context_from(old),
-            );
             let cancellation = crate::runtime::cancellation::CancellationSignal::new();
             let resource_loader = resource_loader
                 .as_ref()
@@ -429,12 +439,12 @@ impl ConfigurationApplications {
                     let result = self
                         .lock()
                         .make_available(scope, identity, &capture, &manager.credentials)
-                        .and_then(|()| bindings(&capability_capture))
+                        .and_then(|()| bindings(&capture))
                         .and_then(|models| {
                             runtime.complete_candidate_context(
                                 &mut candidate,
-                                &capability_capture.context_binding(models),
-                                capability_capture.session_model().clone(),
+                                &capture.context_binding(models),
+                                capture.session_model().clone(),
                             )
                         });
                     match result {
@@ -455,146 +465,46 @@ impl ConfigurationApplications {
                     Err(diagnostic)
                 }
             };
-            if let Err(diagnostic) = candidate {
-                capability_failed = true;
-                let mut state = self.lock();
-                state.publish(scope, identity, ApplyUnit::Capabilities, || {
-                    UnitApplication::Failed { diagnostic }
-                });
-                // Child provider bindings participate in the capability closure.
-                // Independent instructions can still use the complete adopted
-                // capability/provider binding, including its resource leases.
-                let old = adopted.as_ref().expect("retained Session binding");
-                if !provider_published {
-                    let provider = if capture.same_provider(old) {
-                        UnitApplication::Applied
-                    } else {
-                        UnitApplication::Failed {
-                            diagnostic: "provider preparation depends on failed capability closure"
-                                .into(),
-                        }
-                    };
-                    state.publish(scope, identity, ApplyUnit::Provider, || provider);
-                }
-                if capture.same_context(old) {
-                    state.publish(scope, identity, ApplyUnit::Instructions, || {
-                        UnitApplication::Applied
-                    });
-                    self.notify(&state);
-                    return;
-                }
-                self.notify(&state);
-                drop(state);
-                capture = (**old).clone().retaining_context_from(&capture);
-                bindings(&capture).and_then(|models| {
-                    runtime.prepare_context_configuration(|base| {
-                        capture.compose_context_binding(base, models)
-                    })
-                })
-            } else {
-                let mut candidate = candidate.expect("successful capability candidate");
-                if candidate.adopts_implicitly() {
+            match candidate {
+                Ok(candidate) => Ok(candidate),
+                Err(diagnostic) => {
+                    capability_failed = true;
                     let mut state = self.lock();
-                    if !state.current(scope, identity) {
-                        return;
-                    }
-                    let context_unchanged = capture.same_context(&capability_capture)
-                        && capture.same_provider(&capability_capture);
-                    let mut retained =
-                        match capability_capture.admit(|| manager.credentials.clone()) {
-                            Ok(retained) => retained,
-                            Err(diagnostic) => {
-                                drop(state);
-                                self.fail_units(
-                                    scope,
-                                    identity,
-                                    &[
-                                        ApplyUnit::Capabilities,
-                                        ApplyUnit::Instructions,
-                                        ApplyUnit::Provider,
-                                    ],
-                                    diagnostic,
-                                );
-                                return;
+                    state.publish(scope, identity, ApplyUnit::Capabilities, || {
+                        UnitApplication::Failed { diagnostic }
+                    });
+                    // Child provider bindings participate in the capability
+                    // closure. Independent instructions can still use the
+                    // complete committed capability/provider binding, including
+                    // its resource leases.
+                    let old = adopted.as_ref().expect("retained Session binding");
+                    if !provider_published {
+                        let provider = if capture.same_provider(old) {
+                            UnitApplication::Applied
+                        } else {
+                            UnitApplication::Failed {
+                                diagnostic:
+                                    "provider preparation depends on failed capability closure"
+                                        .into(),
                             }
                         };
-                    let baseline = candidate.baseline;
-                    retained.binding_revision = baseline + 1;
-                    let mut ready = Some(candidate);
-                    let outcome = runtime.adopt_configuration(&mut ready, baseline, false, || {
-                        manager
-                            .sessions
-                            .configuration_bindings
-                            .lock()
-                            .expect("Session configuration bindings")
-                            .insert(session.clone(), retained);
-                        Ok(())
-                    });
-                    if let Err(error) = outcome {
-                        if runtime.configuration_cut().binding_revision != baseline {
-                            let input = state.captured_input(scope);
-                            state.capture_binding(scope.to_owned(), input);
-                            self.notify(&state);
-                            return;
-                        }
-                        drop(state);
-                        self.fail_units(
-                            scope,
-                            identity,
-                            &[
-                                ApplyUnit::Capabilities,
-                                ApplyUnit::Instructions,
-                                ApplyUnit::Provider,
-                            ],
-                            format!("configuration commit refused: {error:?}"),
-                        );
-                        return;
+                        state.publish(scope, identity, ApplyUnit::Provider, || provider);
                     }
-                    state.publish(scope, identity, ApplyUnit::Capabilities, || {
-                        UnitApplication::Applied
-                    });
-                    if context_unchanged {
-                        if let Err(diagnostic) =
-                            state.make_available(scope, identity, &capture, &manager.credentials)
-                        {
-                            drop(state);
-                            self.fail_units(
-                                scope,
-                                identity,
-                                &[
-                                    ApplyUnit::Capabilities,
-                                    ApplyUnit::Instructions,
-                                    ApplyUnit::Provider,
-                                ],
-                                diagnostic,
-                            );
-                            return;
-                        }
-                        for unit in [ApplyUnit::Instructions, ApplyUnit::Provider] {
-                            state.publish(scope, identity, unit, || UnitApplication::Applied);
-                        }
+                    if capture.same_context(old) {
+                        state.publish(scope, identity, ApplyUnit::Instructions, || {
+                            UnitApplication::Applied
+                        });
                         self.notify(&state);
                         return;
                     }
                     self.notify(&state);
                     drop(state);
-                    context_only = true;
+                    capture = (**old).clone().retaining_context_from(&capture);
                     bindings(&capture).and_then(|models| {
                         runtime.prepare_context_configuration(|base| {
                             capture.compose_context_binding(base, models)
                         })
                     })
-                } else {
-                    match bindings(&capture).and_then(|models| {
-                        runtime.complete_candidate_context(
-                            &mut candidate,
-                            &capture.context_binding(models),
-                            capture.session_model().clone(),
-                        )
-                    }) {
-                        Ok(()) => Ok(candidate),
-                        Err(error) => Err(error),
-                    }
                 }
             }
         };
@@ -619,7 +529,9 @@ impl ConfigurationApplications {
         #[cfg(test)]
         manager.configuration_test_gate(&session, true).await;
         let mut state = self.lock();
-        if !state.current(scope, identity) {
+        if !state.current(scope, identity)
+            || !state.still_resident(manager, &session, identity, resident)
+        {
             return;
         }
         // Availability composes from source-owned validated units, never from
@@ -649,85 +561,141 @@ impl ConfigurationApplications {
             );
             return;
         }
-        let impact = prepared.impact;
-        let baseline = prepared.baseline;
-        let implicit = prepared.adopts_implicitly();
-        let mut prepared = Some(prepared);
-        let outcome = if implicit {
-            let retained = capture.clone().admit(|| manager.credentials.clone());
-            match retained {
-                Err(diagnostic) => UnitApplication::Failed { diagnostic },
-                Ok(mut retained) => {
-                    retained.binding_revision = baseline + 1;
-                    match runtime.adopt_configuration(&mut prepared, baseline, false, || {
-                        manager
-                            .sessions
-                            .configuration_bindings
-                            .lock()
-                            .expect("Session configuration bindings")
-                            .insert(session.clone(), retained);
-                        Ok(())
-                    }) {
-                        Ok(_) => UnitApplication::Applied,
-                        Err(error) => {
-                            if runtime.configuration_cut().binding_revision != baseline {
-                                let input = state.captured_input(scope);
-                                state.capture_binding(scope.to_owned(), input);
-                                self.notify(&state);
-                                return;
-                            }
-                            UnitApplication::Failed {
-                                diagnostic: format!("configuration commit refused: {error:?}"),
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            let current = runtime.with_configuration_baseline(
-                prepared.as_ref().expect("prepared candidate"),
-                || {
-                    state
-                        .scopes
-                        .get_mut(scope)
-                        .expect("current scope")
-                        .candidate = Some(AvailableConfiguration {
-                        identity: identity.clone(),
-                        expected_binding: baseline,
-                        impact,
-                    });
-                },
-            );
-            if current {
-                state
-                    .ready
-                    .insert(scope.to_owned(), ReadyConfiguration { capture, prepared });
-                UnitApplication::Ready { impact }
-            } else {
-                let input = state.captured_input(scope);
-                state.capture_binding(scope.to_owned(), input);
-                self.notify(&state);
+        let mut retained = match capture.clone().admit(|| manager.credentials.clone()) {
+            Ok(retained) => retained,
+            Err(diagnostic) => {
+                drop(state);
+                self.fail_units(
+                    scope,
+                    identity,
+                    &[
+                        ApplyUnit::Capabilities,
+                        ApplyUnit::Instructions,
+                        ApplyUnit::Provider,
+                    ],
+                    diagnostic,
+                );
                 return;
             }
         };
-        for unit in [
+        // The units this candidate commits. Already settled units keep their
+        // own outcome; the commit is reported to exactly the remaining ones.
+        let units: Vec<ApplyUnit> = [
             ApplyUnit::Capabilities,
             ApplyUnit::Instructions,
             ApplyUnit::Provider,
-        ] {
-            if (capability_failed && unit != ApplyUnit::Instructions)
-                || (provider_published && unit == ApplyUnit::Provider)
-            {
-                continue;
+        ]
+        .into_iter()
+        .filter(|unit| {
+            !((capability_failed && *unit != ApplyUnit::Instructions)
+                || (provider_published && *unit == ApplyUnit::Provider)
+                || (context_only && *unit == ApplyUnit::Capabilities))
+        })
+        .collect();
+        for &unit in &units {
+            state.publish(scope, identity, unit, || UnitApplication::Ready);
+        }
+        let reason = state.reason(scope);
+        let desired = state.desired(scope, identity);
+        state
+            .staged_in
+            .insert(scope.to_owned(), (prepared.owner.clone(), identity.clone()));
+        state.attach(scope, &runtime);
+        let bindings_owner = manager.clone();
+        let retain_session = session.clone();
+        let owner = self.clone();
+        let settled_manager = manager.clone();
+        let settled_scope = scope.to_owned();
+        let settled_identity = identity.clone();
+        self.notify(&state);
+        // Staging happens under the source fence: no newer desire can be
+        // captured between the currency check above and this hand-off. The
+        // runtime commits at its own safe boundary, possibly inside this call.
+        runtime.stage_configuration(crate::runtime::configuration_commit::StagedConfiguration {
+            prepared,
+            desired,
+            reason,
+            retain: Box::new(move |revision| {
+                retained.binding_revision = revision;
+                bindings_owner
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .expect("Session configuration bindings")
+                    .insert(retain_session, retained);
+            }),
+            settled: Box::new(move |outcome| {
+                Box::pin(async move {
+                    #[cfg(test)]
+                    settled_manager.park_configuration_settlement().await;
+                    owner.staged_settled(
+                        &settled_manager,
+                        &settled_scope,
+                        &settled_identity,
+                        &units,
+                        outcome,
+                    );
+                })
+            }),
+        });
+    }
+
+    /// Record the runtime's outcome for one staged candidate. A candidate the
+    /// runtime superseded while it was still the desired application is
+    /// prepared again from its exact captured input, never from newer files.
+    fn staged_settled(
+        &self,
+        manager: &SessionRuntimeManager,
+        scope: &str,
+        identity: &ApplicationIdentity,
+        units: &[ApplyUnit],
+        outcome: crate::runtime::configuration_commit::StagedOutcome,
+    ) {
+        use crate::runtime::configuration_commit::StagedOutcome;
+        let mut state = self.lock();
+        if state
+            .staged_in
+            .get(scope)
+            .is_some_and(|(_, staged)| staged == identity)
+        {
+            state.staged_in.remove(scope);
+        }
+        if !state.current(scope, identity) {
+            // A superseded application's commit may still have been published
+            // unrecorded; views read that from the allocation, so they change.
+            if matches!(outcome, StagedOutcome::Uncertain { .. }) {
+                state.touch(scope);
+                self.notify(&state);
             }
-            let unit_outcome = if context_only && unit == ApplyUnit::Capabilities {
-                UnitApplication::Applied
-            } else {
-                outcome.clone()
-            };
-            state.publish(scope, identity, unit, || unit_outcome);
+            return;
+        }
+        let unit_outcome = match outcome {
+            StagedOutcome::Committed => UnitApplication::Applied,
+            StagedOutcome::Failed { diagnostic } => UnitApplication::Failed { diagnostic },
+            StagedOutcome::Uncertain { diagnostic } => UnitApplication::Uncertain { diagnostic },
+            StagedOutcome::Superseded => {
+                let input = state.captured_input(scope);
+                state.capture_binding(scope.to_owned(), input);
+                self.notify(&state);
+                drop(state);
+                self.run(manager.clone());
+                return;
+            }
+        };
+        let committed = unit_outcome == UnitApplication::Applied;
+        for &unit in units {
+            state.publish(scope, identity, unit, || unit_outcome.clone());
         }
         self.notify(&state);
+        drop(state);
+        if committed
+            && let Ok(session) = SessionId::parse(scope)
+            && let Some(runtime) = manager.configuration_runtime(&session)
+        {
+            tokio::spawn(async move {
+                runtime.settle_configuration_resources().await;
+            });
+        }
     }
 
     /// Publish a validated catalog to one Session under the application
@@ -797,89 +765,26 @@ impl ConfigurationApplications {
         }
         self.notify(&state);
     }
+}
 
-    pub(crate) fn adopt(
-        &self,
+impl super::ApplicationState {
+    /// Whether the allocation a preparation looked up is still the Session's
+    /// resident. Checked under the application lock (lock order application,
+    /// then registry), so only the current allocation becomes the
+    /// application's health owner or receives its outcomes. When it moved, the
+    /// application is queued again for the allocation resident now, never
+    /// lost.
+    fn still_resident(
+        &mut self,
         manager: &SessionRuntimeManager,
         session: &SessionId,
         identity: &ApplicationIdentity,
-        expected_binding: u64,
-    ) -> Result<ConfigurationApplication, AdoptionError> {
-        let scope = session.to_string();
-        let mut state = self.lock();
-        if !state.current(&scope, identity) {
-            return Err(AdoptionError::Conflict);
+        observed: Option<crate::local_runtime::session_runtime_manager::RuntimeIncarnationId>,
+    ) -> bool {
+        if manager.resident_incarnation(session) == observed {
+            return true;
         }
-        let ready = state.ready.get_mut(&scope).ok_or(AdoptionError::NotReady)?;
-        let runtime = manager
-            .configuration_runtime(session)
-            .ok_or(AdoptionError::NotReady)?;
-        let mut retained = ready
-            .capture
-            .clone()
-            .admit(|| manager.credentials.clone())
-            .map_err(|diagnostic| AdoptionError::Failed { diagnostic })?;
-        retained.binding_revision = expected_binding + 1;
-        let outcome =
-            runtime.adopt_configuration(&mut ready.prepared, expected_binding, true, || {
-                manager
-                    .sessions
-                    .configuration_bindings
-                    .lock()
-                    .expect("Session configuration bindings")
-                    .insert(session.clone(), retained);
-                Ok(())
-            });
-        if let Err(error) = outcome {
-            if ready.prepared.is_none() {
-                state.ready.remove(&scope);
-                state
-                    .scopes
-                    .get_mut(&scope)
-                    .expect("current scope")
-                    .candidate = None;
-                for unit in [
-                    ApplyUnit::Capabilities,
-                    ApplyUnit::Instructions,
-                    ApplyUnit::Provider,
-                ] {
-                    if matches!(
-                        state.scopes[&scope].units[&unit],
-                        UnitApplication::Ready { .. }
-                    ) {
-                        state.publish(&scope, identity, unit, || UnitApplication::Failed {
-                            diagnostic: format!("configuration commit refused: {error:?}"),
-                        });
-                    }
-                }
-                self.notify(&state);
-            }
-            return Err(error);
-        }
-        state.ready.remove(&scope);
-        for unit in [
-            ApplyUnit::Capabilities,
-            ApplyUnit::Instructions,
-            ApplyUnit::Provider,
-        ] {
-            if matches!(
-                state.scopes[&scope].units[&unit],
-                UnitApplication::Ready { .. }
-            ) {
-                state.publish(&scope, identity, unit, || UnitApplication::Applied);
-            }
-        }
-        state
-            .scopes
-            .get_mut(&scope)
-            .expect("current scope")
-            .candidate = None;
-        self.notify(&state);
-        let view = state.view(&scope).expect("current scope");
-        drop(state);
-        tokio::spawn(async move {
-            runtime.settle_configuration_resources().await;
-        });
-        Ok(view)
+        self.pending.insert(session.to_string(), identity.clone());
+        false
     }
 }

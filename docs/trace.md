@@ -612,9 +612,11 @@ renumber every Turn; it cannot move collapse, selection, detail, search or focus
 One native Attempt owns exactly one Turn and one native Step owns exactly one Step
 group even with interleaved records. The first loaded occurrence orders groups,
 never assigns membership. Attempt-owned records with no Step form Message.
-Unscoped records remain outside Turns. An adoption committed while idle carries no
-Attempt of its own; Trace resolves it to the first Attempt started after it,
-the rule the turn outline reads its prompt by, so a Turn opens on its own input. Flattening can therefore bring interleaved
+Unscoped records remain outside Turns. A configuration change committed while
+idle (`TraceKind::Configuration`) carries no Attempt of its own; Trace resolves it to the first Attempt started after it,
+the rule the turn outline reads its prompt by, so a Turn opens on its own input. Its Inspector shows the
+change summary, the exact effective instructions the commit installed and the definitions of the Tools and Skills it
+added, changed or removed (before and after), read through the record's detail cut from the content the fact retains, so a configuration no request used stays inspectable. Flattening can therefore bring interleaved
 members of the same native structure together, without changing native history.
 Retries stay request metadata inside the same Step. Native IDs remain in Inspector.
 There is no Attempt-first renderer or compatibility hierarchy.

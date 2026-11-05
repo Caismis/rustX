@@ -1,5 +1,5 @@
 //! Configuration requests outside any attachment: User/Workspace sources,
-//! Session settings, MCP probes, reconciliation and adoption. Mutations
+//! Session settings, MCP probes and reconciliation. Mutations
 //! commit through the manager; reads materialize off the async executor.
 use super::AppServerConnection;
 use crate::app_server::protocol::{ErrorData, Method, MethodResult, RpcError};
@@ -31,21 +31,6 @@ impl AppServerConnection {
                     .reconcile_configuration(&target)
                     .await
                     .map_err(source_settings_error)?;
-                Ok(MethodResult::ConfigurationReceipt {
-                    scope: application.scope,
-                    version: application.version,
-                })
-            }
-            Method::AdoptConfiguration {
-                session_id,
-                candidate,
-                expected_binding,
-            } => {
-                let application = self
-                    .host
-                    .manager()
-                    .adopt_configuration(&session_id, &candidate, expected_binding)
-                    .map_err(|rejection| domain(ErrorData::ConfigurationAdoption { rejection }))?;
                 Ok(MethodResult::ConfigurationReceipt {
                     scope: application.scope,
                     version: application.version,

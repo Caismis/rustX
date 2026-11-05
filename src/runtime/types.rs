@@ -609,6 +609,24 @@ impl ConversationLifecycle {
             == self.inner.resident_resources.load(Ordering::Acquire)
     }
 
+    /// Hold the native commit boundary until `release` fires, as a
+    /// concurrent lifecycle commit would. Returns once it is held.
+    #[cfg(test)]
+    pub(crate) fn hold_commit_boundary(&self, release: std::sync::mpsc::Receiver<()>) {
+        let (held, acquired) = std::sync::mpsc::channel();
+        let lifecycle = self.clone();
+        std::thread::spawn(move || {
+            let _boundary = lifecycle
+                .inner
+                .commit_boundary
+                .lock()
+                .expect("lifecycle commit boundary poisoned");
+            held.send(()).expect("holder waits");
+            let _ = release.recv();
+        });
+        acquired.recv().expect("boundary held");
+    }
+
     #[cfg(test)]
     pub(crate) async fn wait_for_no_active_operations(&self) {
         loop {
@@ -703,6 +721,11 @@ pub(crate) enum DurableOperation {
     /// read as an empty one. The child therefore fails closed instead of
     /// publishing a terminal it cannot justify.
     ParentGuidanceSeal,
+    /// A committed configuration's change fact could not be made durable.
+    ///
+    /// Non-transient: the generation is already published, so admission is
+    /// fenced rather than letting new work run on an unrecorded generation.
+    RecordConfigurationChange,
 }
 
 impl DurableOperation {
@@ -727,6 +750,7 @@ impl DurableOperation {
             Self::BackgroundTerminalPublication => "background_terminal_publication",
             Self::SubagentTerminalPublication => "subagent_terminal_publication",
             Self::ParentGuidanceSeal => "parent_guidance_seal",
+            Self::RecordConfigurationChange => "record_configuration_change",
         }
     }
 }

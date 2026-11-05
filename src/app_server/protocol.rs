@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v71 envelope and method vocabulary.
+//! Rust authority for the App Server v72 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 71;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 72;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -986,12 +986,6 @@ pub enum Method {
     },
     #[serde(rename = "session/configuration")]
     SessionConfiguration { session_id: SessionId },
-    #[serde(rename = "session/adoptConfiguration")]
-    AdoptConfiguration {
-        session_id: SessionId,
-        candidate: crate::local_runtime::configuration::application::ApplicationIdentity,
-        expected_binding: u64,
-    },
 }
 
 impl Method {
@@ -1132,8 +1126,7 @@ impl Method {
             | Self::InteractionRespond { .. }
             | Self::InteractionCancel { .. }
             | Self::SourcesWrite { .. }
-            | Self::ConfigurationReconcile { .. }
-            | Self::AdoptConfiguration { .. } => true,
+            | Self::ConfigurationReconcile { .. } => true,
         }
     }
 }
@@ -1147,9 +1140,8 @@ pub enum ErrorData {
     SessionFileRead {
         reason: crate::tools::session_files::SessionFileReadFailure,
     },
-    ConfigurationAdoption {
-        rejection: crate::runtime::adoption::AdoptionError,
-    },
+    /// A newer Session binding superseded the model selection's fence.
+    ModelSelectionConflict,
     /// The Session's published Model Catalog does not admit its configured
     /// selection, so no work is accepted until `session/setModel` commits a
     /// selection it does admit. Nothing falls back to a default.

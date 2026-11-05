@@ -43,15 +43,15 @@ async fn t03_mixed_application_and_true_process_binding_restart() {
         )
         .await
         .unwrap();
-    let application = settled(&fixture, 0).await;
+    let application = applied(&fixture, 0).await;
     assert_eq!(
         application.units[&ApplyUnit::ExecutionPolicy],
         UnitApplication::Applied
     );
-    assert!(matches!(
+    assert_eq!(
         application.units[&ApplyUnit::Instructions],
-        UnitApplication::Ready { .. }
-    ));
+        UnitApplication::Applied
+    );
     assert_eq!(
         application.units[&ApplyUnit::ProcessBindings],
         UnitApplication::ProcessRestart
@@ -65,7 +65,7 @@ async fn t03_mixed_application_and_true_process_binding_restart() {
             .approval_mode,
         crate::runtime::ApprovalMode::FullAccess
     );
-    assert_ne!(
+    assert_eq!(
         runtime
             .runtime_resources()
             .configuration()
@@ -79,7 +79,7 @@ async fn t03_mixed_application_and_true_process_binding_restart() {
 }
 
 #[tokio::test]
-async fn t05_complete_policy_registry_publishes_while_instructions_remain_pending() {
+async fn t05_complete_policy_registry_publishes_independently_of_instructions() {
     let fixture = Fixture::with_session_count(None, 1).await;
     let id = &fixture.sessions[0].id;
     fixture.manager.load(id, None).await.unwrap();
@@ -93,7 +93,8 @@ async fn t05_complete_policy_registry_publishes_while_instructions_remain_pendin
         },
     )
     .await;
-    assert!(settled(&fixture, 0).await.candidate.is_some());
+    applied(&fixture, 0).await;
+    let instructions = runtime.runtime_resources();
     write(
         &fixture,
         0,
@@ -105,16 +106,24 @@ async fn t05_complete_policy_registry_publishes_while_instructions_remain_pendin
         },
     )
     .await;
-    let application = settled(&fixture, 0).await;
+    let application = applied(&fixture, 0).await;
     assert_eq!(
         application.units[&ApplyUnit::Capabilities],
         UnitApplication::Applied,
         "{application:?}"
     );
-    assert!(application.candidate.is_some());
     let current = runtime.runtime_resources();
     assert_eq!(
-        old.configuration().unwrap().config.agent.instructions,
+        current.configuration().unwrap().config.agent.instructions,
+        "pending instructions"
+    );
+    assert_eq!(
+        instructions
+            .configuration()
+            .unwrap()
+            .config
+            .agent
+            .instructions,
         current.configuration().unwrap().config.agent.instructions
     );
     let read = |resources: &crate::runtime::RuntimeResourceSnapshot| {
@@ -183,26 +192,15 @@ async fn t08_model_baseline_change_recaptures_prepared_context() {
             .await
             .unwrap();
         probe.before_configuration_publish.release();
-        let application = settled(&fixture, 0).await;
-        let recaptured = application
-            .candidate
-            .as_ref()
-            .expect("new baseline becomes ready");
-        assert_eq!(recaptured.identity, application.desired);
+        // The stale preparation never commits; the recaptured input commits
+        // over the new baseline and keeps the explicit selection.
+        let application = applied(&fixture, 0).await;
         assert_eq!(
-            recaptured.expected_binding,
-            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
-                &runtime
-            )
-            .unwrap()
-            .adopted_binding
-        );
-        assert!(matches!(
             application.units[&ApplyUnit::Instructions],
-            UnitApplication::Ready { .. }
-        ));
+            UnitApplication::Applied
+        );
         assert_eq!(runtime.model_view().configured.model.to_string(), "local/b");
-        assert_ne!(
+        assert_eq!(
             runtime
                 .runtime_resources()
                 .configuration()
@@ -212,6 +210,7 @@ async fn t08_model_baseline_change_recaptures_prepared_context() {
                 .instructions,
             "prepared for old model"
         );
+        assert_eq!(configuration_changes(&runtime).len(), 1);
         assert_ne!(
             application.desired, candidate_id,
             "stale preparation is superseded"
@@ -268,15 +267,12 @@ async fn t12_lost_source_write_response_does_not_cancel_native_application() {
         assert!(rpc.await.unwrap_err().is_cancelled());
         probe.before_configuration_prepare.entered().await;
         let preparing = fixture.manager.configuration_application(&id).unwrap();
-        assert_eq!(
-            fixture
-                .manager
-                .adopt_configuration(&id, &preparing.desired, 1),
-            Err(AdoptionError::NotReady)
-        );
         probe.before_configuration_prepare.release();
-        let ready = settled(&fixture, 0).await;
-        assert!(ready.candidate.is_some());
+        let ready = applied(&fixture, 0).await;
+        assert_eq!(
+            ready.units[&ApplyUnit::Instructions],
+            UnitApplication::Applied
+        );
         assert_eq!(ready.desired, preparing.desired);
         assert!(ready.version > preparing.version);
         // Reconnect rereads authority. It does not repeat the source mutation.
@@ -327,17 +323,24 @@ async fn t02_later_tool_batch_and_model_step_keep_admitted_registry_policy() {
             },
         )
         .await;
-        let applied = settled(&fixture, 0).await;
+        // The admitted Attempt owns its registry, so the policy is staged.
+        let staged = settled(&fixture, 0).await;
         assert_eq!(
-            applied.units[&ApplyUnit::Capabilities],
+            staged.units[&ApplyUnit::Capabilities],
+            UnitApplication::Ready
+        );
+        assert_eq!(runtime.runtime_resources().revision(), captured.generation);
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        // Only now can the provider release the Tool proposal. The Tool batch
+        // and subsequent model Step are created after newer policy was saved.
+        fixture.gates[0].release();
+        settlement.wait().await;
+        let committed = applied(&fixture, 0).await;
+        assert_eq!(
+            committed.units[&ApplyUnit::Capabilities],
             UnitApplication::Applied
         );
         assert!(runtime.runtime_resources().revision() > captured.generation);
-        let mut settlement = SettlementReceiptWait::capture(&runtime);
-        // Only now can the provider release the Tool proposal. The Tool batch
-        // and subsequent model Step are created after newer policy published.
-        fixture.gates[0].release();
-        settlement.wait().await;
         let requests = fixture.provider.request_bodies();
         assert_eq!(
             requests.len(),
@@ -386,7 +389,13 @@ async fn t09_unselected_model_and_default_edits_publish_without_adoption_t15_new
         .await
         .unwrap();
     let applied = settled(&fixture, 0).await;
-    assert!(applied.candidate.is_none(), "{applied:?}");
+    assert!(
+        applied
+            .units
+            .values()
+            .all(|unit| *unit != UnitApplication::Ready),
+        "{applied:?}"
+    );
     assert!(
         applied
             .units
@@ -467,13 +476,16 @@ async fn t13_failed_preparation_retries_same_input_and_t14_latest_pending_is_bou
             )
             .await
             .unwrap();
-        let retried = settled(&fixture, 0).await;
+        let retried = applied(&fixture, 0).await;
         assert_eq!(
             retried.desired.input_revision,
             failed.desired.input_revision
         );
         assert!(retried.desired.attempt > failed.desired.attempt);
-        assert!(retried.candidate.is_some());
+        assert_eq!(
+            retried.units[&ApplyUnit::Instructions],
+            UnitApplication::Applied
+        );
         let before = probe.configuration_preparations.load(Ordering::SeqCst);
         probe.before_configuration_prepare.arm();
         write(
@@ -506,18 +518,13 @@ async fn t13_failed_preparation_retries_same_input_and_t14_latest_pending_is_bou
             .unwrap()
             .desired;
         probe.before_configuration_prepare.release();
-        let ready = settled(&fixture, 0).await;
-        assert_eq!(ready.candidate.as_ref().unwrap().identity, latest);
+        let ready = applied(&fixture, 0).await;
+        assert_eq!(ready.desired, latest);
         assert_eq!(
             probe.configuration_preparations.load(Ordering::SeqCst),
             before + 2,
             "only the latest pending input is prepared after old work settles"
         );
-        let candidate = ready.candidate.unwrap();
-        fixture
-            .manager
-            .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
         assert_eq!(
             fixture
                 .manager
@@ -626,7 +633,7 @@ async fn t03_t05_mixed_instructions_publication_rejects_rebound_project_path() {
             UnitApplication::Failed { diagnostic }
                 if diagnostic.contains("new.md") && diagnostic.contains("outside workspace boundary")
         ), "{rejected:?}");
-        assert!(rejected.candidate.is_none());
+        assert!(rejected.units.values().all(|unit| *unit != UnitApplication::Ready));
         assert!(Arc::ptr_eq(&before, &runtime.runtime_resources()));
 
         // Keep the escaping link in place: admission can succeed only using
@@ -661,7 +668,7 @@ async fn t03_t05_mixed_instructions_publication_rejects_rebound_project_path() {
 }
 
 #[tokio::test]
-async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adopted() {
+async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit() {
     let fixture = Fixture::with_session_count(None, 1).await;
     let id = &fixture.sessions[0].id;
     let skill = fixture.workspaces[0].join(".agents/skills/retained");
@@ -732,7 +739,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         },
     )
     .await;
-    let application = settled(&fixture, 0).await;
+    let application = applied(&fixture, 0).await;
     assert!(
         matches!(
             application.units[&ApplyUnit::Capabilities],
@@ -740,22 +747,11 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         ),
         "{application:?}"
     );
-    assert!(
-        matches!(
-            application.units[&ApplyUnit::Instructions],
-            UnitApplication::Ready { .. }
-        ),
-        "{application:?}"
+    assert_eq!(
+        application.units[&ApplyUnit::Instructions],
+        UnitApplication::Applied,
+        "independent instructions commit while the failed closure keeps its leases"
     );
-    let candidate = application.candidate.unwrap();
-    let adopted = fixture
-        .manager
-        .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
-        .unwrap();
-    assert!(matches!(
-        adopted.units[&ApplyUnit::Capabilities],
-        UnitApplication::Failed { .. }
-    ));
     let after = runtime.runtime_resources();
     assert_eq!(
         after.configuration().unwrap().config.agent.instructions,
@@ -903,48 +899,56 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         c1i2.skill_discovery.packages,
         retained(id).skill_discovery.packages
     );
+    // The second Session composes from its retained C1 closure; its deferred
+    // C2 is then prepared again for that allocation and commits as one
+    // recorded reallocation whose `before` is exactly the retained C1 Tools.
+    assert_eq!(
+        retained(&second).config.native_tools,
+        before.configuration().unwrap().config.native_tools
+    );
     fixture.manager.load(&second, None).await.unwrap();
-    let second_resources = fixture
-        .manager
-        .configuration_runtime(&second)
+    session_applied(&fixture, &second).await;
+    let second_runtime = fixture.manager.configuration_runtime(&second).unwrap();
+    let changes = configuration_changes(&second_runtime);
+    let [change] = changes.as_slice() else {
+        panic!("one reallocation fact: {changes:?}");
+    };
+    assert_eq!(
+        change.reason,
+        crate::runtime::configuration_commit::ConfigurationChangeReason::Reallocation
+    );
+    assert!(
+        change.tools.changed.names.contains(&"read".to_owned()),
+        "{change:?}"
+    );
+    let catalog = configuration_catalogs(&second_runtime.tool_runtime().durable_store())
+        .pop()
+        .unwrap();
+    let read = catalog["tools"]
+        .as_array()
         .unwrap()
-        .runtime_resources();
+        .iter()
+        .find(|tool| tool["name"] == "read")
+        .unwrap();
+    let approval = |state: &str| read[state]["definition"]["approval_policy"].clone();
     assert_eq!(
-        second_resources
-            .configuration()
-            .unwrap()
-            .config
-            .native_tools,
-        c1i2.config.native_tools
+        approval("before"),
+        serde_json::to_value(
+            before
+                .capability()
+                .tool_registry()
+                .definitions()
+                .into_iter()
+                .find(|tool| tool.name == "read")
+                .unwrap()
+                .approval_policy
+        )
+        .unwrap(),
+        "{read}"
     );
-    assert_eq!(
-        second_resources
-            .capability()
-            .tool_registry()
-            .model_definitions(),
-        before.capability().tool_registry().model_definitions()
-    );
-    assert_eq!(
-        second_resources.capability().skills().packages(),
-        before.capability().skills().packages()
-    );
-    assert_eq!(
-        second_resources
-            .root_profile()
-            .unwrap()
-            .project_instructions
-            .files,
-        c1i2.root_agent_project_files
-    );
-    assert_eq!(
-        second_resources
-            .configuration()
-            .unwrap()
-            .authored
-            .component_revisions,
-        c1i2.component_revisions
-    );
-    // Retry the same authored C2; S1/S2 retain their explicit compositions.
+    assert_ne!(approval("before"), approval("after"), "{read}");
+    // Retry the same authored C2: it prepares and every resident Session
+    // commits it automatically, while new Sessions bind C2 as well.
     fixture
         .manager
         .reconcile_configuration(
@@ -954,7 +958,8 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         )
         .await
         .unwrap();
-    settled(&fixture, 0).await;
+    applied(&fixture, 0).await;
+    session_applied(&fixture, &second).await;
     let third = create().await.unwrap().session.id;
     let c2i2 = retained(&third);
     assert_eq!(
@@ -966,18 +971,21 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         c1i2.component_revisions[&ApplyUnit::Capabilities]
     );
     assert_ne!(c2i2.config.native_tools, c1i2.config.native_tools);
-    assert!(Arc::ptr_eq(
-        &second_resources,
-        &fixture
+    assert_eq!(
+        fixture
             .manager
             .configuration_runtime(&second)
             .unwrap()
             .runtime_resources()
-    ));
-
+            .configuration()
+            .unwrap()
+            .config
+            .native_tools,
+        c2i2.config.native_tools
+    );
     assert_eq!(
-        retained(&second).component_revisions,
-        c1i2.component_revisions
+        retained(&second).component_revisions[&ApplyUnit::Capabilities],
+        c2i2.component_revisions[&ApplyUnit::Capabilities]
     );
     assert_eq!(
         runtime
@@ -989,7 +997,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
             .instructions,
         "independent instructions P2"
     );
-    assert_eq!(
+    assert_ne!(
         runtime.runtime_resources().capability().revision(),
         before.capability().revision()
     );

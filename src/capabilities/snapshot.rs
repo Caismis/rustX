@@ -152,6 +152,15 @@ impl CapabilitySnapshot {
         }
     }
 
+    /// This generation with another effective Tool environment.
+    #[cfg(test)]
+    pub(crate) fn with_effective_environment(&self, environment: ToolEnvironment) -> Self {
+        Self {
+            effective_environment: environment,
+            ..self.clone()
+        }
+    }
+
     /// The configured MCP server bindings of this immutable generation.
     #[must_use]
     pub fn mcp_servers(&self) -> &McpServerBindings {

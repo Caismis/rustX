@@ -110,6 +110,7 @@ pub(crate) const ANCHORS: &[&str] = &[
     "subagent_ownership_committed",
     "workflow_started",
     "interaction_requested",
+    "configuration_applied",
 ];
 
 /// Most canonical messages projected for one adopted inbound turn.
@@ -649,18 +650,5 @@ pub(crate) use live::{repair_agent_records, repair_records};
 mod tests;
 
 fn anchor_kinds() -> Vec<TraceFactKind> {
-    use TraceFactKind as K;
-    vec![
-        K::AttemptStarted,
-        K::TurnStarted,
-        K::InboundTurnAdopted,
-        K::ModelRequestStarted,
-        K::AssistantMessageCommitted,
-        K::ToolExecutionStarted,
-        K::CompactionStarted,
-        K::BackgroundExecutionCommitted,
-        K::SubagentOwnershipCommitted,
-        K::WorkflowStarted,
-        K::InteractionRequested,
-    ]
+    TraceFactKind::anchors()
 }

@@ -32,6 +32,7 @@ pub(super) struct AnchorFacts {
     pub truncated: bool,
     pub fields: Vec<TraceFieldSource>,
     pub collections: Vec<crate::observation::cut::CollectionFrontier>,
+    pub configuration: Option<crate::runtime::configuration_commit::ConfigurationChange>,
 }
 pub(super) struct AnchorRequest {
     pub start_sequence: u64,
@@ -70,6 +71,7 @@ impl AnchorFacts {
             truncated: false,
             fields: header.fields.clone(),
             collections: Vec::new(),
+            configuration: None,
         }
     }
     pub(super) fn canonical(
@@ -283,6 +285,7 @@ impl TraceProjection<'_> {
                 facts.native_id.clone_from(native_id);
                 vec![K::InteractionSettled]
             }
+            D::Configuration { change } => configuration_start(facts, change),
             D::CanonicalToolCommit { .. } | D::Terminal(_) => {
                 return Err(ConversationStoreError::InvalidReference(
                     "native fact is not a Trace anchor".into(),
@@ -324,6 +327,22 @@ impl TraceProjection<'_> {
         Ok(())
     }
 }
+/// A Session-level record between Attempts: its own native position, no
+/// owning Attempt, Step or request.
+fn configuration_start(
+    facts: &mut AnchorFacts,
+    change: &crate::runtime::configuration_commit::ConfigurationChange,
+) -> Vec<K> {
+    facts.kind = TraceKind::Configuration;
+    facts.state = TraceState::Completed;
+    facts.timing.ended_at = Some(facts.timing.started_at);
+    facts.timing.duration_ms = Some(0);
+    // The retained instructions are read through the record's detail cut.
+    facts.has_detail = true;
+    facts.configuration = Some(change.clone());
+    Vec::new()
+}
+
 fn request_start(facts: &mut AnchorFacts, data: &D) -> Vec<K> {
     let D::RequestStart {
         start_sequence,

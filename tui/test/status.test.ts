@@ -936,3 +936,28 @@ it('deferred occupancy model keeps native quantities without a guessed identity'
   }}});
   assert.equal(contextLabel(state), 'last context 25.6k/256k · model deferred (/context-model)');
 });
+
+describe("Session configuration status", () => {
+  type Status = "applied" | "preparing" | "ready" | "failed" | "uncertain";
+  const unit = (status: Status) => status === "failed" || status === "uncertain" ? { status, diagnostic: "store unavailable" } : { status };
+  const application = (status: Status, capabilities: Status = "applied") => ({
+    scope: "s", sources: [{ kind: "user" as const }], version: "1", desired: { input_revision: "i", attempt: "1" },
+    units: { execution_policy: { status: "applied" as const }, instructions: unit(status), capabilities: unit(capabilities) },
+  });
+  it("never claims the previous configuration was kept for an uncertain commit", () => {
+    for (const shown of [application("uncertain"), application("failed", "uncertain")]) {
+      const wide = footer(stateOf(), "connected", 160, undefined, undefined, shown);
+      assert.match(wide, /config applied, not recorded · new work waits/);
+      assert.doesNotMatch(wide, /previous kept/);
+      const narrow = footer(stateOf(), "connected", 40, undefined, undefined, shown);
+      assert.match(narrow, /config uncertain/);
+      assert.doesNotMatch(narrow, /previous kept|config failed/);
+    }
+  });
+  it("is silent once applied and names pending or failed work compactly", () => {
+    assert.doesNotMatch(footer(stateOf(), "connected", 160, undefined, undefined, application("applied")), /config/);
+    assert.match(footer(stateOf(), "connected", 160, undefined, undefined, application("preparing")), /config preparing/);
+    assert.match(footer(stateOf(), "connected", 160, undefined, undefined, application("ready")), /config applies after current work/);
+    assert.match(footer(stateOf(), "connected", 160, undefined, undefined, application("failed")), /config failed · previous kept/);
+  });
+});

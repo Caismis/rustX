@@ -1,0 +1,44 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from Harness ContextInjectionRow.module.css; see PROVENANCE.md.
+   Figma 10:2482: 24px Tool calls header, 4px gap, 141px code block cap. */
+
+/* Separator beside the title: ToolRow's summary geometry, so the disclosure
+   rows keep one 24px rhythm and one separator shape. */
+.sep {
+  flex: none;
+  width: 2px;
+  height: 2px;
+  margin: 0 8px;
+  border-radius: 1px;
+  background: var(--dsw-alias-label-caption);
+}
+
+/* The change's one-line account: the reason it rarely needs expanding. */
+.summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.body {
+  box-sizing: border-box;
+  /* Indent under the title, which starts at leading (16 + delta) + gap 6. */
+  width: calc(100% - 22px - var(--dsh-content-font-delta, 0px));
+  max-height: 141px;
+  margin: 4px 0 0 calc(22px + var(--dsh-content-font-delta, 0px));
+  overflow: auto;
+  padding: 10px 16px 12px 12px;
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-markdown-code-block);
+  color: var(--dsw-alias-label-tertiary);
+  font: 400 11px/16px var(--ds-font-family-code);
+}
+
+/* Names wrap on a narrow Session instead of scrolling the row sideways. */
+.toolChanges {
+  overflow-wrap: anywhere;
+}

@@ -1,6 +1,6 @@
 /** Pure Runtime Client read-model fold. Routing/cursor continuity belongs to
  * the attachment owner. No I/O, providers, React, or execution authority. */
-import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor } from './v71.ts';
+import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor } from './v72.ts';
 import { canonicalLocatorKey, contentSourceKey, sameContentRef } from './content-identity.ts';
 
 const cuts = new WeakMap<Snapshot, ProjectionMetadata>();
@@ -294,11 +294,11 @@ function foldOrdinaryEvent(state: Snapshot, event: Exclude<Event, {type: 'projec
     case 'collection_changed': return {...state};
     case 'capability_updated': return { ...state, capabilities: event.capabilities };
     case 'resource_generation_updated': return { ...state, effective_plugins: event.plugins, model: event.model, model_status: event.model_status, effective_approval_mode: event.approval_mode, capabilities: event.capabilities, resources: event.resources };
+    // The committed change row arrives with the next read-domain cut.
+    case 'configuration_applied': return state;
     case 'session_model_changed': return { ...state, model: event.model, model_status: event.model_status };
     case 'runtime_shutdown': return { ...state, shutting_down: true };
     case 'runtime_durability_failed': return { ...state, durability_failure: { operation: event.operation, diagnostic: event.diagnostic } };
-    // Runtime-domain advisory state; never a configuration-application change.
-    case 'configuration_adoption_eligibility_changed': return { ...state, configuration_adoption_eligibility: event.eligibility };
     default: { const exhaustive: never = event; throw new Error(`Unknown Runtime Client event: ${exhaustive}`); }
   }
 }

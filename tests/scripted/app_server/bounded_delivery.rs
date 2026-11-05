@@ -34,7 +34,7 @@ async fn granted_connection(
             .await
         });
         let offered = format!(
-            "rustx.app-server.v71, rustx-token.{}, rustx-delivery-access.{DELIVERY_SECRET}",
+            "rustx.app-server.v72, rustx-token.{}, rustx-delivery-access.{DELIVERY_SECRET}",
             driver::TOKEN
         );
         (driver::websocket_offering(&url, &offered).await, server)
@@ -112,17 +112,7 @@ async fn t08_t11_t12_t14_t19_numeric_delivery_carrier_keeps_real_stdio_and_webso
             let (client, serving) = granted_connection(&fixture, ws, grant.clone()).await;
             initialize(&client).await;
             let target = attach(&client, &fixture).await;
-            // The supervisor publishes its genuine idle adoption gate after
-            // attachment. Capture the read-purity baseline after that native
-            // readiness fact, rather than racing initialization.
-            let checkpoint = loop {
-                let MethodResult::Checkpoint { checkpoint } = call(&client, 46_790, Method::SessionCheckpoint { target: target.clone(), trace_records: vec![] }).await else { panic!("checkpoint"); };
-                if checkpoint.snapshot.configuration_adoption_eligibility
-                    == crate::runtime::adoption::AdoptionEligibility::Eligible
-                {
-                    break checkpoint;
-                }
-            };
+            let MethodResult::Checkpoint { checkpoint } = call(&client, 46_790, Method::SessionCheckpoint { target: target.clone(), trace_records: vec![] }).await else { panic!("checkpoint"); };
             let descriptor = checkpoint.snapshot.message_descriptors.iter().find(|descriptor| descriptor.locator == locator).unwrap();
             assert!(descriptor.identity.is_none(), "giant original identity is deferred, never replaced");
             let head = descriptor.deliveries.as_ref().expect("positive successful C delivery head");

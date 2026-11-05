@@ -584,6 +584,14 @@ impl RuntimeClientProjection {
                 }
                 events
             }
+            ConversationObservation::ConfigurationApplied { event, cursor } => {
+                let item = crate::observation::transcript::configuration_applied_item(*event)
+                    .expect("runtime configuration change fact is valid");
+                vec![RuntimeClientEvent::ConfigurationApplied {
+                    item: Box::new(item),
+                    transcript_cursor: RuntimeClientTranscriptCursor::from(cursor),
+                }]
+            }
             #[cfg(test)]
             ConversationObservation::InteractionRemoved { interaction } => {
                 self.snapshot
@@ -923,15 +931,6 @@ impl RuntimeClientProjection {
                     operation,
                     diagnostic,
                 }]
-            }
-            ConversationObservation::AdoptionEligibility(eligibility) => {
-                if self.snapshot.configuration_adoption_eligibility == eligibility {
-                    return Vec::new();
-                }
-                self.snapshot
-                    .configuration_adoption_eligibility
-                    .clone_from(&eligibility);
-                vec![RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility }]
             }
         }
     }

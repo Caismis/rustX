@@ -1,9 +1,10 @@
 import {traceAttemptKey,traceStepKey,traceOccurrenceKey,sameTraceStep} from '../../../../protocol/app-server/trace-identity';
 import {canonicalLocatorKey} from '../../../../protocol/app-server/content-identity';
 import { traceStateLabel } from '../../bindings/status-labels';
+import { configurationSummary } from '../../bindings/configuration-change';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v71';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v72';
 import type { WorkflowNodes, WorkflowTraceNode } from './workflow';
 
 /** The Harness detail tab identities. Labels follow the locale; ids never do. */
@@ -125,6 +126,7 @@ export interface TrajectoryProjection {
 
 function cellsOf(tx: Translate, record: TraceRecord): InspectableDisplayItem[] {
   if (record.kind === 'attempt' || record.kind === 'step') return [];
+  if (record.kind === 'configuration' && record.configuration) return [{ ...origin(record, 'record', recordLabel(tx, record), configurationSummary(tx, record.configuration), 'overview', record.id), type: 'RecordRow' }];
   if (record.kind !== 'request' || !record.request) return [{ ...origin(record, 'record', recordLabel(tx, record), record.preview?.text ?? '', 'overview', record.id), type: 'RecordRow' }];
   const request = record.request;
   const cells: InspectableDisplayItem[] = [];
@@ -206,7 +208,7 @@ export function trajectoryItems(tx: Translate, projection: TrajectoryProjection,
 
 /** Never correlate incomplete scope, or ambiguous proposals. Session/Conversation
  * isolation is supplied by the native Trace cache, not reconstructed from IDs. */
-function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v71').RuntimeClientToolOccurrence|null}):string|undefined {
+function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v72').RuntimeClientToolOccurrence|null}):string|undefined {
  const owner=traceAttemptKey(record.location),step=traceStepKey(record.location);
  if(owner==null||step==null||!call.occurrence)return;
  return displayKey(owner,step,traceOccurrenceKey(call.occurrence));

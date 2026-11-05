@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v71.ts';
+import type { Request1 } from './v72.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -192,7 +192,6 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/configuration': { effect: 'read' },
   'session/configurationValueRead': { effect: 'read' },
   'configuration/reconcile': { effect: 'side_effecting' },
-  'session/adoptConfiguration': { effect: 'side_effecting' },
 } satisfies Record<MethodName, MethodPolicy>);
 
 /** What a lost response to this exact request may mean. */

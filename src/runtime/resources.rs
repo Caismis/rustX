@@ -20,7 +20,8 @@ use crate::runtime::identity::{CapabilityRevision, RuntimeResourceRevision};
 use crate::runtime::subagent::catalog::{AgentCatalog, SubagentName};
 use crate::runtime::workflow::WorkflowCatalog;
 
-const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
+/// The guidance files one directory may contribute, in precedence order.
+pub(crate) const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
     "AGENTS.override.md",
     "AGENTS.md",
     "AGENTS.MD",
@@ -286,79 +287,22 @@ impl RuntimeResourceSnapshot {
         snapshot
     }
 
+    /// This generation with another effective Tool environment.
+    #[cfg(test)]
+    pub(crate) fn with_effective_environment(
+        &self,
+        environment: crate::tools::environment::ToolEnvironment,
+    ) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.capability = Arc::new(self.capability.with_effective_environment(environment));
+        snapshot
+    }
+
     pub(crate) fn with_revision(mut self, revision: RuntimeResourceRevision) -> Self {
         self.revision = revision;
         self
     }
 
-    pub(crate) fn request_shape(
-        &self,
-        model: &crate::model::session::SessionModelState,
-    ) -> Result<crate::model::request_shape::ConfigurationRequestShape, String> {
-        let registry = model
-            .registry()
-            .ok_or("frozen model has no configuration adoption registry")?;
-        let snapshot = model.snapshot().map_err(|e| e.to_string())?;
-        let binding = registry
-            .freeze(&model.config().selection())
-            .map_err(|e| e.to_string())?
-            .binding;
-        let sections = self
-            .context_assembly
-            .system_sections(&self.native_system_input())
-            .map_err(|e| e.to_string())?;
-        let tools = self
-            .capability
-            .tool_registry()
-            .for_model(snapshot.primary().capabilities())
-            .definitions()
-            .iter()
-            .map(crate::tools::schema::compile_model_definition)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-        let primary = crate::model::request_shape::ConfigurationRequestShape::capture(
-            binding,
-            snapshot.primary().context_window(),
-            crate::model::ModelRequest {
-                response_schema: None,
-                response_byte_limit: None,
-                continuation_source: None,
-                images: std::collections::BTreeMap::new(),
-                invocation: snapshot.primary().invocation_config(),
-                messages: crate::model::SelectedModelInput::default(),
-                tools,
-                effective_system_prompt: crate::context::render_effective_system_prompt(&sections),
-                continuation: None,
-            },
-        )
-        .map_err(|e| e.message)?;
-        let summary_binding = registry
-            .freeze(
-                &model
-                    .config()
-                    .summary_selection()
-                    .unwrap_or_else(|| model.config().selection()),
-            )
-            .map_err(|e| e.to_string())?
-            .binding;
-        let summary = crate::model::request_shape::ConfigurationRequestShape::capture(
-            summary_binding,
-            snapshot.summary_invocation().context_window(),
-            crate::model::ModelRequest {
-                response_schema: None,
-                response_byte_limit: None,
-                continuation_source: None,
-                images: std::collections::BTreeMap::new(),
-                invocation: snapshot.summary_invocation().invocation_config(),
-                messages: crate::model::SelectedModelInput::default(),
-                tools: Vec::new(),
-                effective_system_prompt: String::new(),
-                continuation: None,
-            },
-        )
-        .map_err(|e| e.message)?;
-        Ok(primary.with_summary(summary))
-    }
     #[cfg(test)]
     pub(crate) fn with_test_root_agents(mut self, agents: BTreeSet<SubagentName>) -> Self {
         use crate::runtime::agent_profile::{
@@ -1061,6 +1005,9 @@ pub(crate) fn validate_project_resource_path(
             Err(e) => Err(e),
         }
     }
+    // A capture depends on the path it authorizes even when authorization
+    // fails, so that repairing the path recaptures it.
+    crate::bounded_file::record_read(path);
     // The owner supplies the canonical workspace captured at launch. Do not
     // recanonicalize that authority: replacing the workspace itself with a
     // symlink must not transfer its trust to the new target.

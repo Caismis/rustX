@@ -39,7 +39,7 @@ Workflow serialized source and normalized compact JSON are independently bounded
 at **16,777,216 bytes inclusive**. Canonical save must satisfy both. The App Server
 moves documents using connection- and target-bound anonymous scratch references,
 64 KiB raw chunks, verified length/SHA/completion and atomic source CAS. Its
-ordinary 1 MiB records and child IPC stay unchanged. App Server v71 removes the
+ordinary 1 MiB records and child IPC stay unchanged. App Server v72 removes the
 inline document API; all protocol consumers use the same exact-u64 codec and
 native authority. The encoded carrier allowance is 32 MiB to accommodate wire
 integer strings, while native normalized-document admission remains 16 MiB.
@@ -209,7 +209,7 @@ of Model Profile ordering, its type assertions, the Settings source-intrinsic
 repair contract, and the native/wire generic document bridge. Historical Runtime
 Client version references were preserved separately from the App Server bump.
 
-- App Server v71 / Runtime Client v82: all-target/all-feature check and Clippy
+- App Server v72 / Runtime Client v82: all-target/all-feature check and Clippy
   passed; protocol regeneration and strict typecheck passed.
 - WebUI full execution: 4,055 passed, 4 skipped; typecheck, provenance and build
   passed.
@@ -253,7 +253,7 @@ protocol generated-artifact drift checks passed.
 ## Follow-up review repairs after 5404876
 
 The second review identified four remaining P2 contracts. The follow-up uses the
-same architecture and keeps App Server v71 (this PR is unmerged):
+same architecture and keeps App Server v72 (this PR is unmerged):
 
 - `workflow/toolCatalog` now keeps the detached request owner through cached
   Python verification, holds its `LISTINGS` permit until physical exit, and

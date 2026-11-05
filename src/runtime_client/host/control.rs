@@ -630,9 +630,7 @@ impl ClientInner {
                 ModelUpdateError::SessionOwned => RuntimeClientError::InvalidState {
                     message: "Session model selection requires the native Session owner".to_owned(),
                 },
-                ModelUpdateError::Conflict => RuntimeClientError::ConfigurationAdoption {
-                    rejection: crate::runtime::adoption::AdoptionError::Conflict,
-                },
+                ModelUpdateError::Conflict => RuntimeClientError::ModelSelectionConflict,
                 ModelUpdateError::Inactive => RuntimeClientError::InvalidState {
                     message: "the conversation runtime is not activated".to_owned(),
                 },

@@ -152,7 +152,8 @@ impl super::TraceProjection<'_> {
             | TraceFactData::BackgroundStart { .. }
             | TraceFactData::SubagentStart { .. }
             | TraceFactData::WorkflowStart { .. }
-            | TraceFactData::InteractionStart { .. } => TraceInspectionContent::Lifecycle,
+            | TraceFactData::InteractionStart { .. }
+            | TraceFactData::Configuration { .. } => TraceInspectionContent::Lifecycle,
             TraceFactData::RequestStart { .. }
             | TraceFactData::CanonicalToolCommit { .. }
             | TraceFactData::Terminal(_) => {

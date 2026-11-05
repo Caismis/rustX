@@ -1,4 +1,4 @@
-import { readApplication, readSource } from './source-reading';
+import { readSource } from './source-reading';
 import { openEmptySession } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { AppServerHost } from '../../../tui/src/app-server/host';
@@ -6,7 +6,6 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, connectionAction, closeSettings, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
-import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 
 test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorization and lost-write recovery', async ({ page }) => {
  const f = await startDogfood();
@@ -88,7 +87,7 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
  } finally { await remote.shutdown(); const report = await f.stop(false); expect(report.requestCount).toBe(0); }
 });
 
-test('C13 C14 C15 C16 C17 real native Busy gate, candidate fence, live eligibility and lost adoption response', async ({ page }) => {
+test('C13 C15 real native automatic commit waits for Session work and preserves the settled history', async ({ page }) => {
  const f = await startDogfood(); const wire = await wireProbe(page);
  const remote = await AppServerHost.connectRemote({ endpoint: f.endpoint, token: f.token });
  try {
@@ -100,19 +99,11 @@ test('C13 C14 C15 C16 C17 real native Busy gate, candidate fence, live eligibili
    await message.fill('Long action in A'); await message.press('Enter'); await f.gate('finish-a');
    const source = await readSource(remote,{kind:'user'});
    await remote.client.call('configuration/sourceWrite', { target: { kind: 'user' }, expected_revision: source.user.revision,
-     mutation: { kind: 'config', mutation: { unit: 'instructions', authored: 'New instructions require explicit Session adoption.' } } }, 'sources_written');
-   const adopt = page.getByRole('button', { name: 'Adopt configuration', exact: true });
-   await expect(adopt).toBeVisible(); await expect(adopt).toBeDisabled();
-   await expect(page.getByText('Session work must settle before adoption.')).toBeVisible();
-   // The disabled banner above is the runtime's own published Busy eligibility;
-   // configuration authority carries the candidate only.
-   const app = await readApplication(remote, id);
-   const candidate = app.candidate!;
-   await expect(remote.client.call('session/adoptConfiguration', { session_id: id, candidate: candidate.identity, expected_binding: candidate.expected_binding }, 'configuration_receipt')).rejects.toThrow();
-   await expect(remote.client.call('session/adoptConfiguration', { session_id: id, candidate: { ...candidate.identity, attempt: String(BigInt(candidate.identity.attempt) + 1n) }, expected_binding: candidate.expected_binding }, 'configuration_receipt')).rejects.toThrow();
-   await f.release('finish-a'); await expect(adopt).toBeEnabled();
-   const history = await remote.readSession(id);
-   // X07: hold the exact settled historical Request across a lost adoption reply.
+     mutation: { kind: 'config', mutation: { unit: 'instructions', authored: 'New instructions apply at the next safe boundary.' } } }, 'sources_written');
+   const waiting = page.getByText('Configuration changes will apply automatically after the current work settles.');
+   await expect(waiting).toBeVisible();
+   await page.screenshot({ path: '/tmp/rustx-configuration-waiting.png' });
+   // The settled historical Request is frozen across the automatic commit.
    await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
    const requestBoundary = page.locator('[data-request-owner]').first();
    const recordId = await requestBoundary.getAttribute('data-request-owner');
@@ -126,25 +117,15 @@ test('C13 C14 C15 C16 C17 real native Busy gate, candidate fence, live eligibili
    await expect.poll(() => traceResponses().length).toBe(1);
    const oldTrace = await readTrace();
    expect(oldTrace?.id).toBe(recordId);
-
-   const retainedBoundary = (await requestBoundary.elementHandle())!;
-   wire.loseNext('session/adoptConfiguration'); await adopt.click();
-   await expect.poll(wire.lost).toBe(1);
-   await connectionAction(page, 'Reconnect');
-   // Transport readiness can still display the retained old attachment. Wait
-   // for its replacement before asking the new reader for the same native row.
-   const target = await wire.attachedTarget(id);
-   await expect.poll(() => wire.responses.some(row => row.method === 'session/subscribe' && sameTarget(row.result?.target, target))).toBe(true);
-   await expect.poll(() => retainedBoundary.evaluate(el => el.isConnected)).toBe(false);
-   await expect(adopt).toHaveCount(0);
-   expect(wire.lost()).toBe(1); expect(wire.requests.filter(row => row.method === 'session/adoptConfiguration')).toHaveLength(1);
-   expect((await remote.client.call('session/configuration', { session_id: id }, 'session_configuration')).projection!.inline?.candidate).toBeNull();
+   await f.release('finish-a');
+   // Success is silent: the line disappears once native commits.
+   await expect(waiting).toHaveCount(0);
+   await expect(page.getByLabel('Session configuration', { exact: true })).toHaveCount(0);
    expect(await remote.client.call('session/settings', { session_id: id }, 'settings')).toEqual(selection);
-   expect(await remote.readSession(id)).toEqual(history);
-   await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
-   await page.locator(`[data-request-owner="${recordId}"]`).click();
-   await expect.poll(() => traceResponses().length).toBe(2);
    expect(await readTrace()).toEqual(oldTrace);
+   // An instruction change is Trace-only: Chat shows no row for it.
+   await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+   await expect(page.locator('[data-configuration-change]')).toHaveCount(0);
    expect((await f.control('requests')).requests).toHaveLength(1);
  } finally { await remote.shutdown(); await page.close(); await f.stop(false); }
 });

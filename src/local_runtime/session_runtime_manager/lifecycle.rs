@@ -268,9 +268,9 @@ impl SessionRuntimeManager {
                 registry.check_session(session, &id)?;
                 match registry.entries.get(&id) {
                     Some(Entry::Loaded(runtime)) => {
-                        let identity = runtime.identity.clone();
+                        let (identity, resident) = (runtime.identity.clone(), runtime.clone());
                         drop(registry);
-                        self.rebind_configuration_runtime(session);
+                        self.rebind_configuration_runtime(session, &resident);
                         return Ok(identity);
                     }
                     Some(Entry::StorageOnly(storage)) => storage.retirement.clone(),
@@ -310,7 +310,6 @@ impl SessionRuntimeManager {
                     .lock()
                     .expect("registry mutex")
                     .check_session(session, runtime.conversation_id())?;
-                self.rebind_configuration_runtime(session);
                 return Ok(runtime);
             }
             startup.get_or_insert(inherited_startup);
@@ -408,9 +407,13 @@ impl SessionRuntimeManager {
         }
     }
 
-    fn rebind_configuration_runtime(&self, session: &SessionId) {
-        if let Some(runtime) = self.configuration_runtime(session)
-            && self.applications.rebind_runtime(session.as_ref(), &runtime)
+    fn rebind_configuration_runtime(&self, session: &SessionId, resident: &ResidentRuntime) {
+        if let Some(runtime) = resident.shutdown_runtime()
+            && self
+                .applications
+                .rebind_runtime(session.as_ref(), &runtime, || {
+                    self.is_current_resident(session, resident.identity.incarnation)
+                })
         {
             self.applications.run(self.clone());
         }
@@ -1103,20 +1106,56 @@ impl TerminalGuard {
             registry
                 .entries
                 .insert(self.id.clone(), Entry::Loaded(runtime.clone()));
-            self.flight
-                .result
-                .send_replace(Some(Outcome::Resident(runtime.identity.clone())));
             drop(control);
+            #[cfg(test)]
+            let attach = registry.resident_attach.clone();
             drop(registry);
             if let Some(observer) = catalog_observer {
                 tokio::spawn(observer);
             }
+            self.report_resident(
+                runtime,
+                #[cfg(test)]
+                &attach,
+            );
             self.finished = true;
             return;
         }
         self.publish(result.map(|_| ()));
         self.finished = true;
     }
+    /// Every entry that publishes a resident (client load, Scheduler
+    /// activation, recovery) attaches it to its configuration application
+    /// before reporting it loaded, outside the registry lock: whoever learns
+    /// of the resident reads its application.
+    fn report_resident(
+        &self,
+        runtime: &Arc<ResidentRuntime>,
+        #[cfg(test)] attach: &super::tests::AsyncGate,
+    ) {
+        if let (Some((session, _)), Some(conversation)) =
+            (self.flight.target.get(), runtime.shutdown_runtime())
+        {
+            // Between taking this handle and the application lock, the
+            // resident may be replaced; the rebind checks it is still current.
+            #[cfg(test)]
+            attach.park_first_blocking();
+            if self
+                .owner
+                .applications
+                .rebind_runtime(session.as_ref(), &conversation, || {
+                    self.owner
+                        .is_current_resident(session, runtime.identity.incarnation)
+                })
+            {
+                self.owner.applications.run(self.owner.clone());
+            }
+        }
+        self.flight
+            .result
+            .send_replace(Some(Outcome::Resident(runtime.identity.clone())));
+    }
+
     fn publish(&self, result: Result<(), RuntimeManagerError>) {
         if result.is_err() {
             self.flight.startup.release_preparation();

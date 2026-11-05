@@ -1,4 +1,4 @@
-import { useSystemChanges } from './SystemChanges';
+import { ConfigurationChangeRow, hasConfigurationChangeRow } from './ConfigurationChangeRow';
 import { WorkflowRunPanel } from './WorkflowRunPanel';
 import { workflowKey } from '../../bindings/workflow-children';
 import { InteractionAudit } from './InteractionAudit';
@@ -20,9 +20,9 @@ import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v71';
+import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v72';
 import { conversation } from '../../bindings/projection';
-import { agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../../bindings/agent-status';
+import { agentStatusPlacement, isContextInjection, statusesAt } from '../../bindings/agent-status';
 import { TranscriptContinuation } from './TranscriptContinuation';
 import { Feedback } from '../components/ConversationFeedback';
 import { AgentStatusAnnotation } from './AgentStatus';
@@ -35,7 +35,7 @@ import { CreatedTasks } from '../scheduler/CreatedTasks';
 import { descriptorTranscriptPosition, turnDeliveries } from '../../bindings/present';
 import { Tool, ToolDisclosureContext } from './Tool';
 import { deferredToolDescriptors } from '../../bindings/deferred-tools';
-import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
+import { canonicalLocatorKey, messageSource } from '../../../../protocol/app-server/content-identity';
 import { transcriptPresentation, entryIdentity, turnAnchor, type TranscriptCache } from '../../client/transcript';
 import type { ResponseAction } from '../commands/native';
 import { CopyMessage, MessageTime, TurnTail } from './TurnTail';
@@ -45,14 +45,16 @@ import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
-import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v71';
+import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v72';
 /** Standalone Tool-result bodies are suppressed: the native call projection
- * already renders their content beside the call. Suppressing a body does not
+ * already renders their content beside the call. Context injections are
+ * Harness hidden rows in every work-detail mode. Suppressing a body does not
  * erase the entry's authoritative transcript position, so a `PostToolBatch`
  * annotation anchored there still renders in place — as an annotation-only slot. */
 const hasInlineBody = (entry: RuntimeClientTranscriptEntry) => entry.item.type === 'publication_audit'
   ? entry.item.audit.content.some(block => block.kind !== 'proposed_tool_call' && block.text.trim() !== '')
-  : entry.item.type !== 'message' || entry.item.message.role !== 'tool';
+  : entry.item.type === 'configuration_applied' ? hasConfigurationChangeRow(entry.item.change)
+    : entry.item.type !== 'message' || entry.item.message.role !== 'tool' && !isContextInjection(entry.item.message);
 /** A native `ask_user` questionnaire is already told by its call's question row
  * (Harness shows no separate interaction record), so its request and settlement
  * audits keep their transcript positions without a body of their own. Other
@@ -73,6 +75,7 @@ export interface RequestFeedback {
   messages: ReadonlyMap<string, ReactNode>;
   attempts: ReadonlyMap<string, ReactNode>;
 }
+const noFeedback: RequestFeedback = { messages: new Map(), attempts: new Map() };
 type FlowRow = ReactElement<{ hidden?: boolean; 'data-chat-trailing-process'?: boolean; 'data-chat-after-process'?: boolean }>;
 /** A retained hidden seat must not interrupt the next visible header boundary. */
 function withProcessSpacing(rows: (FlowRow | null)[]) {
@@ -102,12 +105,12 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   }>({ scope: toolScope, client: presentationClient.current, presentation: presentation?.owner, values: new Map(), display: new Map() });
   if (headOwners.current.scope !== toolScope || headOwners.current.client !== presentationClient.current || headOwners.current.presentation !== presentation?.owner)
     headOwners.current = { scope: toolScope, client: presentationClient.current, presentation: presentation?.owner, values: new Map(), display: new Map() };
-  const hasBody = (entry: RuntimeClientTranscriptEntry) => !(entry.item.type === 'message' && isRuntimeStatusContext(entry.item.message)) && hasInlineBody(entry) || entry.item.type === 'publication_audit'
+  const hasBody = (entry: RuntimeClientTranscriptEntry) => hasInlineBody(entry) || entry.item.type === 'publication_audit'
     && (presentation?.content ?? []).some(binding => binding.content_ref.readable_end > 0
       && binding.content_ref.source.type === 'durable_transcript_audit' && entry.item.type === 'publication_audit'
       && binding.content_ref.source.stream_id === entry.item.audit.stream_id
       && binding.content_ref.representation === 'utf8_text'
-      && (binding.deferred || entry.item.audit.content.some(block => block.block_index === binding.content_ref.source.block_index
+      && (binding.deferred || entry.item.audit.content.some(block => block.block_index === messageSource(binding.content_ref.source)?.block_index
         && block.kind !== 'proposed_tool_call' && new TextEncoder().encode(block.text).length !== binding.content_ref.readable_end)));
   const canonical = conversation(snapshot);
   const original = transcriptPresentation(history, snapshot.transcript);
@@ -138,8 +141,10 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const auditHeads: RuntimeClientTranscriptEntry[] = history?.window ? [] : publicationHeads.filter(head => head.read_cut.read.conversation_id === snapshot.conversation_id && !loaded.some(entry => entry.cursor === head.transcript_cursor))
     .map(head => ({ cursor: head.transcript_cursor, item: { type: 'publication_audit', audit: head.audit } }));
   const entries = auditHeads.length ? [...loaded, ...auditHeads].sort((a,b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1) : loaded;
-  const descriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], history?.page ?? snapshot.transcript, entries, !!history?.window).filter(descriptor => !isRuntimeStatusContext(descriptor));
-  const requestFeedback = useSystemChanges(snapshot, entries, streaming?.message_id, suppliedFeedback, descriptors);
+  const descriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], history?.page ?? snapshot.transcript, entries, !!history?.window).filter(descriptor => !isContextInjection(descriptor));
+  // Harness Chat hides system-prompt and ordinary Context rows; committed
+  // Tool changes arrive as their own transcript facts, never from requests.
+  const requestFeedback = suppliedFeedback ?? noFeedback;
   const deliveries = turnDeliveries(entries, deferredToolDescriptors(snapshot.message_descriptors ?? [], page, [], !!history?.window), page);
   const deliveredTurns = new Set<string>();
   const deliveryTail = (key: string, before?: string, owner?: {conversation_id:string;attempt_id?:string|null}) => {
@@ -275,6 +280,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         partial.content.flatMap(block => block.kind === 'proposed_tool_call' ? [] : [{ type: block.kind, block_index: block.block_index, text: block.text }]), [], { stopped: true, publicationStream: partial.stream_id,
           actions: partial.content.some(block => block.kind === 'text' || block.kind === 'refusal') && <div className={tailCss.actions} data-clock="end"><CopyMessage text={text} publication={partial}/><MessageTime time={partial.settled_at}/></div> });
     }
+    if (entry.item.type === 'configuration_applied') return <ConfigurationChangeRow change={entry.item.change}/>;
     if (entry.item.type === 'interaction_requested' || entry.item.type === 'interaction_settled') {
       const item = entry.item;
       const settlement = entries.find(candidate => candidate.item.type === 'interaction_settled' && candidate.item.attempt_id === item.attempt_id && candidate.item.interaction_id === item.interaction_id)?.item;
@@ -332,9 +338,9 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next;
     })}/>{requestFeedback?.attempts.get(attemptOwnerKey(group.owner))}</>;
   };
-  // Agent Status has its own anchored annotation, so its canonical Context message
-  // must not reappear here as ordinary chat or as purported current context.
-  const currentContext = messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id) && !isRuntimeStatusContext(message));
+  // Context injections are hidden rows (Agent Status has its own anchored
+  // annotation): only a not-yet-durable Goal continuation remains here.
+  const currentContext = messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id) && !isContextInjection(message));
   const runningAttempt = !history?.window && !!snapshot.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type) ? snapshot.attempt : undefined;
   const latestTurn = snapshot.transcript.statistics?.latest_turn;
   const startedAt = runningAttempt && (latestTurn?.attempt_id != null && latestTurn.attempt_id === runningAttempt.attempt_id ? latestTurn.started_at
@@ -487,7 +493,7 @@ function DescriptorContent({ descriptor }: { descriptor: RuntimeClientMessageDes
   const hasBlocks = descriptor.collections.some(frontier => frontier.domain.endsWith('.blocks'));
   const request = { locator: descriptor.locator, offset: 0, total: descriptor.block_count };
   const native = useMessageBlocks(hasBlocks ? [request] : []), blocks = hasBlocks ? native.blocks(request) : undefined;
-  const bindings = descriptor.content.filter(binding => binding.content_ref.representation === 'utf8_text' && binding.content_ref.source.component === 'payload');
+  const bindings = descriptor.content.filter(binding => binding.content_ref.representation === 'utf8_text' && messageSource(binding.content_ref.source)?.component === 'payload');
   if (!source && !presentation?.owner || !hasBlocks && !bindings.length) return null;
   if (native.errors.length) return <p role="alert">{native.errors.join("\n")} <button type="button" onClick={native.retry}>{tx('agent:message.retry-content')}</button></p>;
   if (blocks) {

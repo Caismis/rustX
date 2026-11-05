@@ -62,11 +62,13 @@ import type {
   TranscriptEntry,
   TranscriptInteractionRequested,
   TranscriptInteractionSettled,
+  TranscriptConfigurationApplied,
   TranscriptPublicationAudit,
 } from "../../presentation/state.ts";
 import type {
   AgentStatusView,
   AnswerSpecification,
+  BoundedNames,
   RuntimeClientOutcome,
   RuntimeError,
   ForegroundToolExecution,
@@ -331,6 +333,8 @@ export function renderEntryBlocks(
       return renderInteractionRequested(entry);
     case "interaction_settled":
       return renderInteractionSettled(entry);
+    case "configuration_applied":
+      return renderConfigurationApplied(entry);
   }
 }
 
@@ -480,6 +484,24 @@ function renderInteractionSettled(
         style.dim,
       ),
     );
+  }
+  return [{ kind: "text", key: entry.key, text: lines.join("\n") }];
+}
+
+/**
+ * One committed Session configuration change as a Codex-style info notice:
+ * a dim bullet naming what changed, then bounded Tool and Skill names. The
+ * full change stays in Trace and `/session settings`.
+ */
+function renderConfigurationApplied(entry: TranscriptConfigurationApplied): TranscriptBlock[] {
+  const { change } = entry;
+  const names = (list: BoundedNames) => list.total > list.names.length
+    ? `${list.names.join(", ")} +${list.total - list.names.length} more` : list.names.join(", ");
+  const lines = [role.meta(`• Configuration applied · ${change.domains.map(domain => domain.replaceAll("_", " ")).join(", ")}`)];
+  for (const [label, changes] of [["Tools", change.tools], ["Skills", change.skills]] as const) {
+    for (const kind of ["added", "removed", "changed"] as const) {
+      if (changes[kind].total > 0) lines.push(style.dim(`  ${label} ${kind}: ${names(changes[kind])}`));
+    }
   }
   return [{ kind: "text", key: entry.key, text: lines.join("\n") }];
 }

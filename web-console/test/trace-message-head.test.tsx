@@ -1,12 +1,13 @@
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v71';
+import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v72';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {readTraceCollection} from '../src/client/trace-content';
 import {traceTool} from './trace-fixture';
 import {checkpoint,Server,snapshot} from './fixture';
 import {AgentTraceReader} from '../src/client/agent-trace';
 import {bindTraceDetailReader,type TraceDetailEntry,type TraceFieldReader} from '../src/client/trace';
+import { messageSource } from '../../protocol/app-server/content-identity';
 const servers:Server[]=[];
 afterEach(()=>{cleanup();servers.splice(0).forEach(server=>server.client.disconnect());});
 const cut=()=>({...checkpoint(snapshot()).read_cut,revision:'9',through:'300'});
@@ -59,10 +60,10 @@ it.each(['root','child','historical'] as const)('%s automatically renders origin
  const {server,native,original,entry,retire}=await selected(kind),domain='messages.ledger:1.blocks',raw=' {"text":"'+'x'.repeat(66000)+'","opaque":18446744073709551615} ',bytes=new TextEncoder().encode(raw),metadata='{"id":"original-call","tool_id":"original-tool","name":"native-tool"}';
  advertise(entry.page!,domain,'1');
  const reference:ContentRef={conversation_id:original.conversation_id,source:{type:'canonical_message_block',component:'payload',locator:{type:'by_ledger_position',position:1},block_index:0},representation:'raw_json_utf8',version:1,content_revision:1,readable_end:bytes.length};
- const metadataRef:ContentRef={...reference,source:{...reference.source,component:'block_metadata'},representation:'canonical_json_v1',readable_end:metadata.length};
+ const metadataRef:ContentRef={...reference,source:{...messageSource(reference.source)!,component:'block_metadata'},representation:'canonical_json_v1',readable_end:metadata.length};
  const pageMethod=kind==='historical'?'session/tracePage':'conversation/checkpointPage',method=kind==='historical'?'session/traceContentRead':'conversation/contentRead';
  server.handlers.set(pageMethod,()=>({type:'checkpoint_page',page:{read_cut:original,cursor:original.revision,domain,total:'1',next_offset:null,collections:[],items:[{offset:'0',identity:'tool_call',key:null,value:null,content:[{path:['value','arguments'],source_path:null,content_ref:reference,deferred:true},{path:['value'],source_path:null,content_ref:metadataRef,deferred:true}],deferred:true,body_complete:null}]}}));
- server.handlers.set(method,request=>{if(request.method!=='session/traceContentRead'&&request.method!=='conversation/contentRead')throw Error('content');const payload=request.params.content_ref.source.component==='block_metadata'?new TextEncoder().encode(metadata):bytes,start=request.params.offset,end=Math.min(start+request.params.max_bytes,payload.length);return {type:'content_chunk',chunk:{content_ref:request.params.content_ref,offset:start,data_base64:btoa(String.fromCharCode(...payload.slice(start,end))),end_offset:end,readable_end:payload.length,next_offset:end<payload.length?end:null,complete:end===payload.length}};});
+ server.handlers.set(method,request=>{if(request.method!=='session/traceContentRead'&&request.method!=='conversation/contentRead')throw Error('content');const payload=messageSource(request.params.content_ref.source)?.component==='block_metadata'?new TextEncoder().encode(metadata):bytes,start=request.params.offset,end=Math.min(start+request.params.max_bytes,payload.length);return {type:'content_chunk',chunk:{content_ref:request.params.content_ref,offset:start,data_base64:btoa(String.fromCharCode(...payload.slice(start,end))),end_offset:end,readable_end:payload.length,next_offset:end<payload.length?end:null,complete:end===payload.length}};});
  render(<TrajectoryInspector {...props(native)} detailPage={entry.page} detailReader={entry.reader}/>);
  await waitFor(()=>expect(document.body.textContent).toContain('18446744073709551615'));expect(document.body.textContent).toContain('native-tool');expect(document.body.textContent).not.toContain('18446744073709552000');
  const requests=server.requests.filter(row=>row.request.method===method);expect(requests.map(row=>'offset' in row.request.params?row.request.params.offset:null)).toEqual([0,0,65536]);

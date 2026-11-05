@@ -1,5 +1,6 @@
 //! Small bounded directory IO shared by the fixed canonical resource readers.
 use crate::runtime::resources::{RuntimeResourceLoadError, validate_project_resource_path};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 mod evidence;
@@ -111,10 +112,26 @@ pub(crate) fn read_resource(
         .map_err(|e| RuntimeResourceLoadError::new(e).at(path, "resources"))
 }
 
+/// The entries of a resource root (`.agents`) that configuration reads.
+pub(crate) const SOURCE_ENTRIES: [&str; 5] = ["agents", "mcp.toml", "skills", "tools", "workflows"];
+
+/// The names, directly under a resource root, that configuration reads: the
+/// source entries and the guidance files. Anything else there — Session
+/// uploads in particular — is not configuration input.
+fn source_entry_names() -> impl Iterator<Item = &'static str> {
+    SOURCE_ENTRIES
+        .into_iter()
+        .chain(crate::runtime::resources::PROJECT_CONTEXT_FILENAMES)
+}
+
 /// Revision of authored resource bytes, including malformed and shadowed entries.
 /// This is change detection, not discovery or configuration authority. Symlinks
 /// are hashed as links and never followed. Traversal is bounded even for invalid
 /// unused trees, and writer locks/staging files do not count as authored input.
+/// The root is read through the fixed names the loaders open
+/// ([`source_entry_names`]), never by matching the spelling of what it lists:
+/// each name resolves exactly as the loaders resolve it, on case-insensitive
+/// volumes too, and Session uploads written beside them never count.
 #[cfg(test)]
 pub(crate) fn revision(root: &Path) -> String {
     revision_with_cancellation(
@@ -124,98 +141,113 @@ pub(crate) fn revision(root: &Path) -> String {
     )
 }
 
+fn revision_walk(
+    path: &Path,
+    hash: &mut Sha256,
+    remaining: &mut usize,
+    bytes_left: &mut u64,
+    depth: usize,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<(), String> {
+    crate::package_io::check_cancelled(cancellation).map_err(|e| e.to_string())?;
+    if *remaining == 0 || depth > 68 {
+        return Err("resource traversal incomplete".into());
+    }
+    *remaining -= 1;
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            hash.update(b"absent");
+            return Ok(());
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    if metadata.file_type().is_symlink() {
+        hash.update(b"link:");
+        hash.update(
+            std::fs::read_link(path)
+                .map_err(|e| e.to_string())?
+                .as_os_str()
+                .as_encoded_bytes(),
+        );
+    } else if metadata.is_dir() {
+        hash.update(b"directory:");
+        if depth == 0 {
+            for name in source_entry_names() {
+                hash.update(name.len().to_le_bytes());
+                hash.update(name);
+                revision_walk(
+                    &path.join(name),
+                    hash,
+                    remaining,
+                    bytes_left,
+                    1,
+                    cancellation,
+                )?;
+            }
+            return Ok(());
+        }
+        let directory =
+            crate::package_io::PackageDirectory::open(path).map_err(|e| e.to_string())?;
+        // The global budget covers both 128-package collections at 4,096
+        // entries each. It cannot hide a valid package at the old 16K cut.
+        for name in directory.names(4096).map_err(|e| e.to_string())? {
+            let name = name.as_os_str();
+            if depth <= 1
+                && (name.as_encoded_bytes().starts_with(b".tmp")
+                    || super::settings::is_writer_artifact(name))
+            {
+                continue;
+            }
+            hash.update(name.as_encoded_bytes().len().to_le_bytes());
+            hash.update(name.as_encoded_bytes());
+            revision_walk(
+                &path.join(name),
+                hash,
+                remaining,
+                bytes_left,
+                depth + 1,
+                cancellation,
+            )?;
+        }
+    } else if metadata.is_file() {
+        if metadata.len() > *bytes_left {
+            return Err("resource byte observation incomplete (64 MiB work budget)".into());
+        }
+        hash.update(b"file:");
+        let parent = path.parent().ok_or("resource has no parent")?;
+        let directory =
+            crate::package_io::PackageDirectory::open(parent).map_err(|e| e.to_string())?;
+        let evidence = crate::package_io::stream(
+            &directory,
+            Path::new(path.file_name().ok_or("resource has no name")?),
+            cancellation,
+            |bytes| {
+                *bytes_left = bytes_left
+                    .checked_sub(bytes.len() as u64)
+                    .ok_or_else(|| std::io::Error::other("resource byte observation incomplete"))?;
+                Ok(())
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        hash.update(evidence.metadata.len().to_le_bytes());
+        hash.update(evidence.digest);
+    } else {
+        hash.update(b"unsupported file type");
+    }
+    Ok(())
+}
+
 pub(crate) fn revision_with_cancellation(
     root: &Path,
     scope: crate::runtime::resources::SourceScope,
     cancellation: &crate::runtime::CancellationSignal,
 ) -> String {
-    use sha2::{Digest, Sha256};
-    fn walk(
-        path: &Path,
-        hash: &mut Sha256,
-        remaining: &mut usize,
-        bytes_left: &mut u64,
-        depth: usize,
-        cancellation: &crate::runtime::CancellationSignal,
-    ) -> Result<(), String> {
-        crate::package_io::check_cancelled(cancellation).map_err(|e| e.to_string())?;
-        if *remaining == 0 || depth > 68 {
-            return Err("resource traversal incomplete".into());
-        }
-        *remaining -= 1;
-        let metadata = match std::fs::symlink_metadata(path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                hash.update(b"absent");
-                return Ok(());
-            }
-            Err(error) => return Err(error.to_string()),
-        };
-        if metadata.file_type().is_symlink() {
-            hash.update(b"link:");
-            hash.update(
-                std::fs::read_link(path)
-                    .map_err(|e| e.to_string())?
-                    .as_os_str()
-                    .as_encoded_bytes(),
-            );
-        } else if metadata.is_dir() {
-            hash.update(b"directory:");
-            let directory =
-                crate::package_io::PackageDirectory::open(path).map_err(|e| e.to_string())?;
-            // The global budget covers both 128-package collections at 4,096
-            // entries each. It cannot hide a valid package at the old 16K cut.
-            for name in directory.names(4096).map_err(|e| e.to_string())? {
-                let name = name.as_os_str();
-                if depth <= 1
-                    && (name.as_encoded_bytes().starts_with(b".tmp")
-                        || super::settings::is_writer_artifact(name))
-                {
-                    continue;
-                }
-                hash.update(name.as_encoded_bytes().len().to_le_bytes());
-                hash.update(name.as_encoded_bytes());
-                walk(
-                    &path.join(name),
-                    hash,
-                    remaining,
-                    bytes_left,
-                    depth + 1,
-                    cancellation,
-                )?;
-            }
-        } else if metadata.is_file() {
-            if metadata.len() > *bytes_left {
-                return Err("resource byte observation incomplete (64 MiB work budget)".into());
-            }
-            hash.update(b"file:");
-            let parent = path.parent().ok_or("resource has no parent")?;
-            let directory =
-                crate::package_io::PackageDirectory::open(parent).map_err(|e| e.to_string())?;
-            let evidence = crate::package_io::stream(
-                &directory,
-                Path::new(path.file_name().ok_or("resource has no name")?),
-                cancellation,
-                |bytes| {
-                    *bytes_left = bytes_left.checked_sub(bytes.len() as u64).ok_or_else(|| {
-                        std::io::Error::other("resource byte observation incomplete")
-                    })?;
-                    Ok(())
-                },
-            )
-            .map_err(|e| e.to_string())?;
-            hash.update(evidence.metadata.len().to_le_bytes());
-            hash.update(evidence.digest);
-        } else {
-            hash.update(b"unsupported file type");
-        }
-        Ok(())
-    }
     let mut hash = Sha256::new();
     // Bound arbitrary unused/malformed tree observation. Overflow is not an
     // admission refusal: accepted domain readers still inspect every accepted
     // byte for the independent complete fence below, without this work budget.
-    match walk(
+    match revision_walk(
         root,
         &mut hash,
         &mut 1_100_000,
@@ -238,6 +270,40 @@ pub(crate) fn revision_with_cancellation(
 mod tests {
     use super::*;
     use std::os::unix::fs::MetadataExt;
+
+    /// Session uploads and other entries configuration never reads leave the
+    /// revision alone; a source entry or a guidance file changes it.
+    #[test]
+    fn only_configuration_entries_change_the_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join(".agents");
+        std::fs::create_dir_all(root.join("skills/guide")).unwrap();
+        std::fs::write(root.join("skills/guide/SKILL.md"), b"A").unwrap();
+        let initial = revision(&root);
+        let uploads = root.join("uploads/ses_1/batch");
+        std::fs::create_dir_all(&uploads).unwrap();
+        std::fs::write(uploads.join("report.txt"), b"upload").unwrap();
+        std::fs::write(root.join("notes.txt"), b"not read").unwrap();
+        assert_eq!(revision(&root), initial, "uploads are not configuration");
+        std::fs::write(root.join("AGENTS.md"), b"guidance").unwrap();
+        let guided = revision(&root);
+        assert_ne!(guided, initial, "a guidance file is configuration");
+        std::fs::write(root.join("skills/guide/SKILL.md"), b"B").unwrap();
+        assert_ne!(revision(&root), guided, "a source entry is configuration");
+    }
+
+    /// On a case-sensitive volume the loaders never open `Skills`, so its
+    /// content is not configuration and leaves the revision alone.
+    #[test]
+    fn a_case_variant_the_loaders_never_open_is_not_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join(".agents");
+        std::fs::create_dir_all(root.join("Skills/guide")).unwrap();
+        std::fs::write(root.join("Skills/guide/SKILL.md"), b"A").unwrap();
+        let initial = revision(&root);
+        std::fs::write(root.join("Skills/guide/SKILL.md"), b"B").unwrap();
+        assert_eq!(revision(&root), initial);
+    }
 
     #[test]
     fn case_sensitive_discovery_counts_lock_directory_case_variants() {
@@ -379,8 +445,7 @@ mod revision_tests {
         crate::package_io::STREAMED_FILE_BYTES.with(|count| count.set(0));
         let first = revision(&root);
         let second = revision(&root);
-        assert!(first.starts_with("incomplete:"));
-        assert_ne!(first, second);
+        assert_eq!(first, second, "unread entries are not configuration");
         assert!(
             same_capture(&first, &second),
             "complete accepted domains remain stable"
@@ -448,5 +513,29 @@ mod revision_tests {
             !same_capture(&before, &revision(&root)),
             "accepted Workflow source bytes remain authoritative after observation overflow"
         );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod case_insensitive_tests {
+    use super::*;
+
+    /// On a case-insensitive volume the loaders open `.agents/skills` and
+    /// read the directory named `Skills`: editing a Skill there changes the
+    /// revision exactly as it changes what they load.
+    #[test]
+    fn a_case_variant_the_loaders_open_is_configuration() {
+        let volume = crate::local_runtime::case_insensitive_volume::CaseInsensitiveVolume::new();
+        let root = volume.path().join(".agents");
+        std::fs::create_dir_all(root.join("Skills/guide")).unwrap();
+        std::fs::write(root.join("Skills/guide/SKILL.md"), b"A").unwrap();
+        assert_eq!(
+            std::fs::read(root.join("skills/guide/SKILL.md")).unwrap(),
+            b"A",
+            "the loaders' fixed path resolves to `Skills`"
+        );
+        let initial = revision(&root);
+        std::fs::write(root.join("Skills/guide/SKILL.md"), b"B").unwrap();
+        assert_ne!(revision(&root), initial);
     }
 }

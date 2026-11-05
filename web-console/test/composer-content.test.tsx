@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { CheckpointPage, RuntimeClientGoalSnapshot } from '../../protocol/app-server/v71';
+import type { CheckpointPage, RuntimeClientGoalSnapshot } from '../../protocol/app-server/v72';
 import { useComposerContent } from '../src/app/agent/useComposerContent';
 import { TodoDock } from '../src/app/composer/TodoDock';
 import { GoalDock } from '../src/app/composer/GoalDock';
@@ -47,8 +47,13 @@ it('keeps an unsaved hydrated Goal objective draft while a Todo-only update wait
  server.snapshots.set('A', { ...snapshot(), todos: { tasks: [], next_id: '4' }, goal: { current: goal } }); await server.attached('A');
  const view = server.client.getSnapshot().views.A, cut = view.checkpoint!.read_cut;
  const objective = 'Hydrated authoritative Goal objective';
- server.handlers.set('conversation/checkpointValueRead', () => ({ type: 'checkpoint_value_chunk', chunk: { cut, domain: 'goal', item_offset: 0, path: ['current', 'objective'], offset: 0, readable_end: objective.length, next_offset: null, representation: 'utf8_text', bytes_base64: btoa(objective) } }));
- const ui = render(<Goal view={view}/>); await screen.findByText(objective);
+ server.held.add('conversation/checkpointValueRead');
+ const ui = render(<Goal view={view}/>);
+ const hydration = await server.waitFor('conversation/checkpointValueRead', 1);
+ // Complete the Goal hydration and its React effects before starting a draft;
+ // the later Todo-only update is the independently controlled read under test.
+ await act(async () => server.socket.success(hydration, { type: 'checkpoint_value_chunk', chunk: { cut, domain: 'goal', item_offset: 0, path: ['current', 'objective'], offset: 0, readable_end: objective.length, next_offset: null, representation: 'utf8_text', bytes_base64: btoa(objective) } }));
+ await screen.findByText(objective);
  fireEvent.click(screen.getByRole('button', { name: 'Edit goal objective' }));
  const input = await screen.findByRole('textbox', { name: 'Goal objective' });
  fireEvent.change(input, { target: { value: 'My unsaved Goal objective' } });

@@ -195,6 +195,54 @@ impl AuxiliaryModelPolicy {
     }
 }
 
+/// Whether `left` resolved against `left_catalog` runs exactly the
+/// invocations `right` resolves to against `right_catalog`: the primary
+/// model and every explicit auxiliary one, over the same provider binding
+/// ([`crate::model::catalog::ModelCatalog::same_invocation`]).
+pub(crate) fn same_session_invocation(
+    left_catalog: &crate::model::catalog::ModelCatalog,
+    left: &SessionModelConfig,
+    right_catalog: &crate::model::catalog::ModelCatalog,
+    right: &SessionModelConfig,
+) -> bool {
+    use crate::model::invocation::RequestParamsLayer;
+    left_catalog.same_invocation(
+        &left.selection(),
+        right_catalog,
+        &right.selection(),
+        RequestParamsLayer::SessionOverrides,
+    ) && [
+        (
+            left.summary_selection(),
+            right.summary_selection(),
+            RequestParamsLayer::SummaryOverrides,
+        ),
+        (
+            left.title_selection(),
+            right.title_selection(),
+            RequestParamsLayer::TitleOverrides,
+        ),
+        (
+            left.classification_selection(),
+            right.classification_selection(),
+            RequestParamsLayer::ClassificationOverrides,
+        ),
+        (
+            left.btw_selection(),
+            right.btw_selection(),
+            RequestParamsLayer::BtwOverrides,
+        ),
+    ]
+    .into_iter()
+    .all(|(left, right, layer)| match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left_catalog.same_invocation(&left, right_catalog, &right, layer)
+        }
+        _ => false,
+    })
+}
+
 /// Analyze the complete Session configuration without credentials, bindings, or I/O.
 /// Primary and explicit summary selections use the same static semantics and
 /// request-parameter layers as native binding. An absent summary follows primary.
@@ -460,6 +508,15 @@ impl SessionModelState {
             resolved: Some(std::sync::Arc::new(resolved)),
             unavailable: None,
         })
+    }
+
+    /// The catalog this Session resolves against; `None` for a child running
+    /// a parent-frozen model.
+    pub(crate) fn catalog(&self) -> Option<&crate::model::catalog::ModelCatalog> {
+        match &self.authority {
+            ModelAuthority::Catalog(registry) => Some(registry.catalog().catalog()),
+            ModelAuthority::Frozen(_) => None,
+        }
     }
 
     /// The authoritative desired configuration.

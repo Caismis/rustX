@@ -45,6 +45,9 @@ use super::{ConversationRuntime, RuntimeInner};
 #[allow(clippy::struct_field_names)]
 pub(crate) struct CoordinatorProbe {
     pub(crate) title_source_reads: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    /// Fails the next configuration change record after its generation is
+    /// published, as a failed durable append would.
+    pub(crate) fail_configuration_record: bool,
     /// Parks the next admission when armed.
     pub(crate) admission_gate: Option<Arc<Gate>>,
     /// Signals only after admission proves the coordinator lock is held by
@@ -441,6 +444,32 @@ impl ConversationRuntime {
             .lock()
             .expect("coordinator probe lock poisoned") = Some(probe);
         Ok(runtime)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lifecycle_for_test(&self) -> crate::runtime::ConversationLifecycle {
+        self.inner.lifecycle.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_configuration_record(&self) {
+        self.inner
+            .probe
+            .lock()
+            .expect("probe")
+            .get_or_insert_with(Default::default)
+            .fail_configuration_record = true;
+    }
+
+    /// Whether an admission pass is parked behind a waiting staged commit.
+    /// Never waits for the coordinator: an admission that instead blocks
+    /// under it reads as not deferred.
+    #[cfg(test)]
+    pub(crate) fn configuration_admission_deferred(&self) -> bool {
+        self.inner
+            .state
+            .try_lock()
+            .is_ok_and(|state| state.configuration_admission_deferred)
     }
 
     #[cfg(test)]

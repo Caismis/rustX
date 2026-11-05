@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { checkpointSnapshot, transitionFacts, foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
-import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v71';
+import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v72';
 import capture from './fixtures/incremental-native.json';
 import { checkpoint, interaction, snapshot } from './fixture';
 
@@ -64,7 +64,7 @@ it('every Session event variant has an explicit transition or documented domain 
   apply({ type: 'assistant_publication_settled', settlement_head:[], attempt_id, transcript_cursor: '10', audit: { stream_id: 's', attempt_id, turn_id: 't', request_id: 'r', message_id: 'unaccepted', kind: 'unaccepted', content: [], settled_at: audit.timestamp } }); expect(state.attempt?.in_flight).toBeUndefined();
   apply({type:'assistant_publication_deferred_settled',settlement_head:[],attempt_id,transcript_cursor:'10',settlement:{stream_id:'s',attempt_id,turn_id:'t',request_id:'r',message_id:'unaccepted',kind:'unaccepted',settled_at:audit.timestamp,block_count:'0'},audit:null,read_cut:nativeCheckpoint.read_cut.source_cut!,content:[],collections:[]});
   apply({ type: 'runtime_durability_failed', operation: 'commit', diagnostic: 'failure' }); expect(state.durability_failure).toEqual({ operation: 'commit', diagnostic: 'failure' });
-  apply({ type: 'configuration_adoption_eligibility_changed', eligibility: { status: 'busy' } }); expect(state.configuration_adoption_eligibility).toEqual({ status: 'busy' });
+  apply({ type: 'configuration_applied', transcript_cursor: '11', item: { event_id: 'evt', timestamp: audit.timestamp, change: { reason: 'source', previous_binding_revision: '1', binding_revision: '2', domains: ['tools'], tools: { added: { names: ['fetch'], total: 1 }, removed: { names: [], total: 0 }, changed: { names: [], total: 0 } }, skills: { added: { names: [], total: 0 }, removed: { names: [], total: 0 }, changed: { names: [], total: 0 } }, instructions_bytes: '0', catalog_bytes: '0' }, instructions: { conversation_id: 'conv', source: { type: 'configuration_instructions', journal_sequence: 11 }, representation: 'utf8_text', version: 1, content_revision: 1, readable_end: 0 }, catalog: { conversation_id: 'conv', source: { type: 'configuration_catalog', journal_sequence: 11 }, representation: 'utf8_text', version: 1, content_revision: 1, readable_end: 0 } } });
   apply({type:'projection_transition',events:[{type:'trace_changed'}],metadata:{read_cut:checkpoint(state).read_cut,content:[],collections:[]}});
   apply({type:'checkpoint_advanced',transition:'display-bounded',checkpoint:checkpoint(state,'0')});
   apply({type:'pending_head_changed',owner:'primary',cut:{generation:'1',total:1},head:[pending]});expect(state.pending_interactions).toEqual([pending]);
@@ -90,7 +90,7 @@ it('every Session event variant has an explicit transition or documented domain 
     agent_status_composed: true, pending_inbound_changed: true, inbound_enqueued: true, inbound_drained: true,
     job_updated: true, agent_updated: true, capability_updated: true, resource_generation_updated: true,
     session_model_changed: true, runtime_shutdown: true, runtime_durability_failed: true,
-    configuration_adoption_eligibility_changed: true,
+    configuration_applied: true,
   };
   expect([...covered].sort()).toEqual(Object.keys(vocabulary).sort());
 });

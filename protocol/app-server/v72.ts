@@ -1183,14 +1183,6 @@ export type Request1 =
       params: {
         session_id: SessionId;
       };
-    }
-  | {
-      method: 'session/adoptConfiguration';
-      params: {
-        session_id: SessionId;
-        candidate: ApplicationIdentity;
-        expected_binding: string;
-      };
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -1679,6 +1671,14 @@ export type ContentSource =
       publication_request_id: RequestId;
       block_index: ContentBlockIndex;
       type: 'live_publication_prefix';
+    }
+  | {
+      journal_sequence: number;
+      type: 'configuration_instructions';
+    }
+  | {
+      journal_sequence: number;
+      type: 'configuration_catalog';
     };
 /**
  * Exact deterministic component of one immutable canonical message.
@@ -3449,7 +3449,8 @@ export type TraceKind =
       | 'interaction'
     )
   | 'user'
-  | 'context';
+  | 'context'
+  | 'configuration';
 /**
  * How one actual request's frozen System Prompt relates to its predecessor.
  *
@@ -3550,6 +3551,21 @@ export type AgentActivationOrigin =
       node_id: WorkflowNodeInstance;
       kind: 'workflow';
     };
+/**
+ * Why the Session's configuration changed.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ConfigurationChangeReason".
+ */
+export type ConfigurationChangeReason = 'source' | 'model_selection' | 'reallocation';
+/**
+ * One configuration domain a commit changed.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ConfigurationDomain".
+ */
+export type ConfigurationDomain =
+  'instructions' | 'context_policy' | 'tools' | 'skills' | 'model' | 'execution_policy';
 /**
  * The cursor domain of durable transcript paging.
  *
@@ -5133,10 +5149,6 @@ export type RuntimeClientEvent =
       type: 'trace_changed';
     }
   | {
-      eligibility: AdoptionEligibility;
-      type: 'configuration_adoption_eligibility_changed';
-    }
-  | {
       view: RuntimeClientGoalView;
       type: 'goal_changed';
     }
@@ -5487,6 +5499,14 @@ export type RuntimeClientEvent =
        */
       transcript_cursor: string;
       type: 'interaction_audit_settled';
+    }
+  | {
+      item: RuntimeClientTranscriptConfigurationApplied;
+      /**
+       * The cursor domain of durable transcript paging.
+       */
+      transcript_cursor: string;
+      type: 'configuration_applied';
     }
   | {
       context: RuntimeClientContextView1;
@@ -5851,26 +5871,6 @@ export type RuntimeClientEvent =
       type: 'runtime_durability_failed';
     };
 /**
- * Whether a live runtime could adopt a prepared configuration now.
- *
- * Runtime-domain advisory state, published by the runtime through its Runtime
- * Client projection; it is never part of a `ConfigurationApplication`.
- * Adoption always revalidates the native admission gate.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AdoptionEligibility".
- */
-export type AdoptionEligibility =
-  | {
-      status: 'eligible';
-    }
-  | {
-      status: 'busy';
-    }
-  | {
-      status: 'unavailable';
-    };
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionNodeOriginObservation".
  */
@@ -5969,7 +5969,6 @@ export type UnitApplication =
       status: 'preparing';
     }
   | {
-      impact: CacheImpact;
       status: 'ready';
     }
   | {
@@ -5977,13 +5976,12 @@ export type UnitApplication =
       status: 'failed';
     }
   | {
+      diagnostic: string;
+      status: 'uncertain';
+    }
+  | {
       status: 'process_restart';
     };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "CacheImpact".
- */
-export type CacheImpact = 'preserved' | 'prefix_changed' | 'cache_namespace_changed' | 'unproven';
 /**
  * The redacted client-facing description of a credential source.
  *
@@ -6179,8 +6177,7 @@ export type ErrorData =
       kind: 'session_file_read';
     }
   | {
-      rejection: AdoptionError;
-      kind: 'configuration_adoption';
+      kind: 'model_selection_conflict';
     }
   | {
       diagnostic: string;
@@ -6368,24 +6365,6 @@ export type SessionFileReadFailure =
   | 'too_large'
   | 'capacity'
   | 'read_failed';
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AdoptionError".
- */
-export type AdoptionError =
-  | {
-      status: 'busy';
-    }
-  | {
-      status: 'not_ready';
-    }
-  | {
-      status: 'conflict';
-    }
-  | {
-      diagnostic: string;
-      status: 'failed';
-    };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionArchivePrepareError".
@@ -7953,6 +7932,18 @@ export type RuntimeClientTranscriptItem =
             type: 'cancelled';
           };
       type: 'interaction_settled';
+    }
+  | {
+      /**
+       * Identifies one durable runtime event.
+       */
+      event_id: string;
+      /**
+       * Event timestamp.
+       */
+      timestamp: string;
+      change: ConfigurationChange1;
+      type: 'configuration_applied';
     };
 /**
  * Typed kind of inbound information.
@@ -10256,19 +10247,6 @@ export interface SessionApplicationRef {
   byte_length: number;
 }
 /**
- * Source attempt identity is independent of both content and execution version.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ApplicationIdentity".
- */
-export interface ApplicationIdentity {
-  /**
-   * None means immutable input capture failed; no source revision is fabricated.
-   */
-  input_revision?: string | null;
-  attempt: string;
-}
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "Success".
  */
@@ -11266,6 +11244,21 @@ export interface TraceRecord {
   message_id?: MessageId | null;
   attachments: TraceArtifact[];
   /**
+   * The committed change of a `configuration` record, as recorded.
+   */
+  configuration?: ConfigurationChange | null;
+  /**
+   * The exact effective instructions that `configuration` record's commit
+   * installed, read through `content_read` whether or not a request used
+   * them.
+   */
+  configuration_instructions?: ContentRef | null;
+  /**
+   * The JSON catalog of the Tools and Skills that commit affected, before
+   * and after.
+   */
+  configuration_catalog?: ContentRef | null;
+  /**
    * Whether this record has heavy detail available for inspection.
    */
   has_detail: boolean;
@@ -11441,6 +11434,75 @@ export interface TraceToolCall {
   name?: string | null;
   occurrence: RuntimeClientToolOccurrence;
   fields: TraceFieldSource[];
+}
+/**
+ * The typed semantic summary of one actual configuration commit.
+ *
+ * Recorded once per commit that changed something; never for preparation,
+ * a file notification or a commit with no effective semantic change. It
+ * names what changed, not the bodies: the exact prompt and Tool schemas a
+ * request used remain in that request's own immutable snapshot.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ConfigurationChange".
+ */
+export interface ConfigurationChange {
+  reason: ConfigurationChangeReason;
+  /**
+   * The Session binding revision this commit replaced.
+   */
+  previous_binding_revision: string;
+  /**
+   * The Session binding revision this commit installed.
+   */
+  binding_revision: string;
+  /**
+   * The changed domains, in their stable order.
+   */
+  domains: ConfigurationDomain[];
+  tools: NamedChanges;
+  skills: NamedChanges;
+  /**
+   * The byte length of the effective system instructions this commit
+   * installed. The fact retains them exactly, readable in bounded ranges
+   * even when no request ever used them.
+   */
+  instructions_bytes: string;
+  /**
+   * The byte length of the retained JSON catalog of every Tool and Skill
+   * this commit added, changed or removed, with their before and after
+   * states.
+   */
+  catalog_bytes: string;
+}
+/**
+ * Named-item differences of one catalog. A same-name item whose definition
+ * changed is `changed`, never a removal plus an addition.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "NamedChanges".
+ */
+export interface NamedChanges {
+  added: BoundedNames;
+  removed: BoundedNames;
+  changed: BoundedNames;
+}
+/**
+ * A bounded, ordered list of names with its exact total.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "BoundedNames".
+ */
+export interface BoundedNames {
+  /**
+   * Sorted names: at most [`CONFIGURATION_CHANGE_NAME_LIMIT`] of them,
+   * within [`CONFIGURATION_CHANGE_NAME_BYTES`] encoded bytes.
+   */
+  names: string[];
+  /**
+   * The exact number of names in this category.
+   */
+  total: number;
 }
 /**
  * A contiguous native history window ending at the selected execution.
@@ -11789,6 +11851,18 @@ export interface RuntimeClientTranscriptEntry {
               type: 'cancelled';
             };
         type: 'interaction_settled';
+      }
+    | {
+        /**
+         * Identifies one durable runtime event.
+         */
+        event_id: string;
+        /**
+         * Event timestamp.
+         */
+        timestamp: string;
+        change: ConfigurationChange1;
+        type: 'configuration_applied';
       };
 }
 /**
@@ -12905,6 +12979,43 @@ export interface QuestionnaireSubmission2 {
   answers: QuestionnaireAnswerEntry[];
 }
 /**
+ * The typed semantic summary of one actual configuration commit.
+ *
+ * Recorded once per commit that changed something; never for preparation,
+ * a file notification or a commit with no effective semantic change. It
+ * names what changed, not the bodies: the exact prompt and Tool schemas a
+ * request used remain in that request's own immutable snapshot.
+ */
+export interface ConfigurationChange1 {
+  reason: ConfigurationChangeReason;
+  /**
+   * The Session binding revision this commit replaced.
+   */
+  previous_binding_revision: string;
+  /**
+   * The Session binding revision this commit installed.
+   */
+  binding_revision: string;
+  /**
+   * The changed domains, in their stable order.
+   */
+  domains: ConfigurationDomain[];
+  tools: NamedChanges;
+  skills: NamedChanges;
+  /**
+   * The byte length of the effective system instructions this commit
+   * installed. The fact retains them exactly, readable in bounded ranges
+   * even when no request ever used them.
+   */
+  instructions_bytes: string;
+  /**
+   * The byte length of the retained JSON catalog of every Tool and Skill
+   * this commit added, changed or removed, with their before and after
+   * states.
+   */
+  catalog_bytes: string;
+}
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ObservedTurnIdentity".
  */
@@ -13050,25 +13161,6 @@ export interface RuntimeClientSnapshot {
    * or tool authority.
    */
   effective_approval_mode: 'policy' | 'full_access';
-  /**
-   * Whether this live runtime could adopt a prepared Session configuration
-   * now. Runtime-domain advisory state published by the runtime with its
-   * adoption gate's idle rule over in-memory owners, and changed only by the
-   * `configuration_adoption_eligibility_changed` event; it describes no
-   * candidate and is never configuration application state. `unavailable` until the runtime runs, after it stops, and for a
-   * durable inspection projection. `session/adoptConfiguration` revalidates
-   * the real gate at its commit boundary.
-   */
-  configuration_adoption_eligibility:
-    | {
-        status: 'eligible';
-      }
-    | {
-        status: 'busy';
-      }
-    | {
-        status: 'unavailable';
-      };
   /**
    * The runtime's durable-authority failure, when it has entered the
    * explicit degraded state. While set, no new durable admission/execution
@@ -15622,10 +15714,6 @@ export interface RuntimeClientProtocolEvent {
         type: 'trace_changed';
       }
     | {
-        eligibility: AdoptionEligibility;
-        type: 'configuration_adoption_eligibility_changed';
-      }
-    | {
         view: RuntimeClientGoalView;
         type: 'goal_changed';
       }
@@ -15976,6 +16064,14 @@ export interface RuntimeClientProtocolEvent {
          */
         transcript_cursor: string;
         type: 'interaction_audit_settled';
+      }
+    | {
+        item: RuntimeClientTranscriptConfigurationApplied;
+        /**
+         * The cursor domain of durable transcript paging.
+         */
+        transcript_cursor: string;
+        type: 'configuration_applied';
       }
     | {
         context: RuntimeClientContextView1;
@@ -16586,6 +16682,94 @@ export interface RuntimeClientTranscriptInteractionSettled {
           | 'subagent_execution_deadline_exceeded';
         type: 'cancelled';
       };
+}
+/**
+ * The bounded configuration change item.
+ */
+export interface RuntimeClientTranscriptConfigurationApplied {
+  /**
+   * Identifies one durable runtime event.
+   */
+  event_id: string;
+  /**
+   * Event timestamp.
+   */
+  timestamp: string;
+  change: ConfigurationChange2;
+  instructions: ContentRef1;
+  catalog: ContentRef2;
+}
+/**
+ * The typed semantic summary of one actual configuration commit.
+ *
+ * Recorded once per commit that changed something; never for preparation,
+ * a file notification or a commit with no effective semantic change. It
+ * names what changed, not the bodies: the exact prompt and Tool schemas a
+ * request used remain in that request's own immutable snapshot.
+ */
+export interface ConfigurationChange2 {
+  reason: ConfigurationChangeReason;
+  /**
+   * The Session binding revision this commit replaced.
+   */
+  previous_binding_revision: string;
+  /**
+   * The Session binding revision this commit installed.
+   */
+  binding_revision: string;
+  /**
+   * The changed domains, in their stable order.
+   */
+  domains: ConfigurationDomain[];
+  tools: NamedChanges;
+  skills: NamedChanges;
+  /**
+   * The byte length of the effective system instructions this commit
+   * installed. The fact retains them exactly, readable in bounded ranges
+   * even when no request ever used them.
+   */
+  instructions_bytes: string;
+  /**
+   * The byte length of the retained JSON catalog of every Tool and Skill
+   * this commit added, changed or removed, with their before and after
+   * states.
+   */
+  catalog_bytes: string;
+}
+/**
+ * The exact effective instructions the commit installed, read in
+ * bounded ranges through `content_read`.
+ */
+export interface ContentRef1 {
+  conversation_id: ConversationId;
+  source: ContentSource;
+  representation: ContentRepresentation;
+  version: number;
+  /**
+   * Immutable sources use revision 1. For `LivePublicationPrefix` this is
+   * the committed frame sequence plus one, with exact H verified against
+   * the retained staging frontier index and projection release cut.
+   */
+  content_revision: number;
+  readable_end: number;
+}
+/**
+ * The JSON catalog of the Tools and Skills the commit affected (before
+ * and after),
+ * read in bounded ranges through `content_read`.
+ */
+export interface ContentRef2 {
+  conversation_id: ConversationId;
+  source: ContentSource;
+  representation: ContentRepresentation;
+  version: number;
+  /**
+   * Immutable sources use revision 1. For `LivePublicationPrefix` this is
+   * the committed frame sequence plus one, with exact H verified against
+   * the retained staging frontier index and projection release cut.
+   */
+  content_revision: number;
+  readable_end: number;
 }
 /**
  * Authoritative context state at this lifecycle boundary.
@@ -17737,16 +17921,19 @@ export interface ConfigurationApplication {
     provider?: UnitApplication;
     shared_capacity?: UnitApplication;
   };
-  candidate?: AvailableConfiguration | null;
 }
 /**
+ * Source attempt identity is independent of both content and execution version.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AvailableConfiguration".
+ * via the `definition` "ApplicationIdentity".
  */
-export interface AvailableConfiguration {
-  identity: ApplicationIdentity;
-  expected_binding: string;
-  impact: CacheImpact;
+export interface ApplicationIdentity {
+  /**
+   * None means immutable input capture failed; no source revision is fabricated.
+   */
+  input_revision?: string | null;
+  attempt: string;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -20284,6 +20471,25 @@ export interface RuntimeClientTranscriptInteractionSettled1 {
           | 'subagent_execution_deadline_exceeded';
         type: 'cancelled';
       };
+}
+/**
+ * One live-published Session configuration change projection.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "RuntimeClientTranscriptConfigurationApplied".
+ */
+export interface RuntimeClientTranscriptConfigurationApplied1 {
+  /**
+   * Identifies one durable runtime event.
+   */
+  event_id: string;
+  /**
+   * Event timestamp.
+   */
+  timestamp: string;
+  change: ConfigurationChange2;
+  instructions: ContentRef1;
+  catalog: ContentRef2;
 }
 /**
  * Finite proposal metadata; exact provider identifiers and arguments can be deferred.

@@ -7,7 +7,7 @@ import { materializeSource } from '../../protocol/app-server/source-observation'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActor } from 'xstate';
-import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v71';
+import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v72';
 import { RepairNotice, repairNoticeText } from '../src/app/RepairNotice';
 import { repairChangeLabel } from '../src/app/settings/advanced/AutoRepair';
 import { inspectionAcknowledger, RepairAcknowledgements } from '../src/app/repair-notices';
@@ -608,7 +608,7 @@ class Native {
     return source;
   }
   application(): ConfigurationApplication {
-    return { scope: 'source:user', sources: [{ kind: 'user' }], version: String(this.version), desired: { input_revision: this.revision, attempt: String(this.version) }, units: { execution_policy: { status: 'applied' } }, candidate: null };
+    return { scope: 'source:user', sources: [{ kind: 'user' }], version: String(this.version), desired: { input_revision: this.revision, attempt: String(this.version) }, units: { execution_policy: { status: 'applied' } } };
   }
 }
 

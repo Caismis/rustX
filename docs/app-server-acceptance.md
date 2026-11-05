@@ -133,8 +133,8 @@ and authoritative state; never resubmit a mutation merely because its reply was 
 
 Edit the printed canonical TOML source after a runtime is loaded. Resync preserves
 that Session's adopted binding. **Rescan configuration files** ingests external
-changes; independently valid policy applies automatically and prepared context
-requires explicit adoption. Runtime reconstruction does not adopt pending context.
+changes; independently valid policy applies automatically and native commits
+prepared context at the Session's safe boundary, with no client adoption.
 To dogfood automatic idle residency, configure `[app_server] idle_grace_ms` before
 server startup, detach every view/controller of an idle Session, and inspect
 `server/diagnostics` until it reports unloaded. The catalog remains visible and a

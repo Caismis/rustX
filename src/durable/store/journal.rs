@@ -62,6 +62,16 @@ pub trait JournalStore: Send + Sync + 'static {
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
+    /// Commits one Session-level configuration change fact, with the exact
+    /// effective instructions and installed catalog as that fact's retained
+    /// content, and returns the transcript position allocated in the same
+    /// durable transaction.
+    fn append_configuration_change(
+        &self,
+        event: RuntimeEventEnvelope,
+        instructions: &str,
+        catalog: &str,
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
     /// Atomically install the leaf Journal observer and capture its initial prefix.
     fn observe_journal(
         &self,

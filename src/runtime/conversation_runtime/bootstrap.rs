@@ -901,6 +901,7 @@ impl ConversationRuntime {
         let catalog_revision = config.capability.catalog_revision();
         let inner = Arc::new(RuntimeInner {
             configuration_owner: Arc::new(()),
+            unrecorded_configuration: Arc::default(),
             initialization_cancellation: std::sync::OnceLock::new(),
             runtime_catalog_preparer: std::sync::OnceLock::new(),
             runtime_catalog_publication: tokio::sync::watch::channel(0).0,
@@ -940,6 +941,9 @@ impl ConversationRuntime {
                 pending_runtime_catalog: None,
                 catalog_commit_blocked: false,
                 catalog_admission_deferred: false,
+                staged_configuration: None,
+                configuration_commit_waiting: false,
+                configuration_admission_deferred: false,
                 runtime_refresh_sequence: 0,
                 runtime_catalog_failure: None,
                 explicit_model: config.explicit_model,
@@ -975,7 +979,6 @@ impl ConversationRuntime {
             }),
             wake: Arc::new(WakeGate::new()),
             worker_started: AtomicBool::new(false),
-            published_eligibility: Mutex::new(None),
             drain: std::sync::OnceLock::new(),
             drain_started: AtomicBool::new(false),
             pending: std::sync::OnceLock::new(),
@@ -1289,10 +1292,6 @@ impl ConversationRuntime {
         if !self.inner.admit_next_scheduled() {
             self.inner.admit_next_attempt();
         }
-        // Activation publishes the first eligibility synchronously: once
-        // `activate` returns, the projection's `unavailable` bootstrap value has
-        // been answered, independent of when the worker first runs.
-        self.inner.publish_adoption_eligibility();
     }
 
     /// Whether this runtime has left the inactive lifecycle, including an

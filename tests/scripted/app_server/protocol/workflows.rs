@@ -297,15 +297,10 @@ async fn issue491_saved_workflow_files_change_only_future_adoption() {
             )
             .await
             .unwrap();
-        // File commit and publication are separate facts from adoption: the
-        // Session keeps its admitted program until it adopts the candidate.
+        // File commit is a separate fact from the Session commit, which native
+        // performs automatically at the idle Session's boundary.
         assert!(receipt.configuration_revision.is_some());
-        let application = super::super::configuration::settled(&f, 0).await;
-        assert_eq!(description().as_deref(), Some("First description"));
-        let candidate = application.candidate.expect("a newer prepared candidate");
-        f.manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        super::super::configuration::applied(&f, 0).await;
         assert_eq!(description().as_deref(), Some("Second description"));
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;
