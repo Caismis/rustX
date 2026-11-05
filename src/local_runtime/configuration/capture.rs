@@ -191,8 +191,12 @@ impl UserConfigManager {
         let context = self
             .resolve_captured_layers(layers)
             .and_then(Self::resolve_runtime_configuration)
-            .and_then(|capture| self.resolve_resources(request, capture))
-            .map_err(|error| error.diagnostic.reason);
+            .and_then(|capture| self.resolve_resources(request, capture));
+        let failed_input = context
+            .as_ref()
+            .err()
+            .and_then(|error| error.diagnostic.file.clone());
+        let context = context.map_err(|error| error.diagnostic.reason);
         self.verify_documents(&documents, &revisions)
             .map_err(|error| error.to_string())?;
         let manifest = context
@@ -210,6 +214,7 @@ impl UserConfigManager {
             process,
             revision,
             context,
+            failed_input,
         })
     }
 

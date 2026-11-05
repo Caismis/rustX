@@ -2456,6 +2456,222 @@ async fn an_edited_selected_instruction_file_reaches_the_resident_runtime() {
     .await;
 }
 
+/// Text of the resident runtime's project instructions.
+fn project_text(runtime: &crate::runtime::ConversationRuntime) -> String {
+    runtime
+        .runtime_resources()
+        .project_instructions()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Select `file` (relative to the first Workspace) as a root instruction file.
+fn select_instruction_file(fixture: &Fixture, file: &str) {
+    let config = fixture.workspaces[0].join("rustx.toml");
+    let mut document = std::fs::read_to_string(&config).unwrap();
+    std::fmt::Write::write_fmt(
+        &mut document,
+        format_args!("\n[agent.agents_md]\nfiles = [{file:?}]\n"),
+    )
+    .unwrap();
+    std::fs::write(&config, document).unwrap();
+}
+
+fn modified(path: &std::path::Path) -> notify::Event {
+    notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
+        .add_path(path.to_path_buf())
+}
+
+/// A newly selected instruction file whose first capture fails stays an
+/// input: fixing only that file, through its own notification, recovers the
+/// same resident runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_newly_selected_file_that_fails_its_first_capture_recovers_from_its_own_edit() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        let policy = fixture.workspaces[0].join("docs/new-policy.md");
+        std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
+        std::fs::write(&policy, b"\xff\xfe not UTF-8").unwrap();
+        select_instruction_file(&fixture, "docs/new-policy.md");
+        let captured = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_captured
+            .clone();
+        captured.arm();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let observe = async {
+            let config = modified(&fixture.workspaces[0].join("rustx.toml"));
+            while !fixture.manager.notify_source_watch(config.clone()) {
+                tokio::task::yield_now().await;
+            }
+            captured.entered().await;
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            assert!(!project_text(&runtime).contains("Policy fixed"));
+            assert!(
+                fixture
+                    .manager
+                    .applications
+                    .lock()
+                    .source_inputs()
+                    .iter()
+                    .any(|(_, file)| file == &policy),
+                "the failed input is not observed"
+            );
+            captured.release();
+            captured.parked(0).await;
+            captured.arm();
+            std::fs::write(&policy, "Policy fixed").unwrap();
+            assert!(fixture.manager.notify_source_watch(modified(&policy)));
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                project_text(&runtime).contains("Policy fixed"),
+                "not recovered: {}",
+                project_text(&runtime)
+            );
+            captured.release();
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
+        watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// An input the watcher learns of only from a capture is captured again
+/// once it is watched: an edit after that capture read it, before its watch
+/// existed, still reaches the resident runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_edit_before_a_new_input_is_watched_is_captured_once_it_is() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        let policy = fixture.workspaces[0].join("docs/policy.md");
+        std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
+        std::fs::write(&policy, "Policy version A").unwrap();
+        select_instruction_file(&fixture, "docs/policy.md");
+        let captured = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_captured
+            .clone();
+        captured.arm();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let observe = async {
+            let config = modified(&fixture.workspaces[0].join("rustx.toml"));
+            while !fixture.manager.notify_source_watch(config.clone()) {
+                tokio::task::yield_now().await;
+            }
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            assert!(project_text(&runtime).contains("Policy version A"));
+            // Edited while the watcher is held after the capture that found
+            // the file and before it watches the file's directory.
+            std::fs::write(&policy, "Policy version B").unwrap();
+            captured.release();
+            while !project_text(&runtime).contains("Policy version B") {
+                tokio::task::yield_now().await;
+            }
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
+        watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// Replacing the directory that holds a captured input with a pre-filled
+/// one notifies only the directory; that notification alone captures the
+/// new content into the resident runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replaced_input_directory_recaptures_its_readers() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let docs = fixture.workspaces[0].join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("policy.md"), "Policy version A").unwrap();
+        select_instruction_file(&fixture, "docs/policy.md");
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        assert!(project_text(&runtime).contains("Policy version A"));
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        let staged = fixture.workspaces[0].join("staged");
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join("policy.md"), "Policy version B").unwrap();
+        std::fs::rename(&docs, fixture.workspaces[0].join("old")).unwrap();
+        std::fs::rename(&staged, &docs).unwrap();
+        let captured = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_captured
+            .clone();
+        captured.arm();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let observe = async {
+            let moved = notify::Event::new(notify::EventKind::Modify(
+                notify::event::ModifyKind::Name(notify::event::RenameMode::To),
+            ))
+            .add_path(docs.clone());
+            while !fixture.manager.notify_source_watch(moved.clone()) {
+                tokio::task::yield_now().await;
+            }
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                project_text(&runtime).contains("Policy version B"),
+                "the replacement was not captured: {}",
+                project_text(&runtime)
+            );
+            captured.release();
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
+        watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
 /// An execution-policy update that really published after an earlier
 /// unrecorded commit is retained: it survives unload/load, and the healthy
 /// replacement allocation recovers the Session's application view.

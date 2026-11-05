@@ -148,6 +148,10 @@ pub(crate) struct CapturedApplication {
     pub(crate) process: super::super::app_server_policy::AppServerPolicy,
     pub(crate) revision: String,
     pub(crate) context: Result<super::ProspectiveSessionConfig, String>,
+    /// The file a failed `context` stopped at, such as a newly selected
+    /// instruction file that is not yet valid: still an input, so a fix to it
+    /// alone is observed.
+    pub(crate) failed_input: Option<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for ApplicationState {
@@ -719,21 +723,31 @@ impl ApplicationState {
 
     /// Every file a known Workspace's retained capture read, with that
     /// Workspace: the bounded inputs its configuration depends on, such as
-    /// selected instruction files outside its fixed sources.
+    /// selected instruction files outside its fixed sources. A desired
+    /// capture whose context failed contributes the file it stopped at.
     pub(crate) fn source_inputs(&self) -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
-        self.available
-            .iter()
-            .chain(
-                self.desired_sources
-                    .iter()
-                    .filter_map(|(directory, capture)| {
-                        Some((directory, capture.as_ref().ok()?.context.as_ref().ok()?))
-                    }),
+        let captured = self.available.iter().map(|(directory, config)| {
+            (
+                directory,
+                config.source_revisions.keys().collect::<Vec<_>>(),
             )
-            .flat_map(|(directory, config)| {
-                config
-                    .source_revisions
-                    .keys()
+        });
+        let desired = self
+            .desired_sources
+            .iter()
+            .filter_map(|(directory, capture)| {
+                let capture = capture.as_ref().ok()?;
+                let files = match &capture.context {
+                    Ok(config) => config.source_revisions.keys().collect(),
+                    Err(_) => capture.failed_input.iter().collect(),
+                };
+                Some((directory, files))
+            });
+        captured
+            .chain(desired)
+            .flat_map(|(directory, files)| {
+                files
+                    .into_iter()
                     .map(|file| (directory.clone(), file.clone()))
             })
             .collect::<BTreeSet<_>>()

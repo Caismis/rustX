@@ -14,7 +14,7 @@
 //! | User resources and guidance | `~/rustx/.agents` for `mcp.toml` and its guidance files, and its `agents`, `skills`, `tools` and `workflows`, recursively (the parent until it exists) |
 //! | Workspace document and root guidance | each known Workspace root, non-recursively, for `rustx.toml`, the guidance files and `*.md` |
 //! | Workspace resources | each known Workspace's `.agents`, as for the User |
-//! | Captured inputs | each other file a known Workspace's retained capture read (a selected instruction file, for one), through its directory, non-recursively |
+//! | Captured inputs | each other file a known Workspace's retained capture read (a selected instruction file, for one) or a failed capture stopped at, and the target of each link among them, through its directory — its nearest existing ancestor while the directory is gone — non-recursively |
 //!
 //! The guidance files are exactly the loader's (`AGENTS.override.md`,
 //! `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`). A notification for a
@@ -34,9 +34,12 @@
 //! sees exactly the sources they read. The entry decides by identity, never
 //! by probing the volume through an unrelated name.
 //!
-//! A captured input routes to every Workspace whose capture read it; the
-//! set is exactly the capture's own source manifest, so nothing else under a
-//! Workspace is watched.
+//! A captured input, or a directory holding it that was replaced, removed or
+//! created, routes to every Workspace whose capture read it; the set is
+//! exactly the captures' own source manifests, so nothing else under a
+//! Workspace is watched. Watches are registered until the set settles before
+//! anything is captured, and an input first learned of from a capture is
+//! captured again once it is watched, so no edit falls between the two.
 //!
 //! A path belongs to every source target whose loaders read it, and only to
 //! those: a known Workspace inside the User root, or inside another
@@ -231,8 +234,10 @@ fn owners(
     owners
 }
 
-/// The Workspaces whose retained capture read the input file at `path`,
-/// matched by the same identity rule, each with the file as it reads it.
+/// The Workspaces whose retained capture read an input file at or beneath
+/// `path`, matched by the same identity rule, each with the file as it reads
+/// it: the file itself, or a directory holding it that was replaced, removed
+/// or created.
 fn input_owners<'a>(
     path: &'a Path,
     inputs: &'a [(PathBuf, PathBuf)],
@@ -240,9 +245,7 @@ fn input_owners<'a>(
 ) -> impl Iterator<Item = (SourceTarget, PathBuf)> + 'a {
     inputs
         .iter()
-        .filter(move |(_, file)| {
-            beneath(path, file, same).is_some_and(|mut rest| rest.next().is_none())
-        })
+        .filter(move |(_, file)| beneath(file, path, same).is_some())
         .map(|(directory, file)| {
             (
                 SourceTarget::Workspace {
@@ -274,6 +277,23 @@ fn notified(
         }
     }
     targets
+}
+
+/// `inputs` with the target each symbolic link among them resolves to. The
+/// loaders follow a link and read its target, so both are inputs: the link's
+/// directory reports it re-pointed, the target's its content.
+fn followed(mut inputs: Vec<(PathBuf, PathBuf)>) -> Vec<(PathBuf, PathBuf)> {
+    let targets: Vec<_> = inputs
+        .iter()
+        .filter_map(|(directory, file)| {
+            let target = std::fs::canonicalize(file).ok()?;
+            (target != *file).then(|| (directory.clone(), target))
+        })
+        .collect();
+    inputs.extend(targets);
+    inputs.sort();
+    inputs.dedup();
+    inputs
 }
 
 /// The sources one pass of the watch observes.
@@ -371,7 +391,12 @@ pub(super) fn desired(sources: &KnownSources) -> BTreeMap<PathBuf, RecursiveMode
             resource_watches(&resources, &mut watches);
         }
     }
-    for directory in inputs.iter().filter_map(|(_, file)| file.parent()) {
+    // An input whose directory is gone is watched through its nearest
+    // existing ancestor, which reports the directory coming back.
+    for directory in inputs
+        .iter()
+        .filter_map(|(_, file)| file.ancestors().skip(1).find(|path| path.is_dir()))
+    {
         let covered = watches.iter().any(|(watched, mode)| {
             watched == directory
                 || (*mode == RecursiveMode::Recursive && directory.starts_with(watched))
@@ -382,6 +407,25 @@ pub(super) fn desired(sources: &KnownSources) -> BTreeMap<PathBuf, RecursiveMode
     }
     watches.retain(|path, _| path.is_dir());
     watches
+}
+
+/// Register the watches for `sources` until the set no longer changes, so a
+/// directory created while its parent's watch was being registered is
+/// watched too before anything beneath it is read.
+fn settle(
+    watcher: &mut impl Watcher,
+    active: &mut BTreeMap<PathBuf, RecursiveMode>,
+    sources: &KnownSources,
+) {
+    let mut registered = desired(sources);
+    loop {
+        rearm(watcher, active, &registered);
+        let now = desired(sources);
+        if now == registered {
+            return;
+        }
+        registered = now;
+    }
 }
 
 /// Converge the registered watches on `desired`; only a watch that
@@ -421,11 +465,17 @@ impl SessionRuntimeManager {
     }
 
     fn known_sources(&self) -> KnownSources {
-        let application = self.applications.lock();
+        let (workspaces, inputs) = {
+            let application = self.applications.lock();
+            (
+                application.watched_source_directories(),
+                application.source_inputs(),
+            )
+        };
         KnownSources {
             user: self.user_source_roots(),
-            workspaces: application.watched_source_directories(),
-            inputs: application.source_inputs(),
+            workspaces,
+            inputs: followed(inputs),
         }
     }
 
@@ -472,9 +522,33 @@ impl SessionRuntimeManager {
             .map_err(|error| error.to_string())?;
         let mut changes = self.configuration_changes();
         let mut active = BTreeMap::<PathBuf, RecursiveMode>::new();
+        let mut known: Option<Vec<(PathBuf, PathBuf)>> = None;
         loop {
             let sources = self.known_sources();
-            rearm(&mut watcher, &mut active, &desired(&sources));
+            settle(&mut watcher, &mut active, &sources);
+            // An input that just appeared — a newly selected instruction
+            // file, a link's new target — may have changed between the
+            // capture that found it and its watch: capture its readers again
+            // now that it is watched. Unchanged sources stay no-ops.
+            let appeared: Vec<_> = known.as_ref().map_or_else(Vec::new, |known| {
+                let mut readers = Vec::new();
+                for (directory, _) in sources.inputs.iter().filter(|input| !known.contains(input)) {
+                    let target = SourceTarget::Workspace {
+                        directory: directory.clone(),
+                    };
+                    if !readers.contains(&target) {
+                        readers.push(target);
+                    }
+                }
+                readers
+            });
+            known = Some(sources.inputs.clone());
+            if !appeared.is_empty() {
+                for target in appeared {
+                    self.observe_source_change(&target).await;
+                }
+                continue;
+            }
             tokio::select! {
                 () = stop.cancelled() => return Ok(()),
                 result = changes.changed() => if result.is_err() { return Ok(()) },
@@ -518,7 +592,7 @@ impl SessionRuntimeManager {
                     }
                     // Watch the replacements before capturing them, so an
                     // edit after the capture reads is always notified.
-                    rearm(&mut watcher, &mut active, &desired(&sources));
+                    settle(&mut watcher, &mut active, &sources);
                     targets.sort_by_key(|target| target.workspace().is_some());
                     for target in targets {
                         self.observe_source_change(&target).await;
@@ -1006,6 +1080,135 @@ mod tests {
                 &mut active
             )
             .is_empty()
+        );
+    }
+
+    /// A directory holding a captured input that is replaced, removed or
+    /// created routes to the input's readers; an input whose directory is
+    /// gone is watched through its nearest existing ancestor.
+    #[test]
+    fn a_captured_input_directory_lifecycle_stays_observed() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("w");
+        std::fs::create_dir_all(workspace.join("docs")).unwrap();
+        let sources = KnownSources {
+            user: roots(&root.path().join("home")),
+            workspaces: vec![workspace.clone()],
+            inputs: vec![
+                (workspace.clone(), workspace.join("docs/policy.md")),
+                (
+                    workspace.clone(),
+                    workspace.join("docs/policies/deep/policy.md"),
+                ),
+            ],
+        };
+        let target = [SourceTarget::Workspace {
+            directory: workspace.clone(),
+        }];
+        let mut active = BTreeMap::new();
+        for directory in ["docs", "docs/policies", "docs/policies/deep"] {
+            assert_eq!(
+                notified(
+                    &workspace.join(directory),
+                    &sources,
+                    &|_, _| false,
+                    &mut active
+                ),
+                target,
+                "{directory}"
+            );
+        }
+        let watches = desired(&sources);
+        assert_eq!(
+            watches.get(&workspace.join("docs")),
+            Some(&RecursiveMode::NonRecursive)
+        );
+        assert!(!watches.contains_key(&workspace.join("docs/policies")));
+        std::fs::create_dir_all(workspace.join("docs/policies/deep")).unwrap();
+        assert_eq!(
+            desired(&sources).get(&workspace.join("docs/policies/deep")),
+            Some(&RecursiveMode::NonRecursive)
+        );
+    }
+
+    /// A watcher that creates a directory beneath the first one it watches,
+    /// as a recreation racing the registration would.
+    struct Racing {
+        create: Option<PathBuf>,
+        watched: Vec<PathBuf>,
+    }
+
+    impl Watcher for Racing {
+        fn new<F: notify::EventHandler>(_: F, _: notify::Config) -> notify::Result<Self> {
+            unreachable!()
+        }
+        fn watch(&mut self, path: &Path, _: RecursiveMode) -> notify::Result<()> {
+            if let Some(directory) = self.create.take() {
+                std::fs::create_dir_all(directory).unwrap();
+            }
+            self.watched.push(path.to_path_buf());
+            Ok(())
+        }
+        fn unwatch(&mut self, _: &Path) -> notify::Result<()> {
+            Ok(())
+        }
+        fn kind() -> notify::WatcherKind {
+            notify::WatcherKind::NullWatcher
+        }
+    }
+
+    /// A directory created while its parent's watch is registered is watched
+    /// before anything beneath it is read.
+    #[test]
+    fn the_watch_set_settles_on_directories_created_while_registering() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("w");
+        std::fs::create_dir_all(workspace.join("docs")).unwrap();
+        let sources = KnownSources {
+            user: roots(&root.path().join("home")),
+            workspaces: vec![workspace.clone()],
+            inputs: vec![(workspace.clone(), workspace.join("docs/policies/policy.md"))],
+        };
+        let mut watcher = Racing {
+            create: Some(workspace.join("docs/policies")),
+            watched: Vec::new(),
+        };
+        let mut active = BTreeMap::new();
+        settle(&mut watcher, &mut active, &sources);
+        assert!(active.contains_key(&workspace.join("docs/policies")));
+        assert!(watcher.watched.contains(&workspace.join("docs/policies")));
+    }
+
+    /// A linked input's target is an input too: its directory is watched and
+    /// an edit of the target routes to the link's readers.
+    #[test]
+    fn a_linked_input_is_observed_through_its_target() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = std::fs::canonicalize(root.path()).unwrap().join("w");
+        std::fs::create_dir_all(workspace.join("docs")).unwrap();
+        std::fs::create_dir_all(workspace.join("policies")).unwrap();
+        std::fs::write(workspace.join("policies/main.md"), "policy").unwrap();
+        std::os::unix::fs::symlink("../policies/main.md", workspace.join("docs/policy.md"))
+            .unwrap();
+        let sources = KnownSources {
+            user: roots(&root.path().join("home")),
+            workspaces: vec![workspace.clone()],
+            inputs: followed(vec![(workspace.clone(), workspace.join("docs/policy.md"))]),
+        };
+        assert_eq!(
+            desired(&sources).get(&workspace.join("policies")),
+            Some(&RecursiveMode::NonRecursive)
+        );
+        assert_eq!(
+            notified(
+                &workspace.join("policies/main.md"),
+                &sources,
+                &|_, _| false,
+                &mut BTreeMap::new()
+            ),
+            [SourceTarget::Workspace {
+                directory: workspace.clone()
+            }]
         );
     }
 
