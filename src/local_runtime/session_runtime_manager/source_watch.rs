@@ -1036,12 +1036,16 @@ mod case_insensitive_tests {
             std::fs::create_dir_all(path).unwrap();
             crate::local_runtime::configuration::capture::canonical_directory(path).unwrap()
         };
-        let owners = [
+        let canonical_owners = [
             canonical(&home.join("RustX/.agents/project")),
             canonical(&digits.join(".Agents/inner")),
         ];
-        let workspaces: Vec<_> = workspaces.iter().chain(&owners).cloned().collect();
-        for owner in &owners {
+        let workspaces: Vec<_> = workspaces
+            .iter()
+            .chain(&canonical_owners)
+            .cloned()
+            .collect();
+        for owner in &canonical_owners {
             std::fs::write(owner.join("rustx.toml"), b"workspace").unwrap();
             for actual in [owner.join("rustx.toml"), owner.join("RustX.toml")] {
                 assert_eq!(
