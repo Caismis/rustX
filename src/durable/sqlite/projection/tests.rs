@@ -33,7 +33,7 @@ fn start_auxiliary_call(
     with_request: bool,
 ) -> (crate::runtime::identity::AuxiliaryCallId, Option<RequestId>) {
     let call_id = crate::runtime::identity::AuxiliaryCallId::generate();
-    if let AuxiliaryBusinessSource::Compaction { operation_id } = &source {
+    if let AuxiliaryBusinessSource::Compaction { operation_id, .. } = &source {
         store
             .append_event(RuntimeEventEnvelope {
                 tool_occurrence: None,
@@ -101,6 +101,84 @@ fn start_summary_call(
     )
 }
 
+fn begin_compaction(store: &SqliteConversationStore, operation_id: &CompactionOperationId) {
+    store
+        .append_event(RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new(""),
+            sequence: 0,
+            conversation_id: store.conversation_id().clone(),
+            attempt_id: None,
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+            event: RuntimeEvent::CompactionStarted {
+                operation_id: operation_id.clone(),
+            },
+        })
+        .unwrap();
+}
+
+fn start_fragment_call(
+    store: &SqliteConversationStore,
+    operation_id: &CompactionOperationId,
+    cut: crate::context::resources::ResourceReadCut,
+    preceding_call: Option<crate::model::auxiliary::AuxiliaryCallRef>,
+    previous_summary: Option<crate::context::checkpoint::SummaryGenerationRef>,
+    source_ranges: Vec<crate::model::auxiliary::AuxiliarySourceRange>,
+    output_strategy: crate::model::structured::StructuredOutputStrategy,
+) -> (crate::runtime::identity::AuxiliaryCallId, RequestId) {
+    let call_id = crate::runtime::identity::AuxiliaryCallId::generate();
+    store
+        .commit_auxiliary_call_start(
+            &AuxiliaryCallStart {
+                call_id: call_id.clone(),
+                purpose: AuxiliaryAttribution::new("summary").unwrap(),
+                trigger: AuxiliaryAttribution::new("automatic").unwrap(),
+                business_source: AuxiliaryBusinessSource::Compaction {
+                    operation_id: operation_id.clone(),
+                    preceding_call,
+                },
+                input: AuxiliaryInputEvidence::Compaction {
+                    cut,
+                    source_ranges,
+                    previous_summary,
+                    output_strategy,
+                },
+                semantic_input_fingerprint: auxiliary_fingerprint('a'),
+                invocation_fingerprint: auxiliary_fingerprint('b'),
+                selected_message_ids: Vec::new(),
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap();
+    let request_id =
+        RequestId::generate_auxiliary(&crate::runtime::identity::SystemUuidV7Generator).unwrap();
+    store
+        .commit_auxiliary_request_start(
+            &AuxiliaryRequestStart {
+                call_id: call_id.clone(),
+                request_id: request_id.clone(),
+                ordinal: 0,
+                model: "fixture/summary".into(),
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap();
+    (call_id, request_id)
+}
+
+fn preceding(
+    reference: &crate::context::checkpoint::SummaryGenerationRef,
+) -> crate::model::auxiliary::AuxiliaryCallRef {
+    crate::model::auxiliary::AuxiliaryCallRef {
+        conversation_id: reference.conversation_id.clone(),
+        call_id: reference.call_id.clone(),
+        through_journal: reference.through_journal,
+    }
+}
+
 fn settle_summary_call(
     store: &SqliteConversationStore,
     call_id: crate::runtime::identity::AuxiliaryCallId,
@@ -145,9 +223,9 @@ fn settle_summary_call_with_outcome(
                 kind: if outcome == AuxiliaryCallOutcome::Cancelled {
                     ModelErrorKind::Cancelled
                 } else {
-                    ModelErrorKind::Authentication
+                    ModelErrorKind::NativeFormatUnsupported
                 },
-                message: "Summary generation did not complete".into(),
+                message: "Provider rejected the native structured output format".into(),
                 retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                 retry_after_ms: None,
                 provider_code: None,
@@ -216,6 +294,7 @@ fn complete_summary_snapshot() -> AuxiliaryAuditSnapshot {
     let operation = "operation:summary-audit-bounds";
     let source = AuxiliaryBusinessSource::Compaction {
         operation_id: CompactionOperationId::new(operation),
+        preceding_call: None,
     };
     let (call_id, request_id) = start_summary_call(&store, source, true);
     settle_summary_call(&store, call_id.clone(), request_id.unwrap());
@@ -2695,6 +2774,7 @@ fn summary_generation_dependency_accepts_success_after_resource_capture_and_pres
         &store,
         AuxiliaryBusinessSource::Compaction {
             operation_id: operation.clone(),
+            preceding_call: None,
         },
         true,
     );
@@ -2772,6 +2852,580 @@ fn summary_generation_dependency_accepts_success_after_resource_capture_and_pres
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "One chain proves historic reads and start fencing"
+)]
+fn compaction_call_audits_use_each_calls_admission_frontier() {
+    use crate::model::auxiliary::{AuxiliaryCallRef, AuxiliarySourceRange, AuxiliarySourceRole};
+    use crate::model::structured::StructuredOutputStrategy;
+
+    let store = store();
+    store.initialize(&[message(1)]).unwrap();
+    let operation = CompactionOperationId::new("call-admission-frontier");
+    begin_compaction(&store, &operation);
+    let cut = store.compaction_resource_cut().unwrap();
+    let ranges = vec![AuxiliarySourceRange {
+        projection_index: 0,
+        role: AuxiliarySourceRole::User,
+        byte_start: 0,
+        byte_end: 1,
+    }];
+    let (first, first_request) = start_fragment_call(
+        &store,
+        &operation,
+        cut.clone(),
+        None,
+        None,
+        ranges.clone(),
+        StructuredOutputStrategy::Prompt,
+    );
+    let first_open = store.auxiliary_audit_cut().unwrap();
+    assert!(
+        store
+            .load_auxiliary_call(&first, first_open)
+            .unwrap()
+            .unwrap()
+            .outcome
+            .is_none()
+    );
+    settle_summary_call(&store, first.clone(), first_request);
+    let first_ref = summary_reference(
+        &store,
+        first.clone(),
+        store.auxiliary_audit_cut().unwrap().journal,
+    );
+    let (second, second_request) = start_fragment_call(
+        &store,
+        &operation,
+        cut.clone(),
+        Some(preceding(&first_ref)),
+        None,
+        ranges.clone(),
+        StructuredOutputStrategy::Prompt,
+    );
+    let second_open = store.auxiliary_audit_cut().unwrap();
+
+    let mut third = AuxiliaryCallStart {
+        call_id: crate::runtime::identity::AuxiliaryCallId::generate(),
+        purpose: AuxiliaryAttribution::new("summary").unwrap(),
+        trigger: AuxiliaryAttribution::new("automatic").unwrap(),
+        business_source: AuxiliaryBusinessSource::Compaction {
+            operation_id: operation.clone(),
+            preceding_call: Some(preceding(&first_ref)),
+        },
+        input: AuxiliaryInputEvidence::Compaction {
+            cut: cut.clone(),
+            source_ranges: ranges.clone(),
+            previous_summary: None,
+            output_strategy: StructuredOutputStrategy::Prompt,
+        },
+        semantic_input_fingerprint: auxiliary_fingerprint('a'),
+        invocation_fingerprint: auxiliary_fingerprint('b'),
+        selected_message_ids: Vec::new(),
+    };
+    assert!(
+        store
+            .commit_auxiliary_call_start(&third, chrono::Utc::now())
+            .is_err(),
+        "an older predecessor cannot bypass the latest Call"
+    );
+    third.business_source = AuxiliaryBusinessSource::Compaction {
+        operation_id: operation.clone(),
+        preceding_call: Some(AuxiliaryCallRef {
+            conversation_id: store.conversation_id().clone(),
+            call_id: second.clone(),
+            through_journal: second_open.journal,
+        }),
+    };
+    assert!(
+        store
+            .commit_auxiliary_call_start(&third, chrono::Utc::now())
+            .is_err(),
+        "an unsettled latest Call cannot authorize the next start"
+    );
+    settle_summary_call(&store, second.clone(), second_request);
+    let second_ref = summary_reference(
+        &store,
+        second.clone(),
+        store.auxiliary_audit_cut().unwrap().journal,
+    );
+    let mut future = preceding(&second_ref);
+    future.through_journal += 1;
+    third.business_source = AuxiliaryBusinessSource::Compaction {
+        operation_id: operation.clone(),
+        preceding_call: Some(future),
+    };
+    assert!(
+        store
+            .commit_auxiliary_call_start(&third, chrono::Utc::now())
+            .is_err(),
+        "a future predecessor cut cannot authorize a start"
+    );
+    third.business_source = AuxiliaryBusinessSource::Compaction {
+        operation_id: operation,
+        preceding_call: Some(preceding(&second_ref)),
+    };
+    store
+        .commit_auxiliary_call_start(&third, chrono::Utc::now())
+        .unwrap();
+    let latest = store.auxiliary_audit_cut().unwrap();
+    for (call, historic) in [(first, first_open), (second, second_open)] {
+        assert!(
+            store
+                .load_auxiliary_call(&call, historic)
+                .unwrap()
+                .unwrap()
+                .outcome
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .load_auxiliary_call(&call, latest)
+                .unwrap()
+                .unwrap()
+                .outcome,
+            Some(AuxiliaryCallOutcome::Completed)
+        );
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One rolling lineage is copied and challenged across the same fork authority.
+fn rolling_compaction_lineage_survives_fork_and_rejects_invalid_prior_authority() {
+    use crate::model::auxiliary::{AuxiliarySourceRange, AuxiliarySourceRole};
+    let root = tempfile::tempdir().unwrap();
+    let source_path = root.path().join("source.sqlite");
+    let source = SqliteConversationStore::open(ConversationId::generate(), &source_path).unwrap();
+    let canonical = vec![message(1)];
+    source.initialize(&canonical).unwrap();
+    let mut checkpoint = candidate(&source, "rolling", vec![summary("final")]);
+    let operation = CompactionOperationId::new("rolling-operation");
+    let (first, request) = start_summary_call(
+        &source,
+        AuxiliaryBusinessSource::Compaction {
+            operation_id: operation.clone(),
+            preceding_call: None,
+        },
+        true,
+    );
+    let incomplete_through = source.auxiliary_audit_cut().unwrap().journal;
+    settle_summary_call(&source, first.clone(), request.unwrap());
+    let previous = summary_reference(
+        &source,
+        first,
+        source.auxiliary_audit_cut().unwrap().journal,
+    );
+    let next = crate::runtime::identity::AuxiliaryCallId::generate();
+    let start = AuxiliaryCallStart {
+        call_id: next.clone(),
+        purpose: AuxiliaryAttribution::new("summary").unwrap(),
+        trigger: AuxiliaryAttribution::new("automatic").unwrap(),
+        business_source: AuxiliaryBusinessSource::Compaction {
+            operation_id: operation.clone(),
+            preceding_call: Some(crate::model::auxiliary::AuxiliaryCallRef {
+                conversation_id: previous.conversation_id.clone(),
+                call_id: previous.call_id.clone(),
+                through_journal: previous.through_journal,
+            }),
+        },
+        input: AuxiliaryInputEvidence::Compaction {
+            cut: checkpoint.read_cut.clone(),
+            source_ranges: vec![AuxiliarySourceRange {
+                projection_index: 0,
+                role: AuxiliarySourceRole::User,
+                byte_start: 0,
+                byte_end: 1,
+            }],
+            previous_summary: Some(previous.clone()),
+            output_strategy: crate::model::structured::StructuredOutputStrategy::Prompt,
+        },
+        semantic_input_fingerprint: auxiliary_fingerprint('a'),
+        invocation_fingerprint: auxiliary_fingerprint('b'),
+        selected_message_ids: vec![],
+    };
+    let mut foreign = start.clone();
+    foreign.business_source = AuxiliaryBusinessSource::Compaction {
+        operation_id: CompactionOperationId::new("other"),
+        preceding_call: None,
+    };
+    assert!(
+        source
+            .commit_auxiliary_call_start(&foreign, chrono::Utc::now())
+            .is_err()
+    );
+    let mut unconfirmed = start.clone();
+    if let AuxiliaryInputEvidence::Compaction {
+        previous_summary: Some(reference),
+        ..
+    } = &mut unconfirmed.input
+    {
+        reference.through_journal = incomplete_through;
+    }
+    assert!(
+        source
+            .commit_auxiliary_call_start(&unconfirmed, chrono::Utc::now())
+            .is_err()
+    );
+    let mut future = start.clone();
+    if let AuxiliaryInputEvidence::Compaction {
+        previous_summary: Some(reference),
+        ..
+    } = &mut future.input
+    {
+        reference.through_journal = u64::MAX;
+    }
+    assert!(
+        source
+            .commit_auxiliary_call_start(&future, chrono::Utc::now())
+            .is_err()
+    );
+    let mut cross = start.clone();
+    if let AuxiliaryInputEvidence::Compaction {
+        previous_summary: Some(reference),
+        ..
+    } = &mut cross.input
+    {
+        reference.conversation_id = ConversationId::generate();
+    }
+    assert!(
+        source
+            .commit_auxiliary_call_start(&cross, chrono::Utc::now())
+            .is_err()
+    );
+    let mut self_ref = start.clone();
+    if let AuxiliaryInputEvidence::Compaction {
+        previous_summary: Some(reference),
+        ..
+    } = &mut self_ref.input
+    {
+        reference.call_id = next.clone();
+    }
+    assert!(
+        source
+            .commit_auxiliary_call_start(&self_ref, chrono::Utc::now())
+            .is_err()
+    );
+    source
+        .commit_auxiliary_call_start(&start, chrono::Utc::now())
+        .unwrap();
+    let request_id =
+        RequestId::generate_auxiliary(&crate::runtime::identity::SystemUuidV7Generator).unwrap();
+    source
+        .commit_auxiliary_request_start(
+            &AuxiliaryRequestStart {
+                call_id: next.clone(),
+                ordinal: 0,
+                request_id: request_id.clone(),
+                model: "fixture/summary".into(),
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap();
+    settle_summary_call(&source, next.clone(), request_id);
+    checkpoint.summary_generation = Some(summary_reference(
+        &source,
+        next,
+        source.auxiliary_audit_cut().unwrap().journal,
+    ));
+    source
+        .commit_projection(commit_input(
+            &source,
+            operation.as_str(),
+            checkpoint,
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    let lineage = source
+        .read_lineage_cut(source.load_head().unwrap().revision)
+        .unwrap();
+    assert_eq!(lineage.auxiliary_audits.len(), 2);
+    let destination_id = ConversationId::generate();
+    let mut projections = lineage.projections;
+    for projection in &mut projections {
+        projection.activation.destination_installation = Some(
+            crate::runtime::identity::LineageInstallationId::new("copied"),
+        );
+        projection.candidate.read_cut.conversation_id = destination_id.clone();
+        projection.candidate.read_cut.journal = JournalFrontier(0);
+        projection.candidate.read_cut.transcript = crate::durable::TranscriptCursor::new(0);
+        for item in &mut projection.candidate.items {
+            if let CheckpointMessage::Derived(body) = &mut item.message {
+                for reference in &mut body.sources {
+                    reference.conversation_id = destination_id.clone();
+                }
+            }
+        }
+        projection.fingerprint = projection.candidate.fingerprint();
+    }
+    let seed = crate::durable::LineageSeed::history(canonical)
+        .with_projections(projections)
+        .unwrap()
+        .with_auxiliary_audits(lineage.auxiliary_audits)
+        .unwrap();
+    let destination =
+        SqliteConversationStore::open(destination_id, &root.path().join("fork.sqlite")).unwrap();
+    destination.initialize_lineage(&seed).unwrap();
+    drop(source);
+    std::fs::remove_file(source_path).unwrap();
+    let inherited = destination
+        .read_lineage_cut(destination.load_head().unwrap().revision)
+        .unwrap();
+    assert_eq!(inherited.auxiliary_audits.len(), 2);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Preserve failed Native and accepted Prompt calls through the complete fork scenario.
+fn failed_native_summary_and_successful_prompt_summary_survive_fork() {
+    use crate::durable::ObservationStore;
+    use crate::model::auxiliary::{AuxiliarySourceRange, AuxiliarySourceRole};
+    use crate::model::structured::StructuredOutputStrategy;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("native-fallback.sqlite");
+    let source = SqliteConversationStore::open(ConversationId::generate(), &path).unwrap();
+    let canonical = vec![message(1)];
+    source.initialize(&canonical).unwrap();
+    let mut checkpoint = candidate(&source, "fallback", vec![summary("result")]);
+    let operation = CompactionOperationId::new("native-fallback");
+    begin_compaction(&source, &operation);
+    let primary_occupancy = source
+        .observation_occupancy(source.auxiliary_audit_cut().unwrap().journal)
+        .unwrap();
+    let ranges = vec![AuxiliarySourceRange {
+        projection_index: 0,
+        role: AuxiliarySourceRole::User,
+        byte_start: 0,
+        byte_end: 5,
+    }];
+    // Even a failed Call that never reached a physical start remains in the causal chain.
+    let no_request = crate::runtime::identity::AuxiliaryCallId::generate();
+    source
+        .commit_auxiliary_call_start(
+            &AuxiliaryCallStart {
+                call_id: no_request.clone(),
+                purpose: AuxiliaryAttribution::new("summary").unwrap(),
+                trigger: AuxiliaryAttribution::new("automatic").unwrap(),
+                business_source: AuxiliaryBusinessSource::Compaction {
+                    operation_id: operation.clone(),
+                    preceding_call: None,
+                },
+                input: AuxiliaryInputEvidence::Compaction {
+                    cut: checkpoint.read_cut.clone(),
+                    source_ranges: ranges.clone(),
+                    previous_summary: None,
+                    output_strategy: StructuredOutputStrategy::Native,
+                },
+                semantic_input_fingerprint: auxiliary_fingerprint('a'),
+                invocation_fingerprint: auxiliary_fingerprint('b'),
+                selected_message_ids: vec![],
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap();
+    let no_request_terminal = crate::durable::auxiliary::auxiliary_settlement_envelope(
+        source.conversation_id().clone(),
+        chrono::Utc::now(),
+        RuntimeEvent::AuxiliaryCallSettled {
+            call_id: no_request.clone(),
+            outcome: AuxiliaryCallOutcome::Failed,
+            request_evidence: None,
+        },
+    )
+    .unwrap();
+    source
+        .commit_auxiliary_call_settlement(no_request_terminal)
+        .unwrap();
+    let no_request_ref = summary_reference(
+        &source,
+        no_request,
+        source.auxiliary_audit_cut().unwrap().journal,
+    );
+    let (failed, request) = start_fragment_call(
+        &source,
+        &operation,
+        checkpoint.read_cut.clone(),
+        Some(preceding(&no_request_ref)),
+        None,
+        ranges.clone(),
+        StructuredOutputStrategy::Native,
+    );
+    settle_summary_call_with_outcome(
+        &source,
+        failed.clone(),
+        request,
+        AuxiliaryCallOutcome::Failed,
+    );
+    let failed_ref = summary_reference(
+        &source,
+        failed,
+        source.auxiliary_audit_cut().unwrap().journal,
+    );
+    let (final_call, request) = start_fragment_call(
+        &source,
+        &operation,
+        checkpoint.read_cut.clone(),
+        Some(preceding(&failed_ref)),
+        None,
+        ranges.clone(),
+        StructuredOutputStrategy::PromptFallback {
+            operation_id: operation.clone(),
+        },
+    );
+    settle_summary_call(&source, final_call.clone(), request);
+    let final_ref = summary_reference(
+        &source,
+        final_call,
+        source.auxiliary_audit_cut().unwrap().journal,
+    );
+    let event = |accepted_fragments, source_ranges, generation| RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: EventId::new(""),
+        sequence: 0,
+        conversation_id: source.conversation_id().clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp: chrono::Utc::now(),
+        event: RuntimeEvent::CompactionChunkAccepted {
+            operation_id: operation.clone(),
+            accepted_fragments,
+            source_ranges,
+            generation,
+        },
+    };
+    assert!(source.append_event(event(1, ranges.clone(), None)).is_err());
+    let mut wrong = ranges.clone();
+    wrong[0].byte_end -= 1;
+    assert!(
+        source
+            .append_event(event(1, wrong, Some(final_ref.clone())))
+            .is_err()
+    );
+    assert!(
+        source
+            .append_event(event(1, ranges.clone(), Some(failed_ref.clone())))
+            .is_err()
+    );
+    source
+        .append_event(event(1, ranges.clone(), Some(final_ref.clone())))
+        .unwrap();
+    assert!(
+        source
+            .append_event(event(2, ranges.clone(), Some(final_ref.clone())))
+            .is_err()
+    );
+    // A different completed Call cannot replay already accepted source bytes.
+    let (replayed, request) = start_fragment_call(
+        &source,
+        &operation,
+        checkpoint.read_cut.clone(),
+        Some(preceding(&final_ref)),
+        Some(final_ref.clone()),
+        ranges.clone(),
+        StructuredOutputStrategy::Prompt,
+    );
+    settle_summary_call(&source, replayed.clone(), request);
+    let replayed_ref = summary_reference(
+        &source,
+        replayed,
+        source.auxiliary_audit_cut().unwrap().journal,
+    );
+    assert!(
+        source
+            .append_event(event(2, ranges.clone(), Some(replayed_ref.clone())))
+            .is_err()
+    );
+    // A successful reduction has no source ranges and is not a progress fact.
+    let (reduction, request) = start_fragment_call(
+        &source,
+        &operation,
+        checkpoint.read_cut.clone(),
+        Some(preceding(&replayed_ref)),
+        Some(final_ref.clone()),
+        Vec::new(),
+        StructuredOutputStrategy::Prompt,
+    );
+    settle_summary_call(&source, reduction.clone(), request);
+    let reduction_ref = summary_reference(
+        &source,
+        reduction,
+        source.auxiliary_audit_cut().unwrap().journal,
+    );
+    let mut next_range = ranges.clone();
+    next_range[0].byte_start = 5;
+    next_range[0].byte_end = 10;
+    let (next, request) = start_fragment_call(
+        &source,
+        &operation,
+        checkpoint.read_cut.clone(),
+        Some(preceding(&reduction_ref)),
+        Some(reduction_ref),
+        next_range.clone(),
+        StructuredOutputStrategy::Prompt,
+    );
+    settle_summary_call(&source, next.clone(), request);
+    let next_ref = summary_reference(&source, next, source.auxiliary_audit_cut().unwrap().journal);
+    source
+        .append_event(event(2, next_range, Some(next_ref.clone())))
+        .unwrap();
+    assert_eq!(
+        source
+            .observation_occupancy(source.auxiliary_audit_cut().unwrap().journal)
+            .unwrap(),
+        primary_occupancy
+    );
+    checkpoint.summary_generation = Some(next_ref);
+    source
+        .commit_projection(commit_input(
+            &source,
+            operation.as_str(),
+            checkpoint,
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    let lineage = source
+        .read_lineage_cut(source.load_head().unwrap().revision)
+        .unwrap();
+    assert_eq!(lineage.auxiliary_audits.len(), 6);
+    assert!(lineage.auxiliary_audits.iter().any(|audit| audit.records.iter().any(|record| matches!(&record.fact, AuxiliaryAuditFact::CallSettled(call) if call.outcome == Some(AuxiliaryCallOutcome::Failed)))));
+    let destination_id = ConversationId::generate();
+    let mut projections = lineage.projections;
+    for projection in &mut projections {
+        projection.activation.destination_installation = Some(
+            crate::runtime::identity::LineageInstallationId::new("fallback-copy"),
+        );
+        projection.candidate.read_cut.conversation_id = destination_id.clone();
+        projection.candidate.read_cut.journal = JournalFrontier(0);
+        projection.candidate.read_cut.transcript = crate::durable::TranscriptCursor::new(0);
+        for item in &mut projection.candidate.items {
+            if let CheckpointMessage::Derived(body) = &mut item.message {
+                for reference in &mut body.sources {
+                    reference.conversation_id = destination_id.clone();
+                }
+            }
+        }
+        projection.fingerprint = projection.candidate.fingerprint();
+    }
+    let seed = crate::durable::LineageSeed::history(canonical)
+        .with_projections(projections)
+        .unwrap()
+        .with_auxiliary_audits(lineage.auxiliary_audits)
+        .unwrap();
+    let destination =
+        SqliteConversationStore::open(destination_id, &root.path().join("fallback-fork.sqlite"))
+            .unwrap();
+    destination.initialize_lineage(&seed).unwrap();
+    drop(source);
+    std::fs::remove_file(path).unwrap();
+    let retained = destination
+        .read_lineage_cut(destination.load_head().unwrap().revision)
+        .unwrap();
+    assert_eq!(retained.auxiliary_audits.len(), 6);
+    assert!(retained.auxiliary_audits.iter().any(|audit| audit.records.iter().any(|record| matches!(&record.fact, AuxiliaryAuditFact::CallSettled(call) if call.outcome == Some(AuxiliaryCallOutcome::Failed)))));
+}
+
+#[test]
 fn local_checkpoint_rejects_unconfirmed_or_unsuccessful_summary_without_partial_commit() {
     for status in [
         "open",
@@ -2801,6 +3455,7 @@ fn local_checkpoint_rejects_unconfirmed_or_unsuccessful_summary_without_partial_
             &store,
             AuxiliaryBusinessSource::Compaction {
                 operation_id: operation_id.clone(),
+                preceding_call: None,
             },
             true,
         );
@@ -2891,6 +3546,7 @@ fn inherited_summary_after_retry_retains_each_physical_request_evidence() {
         &store,
         AuxiliaryBusinessSource::Compaction {
             operation_id: CompactionOperationId::new(operation),
+            preceding_call: None,
         },
         true,
     );
@@ -3086,6 +3742,7 @@ fn summary_generation_dependency_rejects_missing_wrong_and_future_prerequisites(
         &store,
         AuxiliaryBusinessSource::Compaction {
             operation_id: operation.clone(),
+            preceding_call: None,
         },
         false,
     );
@@ -3115,7 +3772,7 @@ fn summary_generation_dependency_rejects_missing_wrong_and_future_prerequisites(
             })
             .unwrap_err()
             .to_string()
-            .contains("physical request")
+            .contains("successfully completed")
     );
 
     let wrong_operation = CompactionOperationId::new("operation:summary-wrong-operation");
@@ -3123,6 +3780,7 @@ fn summary_generation_dependency_rejects_missing_wrong_and_future_prerequisites(
         &store,
         AuxiliaryBusinessSource::Compaction {
             operation_id: CompactionOperationId::new("operation:different"),
+            preceding_call: None,
         },
         true,
     );
@@ -3196,6 +3854,7 @@ fn summary_generation_dependency_rejects_missing_wrong_and_future_prerequisites(
         AuxiliaryAttribution::new("btw").unwrap(),
         AuxiliaryBusinessSource::Compaction {
             operation_id: wrong_purpose_operation.clone(),
+            preceding_call: None,
         },
         true,
     );

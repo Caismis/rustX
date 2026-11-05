@@ -72,15 +72,10 @@ fn request(conversation: &str, model: &Arc<FakeModel>) -> AgentExecutionRequest 
 }
 
 fn context_runtime(model: &Arc<FakeModel>) -> rustx::context::ContextRuntime {
-    use rustx::context::{ContextRuntime, DefaultTokenEstimator, SessionContextPolicy};
+    use rustx::context::{ContextRuntime, DefaultTokenEstimator};
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
     let snapshot = support::attempt_model(model.clone(), "fake-model");
     ContextRuntime::for_attempt(
-        SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         estimator,
         Some(rustx::context::AgentStatusEngine::default()),
         &snapshot,

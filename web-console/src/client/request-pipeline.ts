@@ -2,7 +2,7 @@ import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { ATTACHMENT_REQUEST_CAPACITY, hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
 import { OutcomeUncertain, RequestAdmissionDeferred, RequestNotDispatched, RpcFailure } from './errors';
 import { interactionKey, type ClientView, type OperationAdmission, type SessionView, type Socket, type Submission, type UncertainOperation } from './contracts';
-import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v72';
+import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v73';
 
 interface Pending {
   /** Pure actor authority, evaluated after caller-owned admission callbacks. */
@@ -15,7 +15,7 @@ interface Pending {
   sessionId?: string;
   mutation: boolean;
   sent: boolean;
-  expected: MethodResult['type'];
+  expected: readonly MethodResult['type'][];
   resolve: (result: MethodResult) => void;
   reject: (error: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
@@ -88,7 +88,8 @@ export class RequestPipeline {
     });
   }
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
-  async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission, observationSignal?: AbortSignal): Promise<Extract<MethodResult, { type: T }>> {
+  async request<T extends MethodResult['type']>(operation: Request1, expected: T | readonly T[], acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission, observationSignal?: AbortSignal): Promise<Extract<MethodResult, { type: T }>> {
+    const allowed: readonly MethodResult['type'][] = typeof expected === 'string' ? [expected] : expected;
     if (!this.port.socket() || (!this.port.initialized() && operation.method !== 'initialize')) throw new RequestNotDispatched('Connect and initialize first.');
     if (['session/attach', 'session/detach', 'session/switchNode', 'session/delete', 'session/recoverDeletion'].includes(operation.method)
       && (typeof dispatchCurrent !== 'object' || !this.port.claimLifecycleAdmission(dispatchCurrent))) throw new RequestNotDispatched('Session lifecycle operations require actor admission.');
@@ -125,7 +126,7 @@ export class RequestPipeline {
     const work = new Promise<MethodResult>((resolve, reject) => {
       const params = operation.params;
       const sessionId = 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id ?? undefined : undefined;
-      this.pending.set(id, { request, sessionId, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
+      this.pending.set(id, { request, sessionId, mutation: mayCommit(operation), sent: false, expected: allowed, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
       abortObservation = () => {
         const auxiliaryRead = ['auxiliary/status', 'auxiliary/result', 'auxiliary/submissionLookup'].includes(operation.method);
         if (operation.method !== 'agent/observe' && !auxiliaryRead) return;
@@ -143,9 +144,9 @@ export class RequestPipeline {
     });
     const result = observationSignal ? await work.finally(() => observationSignal.removeEventListener('abort', abortObservation)) : await work;
     if (!this.port.current(generation)) throw new Error('Obsolete connection response; inspect the current authoritative state.');
-    if (result.type !== expected) {
+    if (!allowed.includes(result.type)) {
       this.port.lose(this.port.state().generation);
-      throw new Error(`Incompatible response: expected ${expected}, received ${result.type}.`);
+      throw new Error(`Incompatible response: expected ${allowed.join(' or ')}, received ${result.type}.`);
     }
     return result as Extract<MethodResult, { type: T }>;
   }
@@ -250,7 +251,7 @@ export class RequestPipeline {
     const pending = value.id !== null ? this.pending.get(String(value.id)) : undefined;
     if (!pending || !pending.sent) return;
     if (('result' in value) === ('error' in value) ||
-        ('result' in value && (!value.result || value.result.type !== pending.expected))) {
+        ('result' in value && (!value.result || !pending.expected.includes(value.result.type)))) {
       // Leave the transmitted request registered while closing, so a malformed
       // acknowledgement cannot erase its uncertain mutation diagnostic.
       this.port.lose(generation); return;

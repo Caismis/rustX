@@ -14,9 +14,8 @@
 //!
 //! The Issue #27 evidence asserted byte for byte:
 //!
-//! - the Message Ledger retains everything, including both compaction
-//!   summaries and every retired message, while each rebuilt request
-//!   excludes exactly the retired span (no resurrection, no double summary);
+//! - the Message Ledger retains every Original, while summaries belong to
+//!   checkpoints and each rebuilt request excludes its retired span;
 //! - every actual primary request is reconstructible from its frozen
 //!   Request Snapshot plus the historical Surface — including requests taken
 //!   *before* later compactions rewrote the active surface;
@@ -43,17 +42,14 @@ use super::super::{common, support};
 use std::sync::Arc;
 use std::time::Duration;
 
-use rustx::context::{
-    AgentStatusClock, AgentStatusConfig, AgentStatusEngine, AgentStatusModuleId,
-    SessionContextPolicy,
-};
+use rustx::context::{AgentStatusClock, AgentStatusConfig, AgentStatusEngine, AgentStatusModuleId};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
     AssistantContentBlock, ContentBlockIndex, ContextKind, InboundKind, MessageBlock,
     UserContentBlock,
 };
 use rustx::model::catalog::ModelRef;
-use rustx::model::session::{AuxiliaryModelPolicy, SessionModelConfig, SessionModelState};
+use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelPolicy};
 use rustx::model::snapshot::RequestSnapshot;
 use rustx::model::types::ModelRequest;
 use rustx::model::{
@@ -141,7 +137,7 @@ fn assert_last_attempt_completed(events: &[RuntimeClientProtocolEvent]) {
                         outcome,
                         rustx::runtime_client::event::RuntimeClientOutcome::Completed { .. }
                     ),
-                    "expected a completed attempt before its request history: {outcome:?}"
+                    "expected a completed attempt before its request history: {outcome:?}; events={events:?}"
                 );
                 return;
             }
@@ -230,6 +226,29 @@ fn turn_text(value: String) -> Vec<FakeStep> {
     ]
 }
 
+/// A successful Summary is one schema-valid JSON object, rendered only after acceptance.
+fn summary_turn(value: &str) -> Vec<FakeStep> {
+    turn_text(
+        serde_json::json!({
+            "goal": value,
+            "constraints_and_preferences": [],
+            "progress": {"done": [], "in_progress": [], "blocked": []},
+            "key_decisions": [],
+            "next_steps": [],
+            "critical_context": []
+        })
+        .to_string(),
+    )
+}
+
+/// Bounded, nonperiodic prior output makes a later Summary a real reduction.
+fn historical_output(label: &str) -> String {
+    let entries = (0..96)
+        .map(|index| format!("step-{index:03};"))
+        .collect::<String>();
+    format!("{label}: {entries}")
+}
+
 /// One scripted invocation that fails immediately with a provider-reported
 /// context-window overflow.
 fn overflow_turn() -> Vec<FakeStep> {
@@ -279,8 +298,16 @@ fn submit(attachment: &RuntimeAttachment, id: u64, value: &str) {
 async fn await_request_history_len(host: &RuntimeClientHost, expected: usize) {
     tokio::time::timeout(LIVENESS, async {
         loop {
-            if common::request_snapshots(&host.request_history()).len() == expected {
+            let count = common::request_snapshots(&host.request_history()).len();
+            if count == expected {
                 return;
+            }
+            if let Ok(checkpoint) = host.checkpoint()
+                && let Some(attempt) = &checkpoint.snapshot.attempt
+                && let rustx::runtime_client::snapshot::RuntimeClientAttemptPhase::Settled { outcome } = &attempt.phase
+            {
+                assert!(matches!(outcome, rustx::runtime_client::event::RuntimeClientOutcome::Completed { .. }),
+                    "attempt settled before {expected} request snapshots: {outcome:?} (found {count}); compaction={:?}", checkpoint.snapshot.context.compaction_error);
             }
             tokio::task::yield_now().await;
         }
@@ -429,18 +456,17 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     // pushes the next attempt's baseline projection past it.
     const WINDOW: u64 = 4_096;
     const OUTPUT: u32 = 128;
-    const RESERVE: u64 = 512;
     const FILLER_BYTES: usize = 16_000;
 
     let filler_one = format!("FILLER-ONE-MARKER {}", "x".repeat(FILLER_BYTES));
     let filler_two = format!("FILLER-TWO-MARKER {}", "y".repeat(FILLER_BYTES));
 
     let adapter: Arc<FakeModel> = Arc::new(FakeModel::new(vec![
-        turn_text(filler_one.clone()),                              // R1
-        turn_text("SUMMARY-ONE covers filler one".to_owned()),      // compaction #1
-        turn_text(filler_two.clone()),                              // R2
-        turn_text("SUMMARY-TWO supersedes summary one".to_owned()), // compaction #2
-        turn_text("final answer".to_owned()),                       // R3
+        turn_text(filler_one.clone()),                      // R1
+        summary_turn("SUMMARY-ONE covers filler one"),      // compaction #1
+        turn_text(filler_two.clone()),                      // R2
+        summary_turn("SUMMARY-TWO supersedes summary one"), // compaction #2
+        turn_text("final answer".to_owned()),               // R3
     ]));
     let primary = FixtureModel::text(
         "fixture/primary-model",
@@ -462,11 +488,10 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
         registry,
         SessionModelConfig {
             title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: AuxiliaryModelPolicy::Explicit {
+            summary_model: SummaryModelPolicy::Explicit {
                 model: ModelRef::parse("fixture/summary-model").expect("valid reference"),
                 profile: None,
                 request_params: RequestParams::new(),
-                max_output_tokens: None,
             },
             ..SessionModelConfig::of(
                 ModelRef::parse("fixture/primary-model").expect("valid reference"),
@@ -478,11 +503,6 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     let status_seam = rustx::context::AgentStatusTestSeam::new();
     let fixture = RuntimeClientFixture::builder("conv_1778c31f-3925-7199-9ba6-e52366afec4a")
         .session_model(session_model)
-        .context_policy(SessionContextPolicy {
-            reserve_tokens: RESERVE,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        })
         .status_engine(counting_status_engine(status_seam.clone()))
         .build()
         .await;
@@ -491,13 +511,15 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
 
     // Attempt 1: the small request never compacts.
     submit(&attachment, 1, "turn one");
-    receive_until(&subscription, settled).await;
+    let first_events = receive_until(&subscription, settled).await;
+    assert_last_attempt_completed(&first_events);
     await_request_history_len(host, 1).await;
     let (_, r1_early) = reconstruct_at(host, 0);
 
     // Attempt 2 commits compaction #1 proactively, before admission.
     submit(&attachment, 2, "turn two");
     let events_two = receive_until(&subscription, settled).await;
+    assert_last_attempt_completed(&events_two);
     await_request_history_len(host, 2).await;
     // R1 and R2 both reconstruct byte-exactly *after* compaction #1.
     let (_, r1_mid) = reconstruct_at(host, 0);
@@ -506,6 +528,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     // Attempt 3 commits compaction #2 on the already-compacted surface.
     submit(&attachment, 3, "turn three");
     let events_three = receive_until(&subscription, settled).await;
+    assert_last_attempt_completed(&events_three);
     await_request_history_len(host, 3).await;
 
     // Exactly five actual model invocations: three primaries, two summaries.
@@ -518,11 +541,19 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     assert_eq!(requests[4].model(), "primary-model");
 
     // Summary requests are the canonical one-off shape: the resolved summary
-    // invocation, no tools, no system prompt, no continuation, and the
-    // deterministic retired-span input.
+    // invocation, no tools or continuation, with the schema prompt frozen
+    // separately from the deterministic retired-span input.
     for summary_request in [&requests[1], &requests[3]] {
         assert!(summary_request.tools.is_empty());
-        assert!(summary_request.effective_system_prompt.is_empty());
+        let format = summary_request
+            .response_schema
+            .as_ref()
+            .expect("Summary schema");
+        assert!(
+            summary_request
+                .effective_system_prompt
+                .ends_with(&format.schema.prompt_instruction())
+        );
         assert_eq!(summary_request.continuation, None);
     }
     assert!(request_wire(&requests[1].messages).contains("FILLER-ONE-MARKER"));
@@ -533,15 +564,15 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     );
     assert!(summary_two_input.contains("FILLER-TWO-MARKER"));
 
-    // R1 observed the pre-compaction surface; each proactive compaction retires
-    // the old visible status, so R2/R3 observe exactly the rebuilt surfaces
-    // [summary, inbound, status].
+    // R1 observed the original status. R2's contributor decision is frozen
+    // before compaction retires that status, so it does not regenerate it;
+    // R3 sees no active status and admits a fresh one.
     let r1_wire = request_wire(&requests[0].messages);
     assert!(r1_wire.contains("turn one"));
     assert!(r1_wire.contains("Current time:"));
     assert_eq!(mixed_compaction_summaries(&requests[0].messages), 0);
 
-    assert_eq!(requests[2].messages.len(), 3, "[sum1, in2, st2]");
+    assert_eq!(requests[2].messages.len(), 2, "[sum1, in2]");
     assert_eq!(mixed_compaction_summaries(&requests[2].messages), 1);
     let r2_wire = request_wire(&requests[2].messages);
     assert!(r2_wire.contains("SUMMARY-ONE covers filler one"));
@@ -550,7 +581,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
         "the retired filler never appears in a rebuilt request"
     );
     assert!(r2_wire.contains("turn two"));
-    assert!(r2_wire.contains("Current time:"));
+    assert!(!r2_wire.contains("Current time:"));
 
     assert_eq!(requests[4].messages.len(), 3, "[sum2, in3, st3]");
     assert_eq!(mixed_compaction_summaries(&requests[4].messages), 1);
@@ -610,8 +641,8 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     .await;
     assert_eq!(
         ledger.len(),
-        9,
-        "3 inbounds + 3 status facts + 3 assistants; summaries belong to checkpoints"
+        8,
+        "3 inbounds + 2 status facts + 3 assistants; summaries belong to checkpoints"
     );
     assert!(matches!(&ledger[0], MessageBlock::User(u) if u.kind == InboundKind::Message));
     assert!(is_agent_status(&ledger[1]));
@@ -621,11 +652,10 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
         projection_count(fixture.runtime.tool_runtime().durable_store().as_ref()),
         2
     );
-    assert!(is_agent_status(&ledger[4]));
-    assert!(matches!(&ledger[5], MessageBlock::Assistant(_)));
-    assert!(matches!(&ledger[6], MessageBlock::User(u) if u.kind == InboundKind::Message));
-    assert!(is_agent_status(&ledger[7]));
-    assert!(matches!(&ledger[8], MessageBlock::Assistant(_)));
+    assert!(matches!(&ledger[4], MessageBlock::Assistant(_)));
+    assert!(matches!(&ledger[5], MessageBlock::User(u) if u.kind == InboundKind::Message));
+    assert!(is_agent_status(&ledger[6]));
+    assert!(matches!(&ledger[7], MessageBlock::Assistant(_)));
     let ledger_wire = wire(&ledger);
     assert!(
         ledger_wire.contains("FILLER-ONE-MARKER"),
@@ -700,11 +730,10 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
         view.configured,
         SessionModelConfig {
             title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: AuxiliaryModelPolicy::Explicit {
+            summary_model: SummaryModelPolicy::Explicit {
                 model: ModelRef::parse("fixture/summary-model").expect("valid reference"),
                 profile: None,
                 request_params: RequestParams::new(),
-                max_output_tokens: None,
             },
             ..SessionModelConfig::of(
                 ModelRef::parse("fixture/primary-model").expect("valid reference"),
@@ -725,8 +754,8 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
 /// the overflowed request, and is invalidated exactly once by the committed
 /// compaction; the continuation-owning tool unit retires completely (no
 /// orphan call, no orphan result) and lands complete inside the summary
-/// input; the second compaction's span is exactly the still-active first
-/// summary; and the overflow retry reuses its step's admitted context
+/// input; the second compaction combines the first summary with new eligible
+/// source; and the overflow retry reuses its step's admitted context
 /// generation while rebuilding from its own post-compaction Surface
 /// revision.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -781,13 +810,13 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
             // Attempt 2 turn 2 request 0: scripted provider overflow.
             overflow_turn(),
             // Compaction #1 (must cover the continuation-owning tool unit).
-            turn_text("SUMMARY-ONE covers the tool turn".to_owned()),
+            summary_turn("SUMMARY-ONE covers the tool turn"),
             // Attempt 2 turn 2 retry.
             turn_text("recovered after one".to_owned()),
             // Attempt 3 turn 1 request 0: scripted provider overflow.
             overflow_turn(),
-            // Compaction #2: its span is exactly the still-active first summary.
-            turn_text("SUMMARY-TWO supersedes summary one".to_owned()),
+            // Compaction #2 combines the first summary and newly eligible source.
+            summary_turn("SUMMARY-TWO supersedes summary one"),
             // Attempt 3 turn 1 retry.
             turn_text("recovered after two".to_owned()),
         ])
@@ -865,7 +894,15 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     assert_eq!(requests[1].tools.len(), 1);
     for summary_request in [&requests[3], &requests[6]] {
         assert!(summary_request.tools.is_empty());
-        assert!(summary_request.effective_system_prompt.is_empty());
+        let format = summary_request
+            .response_schema
+            .as_ref()
+            .expect("Summary schema");
+        assert!(
+            summary_request
+                .effective_system_prompt
+                .ends_with(&format.schema.prompt_instruction())
+        );
     }
 
     // No request ever carries half a tool unit.
@@ -886,12 +923,13 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     assert!(summary_one.contains("call-1"));
     assert!(summary_one.contains("TOOL-RESULT-OK"));
 
-    // Compaction #2's span was exactly the still-active first summary.
+    // Compaction #2 includes the prior Summary and new source.
     let summary_two = request_wire(&requests[6].messages);
     assert!(
         summary_two.contains("SUMMARY-ONE covers the tool turn"),
-        "the second compaction retired the first summary, nothing else"
+        "the second compaction incorporated the first summary"
     );
+    assert!(summary_two.contains("recovered after one"));
 
     // The second retry observes [sum2, in3, st3]: the new summary, the fresh
     // inbound, and its admitted status fact — nothing retired.
@@ -1076,12 +1114,12 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     let adapter = Arc::new(FakeModel::new(vec![
-        turn_text("one".to_owned()),
+        turn_text(historical_output("one")),
         overflow_turn(),
-        turn_text("SUMMARY-ONE".to_owned()),
-        turn_text("two".to_owned()),
+        summary_turn("SUMMARY-ONE"),
+        turn_text(historical_output("two")),
         overflow_turn(),
-        turn_text("SUMMARY-TWO".to_owned()),
+        summary_turn("SUMMARY-TWO"),
         turn_text("three".to_owned()),
     ]));
     let fixture = RuntimeClientFixture::builder("conv_51801d0c-4654-79b4-b546-6021abd3936c")
@@ -1096,7 +1134,8 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
 
     // Attempt 1 under the first attachment.
     submit(&attachment_a, 1, "first");
-    receive_until(&subscription_a, settled).await;
+    let first_events = receive_until(&subscription_a, settled).await;
+    assert_last_attempt_completed(&first_events);
     await_request_history_len(host, 1).await;
 
     // Detach the only client; its handle is revoked immediately.
@@ -1180,6 +1219,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     // Compaction #2 commits under the new attachment.
     submit(&attachment_b, 2, "third");
     let live = receive_until(&subscription_b, settled).await;
+    assert_last_attempt_completed(&live);
     await_request_history_len(host, 5).await;
     assert_eq!(compaction_generations(&live), [2]);
 
@@ -1271,7 +1311,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
 async fn session_summary_mode_freezes_the_attempt_summary_model_against_mid_attempt_updates() {
     let (release, receiver) = model_release();
     let adapter = Arc::new(FakeModel::new(vec![
-        turn_text("one".to_owned()),
+        turn_text(historical_output("one")),
         // Attempt 2 parks inside its first stream, then overflows.
         vec![
             FakeStep::Emit(ModelEvent::Started),
@@ -1290,7 +1330,7 @@ async fn session_summary_mode_freezes_the_attempt_summary_model_against_mid_atte
                 },
             }),
         ],
-        turn_text("SUMMARY-ONE".to_owned()),
+        summary_turn("SUMMARY-ONE"),
         turn_text("recovered".to_owned()),
         turn_text("three".to_owned()),
     ]));
@@ -1313,7 +1353,8 @@ async fn session_summary_mode_freezes_the_attempt_summary_model_against_mid_atte
     let (attachment, subscription) = attach(host);
 
     submit(&attachment, 1, "first");
-    receive_until(&subscription, settled).await;
+    let first_events = receive_until(&subscription, settled).await;
+    assert_last_attempt_completed(&first_events);
     await_request_history_len(host, 1).await;
 
     submit(&attachment, 2, "second");
@@ -1331,7 +1372,8 @@ async fn session_summary_mode_freezes_the_attempt_summary_model_against_mid_atte
     .expect("live Session selection commits while compaction remains frozen");
 
     release.send_replace(true);
-    receive_until(&subscription, settled).await;
+    let second_events = receive_until(&subscription, settled).await;
+    assert_last_attempt_completed(&second_events);
     await_request_history_len(host, 3).await;
 
     let requests = adapter.requests();
@@ -1366,7 +1408,8 @@ async fn session_summary_mode_freezes_the_attempt_summary_model_against_mid_atte
     );
 
     submit(&attachment, 3, "third");
-    receive_until(&subscription, settled).await;
+    let third_events = receive_until(&subscription, settled).await;
+    assert_last_attempt_completed(&third_events);
     await_request_history_len(host, 4).await;
     let requests = adapter.requests();
     assert_eq!(requests.len(), 5);

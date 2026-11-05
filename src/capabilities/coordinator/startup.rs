@@ -3,7 +3,7 @@
 #[cfg(all(test, feature = "mcp-fixture"))]
 mod http_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mcp-fixture"))]
 use super::ToolSourceId;
 use super::{
     CapabilityCoordinator, CapabilityPreparationError, ConversationLifecycle,

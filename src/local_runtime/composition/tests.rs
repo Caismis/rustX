@@ -147,7 +147,7 @@ compat = { chat_reasoning_replay = "omit" }
 
     let echo_call_count_file = root.path().join("echo-call-count");
     let executable = std::env::current_exe().expect("test executable");
-    let mut config_document = serde_json::json!({"schema_version": 10, "agent_id": "agent-parent", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
+    let mut config_document = serde_json::json!({"schema_version": 10, "agent_id": "agent-parent", "mcp_servers": {
             SERVER_NAME: {
                 "command": executable,
                 "args": fixture_spawn_args(test_name),
@@ -617,7 +617,6 @@ async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() 
         &root.path().join("rustx.toml"),
         &toml::to_string_pretty(&serde_json::json!({
             "schema_version":10,
-            "context":{"reserve_tokens":0,"keep_recent_tokens":0},
             "agent":{"model":{"model":"scripted/scripted"},
                 "tools":{"builtin":["read"],"sources":{SERVER_NAME:[TOOL_NAME]}}},
             "providers":{"scripted":{"base_url":provider.url("/v1"),"api_key":"fixture"}},

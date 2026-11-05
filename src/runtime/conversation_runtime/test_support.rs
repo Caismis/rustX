@@ -50,8 +50,7 @@ pub(super) fn test_resolved_subagent(
 
 pub(super) use crate::agent::{LifecycleError, PreToolDecision, PreToolPolicy, PreToolView};
 pub(super) use crate::context::{
-    AgentStatusEngine, ClosureTokenEstimator, ContextError, ContextErrorKind,
-    DefaultTokenEstimator, TokenEstimator,
+    AgentStatusEngine, ClosureTokenEstimator, DefaultTokenEstimator, TokenEstimator,
 };
 pub(super) use crate::durable::ConversationStore;
 pub(super) use crate::events::types::RuntimeEvent;
@@ -202,6 +201,19 @@ pub(super) fn text_turn_script(text: &str) -> Vec<FakeStep> {
     ]
 }
 
+/// A real structured Summary response, using `goal` as the fixture's retained fact.
+pub(super) fn summary_turn_script(goal: &str) -> Vec<FakeStep> {
+    let response = serde_json::json!({
+        "goal": goal,
+        "constraints_and_preferences": [],
+        "progress": { "done": [], "in_progress": [], "blocked": [] },
+        "key_decisions": [],
+        "next_steps": [],
+        "critical_context": [],
+    });
+    text_turn_script(&response.to_string())
+}
+
 /// Builds the conversation runtime of one headless fixture.
 pub(super) async fn headless_runtime(
     dir: &tempfile::TempDir,
@@ -222,7 +234,6 @@ pub(super) async fn headless_runtime(
 pub(super) struct HeadlessRuntimeOptions {
     pub(super) skill_discovery: crate::skills::SkillDiscoveryConfig,
     pub(super) estimator: Arc<dyn TokenEstimator>,
-    pub(super) policy: crate::context::SessionContextPolicy,
     pub(super) status_engine: AgentStatusEngine,
     pub(super) initial_messages: Vec<MessageBlock>,
     pub(super) project_context_files: Vec<crate::runtime::ProjectContextFile>,
@@ -241,11 +252,6 @@ impl Default for HeadlessRuntimeOptions {
         Self {
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             estimator: Arc::new(DefaultTokenEstimator),
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             status_engine: AgentStatusEngine::default(),
             initial_messages: Vec::new(),
             project_context_files: Vec::new(),
@@ -389,7 +395,6 @@ pub(super) async fn headless_runtime_with_options(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
-            policy: options.policy,
             estimator: options.estimator,
             status_engine: Some(options.status_engine),
         },
@@ -498,11 +503,6 @@ pub(super) async fn headless_runtime_over_store_with_policy(
         model_timeout_policy,
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator,
             status_engine: Some(AgentStatusEngine::default()),
         },
@@ -606,11 +606,6 @@ pub(super) async fn headless_runtime_over_store_with_subagents(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator: Arc::new(DefaultTokenEstimator),
             status_engine: Some(AgentStatusEngine::default()),
         },
@@ -721,11 +716,6 @@ pub(super) async fn subagent_runtime_config_with_registry(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator: Arc::new(DefaultTokenEstimator),
             status_engine: Some(AgentStatusEngine::default()),
         },
@@ -1675,11 +1665,6 @@ pub(super) async fn runtime_with_model_probe_at(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator,
             status_engine: Some(AgentStatusEngine::default()),
         },

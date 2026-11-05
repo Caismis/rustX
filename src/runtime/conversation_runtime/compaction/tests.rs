@@ -1,6 +1,29 @@
+use super::ManualCompactionOutcome;
 use crate::durable::CanonicalStore;
 use crate::durable::JournalStore;
 use crate::runtime::conversation_runtime::test_support::*;
+
+fn committed_view(
+    outcome: ManualCompactionOutcome,
+) -> crate::observation::head::RuntimeClientCompactionView {
+    let ManualCompactionOutcome::Compacted {
+        generation,
+        checkpoint_id,
+        activation_id,
+        tokens_before,
+        estimated_tokens_after,
+    } = outcome
+    else {
+        panic!("expected committed compaction");
+    };
+    crate::observation::head::RuntimeClientCompactionView {
+        generation,
+        checkpoint_id,
+        activation_id,
+        tokens_before,
+        estimated_tokens_after,
+    }
+}
 
 /// Manual compaction is a first-class idle maintenance operation: it
 /// uses the configured summary invocation, commits one Derived checkpoint summary
@@ -14,7 +37,7 @@ async fn manual_compaction_commits_and_restores_the_idle_conversation() {
         &dir,
         vec![
             one_turn_script(),
-            text_turn_script("compact factual summary"),
+            summary_turn_script("compact factual summary"),
         ],
         None,
         None,
@@ -50,7 +73,10 @@ async fn manual_compaction_commits_and_restores_the_idle_conversation() {
     let requester = runtime.clone();
     let request = tokio::spawn(async move {
         requester
-            .compact_context(Some("manual-request-435".to_owned().try_into().unwrap()))
+            .compact_context(
+                Some("manual-request-435".to_owned().try_into().unwrap()),
+                Some("Preserve the deployment error codes".into()),
+            )
             .await
     });
     release_gate.wait_entered();
@@ -88,7 +114,7 @@ async fn manual_compaction_commits_and_restores_the_idle_conversation() {
     );
     assert!(before_release.snapshot.context.latest_compaction.is_none());
     release_gate.release();
-    let outcome = request.await.unwrap().expect("manual compaction");
+    let outcome = committed_view(request.await.unwrap().expect("manual compaction"));
     host.projection_settled().await;
     assert_eq!(outcome.generation, 1);
     assert!(outcome.estimated_tokens_after < outcome.tokens_before.input_tokens);
@@ -108,6 +134,11 @@ async fn manual_compaction_commits_and_restores_the_idle_conversation() {
         crate::model::ModelInputMessage::Derived(_)
     ));
     assert_eq!(model.requests().len(), 2, "turn plus summary request");
+    assert!(
+        serde_json::to_string(&model.requests()[1].messages)
+            .unwrap()
+            .contains("Preserve the deployment error codes")
+    );
 
     let trace = crate::runtime_client::trace::TraceProjection::new(runtime.inner.store.as_ref())
         .expect("durable trace");
@@ -152,7 +183,7 @@ async fn manual_compaction_commits_and_restores_the_idle_conversation() {
     assert_eq!(detail.items.len(), 1);
     assert!(matches!(&detail.items[0].content.blocks[0],
         crate::observation::trace::TraceContentBlock::Text { text }
-            if text.text == "compact factual summary"));
+            if text.text.starts_with("## Goal\n\n- compact factual summary\n")));
 
     let completed = host.checkpoint().expect("native compaction completion cut");
     let manual = completed
@@ -201,6 +232,33 @@ async fn manual_compaction_commits_and_restores_the_idle_conversation() {
         canonical_before
     );
     assert!(completed.cursor > before_release.cursor);
+
+    // A projection containing only the checkpoint summary has no new source
+    // coverage. A second manual request skips without another Summary Call.
+    let skipped = runtime
+        .compact_context(Some("summary-only".to_owned().try_into().unwrap()), None)
+        .await
+        .expect("summary-only projection is a no-op");
+    assert_eq!(skipped, ManualCompactionOutcome::Skipped);
+    host.projection_settled().await;
+    let observed = host.checkpoint().unwrap();
+    let receipt = observed.snapshot.context.manual_compaction.unwrap();
+    assert_eq!(receipt.request_id.unwrap().as_str(), "summary-only");
+    assert!(receipt.released && receipt.skipped && receipt.error.is_none());
+    assert!(!observed.snapshot.context.compaction_in_progress);
+    assert_eq!(observed.snapshot.context.compaction_count, 1);
+    assert_eq!(
+        runtime
+            .inner
+            .store
+            .projection_head()
+            .unwrap()
+            .unwrap()
+            .candidate
+            .checkpoint_id,
+        outcome.checkpoint_id
+    );
+    assert_eq!(model.requests().len(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -215,7 +273,7 @@ async fn manual_compaction_lost_commit_ack_publishes_the_original_receipt_after_
         sqlite.clone(),
         vec![
             one_turn_script(),
-            text_turn_script("recovered factual summary"),
+            summary_turn_script("recovered factual summary"),
         ],
         None,
     )
@@ -252,13 +310,13 @@ async fn manual_compaction_lost_commit_ack_publishes_the_original_receipt_after_
         crate::durable::sqlite::CompactionFaultOperation::AfterCommit,
     ]);
     let requester = runtime.clone();
-    let request = tokio::spawn(async move { requester.compact_context(None).await });
+    let request = tokio::spawn(async move { requester.compact_context(None, None).await });
     gate.wait_entered();
     assert!(runtime.has_manual_compaction());
     assert!(!request.is_finished());
     let original = recovered_manual_receipt(&sqlite, &host);
     gate.release();
-    let outcome = request.await.unwrap().unwrap();
+    let outcome = committed_view(request.await.unwrap().unwrap());
     assert_eq!(
         outcome.checkpoint_id,
         original.checkpoint.candidate.checkpoint_id
@@ -331,26 +389,23 @@ async fn manual_compaction_exact_fit_includes_default_and_frozen_skill_guidance(
     let without_skill = tempfile::tempdir().expect("temp dir");
     let (runtime_without_skill, _) = headless_runtime_with_options(
         &without_skill,
-        vec![text_turn_script("S")],
+        vec![summary_turn_script("S")],
         None,
         None,
         HeadlessRuntimeOptions {
             estimator: estimator(),
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 700_000,
-                summary_output_cap: None,
-            },
             initial_messages: history(),
             ..HeadlessRuntimeOptions::default()
         },
     )
     .await;
     runtime_without_skill.activate();
-    let without_outcome = runtime_without_skill
-        .compact_context(None)
-        .await
-        .expect("one-message retirement fits without Skill guidance");
+    let without_outcome = committed_view(
+        runtime_without_skill
+            .compact_context(None, None)
+            .await
+            .expect("one-message retirement fits without Skill guidance"),
+    );
     assert_eq!(without_outcome.tokens_before.input_tokens, 1_100_000);
     assert_eq!(without_outcome.estimated_tokens_after, 760_000);
     assert_eq!(
@@ -376,7 +431,7 @@ async fn manual_compaction_exact_fit_includes_default_and_frozen_skill_guidance(
     .expect("SKILL.md");
     let (runtime_with_skill, _) = headless_runtime_with_options(
         &with_skill,
-        vec![text_turn_script("S")],
+        vec![summary_turn_script("S")],
         Some(with_native_read(ToolRegistry::new())),
         None,
         HeadlessRuntimeOptions {
@@ -384,21 +439,18 @@ async fn manual_compaction_exact_fit_includes_default_and_frozen_skill_guidance(
                 skill.parent().unwrap(),
             ),
             estimator: estimator(),
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 700_000,
-                summary_output_cap: None,
-            },
             initial_messages: history(),
             ..HeadlessRuntimeOptions::default()
         },
     )
     .await;
     runtime_with_skill.activate();
-    let with_outcome = runtime_with_skill
-        .compact_context(None)
-        .await
-        .expect("a larger retirement span fits with frozen Skill guidance");
+    let with_outcome = committed_view(
+        runtime_with_skill
+            .compact_context(None, None)
+            .await
+            .expect("a larger retirement span fits with frozen Skill guidance"),
+    );
     assert_eq!(with_outcome.tokens_before.input_tokens, 1_500_000);
     assert_eq!(with_outcome.estimated_tokens_after, 810_000);
     assert_eq!(
@@ -410,37 +462,41 @@ async fn manual_compaction_exact_fit_includes_default_and_frozen_skill_guidance(
     );
 }
 
-/// A rejected manual compaction never strands the checked-out state. An
-/// empty conversation has no retirable span, and ordinary inbound still
-/// admits immediately after that typed failure.
+/// An empty conversation returns a genuine no-op without a checkpoint;
+/// ordinary inbound remains admissible immediately afterward.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn manual_compaction_no_progress_restores_state_for_future_admission() {
+async fn empty_manual_compaction_skips_and_keeps_future_admission_available() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let (runtime, _model) = headless_runtime(&dir, vec![one_turn_script()], None, None).await;
+    let (runtime, model) = headless_runtime(&dir, vec![one_turn_script()], None, None).await;
     runtime.activate();
-    let error = runtime
-        .compact_context(None)
+    let outcome = runtime
+        .compact_context(Some("empty-request".to_owned().try_into().unwrap()), None)
         .await
-        .expect_err("empty context cannot compact");
-    assert!(matches!(
-        error,
-        ManualCompactionError::Context(ContextError {
-            kind: ContextErrorKind::NoProgress,
-            ..
-        })
-    ));
+        .expect("empty context is a successful no-op");
+    assert_eq!(outcome, ManualCompactionOutcome::Skipped);
+    assert!(runtime.inner.store.projection_head().unwrap().is_none());
+    assert!(model.requests().is_empty());
     assert!(runtime.coordinator_ledger().is_some());
-    let trace = crate::runtime_client::trace::TraceProjection::new(runtime.inner.store.as_ref())
-        .expect("durable trace");
-    let row = trace
-        .page(None, 32)
-        .unwrap()
-        .records
-        .into_iter()
-        .find(|record| record.kind == crate::observation::trace::TraceKind::Compaction)
-        .expect("failed maintenance keeps its own trajectory row");
-    assert_eq!(row.state, crate::observation::trace::TraceState::Failed);
-    assert!(row.message_id.is_none());
+    let events = runtime.inner.store.read_events(None, 32).unwrap().events;
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event.event, RuntimeEvent::CompactionSkipped { .. }))
+    );
+    assert!(!events.iter().any(|event| matches!(
+        event.event,
+        RuntimeEvent::CompactionStarted { .. }
+            | RuntimeEvent::CompactionCompleted { .. }
+            | RuntimeEvent::CompactionFailed { .. }
+    )));
+    assert_eq!(
+        runtime.compact_context(None, Some("界".repeat(1366))).await,
+        Err(ManualCompactionError::InvalidInstructions)
+    );
+    assert_eq!(
+        runtime.compact_context(None, Some("x".repeat(4096))).await,
+        Ok(ManualCompactionOutcome::Skipped)
+    );
     runtime
         .submit_inbound(text_content("works after rejected compaction"))
         .expect("accepted after failure");
@@ -483,7 +539,7 @@ async fn manual_compaction_rejects_a_running_attempt_without_cancelling_it() {
     .expect("model park watch remains open");
 
     assert_eq!(
-        runtime.compact_context(None).await,
+        runtime.compact_context(None, None).await,
         Err(ManualCompactionError::Busy)
     );
     assert!(runtime.has_current_attempt());

@@ -535,6 +535,7 @@ pub(super) fn native_result(
         RuntimeClientResult::ContextCompacted { compaction } => {
             MethodResult::ContextCompacted { compaction }
         }
+        RuntimeClientResult::ContextCompactionSkipped => MethodResult::ContextCompactionSkipped,
         RuntimeClientResult::ProjectionPage { page } => MethodResult::Projections { page },
         RuntimeClientResult::ProjectionDetail { detail } => {
             MethodResult::ProjectionDetail { detail }

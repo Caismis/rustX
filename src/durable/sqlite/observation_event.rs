@@ -50,7 +50,8 @@ fn paths(selected: Option<&[&str]>) -> Vec<Vec<String>> {
 fn selected_paths(event: &crate::events::types::RuntimeEvent) -> Option<&'static [&'static str]> {
     use crate::events::types::RuntimeEvent as Event;
     match event {
-        Event::AttemptStarted { .. }
+        Event::CompactionChunkAccepted { .. }
+        | Event::AttemptStarted { .. }
         | Event::AttemptTimedOut { .. }
         | Event::TurnStarted
         | Event::TurnCompleted
@@ -291,6 +292,22 @@ fn terminal_fields(
         }
         Event::BackgroundTerminalPublished { state, .. } => {
             value["state"] = serde_json::json!(state);
+        }
+        Event::CompactionChunkAccepted {
+            operation_id,
+            accepted_fragments,
+            source_ranges,
+            generation,
+        } => {
+            value["operation_id"] = serde_json::json!(operation_id);
+            value["accepted_fragments"] = serde_json::json!(accepted_fragments);
+            value["source_ranges"] = serde_json::json!(source_ranges);
+            value["generation"] = serde_json::json!(generation);
+        }
+        Event::CompactionStarted { operation_id }
+        | Event::CompactionSkipped { operation_id }
+        | Event::CompactionCancelled { operation_id } => {
+            value["operation_id"] = serde_json::json!(operation_id);
         }
         Event::CompactionCompleted {
             generation,

@@ -313,9 +313,6 @@ impl RuntimeInner {
         summary_backend: Arc<dyn crate::context::summarizer::SummaryBackend>,
     ) -> Result<ContextRuntime, crate::context::ContextError> {
         let configuration = resources.configuration();
-        let policy = configuration.map_or(self.context.policy, |generation| {
-            generation.config.context_policy()
-        });
         let status_engine = match configuration {
             Some(generation) => generation
                 .config
@@ -328,7 +325,6 @@ impl RuntimeInner {
                 .map(AgentStatusEngine::for_attempt),
         };
         let mut context = ContextRuntime::for_attempt_with_assembly(
-            policy,
             Arc::clone(&self.context.estimator),
             status_engine,
             assembly,

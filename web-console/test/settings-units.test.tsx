@@ -8,7 +8,7 @@ import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
 import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v72';
+import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v73';
 import { chooseOption, confirmAction, renderEditor, sameRevision } from './settings-harness';
 import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { act } from '@testing-library/react';
@@ -322,7 +322,7 @@ it('replaces default model intent and project guidance as independent native uni
 });
 
 it.each(['default', 'named Agent'] as const)('%s preserves and edits the complete explicit Summary Model independently', async owner => {
-  const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
+  const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', request_params: { temperature: .2 } };
   const model = { model: 'main', profile: 'fast', request_params: { temperature: .7 }, summary_model: summary };
   const models = ['main', 'summary-a', 'summary-b'];
   const profiles = { main: ['fast'], 'summary-a': ['deep'], 'summary-b': ['deep', 'quick'] };
@@ -353,13 +353,12 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
   await commit({ ...model, summary_model: { ...summary, model: 'summary-b' } });
   const nested = within(screen.getByRole('group', { name: 'Explicit Summary Model settings' }));
   await chooseOption('Profile (Summary)', 'quick', nested);
-  fireEvent.change(nested.getByLabelText('Output limit (Summary)'), { target: { value: '1024' } });
+  expect(nested.queryByLabelText('Output limit (Summary)')).toBeNull();
   changeJson(nested.getByLabelText('Request parameter overrides (Summary)'), '{"temperature": 0.4, "seed": null}');
-  await commit({ ...model, summary_model: { ...summary, model: 'summary-b', profile: 'quick', max_output_tokens: { mode: 'limit', tokens: 1024 }, request_params: { temperature: .4, seed: null } } });
+  await commit({ ...model, summary_model: { ...summary, model: 'summary-b', profile: 'quick', request_params: { temperature: .4, seed: null } } });
   await chooseOption('Profile (Summary)', 'Model default profile', nested);
-  fireEvent.change(nested.getByLabelText('Output limit (Summary)'), { target: { value: '' } });
   const { profile: _, ...withoutProfile } = summary;
-  await commit({ ...model, summary_model: { ...withoutProfile, model: 'summary-b', max_output_tokens: { mode: 'catalog_default' }, request_params: { temperature: .4, seed: null } } });
+  await commit({ ...model, summary_model: { ...withoutProfile, model: 'summary-b', request_params: { temperature: .4, seed: null } } });
   await chooseOption('Summary model', 'Follow selected model');
   await commit({ ...model, summary_model: { mode: 'session' } });
   expect(screen.queryByRole('group', { name: 'Explicit Summary Model settings' })).toBeNull();
@@ -414,7 +413,7 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
 });
 
 it('the explicit Summary Model variant owns complete labels in each locale without changing native payloads', async () => {
-  const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
+  const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', request_params: { temperature: .2 } };
   const model = { model: 'main', profile: 'main-profile', max_output_tokens: { mode: 'limit' as const, tokens: 4096 }, request_params: { temperature: .7 }, summary_model: summary };
   const source = catalogSource('workspace', { agent: { model } });
   const { writes: write, context } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={['main', 'summary-a']} profiles={{ main: ['main-profile'], 'summary-a': ['deep', 'quick'] }} onFocus={noop} onRefresh={noop} />, { source, context: source });
@@ -426,21 +425,20 @@ it('the explicit Summary Model variant owns complete labels in each locale witho
     return {
       group,
       profile: nested.getByRole('button', { name: (name: string) => name.endsWith(tx('settings:models-page.profile-summary')) }),
-      limit: nested.getByLabelText(tx('settings:models-page.output-limit-summary')) as HTMLInputElement,
       params: nested.getByLabelText(tx('settings:models-page.request-parameter-overrides-summary')) as HTMLElement,
       outer: screen.getByLabelText(tx('settings:models-page.request-parameter-overrides')) as HTMLElement,
     };
   };
   const english = labels('en');
-  expect([english.limit.value, readJson(english.params), readJson(english.outer)]).toEqual(['2048', '{\n  "temperature": 0.2\n}', '{\n  "temperature": 0.7\n}']);
+  expect([readJson(english.params), readJson(english.outer)]).toEqual([ '{\n  "temperature": 0.2\n}', '{\n  "temperature": 0.7\n}']);
   expect(english.profile.textContent).toContain('deep');
-  expect(screen.getByLabelText('Output limit (Summary)')).toBe(english.limit);
+  expect(screen.queryByLabelText('Output limit (Summary)')).toBeNull();
   const snapshot = context();
 
   act(() => localeController.setLocale('zh'));
   const chinese = labels('zh');
-  expect([chinese.limit, chinese.params, chinese.outer]).toEqual([english.limit, english.params, english.outer]);
-  expect(screen.getByLabelText('输出上限（摘要）')).toBe(english.limit);
+  expect([chinese.params, chinese.outer]).toEqual([english.params, english.outer]);
+  expect(screen.queryByLabelText('输出上限（摘要）')).toBeNull();
   expect(screen.getByLabelText('请求参数覆盖（摘要）')).toBe(english.params);
   expect(within(chinese.group).getByRole('button', { name: /预设（摘要）$/ })).toBe(chinese.profile);
   expect(within(chinese.group).queryAllByRole('button', { name: /Summary/ })).toEqual([]);
@@ -448,13 +446,13 @@ it('the explicit Summary Model variant owns complete labels in each locale witho
   expect(write).not.toHaveBeenCalled();
   expect(context()).toBe(snapshot);
 
-  fireEvent.change(chinese.limit, { target: { value: '1024' } });
+  changeJson(chinese.params, '{"temperature": 0.4}');
   const zh = translator('zh');
   const form = screen.getByRole('form', { name: zh('settings:models-page.default-model') });
   fireEvent.click(within(form).getByRole('button', { name: `${zh('settings:bridge.save')} ${zh('settings:models-page.default-model')}` }));
   await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
   expect(write.mock.calls[0]).toEqual([{ kind: 'config', mutation: { unit: 'root_model', authored: {
-    ...model, summary_model: { ...summary, max_output_tokens: { mode: 'limit', tokens: 1024 } },
+    ...model, summary_model: { ...summary, request_params: { temperature: .4 } },
   } } }, 'r1']);
 });
 

@@ -697,7 +697,7 @@ chat_reasoning_replay = "omit"
                 },
             }),
         );
-        let session = serde_json::json!({"agent_id": "agent-46", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "mcp_tool_policies": {
+        let session = serde_json::json!({"agent_id": "agent-46", "mcp_tool_policies": {
                 "exa-local": {"execution": "background_only", "concurrency": "parallel"},
             }, "agent": {"model": {"model": "local/composed-model"}, "tools": {"sources": {"exa-local": "all"}}}});
         let config_path = root.path().join("rustx.toml");

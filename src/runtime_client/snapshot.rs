@@ -243,6 +243,16 @@ pub struct RuntimeClientSnapshot {
     pub goal: Option<crate::observation::goal::RuntimeClientGoalView>,
 }
 
+/// Native accepted work for the currently active Compaction operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientCompactionProgress {
+    pub operation_id: crate::runtime::identity::CompactionOperationId,
+    pub accepted_fragments: u32,
+    pub source_ranges: Vec<crate::model::auxiliary::AuxiliarySourceRange>,
+    pub generation: Option<crate::context::checkpoint::SummaryGenerationRef>,
+}
+
 /// The context diagnostics carried by the Runtime Client snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -261,6 +271,9 @@ pub struct RuntimeClientContextView {
     /// Latest native measured request or committed compacted-context estimate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
+    /// Latest accepted fragment, scoped to the currently active operation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_progress: Option<RuntimeClientCompactionProgress>,
     /// Whether the runtime currently owns a context-compaction operation.
     /// This is live operation state, not inferred from token usage.
     pub compaction_in_progress: bool,
@@ -600,6 +613,10 @@ pub struct RuntimeClientManualCompaction {
     pub request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     /// False until coordinator state is restored and maintenance released.
     pub released: bool,
+    /// A confirmed native no-op, distinct from a committed checkpoint.
+    pub skipped: bool,
+    /// Native cancellation released this command without a checkpoint.
+    pub cancelled: bool,
     /// Exact pre-commit failure diagnostic, if released unsuccessfully.
     pub error: Option<String>,
 }

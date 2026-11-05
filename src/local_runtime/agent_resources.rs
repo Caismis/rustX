@@ -19,9 +19,16 @@ pub struct AgentSource {
     pub overridden_revision: Option<String>,
 }
 
+pub(super) const REMOVED_NAMED_SUMMARY_OUTPUT_DIAGNOSTIC: &str = "remove model.summary_model.max_output_tokens; compaction determines its summary output allowance automatically";
+
 pub(crate) fn parse(text: &str) -> Result<AgentProfileDocument, String> {
     if text.len() > 1024 * 1024 {
         return Err("Agent resource exceeds 1 MiB".into());
+    }
+    if let Ok(document) = text.parse::<toml_edit::DocumentMut>()
+        && super::authoring::has_removed_summary_output(&document, false)
+    {
+        return Err(REMOVED_NAMED_SUMMARY_OUTPUT_DIAGNOSTIC.into());
     }
     let document: AgentProfileDocument = crate::toml_authoring::parse(text.as_bytes())?;
     crate::runtime::agent_profile::AgentProfile::from_document(
@@ -153,8 +160,12 @@ pub(crate) fn load_authorized(
             revision = super::settings::revision(Some(&bytes));
             let text = std::str::from_utf8(&bytes).map_err(|e| error(e.to_string()))?;
             let agent = parse(text).map_err(|e| {
-                error(e)
-                    .because("canonical Agent TOML violates its strict typed authoring contract")
+                let reason = if e == REMOVED_NAMED_SUMMARY_OUTPUT_DIAGNOSTIC {
+                    REMOVED_NAMED_SUMMARY_OUTPUT_DIAGNOSTIC
+                } else {
+                    "canonical Agent TOML violates its strict typed authoring contract"
+                };
+                error(e).because(reason)
             })?;
             if agent.agents_md.files.len()
                 > crate::runtime::subagent::catalog::MAX_SUBAGENT_PROJECT_FILES
@@ -283,6 +294,20 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn removed_summary_output_is_actionable_for_named_agents() {
+        for text in [
+            "[model]\nmodel = 'p/m'\nsummary_model = { mode = 'explicit', model = 'p/s', max_output_tokens = { mode = 'limit', tokens = 200 } }",
+            "[model]\nmodel = 'p/m'\n[model.summary_model]\nmode = 'explicit'\nmodel = 'p/s'\n[model.summary_model.max_output_tokens]\nmode = 'limit'\ntokens = 200",
+        ] {
+            let error = parse(text).unwrap_err();
+            assert!(
+                error.contains("remove") && error.contains("summary_model.max_output_tokens"),
+                "{error}"
+            );
+        }
+    }
+
     #[test]
     fn user_discovery_does_not_read_workspace_overrides() {
         let dir = tempfile::tempdir().unwrap();

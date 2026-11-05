@@ -386,7 +386,9 @@ fn tagged_unions_close_only_their_selected_variant() {
         ]
     );
     // An unknown tag selects no variant: nothing under it is guessed.
-    assert!(changes("[context.summary_output_cap]\nmode = 'future'\nextra = 1\n").is_empty());
+    assert!(
+        changes("[tool_deadline_policy.idle_liveness_ms]\nmode = 'future'\nextra = 1\n").is_empty()
+    );
 }
 
 #[test]
@@ -1035,37 +1037,47 @@ fn a_user_may_select_a_model_its_workspace_defines() {
 }
 
 #[test]
-fn an_available_composition_is_checked_like_session_resolution() {
-    // The User's context reserve cannot fit the Workspace Model's window:
-    // decidable only once both scopes are known.
-    let user = format!("{USER_SELECTING_WORKSPACE_MODEL}[context]\nreserve_tokens = 127000\n");
+fn removed_context_settings_are_never_silently_repaired() {
+    for entry in [
+        "[context]\nreserve_tokens = 321",
+        "[context]\nkeep_recent_tokens = 654",
+        "[context]\nsummary_output_cap = { mode = 'limit', tokens = 111 }",
+        "[context.summary_output_cap]\nmode = 'model_limit'",
+    ] {
+        let fixture = Fixture::new();
+        let original = format!("legacy_field = true\n{USER}\n{entry}\n");
+        fixture.write(&SourceTarget::User, &original);
+        assert_eq!(
+            fixture.repair(&SourceTarget::User, &SourceTarget::User),
+            RepairOutcome::Unchanged,
+            "{entry}"
+        );
+        assert_eq!(fixture.read(&SourceTarget::User), original);
+        assert!(fixture.backups().is_empty());
+        let diagnostic = unresolved_diagnostic(&fixture, &SourceTarget::User);
+        assert!(diagnostic.contains("context"), "{diagnostic}");
+        assert!(diagnostic.contains("remove"), "{diagnostic}");
+    }
+}
+
+#[test]
+fn removed_summary_output_is_diagnosed_without_repairing_the_file() {
     let fixture = Fixture::new();
-    fixture.write(&SourceTarget::User, &user);
-    fixture.write(&fixture.workspace, WORKSPACE_MODEL);
-    let directory = fixture.workspace.workspace().unwrap().to_path_buf();
+    let original = format!(
+        "{USER}\n[agent.model.summary_model]\nmode = 'explicit'\nmodel = 'local/a'\nmax_output_tokens = {{ mode = 'limit', tokens = 128 }}\n"
+    );
+    fixture.write(&SourceTarget::User, &original);
     assert_eq!(
-        fixture.repair(&SourceTarget::User, &fixture.workspace),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Unchanged
     );
-    assert_eq!(fixture.read(&SourceTarget::User), user);
+    assert_eq!(fixture.read(&SourceTarget::User), original);
+    assert!(fixture.backups().is_empty());
     let diagnostic = unresolved_diagnostic(&fixture, &SourceTarget::User);
     assert!(
-        diagnostic.contains("context budgets cannot fit the selected models at context"),
+        diagnostic.contains("remove") && diagnostic.contains("summary_model.max_output_tokens"),
         "{diagnostic}"
     );
-    assert!(fixture.backups().is_empty());
-    // Session resolution rejects the same composition for the same reason.
-    std::fs::write(
-        fixture.path(&SourceTarget::User),
-        user.replace("legacy_field = true\n", ""),
-    )
-    .unwrap();
-    let failure = fixture
-        .manager
-        .resolve_session(&super::super::SessionConfigInput::new(directory))
-        .unwrap_err();
-    assert_eq!(failure.diagnostic.path, "context");
-    assert!(!failure.incomplete);
 }
 
 #[test]

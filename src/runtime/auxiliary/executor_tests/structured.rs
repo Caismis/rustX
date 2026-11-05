@@ -328,7 +328,12 @@ async fn malformed_or_mismatched_json_is_a_domain_failure_after_completed_settle
             adapter.release.notify_one();
             let completed = reply.await.unwrap().unwrap();
             let error = completed.output.unwrap_err();
-            assert_eq!(error.kind, ModelErrorKind::InvalidRequest, "{text}");
+            let expected = if native && !text.trim().is_empty() {
+                ModelErrorKind::StructuredOutputContractViolation
+            } else {
+                ModelErrorKind::InvalidRequest
+            };
+            assert_eq!(error.kind, expected, "{text}");
             assert_eq!(
                 error.retry_disposition,
                 crate::model::ModelRetryDisposition::Never
@@ -537,6 +542,54 @@ async fn structured_preflight_rejects_oversized_prepared_context_and_modified_pr
                 .is_empty()
         );
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn forged_fallback_cannot_use_another_compaction_scope() {
+    let (mut fixture, adapter, _, _) = structured_fixture(
+        true,
+        vec![completion(r#"{"label":"ok"}"#)],
+        AuxiliaryOutputFormat::JsonSchema(schema(128)),
+    );
+    let (_, cut, before) = historical_summary_input(&fixture);
+    let forged = CompactionOperationId::new("different-operation");
+    fixture.frozen.request.response_schema = None;
+    fixture.frozen.request = AuxiliaryOutputFormat::JsonSchema(schema(128))
+        .prepare_prompt_fallback(fixture.frozen.request, forged.clone())
+        .unwrap();
+    let strategy = fixture
+        .frozen
+        .request
+        .response_schema
+        .as_ref()
+        .unwrap()
+        .strategy
+        .clone();
+    fixture.frozen.start.business_source = AuxiliaryBusinessSource::Compaction {
+        operation_id: forged,
+        preceding_call: None,
+    };
+    fixture.frozen.start.input = AuxiliaryInputEvidence::Compaction {
+        cut,
+        source_ranges: Vec::new(),
+        previous_summary: None,
+        output_strategy: strategy,
+    };
+    refingerprint(&mut fixture.frozen);
+    let result = fixture
+        .reservation
+        .submit(fixture.frozen)
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(
+        result.unwrap_err().kind,
+        ContextErrorKind::AuxiliaryNotStarted
+    );
+    assert!(adapter.requests.lock().unwrap().is_empty());
+    assert_eq!(fixture.store.auxiliary_audit_cut().unwrap(), before);
+    assert_eq!(fixture.store.read_events(None, 32).unwrap().events.len(), 1);
+    assert!(!fixture.executor.0.resources.durability.is_failed());
 }
 
 #[tokio::test(flavor = "current_thread")]

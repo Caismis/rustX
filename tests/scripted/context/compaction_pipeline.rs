@@ -49,63 +49,36 @@ use support::fake::{FakeModel, FakeStep, ScriptedCall, fake_model, tool_call_eve
 
 use super::compaction_metadata::{file_operation_history, user as md_user};
 
-/// Complete prefixes A/B cost 5k/20k for Summary. Full carryover permits
-/// only B in the primary request; Reduced also permits A. Prices are monotone.
-struct CarryoverReentryEstimator;
+/// A final-fit carryover downgrade must reuse all accepted source chunks.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One real-Store transition, two chunks, and final-fit fallback.
+async fn carryover_degradation_reuses_accepted_chunks_before_one_commit() {
+    use crate::context::compaction::{CompactionAttribution, execute_compaction_in_operation};
+    use rustx::context::CompactionCarryover;
+    use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+    use rustx::model::{
+        CarryoverDetailLevel, ModelInputMessage, RenderedCarryoverRecord,
+        RenderedCarryoverToolCall, RenderedUnresolvedOutputCarryover, RequestOnlyInsertionAnchor,
+        RequestOnlyModelContext, UnresolvedOutputSettlement,
+    };
+    use rustx::runtime::identity::{EventId, PublicationStreamId, ToolCallId, ToolId};
 
-#[derive(Default)]
-struct OverflowingSummaryProvider {
-    requests: std::sync::Mutex<Vec<rustx::model::ModelRequest>>,
-}
-
-fn summary_includes_b(input: &rustx::model::SelectedModelInput) -> bool {
-    input.iter().any(|message| match message.view() {
-        rustx::model::projected::ModelMessageView::User(content) => content.iter().any(|block|
-            matches!(block, UserContentBlock::Text(text) if text.text.contains("[prefix-b-marker]"))),
-        _ => false,
-    })
-}
-
-impl rustx::model::ModelAdapter for OverflowingSummaryProvider {
-    fn protocol(&self) -> rustx::model::ModelProtocol {
-        rustx::model::ModelProtocol::OpenAiChatCompletions
-    }
-
-    fn stream(
-        &self,
-        request: rustx::model::ModelRequest,
-        _: CancellationSignal,
-    ) -> rustx::model::ModelStream {
-        let oversized = summary_includes_b(&request.messages);
-        self.requests.lock().unwrap().push(request);
-        let mut events = vec![started()];
-        if oversized {
-            events.push(fail(
-                rustx::model::ModelErrorKind::ContextWindowExceeded,
-                "Summary provider rejects prefix B",
-            ));
-        } else {
-            events.push(text_delta(0, "short"));
-            events.push(done_with_usage(ModelFinishReason::Stop, 5));
-        }
-        Box::pin(futures_util::stream::iter(
-            events.into_iter().map(rustx::model::ModelStreamItem::Event),
-        ))
-    }
-}
-
-impl rustx::context::TokenEstimator for CarryoverReentryEstimator {
-    fn supports_monotone_compaction(&self, _: &[rustx::model::ModelInputMessage]) -> bool {
-        true
-    }
-
-    fn estimate_input(
-        &self,
-        messages: &[rustx::model::ModelInputMessage],
-        _: &str,
-        _: &[rustx::tools::types::ModelToolDefinition],
-    ) -> u64 {
-        use rustx::model::{ModelInputMessage, RenderedCarryoverRecord, RequestOnlyModelContext};
+    let history = vec![
+        user_message("a", "marker-a"),
+        user_message("b", "marker-b"),
+        user_message("recent", "recent"),
+    ];
+    let store = SqliteConversationStore::in_memory(conversation()).unwrap();
+    store.initialize(&history).unwrap();
+    let head = store.load_head().unwrap();
+    let mut state = ConversationState::from_durable_head(
+        history.clone(),
+        head.active_message_ids,
+        head.revision,
+        head.compaction_generation,
+    )
+    .unwrap();
+    let estimator = rustx::context::ClosureTokenEstimator::new(|messages, _, _| {
         let text: String = messages
             .iter()
             .filter_map(|message| match message.view() {
@@ -119,22 +92,18 @@ impl rustx::context::TokenEstimator for CarryoverReentryEstimator {
             })
             .collect();
         if text.contains("<retired-conversation>") {
-            return if text.contains("[prefix-b-marker]") {
-                20_000
+            return if text.contains("marker-a") && text.contains("marker-b") {
+                300
             } else {
-                5_000
+                100
             };
         }
         messages
             .iter()
             .map(|message| match message {
-                ModelInputMessage::Canonical(MessageBlock::User(user)) => match user.id.as_str() {
-                    "prefix-a" => 200,
-                    "prefix-b" => 100,
-                    "recent" => 400,
-                    _ => 0,
-                },
-                ModelInputMessage::Derived(_) => 10,
+                ModelInputMessage::Canonical(block) if block.id().as_str() == "recent" => 100,
+                ModelInputMessage::Derived(_) if text.contains("## Goal") => 10,
+                ModelInputMessage::Canonical(_) | ModelInputMessage::Derived(_) => 300,
                 ModelInputMessage::RequestOnly(
                     RequestOnlyModelContext::UnresolvedOutputCarryover(carryover),
                 ) => {
@@ -142,87 +111,38 @@ impl rustx::context::TokenEstimator for CarryoverReentryEstimator {
                         matches!(record,
                     RenderedCarryoverRecord::ProposedToolCall(call) if call.arguments.is_some())
                     }) {
-                        150
+                        250
                     } else {
                         50
                     }
                 }
-                _ => 0,
+                ModelInputMessage::RequestOnly(_) => 0,
             })
             .sum()
-    }
-
-    fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
-        self.estimate_input(&rustx::model::input::canonical_input(messages), "", &[])
-    }
-}
-
-#[tokio::test]
-#[allow(clippy::too_many_lines)] // One integrated real-Store/provider/planner re-entry trace.
-async fn summary_input_limit_survives_full_to_reduced_carryover_reentry() {
-    use crate::context::compaction::{
-        CompactionAttribution, CompactionExecutionError, execute_compaction_in_operation,
-    };
-    use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
-    use rustx::model::{
-        CarryoverDetailLevel, RenderedCarryoverRecord, RenderedCarryoverToolCall,
-        RenderedUnresolvedOutputCarryover, RequestOnlyInsertionAnchor, UnresolvedOutputSettlement,
-    };
-    use rustx::runtime::identity::{EventId, PublicationStreamId, ToolCallId, ToolId};
-    let model = Arc::new(OverflowingSummaryProvider::default());
-    let history = vec![
-        user_message("prefix-a", "[prefix-a-marker]"),
-        user_message("prefix-b", "[prefix-b-marker]"),
-        user_message("recent", "recent suffix"),
-    ];
-    let store = Arc::new(SqliteConversationStore::in_memory(conversation()).unwrap());
-    store.initialize(&history).unwrap();
-    let head = store.load_head().unwrap();
-    let mut state = ConversationState::from_durable_head(
-        history.clone(),
-        head.active_message_ids,
-        head.revision,
-        head.compaction_generation,
-    )
-    .unwrap();
-    let clock = Arc::new(rustx::runtime::monotonic::ManualMonotonicClock::new());
-    let mut context = ContextRuntime::with_scripted_summarizer(
+    });
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![
+        FakeSummaryStep::Return("S".repeat(300)),
+        FakeSummaryStep::Return("S".repeat(300)),
+    ]));
+    let context = ContextRuntime::with_scripted_summarizer(
         ContextEngine::new(
             ContextConfig {
-                context_window_tokens: 728,
+                context_window_tokens: 600,
                 reserve_tokens: 0,
-                keep_recent_tokens: 300,
+                keep_recent_tokens: 100,
             },
-            Arc::new(CarryoverReentryEstimator),
+            Arc::new(estimator),
         )
         .unwrap(),
-        Arc::new(FakeContextSummarizer::new(Vec::new())),
+        summarizer.clone(),
         None,
-        CompactionBudgets::new(1, 128, 64_000),
+        CompactionBudgets::new(1, 100, 200),
     );
-    let invocation =
-        support::attempt_model_with_window(model.clone(), "fake-model", 10_000_000, 128)
-            .summary_invocation()
-            .clone();
-    context.summarizer = Arc::new(ModelBackedSummarizer::new(
-        invocation.clone(),
-        rustx::model::ModelTimeoutPolicy::default(),
-        clock.clone(),
-    ));
-    context.monotonic_clock = clock.clone();
-    let backend = crate::runtime::auxiliary::executor::AuxiliaryExecutor::for_test(
-        store.clone(),
-        clock.clone(),
-    )
-    .unwrap();
-    context
-        .summarizer
-        .bind_backend(Arc::new(backend.clone()), 0);
     let attribution = CompactionAttribution::default();
     store
         .append_event(RuntimeEventEnvelope {
             schema_version: EVENT_SCHEMA_VERSION,
-            event_id: EventId::new("carryover-compaction-start"),
+            event_id: EventId::new("carryover-start"),
             sequence: 0,
             tool_occurrence: None,
             observation: None,
@@ -235,66 +155,49 @@ async fn summary_input_limit_survives_full_to_reduced_carryover_reentry() {
             },
         })
         .unwrap();
-    let budget = context.compaction_budget(attribution.operation_id.clone());
     let cancellation = CancellationSignal::new();
+    let budget = context.compaction_budget(attribution.operation_id.clone());
     let operation = context
         .summarizer
-        .operation(budget.clone(), cancellation.child())
+        .operation(budget, cancellation.child())
         .unwrap();
     let carryover = RenderedUnresolvedOutputCarryover {
         source_stream_id: PublicationStreamId::new("frozen-carryover"),
         source_settlement: UnresolvedOutputSettlement::Incomplete,
         records: vec![RenderedCarryoverRecord::ProposedToolCall(
             RenderedCarryoverToolCall {
-                call_id: ToolCallId::new("unexecuted-call"),
-                tool_id: ToolId::new("tool-alpha"),
-                name: "alpha".into(),
+                call_id: ToolCallId::new("call"),
+                tool_id: ToolId::new("tool"),
+                name: "tool".into(),
                 complete: false,
-                arguments: Some("{\"partial\":".into()),
+                arguments: Some("partial".into()),
                 omitted_argument_bytes: 0,
             },
         )],
         omitted_blocks: rustx::model::CarryoverOmissionCounts::default(),
     };
+    let fallbacks = [CompactionCarryover {
+        level: CarryoverDetailLevel::Reduced,
+        value: Some(carryover.degraded(CarryoverDetailLevel::Reduced)),
+    }];
     let protected = [MessageId::new("recent")];
     let anchor = RequestOnlyInsertionAnchor::AfterCanonical;
     let constraints = CompactionConstraints {
         protected_context_ids: &protected,
         carryover: Some(&carryover),
         carryover_anchor: Some(&anchor),
+        carryover_fallbacks: &fallbacks,
         ..Default::default()
     };
-    let first = execute_compaction_in_operation(
-        &mut state,
-        &context,
-        &conversation(),
-        store.as_ref(),
-        &[],
-        None,
-        "",
-        &constraints,
-        &cancellation,
-        attribution.clone(),
-        operation.as_ref(),
-    )
-    .await;
-    assert!(
-        matches!(&first, Err(CompactionExecutionError::Context(error)) if error.kind == ContextErrorKind::CannotFit),
-        "unexpected first planning result: {first:?}"
-    );
-    assert_eq!(budget.summary_input_limit(64_000), 16_000);
-    assert_no_transition(store.as_ref(), &history);
-    let reduced = carryover.degraded(CarryoverDetailLevel::Reduced);
-    clock.advance(17);
-    let constraints = CompactionConstraints {
-        carryover: Some(&reduced),
-        ..constraints
+    let progress_count = std::sync::atomic::AtomicUsize::new(0);
+    let progress = |_| {
+        progress_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     };
-    execute_compaction_in_operation(
+    let completed = execute_compaction_in_operation(
         &mut state,
         &context,
         &conversation(),
-        store.as_ref(),
+        &store,
         &[],
         None,
         "",
@@ -302,41 +205,298 @@ async fn summary_input_limit_survives_full_to_reduced_carryover_reentry() {
         &cancellation,
         attribution,
         operation.as_ref(),
+        Some(&progress),
     )
     .await
     .unwrap();
     operation.close().await;
-    backend.drain().await;
-    let requests = model.requests.lock().unwrap();
+    assert_eq!(
+        completed.carryover_level,
+        Some(CarryoverDetailLevel::Reduced)
+    );
+    assert_eq!(
+        progress_count.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "scripted summaries cannot publish native Call evidence"
+    );
+    let requests = summarizer.requests();
     assert_eq!(
         requests.len(),
-        3,
-        "provider sees B,B,A, without paying for the same reductions twice"
-    );
-    let selected: Vec<_> = requests
-        .iter()
-        .map(|request| {
-            if summary_includes_b(&request.messages) {
-                "B"
-            } else {
-                "A"
-            }
-        })
-        .collect();
-    assert_eq!(selected, ["B", "B", "A"]);
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.invocation == invocation.invocation_config())
+        2,
+        "each source fragment was summarized exactly once"
     );
     assert_eq!(
-        budget.deadline_millis(),
-        300_000,
-        "re-entry never renews the frozen deadline"
+        requests[0].fragment.as_ref().unwrap().ranges[0].projection_index,
+        0
     );
-    assert_eq!(budget.summary_input_limit(64_000), 16_000);
+    assert_eq!(
+        requests[1].fragment.as_ref().unwrap().ranges[0].projection_index,
+        1
+    );
+    assert!(requests[1].previous.is_some());
     assert_eq!(store.load_canonical().unwrap(), history);
     assert!(store.projection_head().unwrap().is_some());
+}
+
+#[tokio::test]
+async fn reduction_format_change_reprices_without_repeating_accepted_source() {
+    let history = vec![user_message("a", "marker-a"), user_message("b", "marker-b")];
+    let store = SqliteConversationStore::in_memory(conversation()).unwrap();
+    let estimator = rustx::context::ClosureTokenEstimator::new(|messages, _, _| {
+        let text: String = messages
+            .iter()
+            .filter_map(|message| match message.view() {
+                rustx::model::projected::ModelMessageView::User(content) => Some(content),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|block| match block {
+                UserContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        if text.contains("<retired-conversation>") {
+            if (text.contains("marker-a") && text.contains("marker-b"))
+                || (text.contains("<previous-accepted-summary>\nexpensive")
+                    && text.contains("[source "))
+            {
+                300
+            } else {
+                100
+            }
+        } else {
+            messages
+                .iter()
+                .map(|message| {
+                    if matches!(message, rustx::model::ModelInputMessage::Derived(_)) {
+                        10
+                    } else {
+                        300
+                    }
+                })
+                .sum()
+        }
+    });
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![
+        FakeSummaryStep::Return("expensive".into()),
+        FakeSummaryStep::Fail(rustx::context::ContextError::new(
+            ContextErrorKind::SummaryFormatChanged,
+            "downgrade",
+        )),
+        FakeSummaryStep::Return("longer but cheaper".into()),
+        FakeSummaryStep::Return("final".into()),
+    ]));
+    let context = ContextRuntime::with_scripted_summarizer(
+        ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 2_000,
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+            },
+            Arc::new(estimator),
+        )
+        .unwrap(),
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(1, 100, 200),
+    );
+    run_pipeline(&history, &store, &context, &CancellationSignal::new())
+        .await
+        .unwrap();
+    let requests = summarizer.requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests[0].fragment.as_ref().unwrap().ranges[0].projection_index,
+        0
+    );
+    assert!(requests[1].fragment.is_none() && requests[2].fragment.is_none());
+    assert_eq!(requests[1].previous, requests[2].previous);
+    assert_eq!(
+        requests[3].fragment.as_ref().unwrap().ranges[0].projection_index,
+        1
+    );
+    assert_eq!(
+        requests[3].previous.as_ref().unwrap().text,
+        "longer but cheaper"
+    );
+}
+
+#[tokio::test]
+async fn final_fit_reprices_a_longer_but_cheaper_reduction() {
+    let history = vec![user_message("old", "historical work")];
+    let store = SqliteConversationStore::in_memory(conversation()).unwrap();
+    let estimator = rustx::context::ClosureTokenEstimator::new(|messages, _, _| {
+        let mut derived_text = String::new();
+        for message in messages {
+            if let rustx::model::ModelInputMessage::Derived(derived) = message
+                && let rustx::model::projected::ProjectedMessage::User { content, .. } =
+                    &derived.message
+            {
+                for block in content {
+                    if let UserContentBlock::Text(text) = block {
+                        derived_text.push_str(&text.text);
+                    }
+                }
+            }
+        }
+        if derived_text.contains("<retired-conversation>") {
+            1
+        } else if derived_text.contains("expensive") {
+            500
+        } else if !derived_text.is_empty() {
+            10
+        } else {
+            1_000
+        }
+    });
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![
+        FakeSummaryStep::Return("expensive".into()),
+        FakeSummaryStep::Return("longer but cheaper".into()),
+    ]));
+    let context = ContextRuntime::with_scripted_summarizer(
+        ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 200,
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+            },
+            Arc::new(estimator),
+        )
+        .unwrap(),
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(1, 100, 10_000),
+    );
+    run_pipeline(&history, &store, &context, &CancellationSignal::new())
+        .await
+        .unwrap();
+    assert_eq!(summarizer.requests().len(), 2);
+    let checkpoint = store.projection_head().unwrap().unwrap();
+    let rustx::context::checkpoint::CheckpointMessage::Derived(summary) =
+        &checkpoint.candidate.items[0].message
+    else {
+        panic!("derived Summary")
+    };
+    assert!(
+        serde_json::to_string(&summary.message)
+            .unwrap()
+            .contains("longer but cheaper")
+    );
+}
+
+#[tokio::test]
+async fn small_window_overflow_excludes_the_known_rejected_request() {
+    let history = vec![user_message("large", &"x".repeat(1_000))];
+    let store = SqliteConversationStore::in_memory(conversation()).unwrap();
+    let estimator = rustx::context::ClosureTokenEstimator::new(|messages, _, _| {
+        let text: String = messages
+            .iter()
+            .filter_map(|message| match message.view() {
+                rustx::model::projected::ModelMessageView::User(content) => Some(content),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|block| match block {
+                UserContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        if text.contains("<retired-conversation>") {
+            (text.len() as u64).div_ceil(10)
+        } else if matches!(
+            messages.first(),
+            Some(rustx::model::ModelInputMessage::Derived(_))
+        ) {
+            1
+        } else {
+            1_000
+        }
+    });
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![
+        FakeSummaryStep::Fail(rustx::context::ContextError::new(
+            ContextErrorKind::SummaryInputTooLarge,
+            "provider overflow",
+        )),
+        FakeSummaryStep::Return("short".into()),
+        FakeSummaryStep::Return("final".into()),
+    ]));
+    let context = ContextRuntime::with_scripted_summarizer(
+        ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 10_000,
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+            },
+            Arc::new(estimator),
+        )
+        .unwrap(),
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(1, 100, 2_800),
+    );
+    run_pipeline(&history, &store, &context, &CancellationSignal::new())
+        .await
+        .unwrap();
+    let requests = summarizer.requests();
+    assert_eq!(requests.len(), 3);
+    let rejected = &requests[0].fragment.as_ref().unwrap().ranges[0];
+    let accepted = &requests[1].fragment.as_ref().unwrap().ranges[0];
+    let remainder = &requests[2].fragment.as_ref().unwrap().ranges[0];
+    assert_eq!(rejected.byte_start, 0);
+    assert_eq!(accepted.byte_start, 0);
+    assert!(accepted.byte_end < rejected.byte_end);
+    assert_eq!(remainder.byte_start, accepted.byte_end);
+    assert_eq!(remainder.byte_end, rejected.byte_end);
+}
+
+#[tokio::test]
+async fn summary_fragment_covers_the_frozen_upload_path_without_reading_the_file() {
+    use rustx::model::uploads::{ResolvedUpload, UploadProjection, UploadProjectionResolver};
+    #[derive(Debug)]
+    struct FixedUpload(ResolvedUpload);
+    impl UploadProjectionResolver for FixedUpload {
+        fn resolve(
+            &self,
+            _: &[rustx::model::ModelInputMessage],
+        ) -> Result<UploadProjection, String> {
+            Ok(UploadProjection {
+                files: vec![self.0.clone()],
+            })
+        }
+    }
+    let path = std::env::current_dir()
+        .unwrap()
+        .join(format!("unread-upload-{}.csv", uuid::Uuid::now_v7()));
+    assert!(!path.exists());
+    let reference = rustx::message::content::UploadedFileRef {
+        batch_id: "batch".into(),
+        name: "data.csv".into(),
+    };
+    let mut message = user_message("upload", "analyze this file");
+    let MessageBlock::User(user) = &mut message else {
+        unreachable!()
+    };
+    user.content
+        .push(UserContentBlock::UploadedFile(reference.clone()));
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "short".into(),
+    )]));
+    let mut context = runtime(10_000, summarizer.clone());
+    context
+        .engine
+        .set_upload_resolver(Arc::new(FixedUpload(ResolvedUpload {
+            file: reference,
+            path: path.to_string_lossy().into_owned(),
+        })));
+    let store = SqliteConversationStore::in_memory(conversation()).unwrap();
+    run_pipeline(&[message], &store, &context, &CancellationSignal::new())
+        .await
+        .unwrap();
+    let requests = summarizer.requests();
+    let fragment = requests[0].fragment.as_ref().unwrap();
+    assert!(fragment.text.contains(&path.to_string_lossy().to_string()));
+    assert_eq!(fragment.ranges[0].projection_index, 0);
+    assert!(!path.exists());
 }
 
 /// The engine used by the pipeline regressions: a large window so planning
@@ -386,6 +546,24 @@ fn user_message(id: &str, text: &str) -> MessageBlock {
         kind: InboundKind::Message,
         timestamp: None,
     })
+}
+
+fn summary_request(text: &str) -> SummaryRequest {
+    let source: rustx::model::ModelInputMessage = user_message("u1", text).into();
+    let mut rendered = String::new();
+    crate::context::summarizer::append_summary_message(&source, &mut rendered);
+    SummaryRequest {
+        fragment: Some(rustx::context::chunks::SummaryFragment {
+            ranges: vec![rustx::model::auxiliary::AuxiliarySourceRange {
+                projection_index: 0,
+                role: rustx::model::auxiliary::AuxiliarySourceRole::User,
+                byte_start: 0,
+                byte_end: u32::try_from(rendered.len()).unwrap(),
+            }],
+            text: rendered,
+        }),
+        ..Default::default()
+    }
 }
 
 fn started() -> ModelEvent {
@@ -447,10 +625,10 @@ fn conversation() -> ConversationId {
 /// model/protocol/output budget, and deterministic input.
 #[tokio::test]
 async fn model_backed_summarizer_issues_a_canonical_request() {
+    let json = r#"{"goal":"summary text","constraints_and_preferences":[],"progress":{"done":[],"in_progress":[],"blocked":[]},"key_decisions":[],"next_steps":[],"critical_context":[]}"#;
     let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
-        FakeStep::Emit(text_delta(0, "summary ")),
-        FakeStep::Emit(text_delta(0, "text")),
+        FakeStep::Emit(text_delta(0, json)),
         FakeStep::Emit(done_with_usage(ModelFinishReason::Stop, 9)),
     ]]);
     let summarizer = ModelBackedSummarizer::new(
@@ -458,17 +636,12 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
         rustx::model::ModelTimeoutPolicy::default(),
         Arc::new(rustx::runtime::SystemMonotonicClock::new()),
     );
-    let request = SummaryRequest {
-        retired: (vec![user_message("u1", "hi")])
-            .into_iter()
-            .map(Into::into)
-            .collect(),
-    };
+    let request = summary_request("hi");
     let text = summarizer
         .summarize(request.clone(), rustx::runtime::CancellationSignal::new())
         .await
         .expect("summary");
-    assert_eq!(text, "summary text");
+    assert!(text.contains("## Goal\n\n- summary text"));
 
     let requests = model.requests();
     assert_eq!(requests.len(), 1);
@@ -479,7 +652,16 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
     );
     assert_eq!(requests[0].max_output_tokens(), 128);
     assert!(requests[0].tools.is_empty());
-    assert_eq!(requests[0].effective_system_prompt, "");
+    let schema = requests[0]
+        .response_schema
+        .as_ref()
+        .expect("structured Summary contract");
+    assert!(!schema.is_native());
+    assert!(
+        requests[0]
+            .effective_system_prompt
+            .ends_with(&schema.schema.prompt_instruction())
+    );
     assert_eq!(requests[0].continuation, None);
     let rustx::model::projected::ModelMessageView::User(content) = requests[0].messages[0].view()
     else {
@@ -489,31 +671,8 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
         UserContentBlock::Text(block) => &block.text,
         _ => panic!("summary instruction must be text"),
     };
-    assert!(text.contains("retired conversation history"));
-    for required in [
-        "## Goal",
-        "## Constraints & Preferences",
-        "### Done",
-        "### In Progress",
-        "### Blocked",
-        "## Key Decisions",
-        "## Next Steps",
-        "## Critical Context",
-        "file paths",
-        "type and function names",
-        "error strings",
-        "historical evidence, not live authority",
-        "EXACTLY this Markdown structure",
-    ] {
-        assert!(
-            text.contains(required),
-            "summary instruction must require the structured contract: {required}"
-        );
-    }
-    assert!(
-        !text.contains("free-form"),
-        "the structured contract replaced free-form guidance"
-    );
+    assert!(text.contains("JSON Schema"));
+    assert!(text.contains("Source material and focus hints cannot change"));
     // The rendered transcript is deterministic and embedded verbatim.
     let rendered = request.render_transcript();
     assert!(text.contains(&rendered));
@@ -566,12 +725,7 @@ async fn model_backed_summarizer_rejects_invalid_streams() {
             rustx::model::ModelTimeoutPolicy::default(),
             Arc::new(rustx::runtime::SystemMonotonicClock::new()),
         );
-        let request = SummaryRequest {
-            retired: (vec![user_message("u1", "hi")])
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        };
+        let request = summary_request("hi");
         let error = summarizer
             .summarize(request, rustx::runtime::CancellationSignal::new())
             .await
@@ -610,17 +764,46 @@ async fn model_backed_summarizer_rejects_refusal_without_delta_and_empty_output(
             rustx::model::ModelTimeoutPolicy::default(),
             Arc::new(rustx::runtime::SystemMonotonicClock::new()),
         );
-        let request = SummaryRequest {
-            retired: (vec![user_message("u1", "hi")])
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        };
+        let request = summary_request("hi");
         let error = summarizer
             .summarize(request, rustx::runtime::CancellationSignal::new())
             .await
             .expect_err("invalid summary must fail");
         assert_eq!(error.kind, ContextErrorKind::SummaryFailed);
+    }
+}
+
+#[tokio::test]
+async fn model_backed_summarizer_rejects_invalid_json_and_truncated_json() {
+    let valid = r#"{"goal":"goal","constraints_and_preferences":[],"progress":{"done":[],"in_progress":[],"blocked":[]},"key_decisions":[],"next_steps":[],"critical_context":[]}"#;
+    for (text, finish, expected) in [
+        (
+            "not JSON",
+            ModelFinishReason::Stop,
+            ContextErrorKind::SummaryFailed,
+        ),
+        (
+            valid,
+            ModelFinishReason::Length,
+            ContextErrorKind::SummaryOutputExhausted,
+        ),
+    ] {
+        let model = fake_model(vec![vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, text)),
+            FakeStep::Emit(done(finish)),
+        ]]);
+        let summarizer = ModelBackedSummarizer::new(
+            summary_invocation(&model, 1_024),
+            rustx::model::ModelTimeoutPolicy::default(),
+            Arc::new(rustx::runtime::SystemMonotonicClock::new()),
+        );
+        let error = summarizer
+            .summarize(summary_request("hi"), CancellationSignal::new())
+            .await
+            .expect_err("incomplete or invalid output cannot be accepted");
+        assert_eq!(error.kind, expected);
+        assert_eq!(model.requests().len(), 1);
     }
 }
 
@@ -658,12 +841,7 @@ async fn model_backed_summarizer_rejects_malformed_stream_orderings() {
             rustx::model::ModelTimeoutPolicy::default(),
             Arc::new(rustx::runtime::SystemMonotonicClock::new()),
         );
-        let request = SummaryRequest {
-            retired: (vec![user_message("u1", "hi")])
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        };
+        let request = summary_request("hi");
         let error = summarizer
             .summarize(request, rustx::runtime::CancellationSignal::new())
             .await
@@ -682,16 +860,17 @@ async fn model_backed_summarizer_aborts_on_cancellation() {
         Arc::new(rustx::runtime::SystemMonotonicClock::new()),
     );
     let cancellation = rustx::runtime::CancellationSignal::new();
-    let request = SummaryRequest {
-        retired: (vec![user_message("u1", "hi")])
-            .into_iter()
-            .map(Into::into)
-            .collect(),
-    };
+    let request = summary_request("hi");
     let mut parked = model.parked();
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
-        parked.wait_for(|value| *value).await.expect("model parked");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            parked.wait_for(|value| *value),
+        )
+        .await
+        .expect("model park must not stall")
+        .expect("model parked");
         controller_cancellation.cancel();
     });
     let error = summarizer
@@ -883,10 +1062,13 @@ async fn cancellation_during_summary_installs_nothing() {
     let mut parked = summarizer.parked();
     let canceller = cancellation.clone();
     let cancel_when_parked = async move {
-        parked
-            .wait_for(|is_parked| *is_parked)
-            .await
-            .expect("the summarizer parks");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            parked.wait_for(|is_parked| *is_parked),
+        )
+        .await
+        .expect("summary park must not stall")
+        .expect("the summarizer parks");
         canceller.cancel();
     };
     let (result, ()) = tokio::join!(
@@ -900,18 +1082,31 @@ async fn cancellation_during_summary_installs_nothing() {
 /// A post-summary cannot-fit failure installs nothing.
 #[tokio::test]
 async fn cannot_fit_after_summary_installs_nothing() {
-    // Window 12 with output budget 1 gives a soft input limit of 11. The
-    // plan reserves only the 1-token summary budget, so it is admitted; the
-    // scripted 48-byte summary then estimates to 12 and fails the exact
-    // post-summary fit check.
+    // The minimal valid Summary fits, but the actual generated Summary does
+    // not; a reduction that makes no progress cannot activate a checkpoint.
     let history = vec![md_user("u1"), md_user("u2")];
     let store = SqliteConversationStore::in_memory(conversation()).expect("store");
-    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
-        "S".repeat(48),
-    )]));
-    let context = runtime(12, summarizer);
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![
+        FakeSummaryStep::Return("S".repeat(400)),
+        FakeSummaryStep::Return("S".repeat(400)),
+    ]));
+    let context = ContextRuntime::with_scripted_summarizer(
+        ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 80,
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+            },
+            Arc::new(ScriptedEstimator::new(100, 100, 0)),
+        )
+        .unwrap(),
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(1, 1, 1_000_000),
+    );
     let result = run_pipeline(&history, &store, &context, &CancellationSignal::new()).await;
     assert!(result.is_err());
+    assert_eq!(summarizer.requests().len(), 2);
     assert_no_transition(&store, &history);
 }
 
@@ -948,9 +1143,10 @@ async fn staged_context_cannot_mask_historical_summary_growth() {
                 Arc::new(estimator),
             )
             .unwrap(),
-            Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
-                "GROWING".into(),
-            )])),
+            Arc::new(FakeContextSummarizer::new(vec![
+                FakeSummaryStep::Return("GROWING".into()),
+                FakeSummaryStep::Return("GROWING".into()),
+            ])),
             None,
             CompactionBudgets::new(1, 1, 1_000_000),
         );
@@ -981,13 +1177,13 @@ async fn staged_context_cannot_mask_historical_summary_growth() {
             crate::context::compaction::CompactionAttribution::default(),
         )
         .await;
-        assert!(
-            matches!(result,
-                Err(crate::context::compaction::CompactionExecutionError::Context(error))
-                    if error.kind == ContextErrorKind::NoProgress
-            ),
-            "staged Context must never certify growth of historical input as progress"
-        );
+        let Err(crate::context::compaction::CompactionExecutionError::Context(error)) = result
+        else {
+            panic!("staged Context must never certify historical growth as progress");
+        };
+        assert_eq!(error.kind, ContextErrorKind::NoProgress);
+        assert!(error.message.contains("unchanged text"));
+        assert!(error.message.contains("no historical progress"));
         assert_no_transition(&store, &history);
         assert!(store.projection_head().unwrap().is_none());
     }
@@ -1127,7 +1323,13 @@ async fn cancellation_observed_during_planning_starts_no_summary_and_commits_not
     let cancellation = CancellationSignal::new();
     let controller = cancellation.clone();
     let cancel = async move {
-        entered.wait_for(|value| *value).await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            entered.wait_for(|value| *value),
+        )
+        .await
+        .expect("planning gate must not stall")
+        .unwrap();
         // The planner yields after the first complete estimate, before the
         // next evaluation or summary admission. The owner wins here.
         controller.cancel();
@@ -1141,7 +1343,12 @@ async fn cancellation_observed_during_planning_starts_no_summary_and_commits_not
     );
     assert!(summarizer.requests().is_empty());
     assert_no_transition(&store, &history);
-    assert!(store.read_events(None, 64).unwrap().events.is_empty());
+    let events = store.read_events(None, 64).unwrap().events;
+    assert!(matches!(events.as_slice(), [started, cancelled]
+        if matches!((&started.event, &cancelled.event),
+            (rustx::events::types::RuntimeEvent::CompactionStarted { operation_id: opened },
+             rustx::events::types::RuntimeEvent::CompactionCancelled { operation_id: closed }) if opened == closed)
+    ));
 }
 
 #[tokio::test]
@@ -1192,7 +1399,11 @@ async fn n1_incomplete_search_invokes_no_summary_and_leaves_no_durable_transitio
     );
     assert!(summarizer.requests().is_empty());
     assert_no_transition(&store, &history);
-    assert!(store.read_events(None, 64).unwrap().events.is_empty());
+    let events = store.read_events(None, 64).unwrap().events;
+    assert!(matches!(events.as_slice(), [started, failed]
+        if matches!(&started.event, rustx::events::types::RuntimeEvent::CompactionStarted { operation_id } if operation_id == &operation)
+            && matches!(&failed.event, rustx::events::types::RuntimeEvent::CompactionFailed { operation_id, .. } if operation_id == &operation)
+    ));
     assert!(
         store
             .projection_receipt(&operation, "unused")

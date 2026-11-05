@@ -286,7 +286,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Session configuration change transcript items and Trace records. Version
 /// 82 added optional, Model-owned reasoning Profile order to full catalog
 /// metadata; selection ordinals and frozen invocation snapshots are unchanged.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 83;
+/// Version 84 adds accepted Summary fragment progress and distinct manual outcomes.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 84;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -437,6 +438,9 @@ pub enum RuntimeClientRequest {
     CompactContext {
         /// Attachment-scoped request id.
         id: RequestId,
+        /// Optional focus hints for the summary, bounded in UTF-8 bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instructions: Option<String>,
     },
 
     /// Answer one live native interaction through the runtime-owned
@@ -877,6 +881,8 @@ pub enum RuntimeClientResult {
         /// independently of the latest published context.
         compaction: Option<crate::observation::head::RuntimeClientCompactionView>,
     },
+    /// No historical material was eligible; no checkpoint was committed.
+    ContextCompactionSkipped,
 
     /// `interaction_respond` succeeded: the coordinator accepted the one
     /// terminal response transition.

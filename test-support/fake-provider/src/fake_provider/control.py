@@ -25,7 +25,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
-from fake_provider.scenario import Gate, RecordedRequest, Scenario, Stream, RawResponse
+from fake_provider.scenario import AdaptiveScenario, Gate, RecordedRequest, Scenario, Stream, RawResponse
 
 # Observation kinds. These are the provider-side states a test may wait on.
 REQUEST_ACCEPTED = "request_accepted"
@@ -98,14 +98,16 @@ class Observation:
         }
 
 
-def declared_gates(scenario: Scenario) -> list[str]:
+def declared_gates(scenario: Scenario | AdaptiveScenario) -> list[str]:
     """Every gate name the scenario script declares, in script order.
 
     Gate names must be unique within a scenario: a name is the address a
     test releases, so two gates sharing one would make the release
     ambiguous.
     """
-    names: list[str] = []
+    names: list[str] = list(scenario.gates) if isinstance(scenario, AdaptiveScenario) else []
+    if len(names) != len(set(names)):
+        raise ValueError(f"duplicate gate name in {scenario.name}")
     for step in scenario.steps:
         script = step.respond.script if isinstance(step.respond, (Stream, RawResponse)) else ()
         for item in script:
@@ -119,12 +121,13 @@ def declared_gates(scenario: Scenario) -> list[str]:
 class ScenarioRun:
     """The mutable state of one scenario execution."""
 
-    def __init__(self, scenario: Scenario) -> None:
+    def __init__(self, scenario: Scenario | AdaptiveScenario) -> None:
         self.scenario = scenario
         self.requests: list[RecordedRequest] = []
         self.observations: list[Observation] = []
         self.failures: list[dict[str, Any]] = []
         self.step_states: list[str] = [STEP_PENDING] * len(scenario.steps)
+        self.final_step_selected = False
         self.gates: dict[str, str] = {name: GATE_PENDING for name in declared_gates(scenario)}
         self._releases: dict[str, asyncio.Event] = {
             name: asyncio.Event() for name in self.gates
@@ -279,7 +282,10 @@ class ScenarioRun:
 
     @property
     def all_settled(self) -> bool:
-        return all(state == STEP_SETTLED for state in self.step_states)
+        return (
+            (not isinstance(self.scenario, AdaptiveScenario) or self.final_step_selected)
+            and all(state == STEP_SETTLED for state in self.step_states)
+        )
 
     # -- failures ---------------------------------------------------------
 
@@ -309,7 +315,7 @@ class ScenarioRun:
     def state(self) -> dict[str, Any]:
         return {
             "scenario": self.scenario.name,
-            "stepsTotal": len(self.scenario.steps),
+            "stepsTotal": len(self.step_states),
             "stepsMatched": self.steps_matched,
             "stepsSettled": self.steps_settled,
             "stepStates": list(self.step_states),

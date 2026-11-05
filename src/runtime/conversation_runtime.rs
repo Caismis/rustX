@@ -300,7 +300,7 @@ use crate::context::compaction::{
 use crate::context::tokens::TokenEstimator;
 use crate::context::{
     AgentStatusEngine, CompactionConstraints, ContextError, ContextErrorKind, ContextRuntime,
-    SessionContextPolicy, render_effective_system_prompt,
+    render_effective_system_prompt,
 };
 use crate::conversation::ConversationState;
 use crate::conversation::SurfaceRevision;
@@ -624,8 +624,6 @@ impl std::error::Error for ConversationRuntimeError {}
 /// attempt's immutable model snapshot. No window captured at process start
 /// can survive a session model change.
 pub struct ConversationContextConfig {
-    /// The current runtime context policy captured by this composition.
-    pub policy: SessionContextPolicy,
     /// The deterministic token estimator.
     pub estimator: Arc<dyn TokenEstimator>,
     /// The launch-scoped Agent Status engine template, present exactly when
@@ -1149,7 +1147,6 @@ impl ConversationRuntime {
         let resources = self.runtime_resources();
         let configuration = resources.configuration();
         ConversationContextConfig {
-            policy: configuration.map_or(self.inner.context.policy, |g| g.config.context_policy()),
             estimator: Arc::clone(&self.inner.context.estimator),
             status_engine: configuration.map_or_else(
                 || {

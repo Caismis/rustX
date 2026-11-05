@@ -15,6 +15,7 @@ pub mod assembly;
 pub mod contribution;
 
 pub mod checkpoint;
+pub mod chunks;
 pub(crate) mod compaction;
 pub mod compaction_budget;
 pub(crate) mod compaction_metadata;
@@ -22,10 +23,12 @@ pub mod engine;
 pub mod error;
 mod images;
 pub mod occupancy;
+pub(crate) mod policy;
 pub mod projection;
 pub mod resources;
 pub mod status;
 pub mod summarizer;
+pub(crate) mod summary_content;
 mod system_prompt;
 pub mod tokens;
 
@@ -48,8 +51,8 @@ pub use assembly::{
     validate_user_message_proposal,
 };
 pub use engine::{
-    CompactionBudgets, CompactionConstraints, ContextConfig, ContextEngine, EstimateCorrection,
-    SessionContextPolicy,
+    CompactionBudgets, CompactionCarryover, CompactionConstraints, ContextConfig, ContextEngine,
+    EstimateCorrection,
 };
 pub use error::{ContextError, ContextErrorKind};
 pub use projection::ContextProjection;
@@ -97,6 +100,8 @@ pub struct ContextRuntime {
     /// The primary/summary output budgets and the summary input limit,
     /// frozen at attempt admission.
     pub(crate) compaction_budgets: CompactionBudgets,
+    pub(crate) minimum_summary_output: u32,
+    pub(crate) maximum_summary_output: u32,
     /// Static request-time System inputs frozen from the admitted resource
     /// generation. Dynamic domain content enters through registered contributors.
     pub(crate) native_system: NativeContextInput,
@@ -117,7 +122,6 @@ impl ContextRuntime {
     /// that the sibling `AgentExecution` receives; it never creates either.
     #[cfg(test)]
     pub(crate) fn for_attempt(
-        policy: SessionContextPolicy,
         estimator: Arc<dyn TokenEstimator>,
         status_engine: Option<AgentStatusEngine>,
         model: &AttemptModelSnapshot,
@@ -125,7 +129,6 @@ impl ContextRuntime {
         monotonic_clock: Arc<dyn MonotonicClock>,
     ) -> Result<Self, ContextError> {
         Self::for_attempt_with_assembly(
-            policy,
             estimator,
             status_engine,
             ContextAssembly::new(),
@@ -143,7 +146,6 @@ impl ContextRuntime {
     /// Returns a context configuration error when the primary or summary
     /// model cannot produce a valid context budget.
     pub(crate) fn for_attempt_with_assembly(
-        policy: SessionContextPolicy,
         estimator: Arc<dyn TokenEstimator>,
         status_engine: Option<AgentStatusEngine>,
         assembly: ContextAssembly,
@@ -157,51 +159,10 @@ impl ContextRuntime {
                 "model request timeout policy values must be positive",
             ));
         }
-        if policy.summary_output_cap == Some(0) {
-            return Err(ContextError::new(
-                ContextErrorKind::InvalidConfiguration,
-                "summary_output_cap must be positive when present",
-            ));
-        }
-        let engine = ContextEngine::new(
-            policy.config_for_window(model.primary().context_window()),
-            estimator,
-        )?;
-        let summary = match policy.summary_output_cap {
-            Some(cap) => model.summary_invocation().with_output_cap(cap),
-            None => model.summary_invocation().clone(),
-        };
-        // The summary request is a bounded one-off: no tools, no Agent
-        // Status, no Skill catalog, no continuation. Its input bound is
-        // derived with the same discipline as any other request of this
-        // runtime — window minus reserve minus output budget — and never as
-        // "the whole window". A summary input budget that spans almost the
-        // entire window lets compaction assemble a request *larger* than the
-        // one that just overflowed, so the recovery from a context overflow
-        // overflows again. The reserve is what keeps the derived budget
-        // honest against token-estimation error.
-        let summary_input_limit = summary
-            .context_window()
-            .checked_sub(policy.reserve_tokens)
-            .and_then(|remaining| remaining.checked_sub(u64::from(summary.max_output_tokens())))
-            .filter(|limit| *limit > 0)
-            .ok_or_else(|| {
-                ContextError::new(
-                    ContextErrorKind::InvalidConfiguration,
-                    format!(
-                        "the summary model context window {} must exceed reserve_tokens {} plus \
-                         its output budget {}",
-                        summary.context_window(),
-                        policy.reserve_tokens,
-                        summary.max_output_tokens()
-                    ),
-                )
-            })?;
-        let compaction_budgets = CompactionBudgets::new(
-            model.primary().max_output_tokens(),
-            summary.max_output_tokens(),
-            summary_input_limit,
-        );
+        let policy = policy::CompactionPolicy::for_models(model)?;
+        let engine = ContextEngine::new(policy.primary, estimator)?;
+        let summary = model.summary_invocation().automatic_summary_base();
+        let compaction_budgets = policy.budgets;
         Ok(Self {
             primary_model: model.primary().invocation_config().model,
             engine,
@@ -213,6 +174,8 @@ impl ContextRuntime {
             native_composition: crate::extensions::NativeContextComposition::new(status_engine),
             assembly,
             compaction_budgets,
+            minimum_summary_output: policy.minimum_summary_output,
+            maximum_summary_output: policy.maximum_summary_output,
             native_system: NativeContextInput::default(),
             resource_revision: crate::runtime::RuntimeResourceRevision::default(),
             monotonic_clock,
@@ -269,6 +232,8 @@ impl ContextRuntime {
             native_composition: crate::extensions::NativeContextComposition::new(status_engine),
             assembly,
             compaction_budgets,
+            minimum_summary_output: 1,
+            maximum_summary_output: compaction_budgets.summary_output_budget,
             native_system: NativeContextInput::default(),
             resource_revision: crate::runtime::RuntimeResourceRevision::default(),
             monotonic_clock: Arc::new(crate::runtime::monotonic::SystemMonotonicClock::new()),

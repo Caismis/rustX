@@ -253,6 +253,8 @@ fn start_request_with_window(
         .freeze_input(
             store.conversation_id(),
             &crate::model::ModelRequest {
+                prompt_fallback_authorization:
+                    crate::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: None,
                 messages: history.messages.clone(),

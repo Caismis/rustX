@@ -270,7 +270,7 @@ canonical compaction-marker or Surface compaction path restored.
 Both lines had independently used App Server v47 for different contracts. The
 combined authoritative contract is now v48, with regenerated schema/TypeScript
 artifacts, synchronized client imports/subprotocols/initialization checks, and no
-v47 reader or alias. Runtime Client remains v72. Local Harness source hashes and
+v47 reader or alias. Runtime Client remains v73. Local Harness source hashes and
 retained import inventories were refreshed for the actual merged source; original
 upstream attribution, hashes and license data remain intact. Protocol drift, all
 client typechecks, i18n and provenance checks passed. Full integrated-source
@@ -817,7 +817,7 @@ labels only the native output and uncovered tail; full replay labels the full in
 Snapshot freeze/reconstruction and captured translations validate the same plan.
 Opaque older encrypted output requiring relabeling remains rejected. No canonical IDs,
 native signatures or encrypted units change. Nullable wire correlation is a necessary
-breaking observation contract: App Server v49 / Runtime Client v70 replace v48/v72,
+breaking observation contract: App Server v49 / Runtime Client v70 replace v48/v73,
 with regenerated artifacts and mechanical consumer imports, without legacy readers.
 
 **F3 — historical eligibility.** Confirmed: Runtime Client paged unrestricted bodies
@@ -936,7 +936,7 @@ this repair. The PR remains open for independent review, without merge or auto-m
 
 Starting HEAD: `47d508a35da8d8f8f9a00ed58f9c7efb71217af7`. Latest integrated main:
 `97096020d64ea00218493a0a99b9b805821eeb28`. The clean dedicated worktree already
-contained all F1–F4 repairs; this repair does not modify their owners or v49/v72.
+contained all F1–F4 repairs; this repair does not modify their owners or v49/v73.
 
 The reviewed defect was reproduced red in a real SQLite file: after P2's Journal
 cut, corrupt P3 activation JSON and an oversized P4 payload caused the old pre-page

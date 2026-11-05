@@ -92,6 +92,32 @@ pub(super) fn validate_call_start_input(
             "temporary auxiliary input cannot name selected historical MessageIds".into(),
         ));
     }
+    if let AuxiliaryInputEvidence::Compaction {
+        source_ranges,
+        previous_summary,
+        ..
+    } = &start.input
+    {
+        if source_ranges.is_empty() {
+            if previous_summary.is_none() {
+                return Err(ConversationStoreError::InvalidReference(
+                    "a reduction requires a previous Summary".into(),
+                ));
+            }
+        } else {
+            crate::durable::auxiliary::validate_compaction_ranges(source_ranges)?;
+        }
+        if !matches!(
+            start.business_source,
+            super::AuxiliaryBusinessSource::Compaction { .. }
+        ) || start.purpose.as_str() != "summary"
+            || !start.selected_message_ids.is_empty()
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "compaction source evidence requires a Summary Call owned by its Compaction operation".into(),
+            ));
+        }
+    }
     bounded_encoded_len(
         start,
         AUXILIARY_CALL_START_ENCODED_MAX,

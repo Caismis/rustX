@@ -17,7 +17,7 @@ use rustx::agent::{
 };
 use rustx::context::{
     AgentStatusEngine, CompactionBudgets, ContextConfig, ContextEngine, ContextRuntime,
-    DefaultTokenEstimator, ModelBackedSummarizer, SessionContextPolicy, SummaryRequest,
+    DefaultTokenEstimator, ModelBackedSummarizer, SummaryRequest,
 };
 use rustx::conversation::ConversationState;
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
@@ -254,11 +254,6 @@ async fn runtime_with_manual_clock(
             model_timeout_policy: policy,
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
-                policy: SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
                 estimator: Arc::new(DefaultTokenEstimator),
                 status_engine: Some(AgentStatusEngine::default()),
             },
@@ -1187,6 +1182,7 @@ async fn model_backed_summarizer_uses_the_same_deadlines_across_bounded_auxiliar
                         .into_iter()
                         .map(Into::into)
                         .collect(),
+                    ..Default::default()
                 },
                 rustx::runtime::CancellationSignal::new(),
             ),
@@ -1250,6 +1246,7 @@ async fn model_backed_summarizer_discards_a_degenerate_or_truncated_summary() {
                         .into_iter()
                         .map(Into::into)
                         .collect(),
+                    ..Default::default()
                 },
                 rustx::runtime::CancellationSignal::new(),
             ),
@@ -1296,7 +1293,8 @@ async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
     // parked next pull proves the summarizer consumed Started before the
     // single runtime-owned clock is advanced.
     let summary_runtime = runtime.clone();
-    let summary_task = tokio::spawn(async move { summary_runtime.compact_context(None).await });
+    let summary_task =
+        tokio::spawn(async move { summary_runtime.compact_context(None, None).await });
     let mut parked = model.parked();
     tokio::time::timeout(
         Duration::from_secs(2),

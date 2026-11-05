@@ -1,7 +1,7 @@
 import { translator } from '../src/locale/translation';
 // @vitest-environment node
 import { expect, it } from 'vitest';
-import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v72';
+import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v73';
 import {
   applicationOwners, applicationScope, authoredUnit, catalogEntries, catalogIdentities, changeBehavior, changeBehaviorLabel, configAuthoring, documentAuthoring,
   effectiveStateLabel, inheritedResources, observedResult, observedResultLabel, openOwnerLabel, provenanceLabel,
@@ -155,7 +155,6 @@ it('S1-14 whole-unit semantic units use their exact whole-unit native paths', ()
     [{ kind: 'config', mutation: { unit: 'instructions', authored: null } }, 'agent.instructions'],
     [{ kind: 'config', mutation: { unit: 'project_guidance', authored: null } }, 'agent.agents_md'],
     [{ kind: 'config', mutation: { unit: 'approval', authored: null } }, 'approval_mode'],
-    [{ kind: 'config', mutation: { unit: 'context', authored: null } }, 'context'],
     [{ kind: 'config', mutation: { unit: 'model_timeout', authored: null } }, 'model_timeout_policy'],
     [{ kind: 'config', mutation: { unit: 'tool_deadline', authored: null } }, 'tool_deadline_policy'],
     [{ kind: 'config', mutation: { unit: 'capacity', authored: null } }, 'subagents'],
@@ -167,14 +166,14 @@ it('S1-14 whole-unit semantic units use their exact whole-unit native paths', ()
   ];
   for (const [mutation, path] of paths) expect(unitProvenancePath(mutation)).toBe(path);
   expect(unitProvenance(resolvedSource({}, { 'agent.model': workspace }), paths[0][0])).toEqual({ state: 'known', origin: workspace });
-  expect(unitProvenance(resolvedSource({}, { 'providers.a': user }), paths[17][0])).toEqual({ state: 'unavailable' });
+  expect(unitProvenance(resolvedSource({}, { 'providers.a': user }), paths[16][0])).toEqual({ state: 'unavailable' });
 });
 
 it('S1-14 a member omitted from a replaced object belongs to that winning object, never a shadowed lower field', () => {
   // `replace_origin` drops a replaced path's descendants, so native records the
   // container; `record_default_origins` then resolves members from it.
-  const context: SourceMutation = { kind: 'config', mutation: { unit: 'context', authored: null } };
-  expect(unitProvenance(resolvedSource({}, { context: workspace, 'context.reserve_tokens': workspace }), context)).toEqual({ state: 'known', origin: workspace });
+  const timeout: SourceMutation = { kind: 'config', mutation: { unit: 'model_timeout', authored: null } };
+  expect(unitProvenance(resolvedSource({}, { model_timeout_policy: workspace, 'model_timeout_policy.stream_idle_timeout_ms': workspace }), timeout)).toEqual({ state: 'known', origin: workspace });
   const policy: SourceMutation = { kind: 'config', mutation: { unit: 'native_policy', id: 'read', authored: null } };
   expect(unitProvenance(resolvedSource({}, { native_tools: user }), policy)).toEqual({ state: 'known', origin: user });
 });
@@ -182,8 +181,8 @@ it('S1-14 a member omitted from a replaced object belongs to that winning object
 it('S1-14 a container whose identities disagree reports mixed origins instead of electing a sibling', () => {
   const capacity: SourceMutation = { kind: 'config', mutation: { unit: 'capacity', authored: null } };
   expect(unitProvenance(resolvedSource({}, { 'subagents.max_concurrent': user }), capacity)).toEqual({ state: 'known', origin: user });
-  const context: SourceMutation = { kind: 'config', mutation: { unit: 'context', authored: null } };
-  expect(unitProvenance(resolvedSource({}, { 'context.reserve_tokens': user, 'context.keep_recent_tokens': workspace }), context)).toEqual({ state: 'mixed' });
+  const timeout: SourceMutation = { kind: 'config', mutation: { unit: 'model_timeout', authored: null } };
+  expect(unitProvenance(resolvedSource({}, { 'model_timeout_policy.response_start_timeout_ms': user, 'model_timeout_policy.stream_idle_timeout_ms': workspace }), timeout)).toEqual({ state: 'mixed' });
 });
 
 it('S1-01/S1-02 entry ownership is named by the exact target, never by a selector value', () => {

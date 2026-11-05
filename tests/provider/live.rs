@@ -95,6 +95,7 @@ fn live_request_with_storage(
     };
     use rustx::runtime::identity::MessageId;
     ModelRequest {
+        prompt_fallback_authorization: rustx::model::types::PromptFallbackAuthorization::default(),
         response_schema: None,
         response_byte_limit: None,
         continuation_source: None,
@@ -259,6 +260,7 @@ async fn live_openai_chat_tool_call() {
     };
     let model = env_or("RUSTX_OPENAI_CHAT_MODEL", Some("gpt-5-mini")).expect("model");
     let request = ModelRequest {
+        prompt_fallback_authorization: rustx::model::types::PromptFallbackAuthorization::default(),
         response_schema: None,
         response_byte_limit: None,
         continuation_source: None,
