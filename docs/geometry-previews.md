@@ -46,30 +46,35 @@ runtime loading starts after that copy is ready and 120 ms without coarse
 input, so its large download and compilation do not compete with the first
 small probes or an active rough gesture. This quiet gate applies only to the
 initial full-view bootstrap; admitted imports continue in their Worker.
-The first independently admitted computed mesh can replace the rough envelope
-after its GPU-ready draw. Already computed CAD pieces then accumulate with their
-final positions, normals, colors and indices while remaining export/conversion
-continues. A localized Refining model label identifies this incomplete graph;
-picking, final occurrence metadata and outlines wait for the complete model.
-The kernel still finishes document transfer and root triangulation before mesh
-export. A large single face may have no useful earlier calculated fragment.
+CAD refinement operates on the entire model at each level of detail (LOD).
+The Worker parses the source once, then tessellates the same native document
+at coarse, medium and final precision. Coarse and medium levels use bounding-box
+deflection ratios of 0.02 and 0.005, and angular deflections of 1.0 and 0.75
+radians; the final level retains 0.001 and 0.5. Each published level contains
+every imported mesh and the complete occurrence hierarchy. Levels replace one
+another atomically; completed pieces never accumulate into an incomplete model.
+The rough coordinate envelope is a loading aid, not a whole-model LOD.
 
-The optional prefix is bounded across the whole job: 16 messages, 65,536
-triangles, 8 MiB of attribute/index streams including generated-normal storage,
-and the existing draw/material bounds. Native and receiver admission remain
-independent. Each message has a strictly ordered sequence and source mesh index;
-it cannot extend the import deadline or substitute for the final result.
-Display buffers and color tuples are owned independently of final conversion.
+Each optional level is independently bounded to 65,536 rendered triangles and
+8 MiB of attribute/index streams, including generated normals, with the existing
+node, material and draw bounds. Native preflight rejects an entire oversized
+level before exporting its arrays. Producer and receiver independently admit
+the complete result, and level numbers must strictly increase. Skipped levels
+do not affect final-model admission or extend the original import deadline.
+BREP sources with embedded triangulations skip optional retessellation to
+preserve their original final geometry. There is no minimum display duration:
+a ready final model can skip an unpainted intermediate level.
 
-The complete model takes over through the same renderer/context. An active
-partial-view gesture and its 120-ms quiet interval finish before handoff; old
-controls, callbacks, fences and temporary graph resources retire. New shaders
-are adopted before old materials are released. A final result arriving before
-the queued partial paint skips that provisional view. Rough/partial gestures
-seed normalized direction, pan, zoom, projection and up axis for the final
-model, with viewport aspect included in framing. Provisional graphs never
-overwrite authoritative occurrence metadata. No rough data enters the final
-geometry streams.
+The localized Refining model label identifies provisional precision; picking,
+final occurrence metadata and outlines wait for final admission. Replacing a
+level preserves the active camera and gesture, refreshes clipping and navigation
+bounds, and retires the old graph after adopting the new graph's shaders. Final
+adoption waits for the end of an active gesture and its 120-ms quiet interval.
+It reuses the renderer and the attached canvas, preserving keyboard focus
+without taking it from another control. Rough/LOD gestures seed normalized
+direction, pan, zoom, projection and up axis for the final model, with viewport
+aspect included in framing. Old callbacks, fences, controls and temporary
+resources retire. No provisional data enters the final geometry streams.
 
 A fresh geometry range read authorizes itself; watch registration follows the
 complete copy instead of blocking first display. The existing reauthorization
@@ -269,10 +274,11 @@ every admitted triangle, authored material/normal/color/texture, mesh outline
 and the original full-resolution pixel policy. New actions cancel/coalesce that
 refinement. A gesture with no pose/selection change schedules no extra work.
 An idle view has no quality loop. All bridge and surface buffers are disposed
-with the visible body. `data-geometry-quality` uses `partial` for a computed
-prefix, `interactive` for a full model at moving pixel/geometry quality, and
-`complete` for a settled full-model draw. `data-geometry-completeness` separately
-marks partial versus full admitted content before pixel refinement. These are
+with the visible body. `data-geometry-lod` identifies `coarse`, `medium` or `full`
+geometry. `data-geometry-quality` distinguishes provisional geometry from
+`interactive` and settled `complete` final-model draws.
+`data-geometry-completeness` separately identifies `preview` versus `complete`
+admission before pixel refinement. These are
 diagnostic states, not GPU-completion or presentation timestamps.
 
 The acceptance workload is approximately 200 MiB of source geometry on the
@@ -381,7 +387,7 @@ The following are per visible body unless stated otherwise:
 | Materials / draw groups, including CAD face ranges | 256 / 512 |
 | CAD BREP-face metadata | 1,000,000 faces total; separate from material draw ranges. Adjacent equal-color ranges merge, and base-color faces require no override |
 | Decoded vertex/index/attribute buffers | 512 MiB |
-| Optional computed CAD prefix | 16 messages / 65,536 triangles / 8 MiB across the whole job, including generated normals; existing aggregate material/draw bounds still apply |
+| Optional whole-model CAD LOD | At most two levels; each has 65,536 triangles / 8 MiB including generated normals; existing aggregate node/material/draw bounds apply |
 | Textures / dimension / aggregate source-image pixels | 8 / 2,048 per side / 8,388,608 pixels |
 | Coordinate / matrix magnitude | Finite, absolute value at most 1e12; resulting world bounds are checked too |
 | Canvas backing pixels / CSS dimension / pixel ratio | 4,194,304 / 4,096 per side / at most 2, reduced to fit the pixel budget |
@@ -452,8 +458,9 @@ manager's error callback, and retired work cannot start another image load.
 
 For two panes, full-model admitted attribute buffers are at most 1 GiB and admitted image
 pixels at most 16,777,216. RGBA image storage is approximately 32 MiB per body
-before mipmaps/driver overhead. Computed prefixes add at most 16 MiB of streams
-during full-model adoption, then retire before optional surface refinement.
+before mipmaps/driver overhead. An active and incoming whole-model LOD can
+temporarily coexist, adding at most 16 MiB per body / 32 MiB for two bodies.
+They retire during final-model adoption before optional surface refinement.
 Each raw input buffer is independently bounded
 by the 200-MiB geometry source limit. Large STL/CAD transfer ownership instead
 of retaining a second copy; two such sources total at most 400 MiB. GLB may
@@ -487,7 +494,7 @@ follow physical settlement independently of browser cancellation.
 
 Three.js is pinned to 0.187.0 (MIT). The exact orientation predicate is supplied
 by robust-predicates 3.0.3 (Unlicense). The local occt-import-js build is pinned
-to 0.0.23-rustx.2 (LGPL-2.1), derived from importer commit
+to 0.0.23-rustx.3 (LGPL-2.1), derived from importer commit
 `c2148e54b456b571238d35cac037d304053d64b2`, with
 OCCT submodule commit `d2abb6d844231cb8f29be6894440874a4700e4a5` from
 `https://git.dev.opencascade.org/repos/occt.git`.
@@ -500,14 +507,15 @@ importer and OCCT license texts in the shipped third-party notice file.
 Corresponding source and upstream build instructions are available at
 [the pinned importer revision](https://github.com/kovacsv/occt-import-js/tree/c2148e54b456b571238d35cac037d304053d64b2),
 including the pinned OCCT submodule and Emscripten build scripts. rustX ships
-a bounded-transfer build. Only the Embind interface changes: typed input copies
+a bounded-transfer and whole-model LOD build. Typed input copies
 in bulk, numeric output uses fixed 4096-double chunks, exclusively owned Worker
 input can be released after native copy, and native input is freed before mesh
-extraction. Optional completed-mesh callbacks expose a bounded display prefix
-during hierarchy export. Displayed streams and coalesced color tuples have
-separate ownership; mutating a prefix cannot change the final result.
-Geometry algorithms, CAD tolerances, allocator and the 2-GiB memory
-maximum remain intact. The complete modified C++ source, pinned revisions,
+extraction. Optional complete-model callbacks export coarse and medium
+tessellations of the same parsed document, with independent stream ownership.
+Later passes clear temporary triangulations before remeshing; embedded BREP
+triangulations retain the original path. Final CAD tolerances, geometry
+algorithms, allocator and the 2-GiB memory maximum remain intact.
+The runtime audit hashes all five modified C++ files. Their complete source, pinned revisions,
 licenses and rebuild script ship at `cad-runtime-source/` in the production
 artifact; the repository copy is `web-console/vendor/occt-import-js/`.
 

@@ -1,15 +1,6 @@
 /** Small, version-bound coordinate envelope. It is never an admitted CAD mesh. */
 export interface GeometryRoughPreview { version: string; positions: Float32Array }
 export interface GeometryRoughPose { direction: [number, number, number]; target: [number, number, number]; zoom: number; up?: [number, number, number] }
-export function roughSourceBounds(values: Float32Array | undefined) {
-  if (!values || values.length < 9 || values.length > 1920 || values.length % 3) return;
-  const min: [number,number,number] = [Infinity,Infinity,Infinity], max: [number,number,number] = [-Infinity,-Infinity,-Infinity];
-  for (let index=0;index<values.length;index++) {
-    const value=values[index],axis=index%3;if(!Number.isFinite(value)||Math.abs(value)>1e12)return;
-    min[axis]=Math.min(min[axis],value);max[axis]=Math.max(max[axis],value);
-  }
-  return {min,max};
-}
 export const isStepName = (name: string) => /\.(?:step|stp)$/i.test(name);
 export function hasRoughArea(points:number[]) {
   if(points.length<9)return false;

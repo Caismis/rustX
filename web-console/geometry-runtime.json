@@ -1,20 +1,26 @@
 {
-  "importer": "occt-import-js@0.0.23-rustx.2",
+  "importer": "occt-import-js@0.0.23-rustx.3",
   "renderer": "three@0.187.0",
   "importerCommit": "c2148e54b456b571238d35cac037d304053d64b2",
   "occtCommit": "d2abb6d844231cb8f29be6894440874a4700e4a5",
-  "modifiedSourceSha256": "48b5b1696ca6363d336c427c1078876d47179faf7fc947c6da8c328df2e364b7",
+  "modifiedSourcesSha256": {
+    "src/importer-brep.cpp": "df40eac1bee6fd8f3404ff24a15d85f7937cb08cca1876af6d1f366309daf00f",
+    "src/importer-brep.hpp": "f68ac0189bed382103fe35b98478accf75181f75b4b08c6eb7551b726a03a7e7",
+    "src/importer-utils.cpp": "2d5214f4ac59fa121c62c4ab5986af6b85a5c9b761350d13af6f7efc454e33e2",
+    "src/importer.hpp": "5710676b6d14a953e8859944a14cba49a7b2c821b808a73e087b837a9b38a439",
+    "src/js-interface.cpp": "aac86776c01a94b92fda80f0a59bb90f69783cf41feeb0010f1aa46b38b6b37e"
+  },
   "wasmMaximumBytes": 2147483648,
   "assets": {
     "occt-import-js.js": {
       "bytes": 97149,
       "gzipBytes": 26939,
-      "sha256": "8daed673a72087a86ec30b91790ed3eb75ddbcbedd4d51f6a37cebae03aa335e"
+      "sha256": "f740060c7e934bc317bb2539fb0abf4e973e18742b1256fcf49eccb10050aa88"
     },
     "occt-import-js.wasm": {
-      "bytes": 7606314,
-      "gzipBytes": 3114580,
-      "sha256": "63dfd5c09b6a0fa26dd2e40dceb17092f73ab54d26467e7638b8435029c0231e"
+      "bytes": 7615810,
+      "gzipBytes": 3116681,
+      "sha256": "30823a95a54e0f639ad08499985af8335adc751f5478ac27491b54f0b58a87f3"
     },
     "license.occt-import-js.txt": {
       "bytes": 26526,

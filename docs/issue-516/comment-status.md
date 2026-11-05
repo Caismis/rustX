@@ -1,23 +1,23 @@
 # PR 517 comment implementation status
 
-Checked on 2026-11-05, Asia/Shanghai, against all fourteen top-level/review timeline
+Checked on 2026-11-05, Asia/Shanghai, against all fifteen top-level/review timeline
 entries, their IDs and update times, and the complete review-thread response.
-Comment 6641379632 adds pending-preparation outline serialization and preference coverage;
+The latest comment 6651081728 covers live clipping bounds and canvas focus;
 the inline-thread list was empty. This is an implementation inventory, not a public reply or an
 acceptance of the remaining latency budget. The current implementation and
-verification are recorded in [the large STEP report](step-200mb-validation.md).
+verification are recorded in [the whole-model LOD report](lod-validation.md).
 
 ## Requested PR work still open
 
 | Request | Current state | Source |
 | --- | --- | --- |
-| Approximately 200 MB geometry: first usable picture within 200 ms, every interaction below 50 ms, complete geometry when settled | The 200.762-MB STEP reference passes three native Host strict-gate runs with coarse/fine interaction maxima, complete settled triangles and retirement checks. General model-class acceptance remains open: the coordinate envelope omits topology/placements, and the historical large-STL first-display failure remains unrecertified. Loading text, P95 or smaller workloads cannot replace the gate. | [STEP evidence](step-200mb-validation.md), [historical surface evidence](surface-preview-optimization.md) |
+| Approximately 200 MB geometry: first usable picture within 200 ms, every interaction below 50 ms, complete geometry when settled | The 200.762-MB STEP reference passed three native Host strict-gate runs at revision 235559e78. These historical runs do not certify the new whole-model LOD pipeline. General model-class acceptance remains open: the coordinate envelope omits topology/placements, and the historical large-STL first-display failure remains unrecertified. Loading text, P95 or smaller workloads cannot replace the gate. | [Historical STEP evidence](step-200mb-validation.md), [historical surface evidence](surface-preview-optimization.md) |
 
 ## Roadmap and evidence follow-ups
 
 | Item | Status |
 | --- | --- |
-| Progressive computed CAD geometry | Implemented from completed-mesh callbacks without changing final tessellation. Up to 16 messages / 65,536 triangles / 8 MiB accumulate through one renderer/context, then hand off after quiet input. Native/receiver admission, data isolation, metadata gating and retirement are covered. Natural CAD output exposes a measured availability window; the controlled visual demonstration is separate from large-model latency acceptance. |
+| Whole-model CAD LOD refinement | Replaces the earlier completed-piece prefix. Coarse and medium tessellations cover the full model and atomically replace the prior level before final precision. Each optional tier has independent 65,536-triangle / 8-MiB admission; one parsed native document and one renderer/context remain. Historical per-piece captures do not certify this pipeline. |
 | Orthographic/perspective switch | Implemented on the existing renderer/context, preserving target-plane scale, direction and target. Effective orthographic zoom, picking, resize, standard views and same-copy restoration have regression coverage. |
 | Observable loading-stage labels | Implemented from actual reading, CAD initialization, import and display-preparation events. Worker observations are a finite ordered enum sequence, independent of terminal result validation and the original deadline. No guessed parser/tessellation milestones, percentages or ETA. |
 | Full per-Worker memory attribution | [Phase samples](review-performance-samples.json) now separate JS heap, backing storage and exported WASM memory, including two genuinely overlapping CAD Workers. These are sampled checkpoints, not peak allocation or GPU/driver attribution; the full peak comparison remains open. |
@@ -33,6 +33,7 @@ These follow-ups are not represented as disabled placeholder controls.
 
 | Comment | Implementation status |
 | --- | --- |
+| [6651081728](https://github.com/Caismis/rustX/pull/517#issuecomment-6651081728) | Each admitted whole-model tier refreshes clipping/navigation bounds without changing the active camera or gesture. Final adoption keeps the same canvas attached and preserves its keyboard focus, while external focus remains untouched. Real Three.js/OrbitControls regressions cover distant geometry, both projections, active gestures, focus, keyboard input and disposal. The browser regression also checks focused adoption. |
 | [6641379632](https://github.com/Caismis/rustX/pull/517#issuecomment-6641379632) | Manual outlines wait for the same import/surface retirement barrier as automatic requests. Only the latest preference can start a Worker; Off and disposal cancel queued work. A real-owner two-pane regression first reached four live Workers, then passed with a peak of two. A component regression preserves explicit Off after surface settlement. Worker/GPU boundaries are controlled in these deterministic tests; browser retirement is checked separately. |
 | [6636090073](https://github.com/Caismis/rustX/pull/517#issuecomment-6636090073) | Picking intersects admitted original geometry, independently of temporary display quality. A real-Raycaster dense-foreground/background test first reproduced the omitted-triangle error, then passed in both moving and complete modes. Original material/geometry references remain intact. Browser selection search is rerun in the current production-fixture validation. |
 | [6625398717](https://github.com/Caismis/rustX/pull/517#issuecomment-6625398717) | Preserve intended camera position/quaternion/zoom across real OrbitControls construction before applying the retained target and limits. Front/Top real-controls reproductions and the browser Focus/projection roundtrip cover tiny off-origin occurrences. Current verification and the still-failing performance gate are recorded in [the budget follow-up](budget-follow-up.md). |

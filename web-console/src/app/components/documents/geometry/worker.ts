@@ -1,4 +1,5 @@
 import { GeometryError } from './limits';
+import type { GeometryLodLevel } from './lod-data';
 import { modelTransfers, type GeometryModel } from './model';
 import type { GeometryFormat } from './format';
 import { optimizeModel } from './optimize';
@@ -6,9 +7,9 @@ import { geometryStageObserver, type GeometryImportStage } from './stages';
 import { previewJobs, preparePreviews } from './preview-data';
 import { GEOMETRY_LIMITS as L } from './limits';
 
-export function serveGeometry(importer: (bytes: Uint8Array<ArrayBuffer>, format: Exclude<GeometryFormat, 'glb'>, stage: (stage: GeometryImportStage) => void, module?: WebAssembly.Module, partial?: (model: GeometryModel, meshIndex: number) => void) => GeometryModel | Promise<GeometryModel>) {
+export function serveGeometry(importer: (bytes: Uint8Array<ArrayBuffer>, format: Exclude<GeometryFormat, 'glb'>, stage: (stage: GeometryImportStage) => void, module?: WebAssembly.Module, onLod?: (level: GeometryLodLevel, model: GeometryModel) => void) => GeometryModel | Promise<GeometryModel>) {
   let beginPreview: (() => void) | undefined;
-  globalThis.onmessage = (event: MessageEvent<{ kind?: 'preview-start'; bytes: Uint8Array<ArrayBuffer>; format: Exclude<GeometryFormat, 'glb'>; deadline: number; profile?: boolean; preparePreview?: boolean; progressive?: boolean; module?: WebAssembly.Module }>) => {
+  globalThis.onmessage = (event: MessageEvent<{ kind?: 'preview-start'; bytes: Uint8Array<ArrayBuffer>; format: Exclude<GeometryFormat, 'glb'>; deadline: number; profile?: boolean; preparePreview?: boolean; lod?: boolean; module?: WebAssembly.Module }>) => {
     if (event.data.kind === 'preview-start') { beginPreview?.(); beginPreview = undefined; return; }
     const { format, deadline, profile: profiling, preparePreview, module } = event.data;
     let bytes: Uint8Array<ArrayBuffer> | undefined = event.data.bytes; event.data.bytes = new Uint8Array();
@@ -18,12 +19,11 @@ export function serveGeometry(importer: (bytes: Uint8Array<ArrayBuffer>, format:
         observations.push({ stage: value, ms: performance.now() - start });
         globalThis.postMessage({ kind: 'stage', stage: value });
       });
-      let sequence = 0;
-      const partial = event.data.progressive ? (model: GeometryModel, meshIndex: number) => {
+      const onLod = event.data.lod ? (level: GeometryLodLevel, model: GeometryModel) => {
         if (performance.timeOrigin + performance.now() >= deadline) return;
-        globalThis.postMessage({ kind: 'partial', sequence: ++sequence, meshIndex, model }, { transfer: modelTransfers(model) });
+        globalThis.postMessage({ kind: 'lod', level, model }, { transfer: modelTransfers(model) });
       } : undefined;
-      let model = await importer(bytes!, format, stage, module, partial);
+      let model = await importer(bytes!, format, stage, module, onLod);
       const importedAt = performance.now();
       stage('preparing');
       // Cooperative 200 ms preparation budget. Start no optional work within

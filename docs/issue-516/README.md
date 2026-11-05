@@ -1,16 +1,22 @@
 # CAD sidebar validation
 
+[Whole-model LOD validation](lod-validation.md) records the current coarse,
+medium and final tessellations, exact native equivalence and browser scope.
+
 Geometry previews admit up to 200 MiB through authorized, single-version byte
 ranges. STEP can first show a labeled, source-version-bound coordinate envelope
-while full source reading and CAD import continue. Already computed CAD meshes
-can then progressively replace that envelope before the complete model is
-available, retaining their final precision and one renderer/context. Full-model moving pictures
+while full source reading and CAD import continue. CAD then refines the entire
+model through coarse and medium tessellations before the final precision, using
+one parsed document and one renderer/context. Every published level includes
+all parts; levels replace one another instead of adding completed pieces.
+The coordinate envelope is a loading aid, not a whole-model LOD. Full-model moving pictures
 preserve original shading and use bounded surface approximations where eligible; a
 settled view restores every admitted triangle, original shading and full pixel
 quality, then stops drawing. The current acceptance requirement is a usable
 model picture within 200 ms and every interaction below 50 ms on the fixed
-browser/test machine. The 200.762-MB STEP reference passes its scoped strict
-gate; **the complete contract across formats and model classes remains open**.
+browser/test machine. The earlier 200.762-MB STEP reference passed its scoped
+strict gate at revision `235559e78`; that result does not certify the new LOD
+pipeline. **The complete contract across formats and model classes remains open**.
 
 The [large STEP validation](step-200mb-validation.md) records the current
 approximately 200-MB STEP workload, actual native Host and browser outcomes,

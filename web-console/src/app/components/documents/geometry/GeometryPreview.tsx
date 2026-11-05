@@ -15,7 +15,7 @@ import { mountGeometry, prepareGeometryGraphics, type Part, type Projection, typ
 import type { Inspection } from './structure';
 import type { OutlineStatus } from './outlines';
 import { GeometryViewGlyph } from './GeometryViewGlyph';
-import { cameraFromPose, progressivePresentation, type GeometryBoundsHint } from './progressive';
+import { cameraFromPose, progressivePresentation } from './progressive';
 import { PartsTree } from './PartsTree';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Menu } from '../../../../presentation/primitives/Menu';
@@ -23,12 +23,12 @@ import { Tooltip } from '../../../../presentation/primitives/Tooltip';
 import { IconChecklistOutline14, IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import css from './GeometryPreview.module.css';
 
-export interface GeometryPreviewProps extends PreviewViewStateProps { bytes: Uint8Array<ArrayBuffer>; name: string; copyId: string; signal: AbortSignal; current: () => boolean; takeSource?: () => Uint8Array<ArrayBuffer> | undefined; releaseSource?: () => void; initialPose?:()=>GeometryRoughPose|undefined; initialBounds?:()=>GeometryBoundsHint|undefined; onDisplay?:()=>void; onFailure?:()=>void; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
-export default function GeometryPreview({ bytes, name, copyId, signal, current, takeSource, releaseSource, initialPose, initialBounds, onDisplay, onFailure, viewState, onViewStateChange, onGeometryRetire }: GeometryPreviewProps) {
+export interface GeometryPreviewProps extends PreviewViewStateProps { bytes: Uint8Array<ArrayBuffer>; name: string; copyId: string; signal: AbortSignal; current: () => boolean; takeSource?: () => Uint8Array<ArrayBuffer> | undefined; releaseSource?: () => void; initialPose?:()=>GeometryRoughPose|undefined; onDisplay?:()=>void; onFailure?:()=>void; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
+export default function GeometryPreview({ bytes, name, copyId, signal, current, takeSource, releaseSource, initialPose, onDisplay, onFailure, viewState, onViewStateChange, onGeometryRetire }: GeometryPreviewProps) {
   const locale = useLocale(), t = locale.active === 'zh' ? zh : en;
   const container = useRef<HTMLDivElement>(null), active = useRef<ReturnType<typeof mountGeometry>>(undefined), outlineAction = useRef(0);
-  const latest = useRef({ viewState, onViewStateChange, t, initialPose, initialBounds, onDisplay, onFailure }); latest.current = { viewState, onViewStateChange, t, initialPose, initialBounds, onDisplay, onFailure };
-  const [state, setState] = useState<{ stage?: GeometryImportStage; partial?: boolean; parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; selected?: string; hidden?: string[]; isolation?: string; projection?: Projection; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
+  const latest = useRef({ viewState, onViewStateChange, t, initialPose, onDisplay, onFailure }); latest.current = { viewState, onViewStateChange, t, initialPose, onDisplay, onFailure };
+  const [state, setState] = useState<{ stage?: GeometryImportStage; preview?: boolean; parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; selected?: string; hidden?: string[]; isolation?: string; projection?: Projection; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
   const [menu, setMenu] = useState(false);
   const [partsOpen, setPartsOpen] = useState(false), partsId = useId();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -63,8 +63,8 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
       const graphicsLost = () => { const publish = live(); retire(); if (publish) {setState({ error: 'webgl' });latest.current.onFailure?.();} };
       if (format === 'glb') stage('importing');
       const pending = format === 'glb' ? importGlb(bytes, controller.signal)
-        : parseGeometry(bytes, format, controller.signal, stage, () => live() ? takeSource?.() : undefined, format === 'stl' ? undefined : partial => {
-          if (live() && progressive) progressive.add(partial); else partial.dispose();
+        : parseGeometry(bytes, format, controller.signal, stage, () => live() ? takeSource?.() : undefined, format === 'stl' ? undefined : lod => {
+          if (live() && progressive) progressive.add(lod); else lod.dispose();
         });
       void pending.catch(() => {});
       try { graphics = prepareGeometryGraphics(format !== 'glb', graphicsLost); }
@@ -73,9 +73,9 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
         const props = latest.current;
         progressive = progressivePresentation({ container: container.current!, graphics, current: live, copyId, labels: () => latest.current.t,
           saved: props.viewState.geometry?.copyId === copyId ? props.viewState.geometry : undefined,
-          bounds: () => latest.current.initialBounds?.(), pose: () => latest.current.initialPose?.(),
+          pose: () => latest.current.initialPose?.(),
           mounted: view => { provisional = view; active.current = view ?? mounted; },
-          displayed: () => { if (live()) { setState(value => ({ ...value, partial: true })); latest.current.onDisplay?.(); } }, failed,
+          displayed: () => { if (live()) { setState(value => ({ ...value, preview: true })); latest.current.onDisplay?.(); } }, failed,
         });
       }
       const loaded = await pending; object = loaded.scene; bounds = loaded.bounds; release = loaded.dispose;
@@ -85,13 +85,13 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
         if (loaded.pendingPreview) startPreview = () => { if (live()) loaded.startPreview(); };
       }
       if (!live()) { retire(); return; }
-      const partialSeed = progressive ? await progressive.complete() : undefined;
+      const lodSeed = progressive ? await progressive.complete() : undefined;
       if (!live()) { retire(); return; }
       releaseSource?.();
       stage('preparing');
       const props = latest.current;let saved = props.viewState.geometry?.copyId === copyId ? props.viewState.geometry : undefined;
-      const seed = partialSeed?.pose ?? props.initialPose?.();
-      if (seed) saved = { ...saved, copyId, camera: cameraFromPose(seed, bounds, container.current!, partialSeed?.projection ?? saved?.camera?.projection) };
+      const seed = lodSeed?.pose ?? props.initialPose?.();
+      if (seed) saved = { ...saved, copyId, camera: cameraFromPose(seed, bounds, container.current!, lodSeed?.projection ?? saved?.camera?.projection) };
       mounted = mountGeometry(container.current!, object, bounds, saved, props.t, patch => {
         if (!live()) return;
         latest.current.onViewStateChange({ geometry: { copyId, ...patch } });
@@ -107,7 +107,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
       const measure = `geometry:display-prepare:${format}`;
       performance.clearMeasures(measure); performance.measure(measure, { start: displayStart });
       active.current = mounted;
-      setState(value => ({ ...value, partial: false, parts: mounted!.parts, projection: mounted!.projection, inspection: mounted!.inspect(), dimensions: [bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z] }));
+      setState(value => ({ ...value, preview: false, parts: mounted!.parts, projection: mounted!.projection, inspection: mounted!.inspect(), dimensions: [bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z] }));
       if (saved?.outlines !== false) requestOutlines(true);
       void prepared.then(() => { if (!live() || !mounted) return; mounted.refreshPreview(); });
     })().catch(failed);
@@ -134,7 +134,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
   }}>
     <div className={css.viewport} ref={container}>
       {state.error ? <div className={css.message} role="alert"><ModelGlyph/><p>{t[state.error]}</p></div>
-        : !state.parts && (state.partial ? <p className={css.partialStatus} role="status" aria-live="polite">{t.refining}</p> : <div className={css.loading} role="status" aria-live="polite"><span className={css.loader} aria-hidden="true"/><GeometryLoading stage={state.stage ?? 'loading'}/></div>)}
+        : !state.parts && (state.preview ? <p className={css.previewStatus} role="status" aria-live="polite">{t.refining}</p> : <div className={css.loading} role="status" aria-live="polite"><span className={css.loader} aria-hidden="true"/><GeometryLoading stage={state.stage ?? 'loading'}/></div>)}
       {!state.error && <>
         <div className={css.rail} role="toolbar" aria-label={t.controls} aria-orientation="vertical">
           <Tooltip label={t.fit} side="right" delayMs={500}><button type="button" className={css.control} disabled={!state.parts} aria-label={t.fit} onClick={() => active.current?.fit()}><FitGlyph/></button></Tooltip>

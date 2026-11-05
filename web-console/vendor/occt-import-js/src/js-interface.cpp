@@ -47,10 +47,8 @@ private:
 class HierarchyWriter
 {
 public:
-    HierarchyWriter (emscripten::val& meshesArr, const emscripten::val& onMesh) :
+    HierarchyWriter (emscripten::val& meshesArr) :
         mMeshesArr (meshesArr),
-        mOnMesh (onMesh),
-        mReportMeshes (onMesh.typeOf ().as<std::string> () == "function"),
         mMeshCount (0)
     {
     }
@@ -166,12 +164,6 @@ private:
 
             meshObj.set ("brep_faces", brepFaceArr);
 
-            // A completed mesh is already part of the final result. Optional
-            // consumers may display it while remaining meshes are exported.
-            if (mReportMeshes) {
-                mOnMesh (mMeshCount, meshObj);
-            }
-
             mMeshesArr.set (mMeshCount, meshObj);
             nodeMeshesArr.set (nodeMeshCount, mMeshCount);
             mMeshCount += 1;
@@ -180,29 +172,93 @@ private:
     }
 
     emscripten::val& mMeshesArr;
-    emscripten::val mOnMesh;
-    bool mReportMeshes;
     int mMeshCount;
 };
 
-static void EnumerateNodeMeshes (const NodePtr& node, const std::function<void (const Mesh&)>& onMesh)
+// Admission happens before any JavaScript mesh arrays are allocated. Exceeding
+// a limit discards the whole optional tier, never an incomplete set of parts.
+struct LodBudgetExceeded {};
+
+class LodBudget
 {
-    if (node->IsMeshNode ()) {
-        node->EnumerateMeshes (onMesh);
+public:
+    LodBudget () : bytes (0), triangles (0), meshes (0), nodes (0) {}
+
+    void AddBytes (size_t amount)
+    {
+        bytes += amount;
+        if (bytes > 8 * 1024 * 1024) {
+            throw LodBudgetExceeded ();
+        }
     }
-    std::vector<NodePtr> children = node->GetChildren ();
-    for (const NodePtr& child : children) {
-        EnumerateNodeMeshes (child, onMesh);
+
+    void Check (const NodePtr& node)
+    {
+        if (++nodes > 512) {
+            throw LodBudgetExceeded ();
+        }
+        AddBytes (256 + node->GetName ().size () * 4);
+        if (node->IsMeshNode ()) {
+            node->EnumerateMeshes ([&](const Mesh& mesh) {
+                if (++meshes > 256) {
+                    throw LodBudgetExceeded ();
+                }
+                AddBytes (512 + mesh.GetName ().size () * 4);
+                mesh.EnumerateFaces ([&](const Face& face) {
+                    AddBytes (128);
+                    face.EnumerateVertices ([&](double, double, double) {
+                        // Positions plus normals, including generated normals.
+                        AddBytes (6 * sizeof (double));
+                    });
+                    face.EnumerateTriangles ([&](int, int, int) {
+                        if (++triangles > 65536) {
+                            throw LodBudgetExceeded ();
+                        }
+                        AddBytes (3 * sizeof (double));
+                    });
+                });
+            });
+        }
+        for (const NodePtr& child : node->GetChildren ()) {
+            Check (child);
+        }
     }
+
+private:
+    size_t bytes;
+    size_t triangles;
+    size_t meshes;
+    size_t nodes;
+};
+
+static emscripten::val WriteResult (const NodePtr& rootNode)
+{
+    emscripten::val result (emscripten::val::object ());
+    emscripten::val root (emscripten::val::object ());
+    emscripten::val meshes (emscripten::val::array ());
+    HierarchyWriter writer (meshes);
+    writer.WriteNode (rootNode, root);
+    result.set ("success", true);
+    result.set ("root", root);
+    result.set ("meshes", meshes);
+    return result;
 }
 
-static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val& buffer, const ImportParams& params, const emscripten::val& options)
+static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val& buffer, const ImportParams& finalParams, const emscripten::val& options)
 {
-    emscripten::val resultObj (emscripten::val::object ());
+    emscripten::val onLod (emscripten::val::undefined ());
+    if (!options.isNull () && !options.isUndefined () && options.hasOwnProperty ("onLod")) {
+        onLod = options["onLod"];
+    }
+    bool reportLod = onLod.typeOf ().as<std::string> () == "function";
+    ImportParams params = finalParams;
+    if (reportLod) {
+        params.linearDeflectionType = ImportParams::LinearDeflectionType::BoundingBoxRatio;
+        params.linearDeflection = 0.02;
+        params.angularDeflection = 1.0;
+    }
 
     std::vector<uint8_t> bufferArr = emscripten::convertJSArrayToNumberVector<std::uint8_t> (buffer);
-    // The caller may relinquish an exclusively owned JS input after the native
-    // copy exists. No OCCT object has borrowed the JS backing buffer.
     if (!options.isNull () && !options.isUndefined () && options.hasOwnProperty ("onInputCopied")) {
         emscripten::val copied = options["onInputCopied"];
         if (copied.typeOf ().as<std::string> () == "function") {
@@ -210,29 +266,45 @@ static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val& 
         }
     }
     Importer::Result importResult = importer->LoadFile (bufferArr, params);
-    // TransferToDocument has settled its streams. Mesh extraction can reuse
-    // this space instead of retaining a source-sized native input allocation.
     std::vector<uint8_t> ().swap (bufferArr);
-    resultObj.set ("success", importResult == Importer::Result::Success);
     if (importResult != Importer::Result::Success) {
-        return resultObj;
+        emscripten::val result (emscripten::val::object ());
+        result.set ("success", false);
+        return result;
     }
 
-    int meshIndex = 0;
-    emscripten::val rootNodeObj (emscripten::val::object ());
-    emscripten::val meshesArr (emscripten::val::array ());
-    NodePtr rootNode = importer->GetRootNode ();
-
-    emscripten::val onMesh (emscripten::val::undefined ());
-    if (!options.isNull () && !options.isUndefined () && options.hasOwnProperty ("onMesh")) {
-        onMesh = options["onMesh"];
+    // Embedded BREP meshes are part of the source's original final result.
+    // Keep them intact instead of replacing them during optional refinement.
+    ImporterBrep* brep = dynamic_cast<ImporterBrep*> (importer.get ());
+    if (brep != nullptr && brep->HasSourceTriangulation ()) {
+        reportLod = false;
+        params = finalParams;
     }
-    HierarchyWriter hierarchyWriter (meshesArr, onMesh);
-    hierarchyWriter.WriteNode (rootNode, rootNodeObj);
 
-    resultObj.set ("root", rootNodeObj);
-    resultObj.set ("meshes", meshesArr);
-    return resultObj;
+    if (reportLod) {
+        for (int level = 0; level < 2; level++) {
+            if (level == 1) {
+                params.linearDeflection = 0.005;
+                params.angularDeflection = 0.75;
+            }
+            NodePtr rootNode = importer->GetRootNode ();
+            try {
+                LodBudget budget;
+                budget.Check (rootNode);
+                // Preflight has tessellated every root. Reusing those native
+                // triangulations during export avoids rebuilding the tier.
+                params.resetTriangulation = false;
+                onLod (level, WriteResult (rootNode));
+            } catch (const LodBudgetExceeded&) {
+                // The final full result remains available even when a preview
+                // cannot fit the independently bounded optional output.
+            }
+            params.resetTriangulation = true;
+        }
+        params = finalParams;
+        params.resetTriangulation = true;
+    }
+    return WriteResult (importer->GetRootNode ());
 }
 
 static ImportParams GetImportParams (const emscripten::val& paramsVal)

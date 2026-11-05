@@ -13,20 +13,34 @@ import { viewersForPath, loadsBytes } from '../src/app/components/workbench-docu
 
 const cadModule = await WebAssembly.compile(readFileSync(new URL('../node_modules/occt-import-js/dist/occt-import-js.wasm', import.meta.url)));
 const fixture = (name: string) => new Uint8Array(readFileSync(fileURLToPath(new URL(`./fixtures/geometry/${name}`, import.meta.url))));
-it('publishes completed CAD meshes before the final result without reducing their precision', async () => {
-  const partials: ReturnType<typeof convertCadResult>[] = [];
+it.each([['lod-assembly.step','step'],['lod-assembly.brep','brep']] as const)('publishes complete coarse and medium %s tessellations before the unchanged full result', async (file,format) => {
+  const tiers: { level: number; model: ReturnType<typeof convertCadResult> }[] = [];
   let complete = false;
-  const result = await importCad(fixture('bracket-array.step'), 'step', cadModule, undefined, false, partial => {
-    expect(complete).toBe(false); partials.push(partial);
+  const result = await importCad(fixture(file), format, cadModule, undefined, false, (level, model) => {
+    expect(complete).toBe(false); tiers.push({ level, model });
   });
   complete = true;
-  expect(partials.length).toBeGreaterThan(0); expect(partials.length).toBeLessThanOrEqual(16);
-  partials.forEach((partial,index) => expect(partial.meshes[0]).toEqual(result.meshes[index]));
+  expect(tiers.map(tier => tier.level)).toEqual([0,1]);
+  for (const tier of tiers) {
+    expect(tier.model.root).toEqual(result.root);
+    expect(tier.model.meshes.map(mesh => mesh.name)).toEqual(result.meshes.map(mesh => mesh.name));
+    expect(tier.model.meshes.length).toBeGreaterThan(1);
+  }
+  const triangles = (model: ReturnType<typeof convertCadResult>) => model.meshes.reduce((sum, mesh) => sum + mesh.indices!.length / 3, 0);
+  expect(triangles(tiers[0].model)).toBeLessThan(triangles(tiers[1].model));
+  expect(triangles(tiers[1].model)).toBeLessThan(triangles(result));
+  expect(result).toEqual(await importCad(fixture(file), format, cadModule));
 });
-it('keeps the final CAD result independent of mutations to a displayed fragment', async () => {
-  const source=fixture('bracket-array.step'),expected=await importCad(source,'step',cadModule);
-  const actual=await importCad(source,'step',cadModule,undefined,false,partial=>{
-    const mesh=partial.meshes[0];mesh.positions.fill(999);mesh.color?.fill(0);mesh.groups.forEach(group=>group.color.fill(0));partial.root.meshes.length=0;
+it('preserves embedded BREP triangulation by skipping LOD while retaining the unchanged final model', async () => {
+  const source=fixture('lod-assembly-meshed.brep'),publish=vi.fn();
+  const expected=await importCad(source,'brep',cadModule),actual=await importCad(source,'brep',cadModule,undefined,false,publish);
+  expect(publish).not.toHaveBeenCalled();expect(actual).toEqual(expected);expect(actual.meshes).toHaveLength(3);
+});
+it('keeps the final CAD result independent of mutations to whole-model tiers', async () => {
+  const source=fixture('lod-assembly.step'),expected=await importCad(source,'step',cadModule);
+  const actual=await importCad(source,'step',cadModule,undefined,false,(_level,model)=>{
+    for (const mesh of model.meshes) { mesh.positions.fill(999);mesh.color?.fill(0);mesh.groups.forEach(group=>group.color.fill(0)); }
+    model.root.meshes.length=0; model.root.children.length=0;
   });
   expect(actual).toEqual(expected);
 });

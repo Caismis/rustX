@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocale } from '../../../locale/react';
 import { en, zh } from '../../../locale/dictionaries/geometry';
 import type { GeometryPreviewProps } from './geometry/GeometryPreview';
@@ -6,7 +6,6 @@ import { geometryFormat } from './geometry/format';
 import { GeometryLoading } from './GeometryLoading';
 import { GeometryRoughPreview } from './GeometryRoughPreview';
 import type { GeometryRoughPose, GeometryRoughPreview as RoughData } from '../../../client/geometry-rough';
-import { roughSourceBounds } from '../../../client/geometry-rough';
 import css from './GeometryDocument.module.css';
 
 type Viewer = typeof import('./geometry/GeometryPreview').default;
@@ -28,7 +27,6 @@ export type GeometryDocumentProps = Omit<GeometryPreviewProps,'bytes'> & { bytes
 export function GeometryDocument(props: GeometryDocumentProps) {
   const locale = useLocale(), [Viewer, setViewer] = useState(() => loaded), [failed, setFailed] = useState(false);
   const [fineReady,setFineReady]=useState(false),[fineFailed,setFineFailed]=useState(false),pose=useRef<GeometryRoughPose|undefined>(undefined);
-  const initialBounds=useMemo(()=>roughSourceBounds(props.rough?.positions),[props.rough?.positions]);
   const [refineCopy,setRefineCopy]=useState<string>(),dragging=useRef(false),quiet=useRef<ReturnType<typeof setTimeout>>(undefined);
   const allowRefinement=!props.rough||refineCopy===props.copyId;
   const interaction=(active:boolean)=>{
@@ -53,7 +51,7 @@ export function GeometryDocument(props: GeometryDocumentProps) {
   // The explicit module state starts the admitted import as soon as code arrives.
   const {rough,bytes,...view}=props;
   return <div className={css.root}>
-    {Viewer && bytes && allowRefinement ? <Viewer {...view} bytes={bytes} initialPose={()=>pose.current} initialBounds={()=>initialBounds} onDisplay={()=>setFineReady(true)} onFailure={()=>setFineFailed(true)}/> : <p role={failed?'alert':'status'}>{failed?t.invalid:<GeometryLoading stage="loading"/>}</p>}
+    {Viewer && bytes && allowRefinement ? <Viewer {...view} bytes={bytes} initialPose={()=>pose.current} onDisplay={()=>setFineReady(true)} onFailure={()=>setFineFailed(true)}/> : <p role={failed?'alert':'status'}>{failed?t.invalid:<GeometryLoading stage="loading"/>}</p>}
     {rough && !fineReady && !fineFailed && !failed && <GeometryRoughPreview preview={rough} copyId={props.copyId} current={props.current} signal={props.signal} pose={pose} interaction={interaction} labels={t}/>}
   </div>;
 }

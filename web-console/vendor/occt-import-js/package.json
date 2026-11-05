@@ -1,10 +1,19 @@
 {
   "name": "occt-import-js",
-  "version": "0.0.23-rustx.2",
-  "description": "Pinned occt-import-js with bounded bulk Embind transfers",
+  "version": "0.0.23-rustx.3",
+  "description": "Pinned occt-import-js with bounded bulk transfers and whole-model LOD",
   "license": "LGPL-2.1",
   "main": "./dist/occt-import-js.js",
   "repository": "github:kovacsv/occt-import-js",
-  "browser": { "fs": false },
-  "files": ["dist", "src", "UPSTREAM.json", "rebuild.sh", "README.md", "LICENSE.md"]
+  "browser": {
+    "fs": false
+  },
+  "files": [
+    "dist",
+    "src",
+    "UPSTREAM.json",
+    "rebuild.sh",
+    "README.md",
+    "LICENSE.md"
+  ]
 }

@@ -8,7 +8,7 @@ export const GEOMETRY_LIMITS = Object.freeze({
   vertices: 13_000_000, triangles: 5_000_000, nodes: 512, parts: 256,
   depth: 32, materials: 256, drawCalls: 512, decodedBytes: 512 * 1024 * 1024,
   cadFaces: 1_000_000,
-  partialUpdates: 16, partialTriangles: 65_536, partialBytes: 8 * 1024 * 1024,
+  lodTriangles: 65_536, lodBytes: 8 * 1024 * 1024,
   movingTriangles: 20_000, movingPixels: 1_048_576, refineDelayMs: 120,
   previewTriangles: 200_000, previewBytes: 20 * 1024 * 1024, previewInputBytes: 16 * 1024 * 1024, previewError: .002, previewTimeoutMs: 2_000,
   preparationVertices: 1_000_000, preparationTriangles: 1_000_000,

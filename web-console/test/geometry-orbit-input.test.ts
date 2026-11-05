@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { Box3, BoxGeometry, Group, Mesh, MeshBasicMaterial, Vector2, Vector3 } from 'three';
-import { mountGeometry } from '../src/app/components/documents/geometry/viewport';
+import { Box3, BoxGeometry, Frustum, Group, Matrix4, Mesh, MeshBasicMaterial, OrthographicCamera, Vector2, Vector3 } from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mountGeometry, prepareGeometryGraphics } from '../src/app/components/documents/geometry/viewport';
+import { progressivePresentation } from '../src/app/components/documents/geometry/progressive';
 import { en } from '../src/locale/dictionaries/geometry';
 import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/limits';
 
@@ -122,4 +124,82 @@ it.each(['front', 'top'] as const)('preserves an off-origin tiny focused part th
   vi.advanceTimersByTime(L.refineDelayMs); draw();
   const renderer = runtime.renderers[0], draws = renderer.render.mock.calls.length;
   vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(renderer.render).toHaveBeenCalledTimes(draws);
+});
+
+it.each(['perspective', 'orthographic'] as const)('replaces a whole-model tier without interrupting a %s gesture and fits only the live model', projection => {
+  const element = document.createElement('div'); document.body.append(element);
+  Object.defineProperties(element, { clientWidth: { value: 640 }, clientHeight: { value: 480 } });
+  const graphics = prepareGeometryGraphics(true, vi.fn()), failed = vi.fn();
+  let view: ReturnType<typeof mountGeometry> | undefined;
+  const owner = progressivePresentation({ container: element, graphics, current: () => true, copyId: 'copy', labels: () => en,
+    mounted: value => { view = value; }, displayed: vi.fn(), failed });
+  const tier = (level: 0 | 1, offsets: number[]) => {
+    const scene = new Group(), geometry = new BoxGeometry(), material = new MeshBasicMaterial();
+    for (const offset of offsets) { const mesh = new Mesh(geometry, material); mesh.position.setScalar(offset); scene.add(mesh); }
+    return { level, scene, bounds: new Box3().setFromObject(scene), dispose: vi.fn(() => { scene.removeFromParent(); geometry.dispose(); material.dispose(); }) };
+  };
+  const first = tier(0, [10,11]), distant = tier(1, [10,-1000]), disposeControls = vi.spyOn(OrbitControls.prototype, 'dispose'), updateControls = vi.spyOn(OrbitControls.prototype, 'update');
+  try {
+    owner.add(first); draw(); draw();
+    view!.setProjection(projection); draw();
+    const renderer = runtime.renderers[0], canvas = renderer.domElement as HTMLCanvasElement;
+    canvas.focus(); expect(document.activeElement).toBe(canvas);
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -1000, bubbles: true, cancelable: true })); draw();
+    pointer(canvas, 'pointerdown', 300); pointer(document, 'pointermove', 320);
+    const camera = renderer.render.mock.calls.at(-2)![1], control = updateControls.mock.contexts.at(-1) as OrbitControls, graph = first.scene.parent!, before = {
+      position: camera.position.clone(), rotation: camera.quaternion.clone(), up: camera.up.clone(), zoom: camera.zoom, near: camera.near,
+      span: camera instanceof OrthographicCamera ? camera.top - camera.bottom : undefined,
+      origin: graph.parent!.position.clone(), target: control.target.clone(), minDistance: control.minDistance, maxDistance: control.maxDistance,
+    };
+    disposeControls.mockClear(); updateControls.mockClear();
+    owner.add(distant); draw(); draw();
+    expect(document.activeElement).toBe(canvas);
+    expect(camera.position.toArray()).toEqual(before.position.toArray()); expect(camera.quaternion.equals(before.rotation)).toBe(true);
+    expect(camera.up.equals(before.up)).toBe(true); expect(camera.zoom).toBe(before.zoom); expect(camera.near).toBe(before.near);
+    if (camera instanceof OrthographicCamera) expect(camera.top - camera.bottom).toBe(before.span);
+    expect(control.target.equals(before.target)).toBe(true); expect(control.minDistance).toBe(before.minDistance); expect(control.maxDistance).toBeGreaterThan(before.maxDistance);
+    expect(updateControls).not.toHaveBeenCalled();
+    expect(graph.parent!.position.equals(before.origin)).toBe(true); expect(graph.children).toEqual([distant.scene]); expect(first.dispose).toHaveBeenCalledOnce(); expect(disposeControls).not.toHaveBeenCalled();
+    expect(camera.far).toBeGreaterThan(camera.position.distanceTo(distant.bounds.getCenter(new Vector3())) + Math.sqrt(3));
+    pointer(document, 'pointermove', 340); pointer(document, 'pointerup', 340);
+    expect(camera.position.distanceTo(before.position)).toBeGreaterThan(0);
+    // A growth update must not clamp a close camera or the orthographic zoom
+    // when the next real input calls OrbitControls.update().
+    if (camera instanceof OrthographicCamera) expect(camera.zoom).toBe(before.zoom);
+    else expect(camera.position.distanceTo(before.position)).toBeLessThan(1);
+    for (const action of [() => view!.fit('front'), () => view!.reset()]) {
+      action(); draw(); camera.updateMatrixWorld(true);
+      const frustum = new Frustum().setFromProjectionMatrix(new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+      for (const admitted of [distant]) {
+        const box = new Box3().setFromObject(admitted.scene);
+        for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) expect(frustum.containsPoint(new Vector3(x, y, z))).toBe(true);
+      }
+    }
+    expect(runtime.renderers).toHaveLength(1); expect(failed).not.toHaveBeenCalled();
+  } finally { owner.dispose(); graphics.dispose(); disposeControls.mockRestore(); updateControls.mockRestore(); }
+});
+
+it.each(['canvas', 'external'] as const)('preserves %s focus through graphics handoff and keeps adopted keyboard navigation active', async focus => {
+  const element = document.createElement('div'), external = document.createElement('button'); document.body.append(element, external);
+  Object.defineProperties(element, { clientWidth: { value: 640 }, clientHeight: { value: 480 } });
+  const object = new Group(); object.add(new Mesh(new BoxGeometry(), new MeshBasicMaterial()));
+  const old = mountGeometry(element, object, new Box3().setFromObject(object), undefined, en, vi.fn(), vi.fn(), { generated: true, provisional: true }); mounted.push(old); draw();
+  const renderer = runtime.renderers[0], canvas = renderer.domElement as HTMLCanvasElement, focused = focus === 'canvas' ? canvas : external;
+  focused.focus(); expect(document.activeElement).toBe(focused);
+  const graphics = old.handoff(); expect(canvas.parentElement).toBe(element); expect(document.activeElement).toBe(focused);
+  const append = vi.spyOn(element, 'append'), changed = vi.fn();
+  const next = mountGeometry(element, object, new Box3().setFromObject(object), undefined, en, changed, vi.fn(), { generated: true, graphics }); mounted.push(next); draw();
+  expect(append).not.toHaveBeenCalledWith(canvas); append.mockRestore(); expect(document.activeElement).toBe(focused); expect(runtime.renderers).toHaveLength(1);
+  changed.mockClear();
+  focused.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight', bubbles: true, cancelable: true }));
+  await Promise.resolve(); vi.advanceTimersByTime(100);
+  if (focus === 'canvas') expect(changed).toHaveBeenCalledOnce();
+  else expect(changed).not.toHaveBeenCalled();
+  next.dispose(); expect(canvas.isConnected).toBe(false); expect(renderer.dispose).toHaveBeenCalledOnce();
+});
+
+it('removes the retained canvas when graphics are disposed before adoption', () => {
+  const f = mount(), graphics = f.view.handoff();
+  expect(f.canvas.isConnected).toBe(true); graphics!.dispose();
+  expect(f.canvas.isConnected).toBe(false); expect(f.renderer.dispose).toHaveBeenCalledOnce();
 });

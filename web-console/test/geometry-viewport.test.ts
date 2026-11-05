@@ -6,7 +6,7 @@ import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/l
 import { validateScene, modelScene, disposeScene } from '../src/app/components/documents/geometry/scene-resources';
 import { en } from '../src/locale/dictionaries/geometry';
 import { parseGeometry } from '../src/app/components/documents/geometry/parse';
-import { progressivePresentation } from '../src/app/components/documents/geometry/progressive';
+import { cameraFromPose, progressivePresentation } from '../src/app/components/documents/geometry/progressive';
 const runtime = vi.hoisted(() => ({ renderers: [] as any[], controls: [] as any[] }));
 vi.mock('three', async original => {
   const actual = await original<typeof import('three')>();
@@ -51,22 +51,31 @@ function mount(object = new Group(), saved?: Parameters<typeof mountGeometry>[3]
 }
 function draw() { while(microtasks.length)microtasks.shift()!();const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); }
 function move(control: any, x: number) { control.object.position.x = x; control.update(); }
-function fragment(x=0) {
-  const value=modelScene({meshes:[{name:'Computed',positions:new Float32Array([x,0,0,x+1,0,0,x,1,0]),groups:[]}],root:{name:'',meshes:[0],children:[]}});
-  return {scene:value.scene,bounds:value.bounds,dispose:vi.fn(()=>disposeScene([value.scene]))};
+function tier(level: 0 | 1 = 0, x=0) {
+  const value=modelScene({meshes:[0,2].map(offset=>({name:`Surface ${offset}`,positions:new Float32Array([x+offset,0,0,x+offset+1,0,0,x+offset,1,0]),groups:[]})),root:{name:'Assembly',meshes:[],children:[0,1].map(index=>({name:`Part ${index}`,meshes:[index],children:[]}))}});
+  return {level,scene:value.scene,bounds:value.bounds,dispose:vi.fn(()=>disposeScene([value.scene]))};
 }
-it('shows growing admitted fragments, waits for the active gesture, and upgrades with one context', async () => {
+it('replaces whole-model tiers, waits for the active gesture, and upgrades with one context', async () => {
   const element=document.createElement('div');Object.defineProperties(element,{clientWidth:{value:640},clientHeight:{value:480}});
-  const graphics=prepareGeometryGraphics(true,vi.fn()),displayed=vi.fn(),failed=vi.fn(),a=fragment(),b=fragment(2);
+  const graphics=prepareGeometryGraphics(true,vi.fn()),displayed=vi.fn(),failed=vi.fn(),a=tier(),b=tier(1,2);
   const owner=progressivePresentation({container:element,graphics,current:()=>true,copyId:'copy',labels:()=>en,mounted:vi.fn(),displayed,failed});
   try {
     owner.add(a);draw();draw();draw();expect(displayed).toHaveBeenCalledOnce();
-    const renderer=runtime.renderers[0];expect(renderer.domElement.dataset.geometryCompleteness).toBe('partial');
-    owner.add(b);draw();draw();expect(a.scene.parent).toBe(b.scene.parent);expect(a.scene.parent?.children).toHaveLength(2);
+    const renderer=runtime.renderers[0];expect(renderer.domElement.dataset.geometryCompleteness).toBe('preview');expect(renderer.domElement.dataset.geometryLod).toBe('coarse');
+    const graph=a.scene.parent;
+    renderer.compile.mockImplementation(() => {
+      expect(graph?.children).toEqual([b.scene]); expect(a.dispose).not.toHaveBeenCalled();
+      const names:string[]=[];graph!.traverse(part=>{if(part instanceof Mesh)names.push(part.name);});expect(names).toEqual(['Surface 0','Surface 2']);
+    });
+    owner.add(b);draw();draw();renderer.compile.mockReset();expect(a.scene.parent).toBeNull();expect(graph?.children).toEqual([b.scene]);expect(a.dispose).toHaveBeenCalledOnce();expect(renderer.domElement.dataset.geometryLod).toBe('medium');
     const control=runtime.controls.at(-1);control.dispatchEvent({type:'start'});move(control,control.object.position.x+1);
+    const expectedPosition=control.object.position.clone().add(a.bounds.getCenter(new Vector3())).sub(b.bounds.getCenter(new Vector3()));
+    const expectedTarget=control.target.clone().add(a.bounds.getCenter(new Vector3())).sub(b.bounds.getCenter(new Vector3()));
     let completed=false;const pending=owner.complete().then(value=>{completed=true;return value;});await Promise.resolve();expect(completed).toBe(false);
     control.dispatchEvent({type:'end'});await vi.advanceTimersByTimeAsync(119);expect(completed).toBe(false);
     await vi.advanceTimersByTimeAsync(1);const seed=await pending;expect(seed?.pose.direction.every(Number.isFinite)).toBe(true);
+    const restored=cameraFromPose(seed!.pose,b.bounds,element,seed!.projection);
+    expect(new Vector3().fromArray(restored.position).distanceTo(expectedPosition)).toBeLessThan(1e-12);expect(new Vector3().fromArray(restored.target).distanceTo(expectedTarget)).toBeLessThan(1e-12);
     expect(renderer.dispose).not.toHaveBeenCalled();expect(runtime.renderers).toHaveLength(1);
     const object=new Group();object.add(new Mesh(new BoxGeometry(),new MeshBasicMaterial()));
     const full=mountGeometry(element,object,new Box3().setFromObject(object),undefined,en,vi.fn(),vi.fn(),{generated:true,graphics});mounted.push(full);
@@ -74,14 +83,44 @@ it('shows growing admitted fragments, waits for the active gesture, and upgrades
     expect(runtime.renderers).toHaveLength(1);full.dispose();expect(renderer.dispose).toHaveBeenCalledOnce();expect(failed).not.toHaveBeenCalled();
   } finally {owner.dispose();graphics.dispose();}
 });
-it('drops an unpainted prefix when the final result is already available, without another view', async () => {
-  const graphics=prepareGeometryGraphics(true,vi.fn()),show=vi.fn(),a=fragment();
+it('disposes superseded unpainted tiers and mounts only the newest whole-model graph', () => {
+  const graphics=prepareGeometryGraphics(true,vi.fn()),coarse=tier(),medium=tier(1),mounted=vi.fn();
+  const owner=progressivePresentation({container:document.createElement('div'),graphics,current:()=>true,copyId:'copy',labels:()=>en,mounted,displayed:vi.fn(),failed:vi.fn()});
+  try {
+    owner.add(coarse);owner.add(medium);expect(coarse.dispose).toHaveBeenCalledOnce();expect(mounted).not.toHaveBeenCalled();
+    draw();draw();expect(runtime.controls).toHaveLength(1);expect(runtime.renderers[0].domElement.dataset.geometryLod).toBe('medium');
+    expect(medium.scene.parent?.children).toEqual([medium.scene]);expect(medium.dispose).not.toHaveBeenCalled();
+  } finally {owner.dispose();graphics.dispose();}
+  expect(medium.dispose).toHaveBeenCalledOnce();
+});
+it('uses only latest-tier bounds for reset and skips pending refinement when final is ready', async () => {
+  const element=document.createElement('div');Object.defineProperties(element,{clientWidth:{value:640},clientHeight:{value:480}});
+  const graphics=prepareGeometryGraphics(true,vi.fn()),coarse=tier(0,1000),medium=tier(1,-1000);let view:ReturnType<typeof mountGeometry>|undefined;
+  const owner=progressivePresentation({container:element,graphics,current:()=>true,copyId:'copy',labels:()=>en,mounted:value=>{view=value;},displayed:vi.fn(),failed:vi.fn()});
+  try {
+    owner.add(coarse);draw();draw();owner.add(medium);draw();draw();view!.reset();
+    expect(runtime.controls.at(-1).target.x).toBe(-2000);
+    const seed=await owner.complete();expect(seed).toBeUndefined();
+    const late=tier(1);owner.add(late);expect(late.dispose).toHaveBeenCalledOnce();
+  } finally {owner.dispose();graphics.dispose();}
+});
+it('disposes an unpainted newer tier immediately when a displayed tier hands off to final', async () => {
+  const graphics=prepareGeometryGraphics(true,vi.fn()),coarse=tier(),medium=tier(1),show=vi.fn();
+  const owner=progressivePresentation({container:document.createElement('div'),graphics,current:()=>true,copyId:'copy',labels:()=>en,mounted:show,displayed:vi.fn(),failed:vi.fn()});
+  try {
+    owner.add(coarse);draw();draw();const compilations=runtime.renderers[0].compile.mock.calls.length;
+    owner.add(medium);await owner.complete();draw();expect(medium.dispose).toHaveBeenCalledOnce();expect(runtime.renderers[0].compile).toHaveBeenCalledTimes(compilations);
+    expect(show.mock.lastCall).toEqual([undefined]);
+  } finally {owner.dispose();graphics.dispose();}
+});
+it('drops an unpainted LOD when the final result is already available, without another view', async () => {
+  const graphics=prepareGeometryGraphics(true,vi.fn()),show=vi.fn(),a=tier();
   const owner=progressivePresentation({container:document.createElement('div'),graphics,current:()=>true,copyId:'copy',labels:()=>en,mounted:show,displayed:vi.fn(),failed:vi.fn()});
   try{owner.add(a);await owner.complete();draw();expect(show).toHaveBeenCalledExactlyOnceWith(undefined);expect(runtime.controls).toHaveLength(0);owner.dispose();expect(a.dispose).toHaveBeenCalledOnce();}
   finally{owner.dispose();graphics.dispose();}
 });
 it('settles a progressive handoff on retirement and fences captured late rendering callbacks', async () => {
-  const graphics=prepareGeometryGraphics(true,vi.fn()),show=vi.fn(),a=fragment();
+  const graphics=prepareGeometryGraphics(true,vi.fn()),show=vi.fn(),a=tier();
   const owner=progressivePresentation({container:document.createElement('div'),graphics,current:()=>true,copyId:'copy',labels:()=>en,mounted:vi.fn(),displayed:show,failed:vi.fn()});
   owner.add(a);draw();draw();draw();runtime.controls.at(-1).dispatchEvent({type:'start'});
   const late=[...frames.values()],pending=owner.complete();owner.dispose();expect(await pending).toBeUndefined();late.forEach(callback=>callback(0));
@@ -91,8 +130,8 @@ it('settles a progressive handoff on retirement and fences captured late renderi
 it('keeps a provisional graph out of picking and outline preparation', async () => {
   const f=mount(undefined,undefined,{generated:true,provisional:true});f.changed.mockClear();
   f.view.select(f.view.parts.find(part=>part.kind==='mesh')!.id);expect(f.changed).not.toHaveBeenCalled();expect(await f.view.setOutlines(true)).toBe('off');
-  expect(f.renderer.domElement.dataset.geometryCompleteness).toBe('partial');
-  draw();expect(f.renderer.domElement.dataset.geometryQuality).toBe('partial');
+  expect(f.renderer.domElement.dataset.geometryCompleteness).toBe('preview');
+  draw();expect(f.renderer.domElement.dataset.geometryQuality).toBe('preview');
 });
 it('hands progressive content to the complete view through one renderer/context and retires old callbacks', () => {
   const oldReady=vi.fn(),nextReady=vi.fn(),f=mount(undefined,undefined,{generated:true,onFirstGpuReady:oldReady}); draw();
