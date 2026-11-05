@@ -27,19 +27,10 @@
 //! rejects an artifact root that equals the workspace root, nests inside it,
 //! or contains it (including symlink-resolved overlap).
 //!
-//! The managed tool-output root lives in a dedicated `tool-output/`
-//! directory below the runtime-private artifact root. Only that directory —
-//! never its enclosing runtime-private parent, which also holds the durable
-//! conversation database and semantic artifact internals — is authorized
-//! for runtime-managed read-only continuation operations. `ManagedToolOutput`
-//! separately rejects model-originated Write/Edit mutations of that root.
-//!
-//! Root composition is validated here, where the runtime composes those
-//! resources: the canonical managed-output root must be a strict dedicated
-//! descendant of the canonical artifact root and must stay disjoint from
-//! the canonical workspace root, and a pre-existing symlink at the
-//! `tool-output/` root is rejected. No runtime read root can therefore alias
-//! another, and the locator can rely on valid, disjoint roots.
+//! Managed output uses private temporary namespaces with trusted bindings in
+//! the Conversation resource allocation. Only those namespaces authorize
+//! runtime output reads and reject Native Write/Edit; neither their temporary
+//! parent nor the artifact root becomes a managed-output read root.
 //!
 //! # Durable authority binding
 //!
@@ -94,17 +85,6 @@ pub enum ConversationRuntimeError {
         /// The canonical artifact root.
         artifacts: PathBuf,
     },
-    /// The managed tool-output root is not a strict dedicated descendant
-    /// of the canonical artifact root, or it aliases the workspace root:
-    /// no authorized filesystem root may alias another.
-    ManagedOutputRootAlias {
-        /// The canonical managed tool-output root.
-        root: PathBuf,
-        /// The canonical artifact/runtime-private root.
-        artifacts: PathBuf,
-        /// The canonical workspace root.
-        workspace: PathBuf,
-    },
     /// The durable conversation store could not be opened.
     DurableConversation(String),
     /// The conversation's task list cannot be rebuilt from its own
@@ -134,18 +114,6 @@ impl core::fmt::Display for ConversationRuntimeError {
                 f,
                 "the artifact root {} and the workspace root {} must be disjoint \
                  filesystem regions",
-                artifacts.display(),
-                workspace.display()
-            ),
-            Self::ManagedOutputRootAlias {
-                root,
-                artifacts,
-                workspace,
-            } => write!(
-                f,
-                "the managed tool-output root {} must be a strict dedicated descendant of the \
-                 artifact root {} and must not alias the workspace root {}",
-                root.display(),
                 artifacts.display(),
                 workspace.display()
             ),
@@ -428,7 +396,8 @@ impl ConversationToolRuntime {
             for path in [
                 config.artifacts_dir.clone(),
                 config.artifacts_dir.join("conversation.sqlite"),
-                config.artifacts_dir.join("tool-output"),
+                config.artifacts_dir.join("output-namespaces.json"),
+                config.artifacts_dir.join("output-namespaces.lock"),
             ] {
                 root.confined(&path).map_err(|error| {
                     ConversationRuntimeError::Artifacts(ArtifactError::RootUnavailable(
@@ -471,18 +440,12 @@ impl ConversationToolRuntime {
         let artifacts = ArtifactStore::new(conversation_id.clone(), &artifacts_root)
             .map_err(ConversationRuntimeError::Artifacts)?
             .with_lifecycle(config.lifecycle.clone());
-        // The managed tool-output root is a *dedicated* region below the
-        // runtime-private root: textual spill files must be model-readable
-        // through the read-only filesystem tools, but the enclosing
-        // runtime-private region (the durable conversation database, the
-        // semantic artifact internals) must not. The runtime read locator
-        // therefore authorizes exactly this root, never its parent, while
-        // ManagedToolOutput rejects model-originated mutation there.
-        let tool_output =
-            ManagedToolOutput::new(conversation_id.clone(), artifacts_root.join("tool-output"))
-                .map_err(ConversationRuntimeError::ManagedOutput)?
-                .with_lifecycle(config.lifecycle.clone());
-        validate_managed_output_root(workspace.root(), &artifacts_root, tool_output.root())?;
+        // Temporary output has explicit Conversation-local ownership metadata;
+        // the artifact region and OS temporary root grant no output authority.
+        let tool_output = ManagedToolOutput::new(conversation_id.clone(), &artifacts_root)
+            .map_err(ConversationRuntimeError::ManagedOutput)?
+            .with_workspace_root(workspace.root())
+            .with_lifecycle(config.lifecycle.clone());
         let clock = config
             .clock
             .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn RuntimeClock>);
@@ -851,40 +814,6 @@ fn validate_disjoint_storage(
     Ok(())
 }
 
-/// Validates the managed tool-output root composition invariant: the
-/// canonical managed root must be a strict dedicated descendant of the
-/// canonical artifact root and must stay disjoint from the canonical
-/// workspace root, so no authorized filesystem root aliases another.
-///
-/// All three roots are canonical at this point, and
-/// [`ManagedToolOutput::new`] has already rejected a pre-existing symlink
-/// at the dedicated root itself; this check is the composition-level
-/// guarantee the runtime read locator and mutation guard rely on.
-fn validate_managed_output_root(
-    workspace_root: &Path,
-    artifacts_root: &Path,
-    tool_output_root: &Path,
-) -> Result<(), ConversationRuntimeError> {
-    let alias = || ConversationRuntimeError::ManagedOutputRootAlias {
-        root: tool_output_root.to_path_buf(),
-        artifacts: artifacts_root.to_path_buf(),
-        workspace: workspace_root.to_path_buf(),
-    };
-    // A strict dedicated descendant of the artifact root: neither equal to
-    // it nor escaped from it.
-    if tool_output_root == artifacts_root || !tool_output_root.starts_with(artifacts_root) {
-        return Err(alias());
-    }
-    // Disjoint from the workspace in both directions.
-    if tool_output_root == workspace_root
-        || tool_output_root.starts_with(workspace_root)
-        || workspace_root.starts_with(tool_output_root)
-    {
-        return Err(alias());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{ConversationRuntimeConfig, ConversationRuntimeError, ConversationToolRuntime};
@@ -994,128 +923,38 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn a_tool_output_symlink_to_the_workspace_is_rejected() {
-        use std::os::unix::fs::symlink;
-        let dir = tempfile::tempdir().expect("temp dir");
-        fs::create_dir_all(dir.path().join("workspace")).expect("create");
-        fs::create_dir_all(dir.path().join("artifacts")).expect("create");
-        symlink(
-            dir.path().join("workspace"),
-            dir.path().join("artifacts/tool-output"),
-        )
-        .expect("symlink");
-        let error = ConversationToolRuntime::new(
-            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
-            dir.path().join("workspace"),
-            dir.path().join("artifacts"),
-        )
-        .expect_err("a tool-output symlink to the workspace must be rejected");
-        assert!(
-            matches!(
-                error,
-                ConversationRuntimeError::ManagedOutput(
-                    crate::tools::managed_output::ManagedOutputError::SymlinkRoot(_)
-                )
-            ),
-            "got {error:?}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_tool_output_symlink_to_the_artifact_root_is_rejected() {
-        use std::os::unix::fs::symlink;
-        let dir = tempfile::tempdir().expect("temp dir");
-        fs::create_dir_all(dir.path().join("workspace")).expect("create");
-        fs::create_dir_all(dir.path().join("artifacts")).expect("create");
-        symlink(
-            dir.path().join("artifacts"),
-            dir.path().join("artifacts/tool-output"),
-        )
-        .expect("symlink");
-        let error = ConversationToolRuntime::new(
-            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
-            dir.path().join("workspace"),
-            dir.path().join("artifacts"),
-        )
-        .expect_err("a tool-output symlink to the artifact root must be rejected");
-        assert!(
-            matches!(
-                error,
-                ConversationRuntimeError::ManagedOutput(
-                    crate::tools::managed_output::ManagedOutputError::SymlinkRoot(_)
-                )
-            ),
-            "got {error:?}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_tool_output_symlink_to_an_external_directory_is_rejected() {
-        use std::os::unix::fs::symlink;
-        let dir = tempfile::tempdir().expect("temp dir");
-        fs::create_dir_all(dir.path().join("workspace")).expect("create");
-        fs::create_dir_all(dir.path().join("artifacts")).expect("create");
-        fs::create_dir_all(dir.path().join("external")).expect("create");
-        symlink(
-            dir.path().join("external"),
-            dir.path().join("artifacts/tool-output"),
-        )
-        .expect("symlink");
-        let error = ConversationToolRuntime::new(
-            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
-            dir.path().join("workspace"),
-            dir.path().join("artifacts"),
-        )
-        .expect_err("a tool-output symlink to an external directory must be rejected");
-        assert!(
-            matches!(
-                error,
-                ConversationRuntimeError::ManagedOutput(
-                    crate::tools::managed_output::ManagedOutputError::SymlinkRoot(_)
-                )
-            ),
-            "got {error:?}"
-        );
-    }
-
-    /// A normal real `tool-output/` directory satisfies the composition
-    /// invariant: construction succeeds, the managed root is a strict
-    /// descendant of the canonical artifact root, and `ManagedToolOutput` owns
-    /// its model-mutation guard.
-    #[test]
-    fn a_real_tool_output_directory_is_accepted_and_read_only() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        fs::create_dir_all(dir.path().join("workspace")).expect("create");
+    fn temporary_output_is_disjoint_and_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("workspace")).unwrap();
         let runtime = ConversationToolRuntime::new(
             ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("workspace"),
             dir.path().join("artifacts"),
         )
-        .expect("a real tool-output directory is accepted");
-        let managed = runtime.tool_output().root().to_path_buf();
+        .unwrap();
+        let managed = runtime.tool_output().root().unwrap();
         assert!(managed.is_dir());
+        assert!(!managed.starts_with(runtime.artifacts().root()));
+        assert!(!dir.path().join("artifacts/tool-output").exists());
+        let spill = runtime.tool_output().open_spill().unwrap();
+        crate::tools::locator::resolve(
+            runtime.workspace(),
+            runtime.tool_output(),
+            spill.path().to_str().unwrap(),
+        )
+        .unwrap();
         assert!(
-            managed.starts_with(runtime.artifacts().root())
-                && managed != runtime.artifacts().root(),
-            "the managed root is a strict descendant of the artifact root"
+            runtime
+                .tool_output()
+                .ensure_model_mutation_allowed(&managed)
+                .is_err()
         );
-        let spill = runtime.tool_output().open_spill().expect("spill");
-        let locator = spill.path().to_str().expect("utf8 path").to_owned();
-        drop(spill);
-        crate::tools::locator::resolve(runtime.workspace(), runtime.tool_output(), &locator)
-            .expect("the managed root is readable");
         assert!(
-            matches!(
-                runtime
-                    .tool_output()
-                    .ensure_model_mutation_allowed(&managed),
-                Err(crate::tools::managed_output::ManagedOutputError::ModelMutationReadOnly(_))
-            ),
-            "the managed root is read-only to model-originated mutation"
+            runtime
+                .tool_output()
+                .ensure_model_mutation_allowed(managed.parent().unwrap())
+                .is_ok()
         );
     }
 

@@ -551,8 +551,10 @@ async fn managed_output_is_readable_but_model_mutation_cannot_replace_a_live_ino
 #[tokio::test]
 async fn managed_output_descendants_are_rejected_before_parent_creation() {
     let fixture = native_fixture();
-    let root = fixture.runtime.tool_output().root();
-    let missing = root.join("tasks").join("new/deep/file.txt");
+    let root = fixture.runtime.tool_output().root().unwrap();
+    std::fs::create_dir_all(root.join("stored")).unwrap();
+    std::fs::create_dir_all(root.join("nested")).unwrap();
+    let missing = root.join("nested").join("new/deep/file.txt");
     let write = run_tool(
         &fixture,
         "write",
@@ -563,9 +565,9 @@ async fn managed_output_descendants_are_rejected_before_parent_creation() {
     )
     .await;
     assert_failed_contains(&write, "managed tool-output root");
-    assert!(!root.join("tasks/new").exists());
+    assert!(!root.join("nested/new").exists());
 
-    let existing = root.join("results/existing.txt");
+    let existing = root.join("stored/existing.txt");
     std::fs::write(&existing, "original").expect("managed fixture");
     let edit_result = run_tool(
         &fixture,
@@ -579,7 +581,7 @@ async fn managed_output_descendants_are_rejected_before_parent_creation() {
     assert_failed_contains(&edit_result, "managed tool-output root");
     assert_eq!(std::fs::read_to_string(existing).unwrap(), "original");
 
-    let lexical = root.join("tasks/../results/lexical.txt");
+    let lexical = root.join("nested/../stored/lexical.txt");
     let lexical_result = run_tool(
         &fixture,
         "write",
@@ -590,9 +592,9 @@ async fn managed_output_descendants_are_rejected_before_parent_creation() {
     )
     .await;
     assert_failed_contains(&lexical_result, "managed tool-output root");
-    assert!(!root.join("results/lexical.txt").exists());
+    assert!(!root.join("stored/lexical.txt").exists());
 
-    let lexical_missing = root.join("tasks/missing/../results/lexical-missing.txt");
+    let lexical_missing = root.join("nested/missing/../stored/lexical-missing.txt");
     let lexical_missing_result = run_tool(
         &fixture,
         "write",
@@ -603,7 +605,7 @@ async fn managed_output_descendants_are_rejected_before_parent_creation() {
     )
     .await;
     assert_failed_contains(&lexical_missing_result, "managed tool-output root");
-    assert!(!root.join("tasks/missing").exists());
+    assert!(!root.join("nested/missing").exists());
 }
 
 #[cfg(unix)]
@@ -612,8 +614,9 @@ async fn managed_output_symlink_mutations_are_rejected_without_side_effects() {
     use std::os::unix::fs::symlink;
 
     let fixture = native_fixture();
-    let managed_root = fixture.runtime.tool_output().root();
-    let managed_file = managed_root.join("tasks/managed.txt");
+    let managed_root = fixture.runtime.tool_output().root().unwrap();
+    std::fs::create_dir_all(managed_root.join("nested")).unwrap();
+    let managed_file = managed_root.join("nested/managed.txt");
     std::fs::write(&managed_file, "original").expect("managed fixture");
 
     let final_link = workspace_path(&fixture, "managed-final-link.txt");
@@ -637,7 +640,7 @@ async fn managed_output_symlink_mutations_are_rejected_without_side_effects() {
     );
 
     let ancestor_link = workspace_path(&fixture, "managed-ancestor");
-    symlink(managed_root.join("tasks"), &ancestor_link).expect("ancestor symlink");
+    symlink(managed_root.join("nested"), &ancestor_link).expect("ancestor symlink");
     let ancestor_target = ancestor_link.join("new.txt");
     let ancestor_result = run_tool(
         &fixture,
@@ -649,9 +652,9 @@ async fn managed_output_symlink_mutations_are_rejected_without_side_effects() {
     )
     .await;
     assert_failed_contains(&ancestor_result, "managed tool-output root");
-    assert!(!managed_root.join("tasks/new.txt").exists());
+    assert!(!managed_root.join("nested/new.txt").exists());
 
-    let dangling_target = managed_root.join("tasks/dangling.txt");
+    let dangling_target = managed_root.join("nested/dangling.txt");
     let dangling_link = workspace_path(&fixture, "managed-dangling-link.txt");
     symlink(&dangling_target, &dangling_link).expect("dangling final symlink");
     let dangling_result = run_tool(
@@ -667,7 +670,7 @@ async fn managed_output_symlink_mutations_are_rejected_without_side_effects() {
     assert!(!dangling_target.exists());
 
     let lexical_link = workspace_path(&fixture, "managed-lexical-link");
-    symlink(managed_root.join("tasks"), &lexical_link).expect("lexical ancestor symlink");
+    symlink(managed_root.join("nested"), &lexical_link).expect("lexical ancestor symlink");
     let lexical_target = lexical_link.join("../managed-lexical-link/lexical-managed.txt");
     let lexical_result = run_tool(
         &fixture,
@@ -679,7 +682,7 @@ async fn managed_output_symlink_mutations_are_rejected_without_side_effects() {
     )
     .await;
     assert_failed_contains(&lexical_result, "managed tool-output root");
-    assert!(!managed_root.join("tasks/lexical-managed.txt").exists());
+    assert!(!managed_root.join("nested/lexical-managed.txt").exists());
 }
 
 #[cfg(unix)]

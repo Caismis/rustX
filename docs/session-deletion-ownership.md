@@ -200,14 +200,14 @@ Authoritative layout:
 runtime/                              stable ownership-transition lock inode
   .product-writer.lock                permanent controller lock inode
   sessions/catalog.json               shared file; target is one Session record
-  sessions/<SessionId>/conversations/<ConversationId>/
+  sessions/<SessionId>/conversations/<ConversationId>/  nodes and owned children
     conversation.sqlite               bound identity and linear durable authority
     artifact_*.bin                    Conversation-private semantic artifacts
-    tool-output/                      Conversation-owned managed output
-  subagents/<ConversationId>/          owned only through a durable parent commit
-    conversation.sqlite
-    inspection liveness sidecar
+    output-namespaces.json            trusted temporary namespace bindings
+    output-namespaces.lock            binding publication exclusion
+    .inspection-live                 disposable child inspection lease
     incarnation-*/                    exclusively allocated child-private resources
+  .<inspection-token>                 short child inspection socket
   environments/                       shared; outside the cascade
 ```
 
@@ -290,3 +290,27 @@ uncertainty, recovery, allocator monotonicity, catalog generations, bounded App 
 Preview never retains `ConversationExclusion` while awaiting user confirmation.
 Final inspection remains under the ownership snapshot through exclusion acquisition,
 revision revalidation and catalog commit. Runtime residency alone is no blocker.
+
+## Disposable tool output namespaces
+
+Managed output lives outside the product root, in private short directories under
+`std::env::temp_dir()`. Each Conversation allocation retains trusted namespace
+bindings with the canonical path, device/inode and ownership token; the namespace
+marker additionally binds the private allocation and Conversation identity.
+Ownership inspection fingerprints these bindings without requiring output files
+to exist. No historical path or `rx-*` wildcard grants deletion authority.
+
+Cleanup runs after the deletion commit, under the existing Conversation exclusion,
+and before removing that Conversation's private metadata. It validates each
+namespace and unlinks flat entries through directory descriptors. Missing
+namespaces are already cleaned; an existing directory without a valid ownership
+marker fails closed even if empty, because an inode may have been reused. Other
+errors preserve the private metadata and
+return existing cleanup-pending semantics. Open spill/background sinks keep the
+ConversationAccess pin even after external unlink. Process exit, runtime detach,
+Session switching and tool completion never clean published output.
+
+Fork/clone references and imported archive history do not transfer namespace
+ownership. Child Conversation bindings belong to the Session selected by native
+ownership commits. Temporary removal cannot corrupt required history or artifacts.
+See [the output contract](issue-520/README.md).

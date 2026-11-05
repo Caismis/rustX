@@ -1079,3 +1079,226 @@ fn issue422_deletion_membership_changes_once_before_cleanup_even_when_uncertain(
         assert_eq!(log.next_after(sequence), None);
     }
 }
+
+#[test]
+fn temporary_outputs_keep_writer_exclusion_and_cleanup_only_the_owned_session() {
+    use crate::tools::managed_output::ManagedToolOutput;
+    let (dir, mut catalog, preview) = fixture();
+    let temporary = dir.path().join("temporary root with spaces");
+    std::fs::create_dir(&temporary).unwrap();
+    let conversation = preview.scopes[0].conversation().clone();
+    let private = catalog
+        .database_path(&preview.session_id, &conversation)
+        .parent()
+        .unwrap()
+        .to_owned();
+    let access = Arc::new(ConversationAccess::existing(&catalog.product, &private).unwrap());
+    let output = ManagedToolOutput::new_in_temp_root(conversation.clone(), &private, &temporary)
+        .unwrap()
+        .with_lifecycle(Some(access.clone()));
+    let mut writer = output.open_spill().unwrap();
+    writer.write_all("owned").unwrap();
+    let namespace = output.root().unwrap();
+    let other_session = catalog
+        .persisted_session_ids()
+        .into_iter()
+        .find(|id| id != &preview.session_id)
+        .unwrap();
+    let other = catalog.snapshot(&other_session).unwrap();
+    let other_private = catalog
+        .database_path(&other_session, &other.active_conversation_id)
+        .parent()
+        .unwrap()
+        .to_owned();
+    let other_output = ManagedToolOutput::new_in_temp_root(
+        other.active_conversation_id.clone(),
+        &other_private,
+        &temporary,
+    )
+    .unwrap();
+    let mut retained = other_output.open_spill().unwrap();
+    retained.write_all("other Session").unwrap();
+    let other_path = retained.path().to_owned();
+    drop(retained);
+    drop(other_output);
+    let additional =
+        ManagedToolOutput::new_in_temp_root(conversation.clone(), &private, &temporary).unwrap();
+    let retained_namespace = additional
+        .open_spill()
+        .unwrap()
+        .path()
+        .parent()
+        .unwrap()
+        .to_owned();
+    drop(additional);
+    // External unlink never releases a writer's ConversationAccess pin.
+    std::fs::remove_dir_all(&namespace).unwrap();
+    // Deterministic handoff: only a detached writer holds ConversationAccess.
+    drop(output);
+    drop(access);
+    let SessionDeleteResult::Preview { preview } = catalog.delete_preview(&preview.session_id)
+    else {
+        panic!("preview");
+    };
+    assert!(matches!(
+        catalog
+            .commit_delete(&preview.session_id, &preview.target_revision)
+            .unwrap(),
+        Err(SessionDeleteResult::Blocked {
+            reason: DeletionBlocker::ResourceConflict,
+            ..
+        })
+    ));
+    let (release, released) = std::sync::mpsc::channel();
+    let (done, completed) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        released.recv().unwrap();
+        drop(writer);
+        done.send(()).unwrap();
+    });
+    release.send(()).unwrap();
+    completed.recv().unwrap();
+    thread.join().unwrap();
+    let work = catalog
+        .commit_delete(&preview.session_id, &preview.target_revision)
+        .unwrap()
+        .unwrap();
+    let result = work.run();
+    assert!(result.is_ok(), "{result:?}");
+    assert!(matches!(
+        catalog.finish_delete(&work.record, result),
+        SessionDeleteResult::Deleted { .. }
+    ));
+    assert!(!namespace.exists());
+    assert!(!retained_namespace.exists());
+    assert_eq!(
+        std::fs::read_to_string(other_path).unwrap(),
+        "other Session"
+    );
+}
+
+#[test]
+fn temporary_cleanup_failure_stays_pending_and_missing_namespace_is_idempotent() {
+    use crate::tools::managed_output::ManagedToolOutput;
+    let (dir, mut catalog, preview) = fixture();
+    let temporary = dir.path().join("temporary");
+    std::fs::create_dir(&temporary).unwrap();
+    let conversation = preview.scopes[0].conversation().clone();
+    let private = catalog
+        .database_path(&preview.session_id, &conversation)
+        .parent()
+        .unwrap()
+        .to_owned();
+    let output = ManagedToolOutput::new_in_temp_root(conversation, &private, &temporary).unwrap();
+    let namespace = output.root().unwrap();
+    std::fs::create_dir(namespace.join("unexpected")).unwrap();
+    drop(output);
+    let SessionDeleteResult::Preview { preview } = catalog.delete_preview(&preview.session_id)
+    else {
+        panic!("preview");
+    };
+    let work = catalog
+        .commit_delete(&preview.session_id, &preview.target_revision)
+        .unwrap()
+        .unwrap();
+    let result = work.run();
+    assert!(result.is_err());
+    assert!(matches!(
+        catalog.finish_delete(&work.record, result),
+        SessionDeleteResult::CommittedCleanupPending { .. }
+    ));
+    assert!(private.join("output-namespaces.json").exists());
+    assert!(catalog.snapshot(&preview.session_id).is_err());
+    std::fs::remove_dir_all(&namespace).unwrap();
+    let work = catalog.recover_delete(&preview.session_id).unwrap();
+    let result = work.run();
+    assert!(result.is_ok());
+    assert!(matches!(
+        catalog.finish_delete(&work.record, result),
+        SessionDeleteResult::Deleted { .. }
+    ));
+}
+
+#[test]
+fn cloned_history_keeps_source_locator_without_transferring_namespace_ownership() {
+    use crate::tools::managed_output::ManagedToolOutput;
+    use crate::tools::types::ManagedOutputContinuation;
+    let (dir, mut catalog, _) = open_catalog();
+    let source_session = first_session(&catalog);
+    let source_node = catalog.snapshot(&source_session).unwrap();
+    let conversation = source_node.active_conversation_id.clone();
+    let private = catalog
+        .database_path(&source_session, &conversation)
+        .parent()
+        .unwrap()
+        .to_owned();
+    let temporary = dir.path().join("temporary");
+    std::fs::create_dir(&temporary).unwrap();
+    let output =
+        ManagedToolOutput::new_in_temp_root(conversation.clone(), &private, &temporary).unwrap();
+    let mut spill = output.open_spill().unwrap();
+    spill.write_all("source full output").unwrap();
+    let locator = spill.path().to_owned();
+    let mut history = source_history();
+    let MessageBlock::Tool(tool) = &mut history[2] else {
+        panic!("tool");
+    };
+    tool.result.managed_output = Some(Box::new(ManagedOutputContinuation::Complete {
+        locator: locator.clone(),
+    }));
+    let (_, _, node) = append_history(&catalog, &history);
+    let source = store_for(&catalog, &source_session, &conversation);
+    let revision = source.load_head().unwrap().revision;
+    let lineage = lineage_at(&source, &conversation, revision);
+    let clone = catalog.prepare_clone_session(&state(), &lineage).unwrap();
+    catalog
+        .publish_session(
+            &clone,
+            SessionNodeOrigin::Clone {
+                source_session: source_session.clone(),
+                source_node: node,
+                source_surface_revision: revision,
+            },
+        )
+        .unwrap();
+    let clone_id = clone.session_id.clone();
+    let cloned = catalog.snapshot(&clone_id).unwrap();
+    let cloned_private = catalog
+        .database_path(&clone_id, &cloned.active_conversation_id)
+        .parent()
+        .unwrap()
+        .to_owned();
+    assert!(!cloned_private.join("output-namespaces.json").exists());
+    drop((source, output, spill, catalog));
+    let mut catalog = reopen_catalog(dir.path());
+    assert_eq!(
+        std::fs::read_to_string(&locator).unwrap(),
+        "source full output"
+    );
+    let SessionDeleteResult::Preview { preview } = catalog.delete_preview(&clone_id) else {
+        panic!("clone preview");
+    };
+    let work = catalog
+        .commit_delete(&clone_id, &preview.target_revision)
+        .unwrap()
+        .unwrap();
+    let result = work.run();
+    assert!(matches!(
+        catalog.finish_delete(&work.record, result),
+        SessionDeleteResult::Deleted { .. }
+    ));
+    assert_eq!(
+        std::fs::read_to_string(&locator).unwrap(),
+        "source full output"
+    );
+    std::fs::remove_dir_all(locator.parent().unwrap()).unwrap();
+    drop(catalog);
+    let catalog = reopen_catalog(dir.path());
+    let recovered = store_for(&catalog, &source_session, &conversation)
+        .load_canonical()
+        .unwrap();
+    assert_eq!(recovered, history);
+    let resumed = ManagedToolOutput::new_in_temp_root(conversation, &private, &temporary).unwrap();
+    assert!(resumed.open_spill().is_ok());
+    assert!(!locator.exists());
+}

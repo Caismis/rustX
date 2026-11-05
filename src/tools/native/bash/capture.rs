@@ -270,11 +270,11 @@ mod settlement_tests {
                 directory.path().join("tool-output"),
             )
             .unwrap();
-            let results = store.root().join("results");
+            let results = store.root().unwrap();
             if write_failure {
                 store.fail_writes_after(0);
             } else {
-                std::fs::remove_dir(&results).unwrap();
+                std::fs::remove_dir_all(&results).unwrap();
                 std::fs::write(&results, "not a directory").unwrap();
             }
             let (tx, rx) = tokio::sync::mpsc::channel(1);

@@ -293,6 +293,13 @@ fn ownership_revision(
         let schedule = store.schedule_summary().map_err(invalid)?;
         text(&mut hash, "scheduler-generation");
         field(&mut hash, &schedule.generation.to_be_bytes());
+        field(
+            &mut hash,
+            &crate::tools::managed_output::storage::ownership_revision(
+                &conversation.private_root,
+                &conversation.conversation_id,
+            )?,
+        );
         text(&mut hash, "conversation");
         text(&mut hash, conversation.conversation_id.as_str());
         text(

@@ -128,9 +128,13 @@ pub fn resolve(
     // symlink, and a path that reaches a root only through a symlinked
     // ancestor outside both roots has no owner at all.
     let normalized = normalize_lexical(path);
+    let managed_root = tool_output
+        .roots()
+        .into_iter()
+        .find(|root| normalized.starts_with(root));
     let owner = if normalized.starts_with(workspace.root()) {
         OwningRoot::Workspace
-    } else if normalized.starts_with(tool_output.root()) {
+    } else if managed_root.is_some() {
         OwningRoot::ManagedOutput
     } else {
         return Err(LocatorError::OutsideAuthorizedRoots(locator.to_owned()));
@@ -149,7 +153,13 @@ pub fn resolve(
             }
         }
         OwningRoot::ManagedOutput => {
-            if !canonical.starts_with(tool_output.root()) {
+            tool_output
+                .validate_locator(&normalized)
+                .map_err(|e| LocatorError::Unresolvable(locator.to_owned(), e.to_string()))?;
+            if !managed_root
+                .as_ref()
+                .is_some_and(|root| canonical.starts_with(root))
+            {
                 // A managed-output locator escaped its owning root through
                 // a symlink — including into the workspace, which would
                 // turn the read-only region into mutation authority.
@@ -192,7 +202,7 @@ mod tests {
     use std::fs;
 
     struct Roots {
-        _dir: tempfile::TempDir,
+        directory: tempfile::TempDir,
         workspace: Workspace,
         tool_output: ManagedToolOutput,
         spill: std::path::PathBuf,
@@ -211,7 +221,7 @@ mod tests {
         let spill = tool_output.open_spill().expect("spill");
         let spill = spill.path().to_path_buf();
         Roots {
-            _dir: dir,
+            directory: dir,
             workspace,
             tool_output,
             spill,
@@ -268,12 +278,22 @@ mod tests {
         ));
         // The enclosing runtime-private directory of the managed-output
         // root is not implicitly opened.
-        let enclosing = roots
+        let temporary_parent = roots
             .tool_output
             .root()
+            .unwrap()
             .parent()
-            .expect("the managed root has a parent")
-            .join("conversation.sqlite");
+            .unwrap()
+            .to_owned();
+        assert!(matches!(
+            resolve(
+                &roots.workspace,
+                &roots.tool_output,
+                &absolute(&temporary_parent)
+            ),
+            Err(LocatorError::OutsideAuthorizedRoots(_))
+        ));
+        let enclosing = roots.directory.path().join("conversation.sqlite");
         fs::write(&enclosing, "private").expect("private file");
         assert!(
             matches!(
@@ -303,8 +323,13 @@ mod tests {
 
         // A symlink inside the managed-output root pointing outside it:
         // rejected for reads as well.
-        symlink(outside.path(), roots.tool_output.root().join("linked")).expect("managed symlink");
-        let managed_locator = absolute(&roots.tool_output.root().join("linked/secret.txt"));
+        symlink(
+            outside.path(),
+            roots.tool_output.root().unwrap().join("linked"),
+        )
+        .expect("managed symlink");
+        let managed_locator =
+            absolute(&roots.tool_output.root().unwrap().join("linked/secret.txt"));
         assert!(matches!(
             resolve(&roots.workspace, &roots.tool_output, &managed_locator,),
             Err(LocatorError::OutsideAuthorizedRoots(_))
@@ -327,10 +352,16 @@ mod tests {
         // though the workspace target is readable.
         symlink(
             roots.workspace.root(),
-            roots.tool_output.root().join("workspace-alias"),
+            roots.tool_output.root().unwrap().join("workspace-alias"),
         )
         .expect("managed -> workspace symlink");
-        let locator = absolute(&roots.tool_output.root().join("workspace-alias/file.txt"));
+        let locator = absolute(
+            &roots
+                .tool_output
+                .root()
+                .unwrap()
+                .join("workspace-alias/file.txt"),
+        );
         assert!(
             matches!(
                 resolve(&roots.workspace, &roots.tool_output, &locator,),
@@ -344,7 +375,7 @@ mod tests {
         let spill_path = spill.path().to_path_buf();
         drop(spill);
         let results_alias = roots.workspace.root().join("results-alias");
-        symlink(roots.tool_output.root().join("results"), &results_alias)
+        symlink(roots.tool_output.root().unwrap(), &results_alias)
             .expect("workspace -> managed symlink");
         let locator = absolute(&results_alias.join(spill_path.file_name().expect("spill name")));
         assert!(

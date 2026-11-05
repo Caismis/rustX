@@ -32,7 +32,7 @@ pub(crate) enum DeletionScope {
     },
 }
 impl DeletionScope {
-    fn conversation(&self) -> &ConversationId {
+    pub(super) fn conversation(&self) -> &ConversationId {
         match self {
             Self::Node {
                 conversation_id, ..
@@ -177,6 +177,7 @@ impl CleanupWork {
                 }
                 File::open(self.root.root())?.sync_all()?;
             }
+            crate::tools::managed_output::storage::cleanup(&path, scope.conversation())?;
             match fs::remove_dir_all(&path) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

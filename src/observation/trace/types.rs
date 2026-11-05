@@ -788,10 +788,10 @@ pub struct TraceToolTruncation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceManagedOutput {
-    /// Whether the store holds this result's complete textual output, so the
-    /// bounded result content is a preview rather than the whole record.
+    /// Whether capture retained complete output at settlement. Later temporary
+    /// cleanup does not change this fact or reconstruct full output from preview.
     pub complete: bool,
-    /// Whether any managed output file exists at all.
+    /// Whether capture allocated an output file; current OS retention is not probed.
     pub available: bool,
     /// Exact native locator, when output storage owns one.
     pub locator: Option<std::path::PathBuf>,

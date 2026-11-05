@@ -4312,12 +4312,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   overlap — so runtime-private output files are not included in the default
   cwd-based Glob/Grep traversal. An explicit absolute host path remains
   subject to the ordinary native file-tool contract. The conversation's
-  managed tool-output root retains its own disjointness and composition
-  invariants: construction rejects a pre-existing symlink at the
-  `tool-output/` root and requires the canonical managed root to be a strict
-  dedicated descendant of the canonical artifact root, disjoint from the
-  canonical workspace root, so no authorized runtime root can ever alias
-  another.
+  managed tool-output namespaces are disjoint from artifact and workspace
+  roots. Namespace bindings, filesystem identities and ownership markers
+  authorize only those private temporary directories, never the temporary
+  parent. Symlinks cannot redirect allocation or transfer read authority.
 - All progress entering runtime state and events passes through one shared
   UTF-8-safe bound (`bound_tool_progress`); the foreground reporter and the
   background registry produce the same normalized value, and an oversized
@@ -4829,7 +4827,7 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   Foreground output at or below the threshold remains a direct result and
   creates no file. Once the complete deterministic representation crosses
   it, normalization lazily allocates exactly one result spill
-  (`tool-output/results/result_N.txt`, monotonic per-conversation sequence,
+  (`<temp>/rx-<16 hex>/r-<16 hex>.txt`, independent random names,
   `create_new`), writes the complete representation once, and publishes a
   bounded deterministic preview plus typed continuation metadata
   (`ToolExecutionResult::managed_output`, never a magic tool-JSON key,
@@ -4849,12 +4847,12 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   budgeted collectively, so UTF-8/JSON framing is never delegated to bounded
   subprocess stdout capture.
   A **background** execution instead owns one live-output channel from the
-  dispatch commit point on (`tool-output/tasks/exec_N.output`): the file is
+  dispatch commit point on (`<temp>/rx-<16 hex>/e-<16 hex>.output`): the file is
   allocated before the accepted result advertises its absolute path
   (`output_path`) with Read/Grep continuation guidance. Bash appends from the
   first byte; MCP writes its final complete deterministic result
   there when it becomes available. Accepted and terminal messages reuse the
-  exact same path, no secondary `results/result_N.txt` is created, and the
+  exact same path, no secondary `r-<16 hex>.txt` is created, and the
   terminal canonical projection remains bounded while structurally retaining
   the typed locator/guidance. An output-storage failure of an
   already-advertised background path settles as explicit `Partial`, never a
@@ -8303,3 +8301,29 @@ Original admission scope, current controller and result reservation precede nati
 - Editing and analysis start no Tools, provider calls or child execution. Native
   execution of the shared authored fixture proves keyed joins, both Loop exits,
   private arguments and absence of author-only note text from runtime snapshots.
+
+## Disposable managed output ownership (Issue #520)
+
+- The actual returned filesystem locator is a short absolute path beneath the
+  OS temporary root. Foreground spills and background streams use the same
+  storage owner, with distinct allocation/acceptance lifecycles. No provider or
+  client synthesizes paths.
+- Exclusive directory/file creation, bounded collision retries, private POSIX
+  modes and descriptor-relative operations prevent overwrite and symlink
+  redirection. Issued names stay consumed within an allocator; restart or
+  external namespace removal lazily starts a fresh namespace, never aliases old output.
+- Trusted Conversation-local bindings, rather than canonical history strings,
+  establish cleanup authority. They retain original roots across restart and
+  participate in the deletion ownership revision. Active stores and writers
+  retain ConversationAccess even if the OS unlinks their paths.
+- Published output survives turn completion, Session switching, runtime drop and
+  normal exit. Later OS removal is honest unavailability, not corruption of
+  canonical history. Complete records capture-time retention; later cleanup does
+  not change that record. Current allocation/write failures still fail explicitly.
+- Session cleanup runs under committed deletion and Conversation exclusion,
+  before private metadata is removed. Missing namespaces are idempotent; other
+  errors remain cleanup-pending. Fork/clone history grants no source deletion
+  authority and archives omit auxiliary files. No global sweep, registry,
+  reference counting, compatibility path, or full-output reconstruction exists.
+
+See [the storage and lifecycle contract](issue-520/README.md).

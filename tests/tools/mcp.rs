@@ -398,6 +398,9 @@ mod unix_tests {
         assert_eq!(
             std::fs::read_dir(locator.parent().expect("results directory"))
                 .expect("results directory")
+                .filter(|e| e
+                    .as_ref()
+                    .is_ok_and(|e| e.file_name().to_string_lossy().starts_with("r-")))
                 .count(),
             1
         );
@@ -541,15 +544,21 @@ mod unix_tests {
             vec![b'x'; 100_000]
         );
         assert_eq!(
-            std::fs::read_dir(tool_runtime.tool_output().root().join("results"))
+            std::fs::read_dir(tool_runtime.tool_output().root().unwrap())
                 .expect("results directory")
+                .filter(|entry| entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
                 .count(),
             0,
             "background MCP never allocates a secondary result spill"
         );
         assert_eq!(
-            std::fs::read_dir(tool_runtime.tool_output().root().join("tasks"))
+            std::fs::read_dir(tool_runtime.tool_output().root().unwrap())
                 .expect("tasks directory")
+                .filter(|entry| entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("e-")))
                 .count(),
             1
         );
