@@ -13,6 +13,18 @@ enum RoutedDelivery {
     Auxiliary(crate::runtime::auxiliary::observer::AuxiliarySegment),
 }
 
+/// One application read survives cancelled transport select turns. Keeping
+/// its handle here bounds physical lock waiters to one per connection.
+#[derive(Default)]
+pub(super) struct ConfigurationInterest {
+    versions: std::collections::BTreeMap<String, u64>,
+    reading: Option<
+        tokio::task::JoinHandle<
+            Option<crate::local_runtime::configuration::application::ConfigurationApplication>,
+        >,
+    >,
+}
+
 /// Which source repair observations one connection may see.
 ///
 /// The User source always; a Workspace source once this connection addressed
@@ -201,19 +213,27 @@ impl AppServerConnection {
     ///
     /// Level-triggered against the manager's current applications and this
     /// connection's per-scope version cursor.
-    fn next_configuration_change(&self) -> Option<NotificationMethod> {
-        let mut versions = self
-            .configuration_versions
-            .lock()
-            .expect("configuration notification versions");
-        let application = self
-            .host
-            .manager()
-            .next_configuration_application(&versions)?;
+    async fn next_configuration_change(&self) -> Option<NotificationMethod> {
+        let mut interest = self.configuration_interest.lock().await;
+        // Source capture holds the application owner while reading authored
+        // bytes. Waiting for that owner must not occupy a transport worker.
+        // Advance the connection cursor only after this cancellable read returns.
+        if interest.reading.is_none() {
+            let versions = interest.versions.clone();
+            let manager = self.host.manager().clone();
+            interest.reading = Some(tokio::task::spawn_blocking(move || {
+                manager.next_configuration_application(&versions)
+            }));
+        }
+        let result = interest.reading.as_mut().expect("application read").await;
+        interest.reading = None;
+        let application = result.ok()??;
         let projection =
             crate::local_runtime::configuration::observation::session_application(&application)
                 .ok()?;
-        versions.insert(application.scope, application.version);
+        interest
+            .versions
+            .insert(application.scope, application.version);
         Some(NotificationMethod::ConfigurationChanged {
             application: projection,
         })
@@ -251,10 +271,15 @@ impl AppServerConnection {
     /// The next level-triggered notification owed outside any attachment, in
     /// priority order: Session metadata, configuration application, then
     /// configuration source repair.
-    fn next_level_notification(&self) -> Option<NotificationMethod> {
-        self.next_ownership_invalidation()
+    async fn next_level_notification(&self) -> Option<NotificationMethod> {
+        if let Some(notification) = self
+            .next_ownership_invalidation()
             .or_else(|| self.next_summary_invalidation())
-            .or_else(|| self.next_configuration_change())
+        {
+            return Some(notification);
+        }
+        self.next_configuration_change()
+            .await
             .or_else(|| self.next_source_repair())
             .or_else(|| self.next_schedule_change())
     }
@@ -307,7 +332,7 @@ impl AppServerConnection {
             .expect("task catalog changes")
             .clone();
         loop {
-            if let Some(notification) = self.next_level_notification() {
+            if let Some(notification) = self.next_level_notification().await {
                 return (
                     Notification {
                         jsonrpc: JsonRpcVersion::V2,

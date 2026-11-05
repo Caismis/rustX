@@ -65,7 +65,17 @@ impl SessionRuntimeManager {
                 let revision = *publications.borrow_and_update();
                 if revision != observed {
                     observed = revision;
-                    owner.rebase_runtime_catalog(&session, incarnation, &runtime);
+                    let owner = owner.clone();
+                    let session = session.clone();
+                    let runtime = runtime.clone();
+                    if tokio::task::spawn_blocking(move || {
+                        owner.rebase_runtime_catalog(&session, incarnation, &runtime);
+                    })
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
                 }
                 tokio::select! {
                     () = &mut changed => {},
@@ -377,13 +387,21 @@ impl SessionRuntimeManager {
         let target = target.clone();
         tokio::spawn(async move {
             owner.coordinate_source(&target).await?;
-            owner
-                .applications
-                .lock()
-                .view(&target.application_scope())
-                .ok_or(SourceSettingsError::Source(
+            tokio::task::spawn_blocking(move || {
+                owner
+                    .applications
+                    .lock()
+                    .view(&target.application_scope())
+                    .ok_or(SourceSettingsError::Source(
+                        super::super::configuration::settings::SettingsError::Io,
+                    ))
+            })
+            .await
+            .map_err(|_| {
+                SourceSettingsError::Source(
                     super::super::configuration::settings::SettingsError::Io,
-                ))
+                )
+            })?
         })
         .await
         .map_err(|_| {

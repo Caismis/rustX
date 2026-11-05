@@ -1190,3 +1190,55 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
     })
     .await;
 }
+
+/// A source ingestion may own the application mutex for a large document.
+/// Cancelling the notification poll must leave negotiation responsive and
+/// preserve the application notice for the next poll.
+#[tokio::test]
+async fn application_observation_yields_during_ingestion_and_survives_poll_cancellation() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        f.manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::User,
+            )
+            .await
+            .unwrap();
+        let connection = AppServerConnection::new(f.host.clone());
+        let peer = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let manager = f.manager.clone();
+        let (entered, held) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let ingestion = std::thread::spawn(move || {
+            let _application = manager.applications.lock();
+            entered.send(()).unwrap();
+            // A liveness guard releases the mutex even if an old synchronous
+            // notification poll blocks the only async worker.
+            released
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .is_ok()
+        });
+        held.await.unwrap();
+        for _ in 0..2 {
+            let notification = connection.next_notification();
+            tokio::pin!(notification);
+            assert!(futures_util::poll!(&mut notification).is_pending());
+        }
+        initialize(&peer).await;
+        let released = release.send(()).is_ok();
+        assert!(
+            ingestion.join().unwrap(),
+            "notification polling blocked ingestion"
+        );
+        assert!(released);
+        assert!(matches!(
+            connection.next_notification().await.notification,
+            NotificationMethod::ConfigurationChanged { .. }
+        ));
+        connection.close();
+        peer.close();
+        f.close().await;
+    })
+    .await;
+}

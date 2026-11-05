@@ -717,7 +717,12 @@ impl SessionRuntimeManager {
         // before its watch is captured again like any other.
         let mut known: Vec<(PathBuf, PathBuf)> = Vec::new();
         loop {
-            let sources = self.known_sources();
+            let owner = self.clone();
+            // A source capture may hold the application owner while reading
+            // large files; keep both that wait and path resolution off the reactor.
+            let sources = tokio::task::spawn_blocking(move || owner.known_sources())
+                .await
+                .map_err(|error| error.to_string())?;
             settle(watcher.as_mut(), &mut active, &sources);
             // An input that just appeared — a newly selected instruction
             // file, a link's new target — may have changed between the
