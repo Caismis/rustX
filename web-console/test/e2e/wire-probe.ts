@@ -3,6 +3,7 @@ import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult,
 import { domainOriginalValue } from '../../../protocol/app-server/domain-observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { METHOD_POLICY, requestLane, type MethodName } from '../../../protocol/app-server/method-policy';
+import { RpcFailure } from '../../src/client/errors';
 
 type NativeRead = 'session/checkpoint' | 'session/effectiveConfiguration';
 type NativeReadResult<M extends NativeRead> = Extract<MethodResult, { type: M extends 'session/checkpoint' ? 'checkpoint' : 'effective_configuration' }>;
@@ -110,7 +111,7 @@ export async function wireProbe(page: Page) {
       const read = activeRead === response.id ? reads.get(response.id) : undefined;
       if (read) {
         reads.delete(response.id); activeRead = undefined;
-        if (response.error) read.reject(new Error(`Native read rejected: ${JSON.stringify(response.error)}`));
+        if (response.error) read.reject(new RpcFailure(response.error));
         else read.resolve(response.result);
         pump();
         return;

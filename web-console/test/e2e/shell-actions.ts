@@ -152,7 +152,10 @@ export async function openEmptySession(page: Page, fixture: { endpoint: string; 
     await expect(page.locator('main')).not.toHaveAttribute('inert', '');
     await expand.click(); // Inspect the selected row after the navigation dismissed its overlay.
   }
-  await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
+  // Native fixture selection includes reading the Workspace's authored files.
+  // Await its completion within the test deadline; a 16 MiB Workflow does
+  // not impose the presentation assertions' default five-second load budget.
+  await page.locator('#session-view[data-shell-route="session"]').waitFor({ state: 'visible' });
   await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('aria-current', 'page');
   await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
   await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
