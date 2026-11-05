@@ -1636,10 +1636,11 @@ mod mcp_write_tests {
     #[test]
     fn named_agent_source_reports_removed_summary_output_without_exposing_values() {
         let root = tempfile::tempdir().unwrap();
-        let agents = root.path().join("agents");
+        let canonical_root = root.path().canonicalize().unwrap();
+        let agents = canonical_root.join("agents");
         std::fs::create_dir_all(&agents).unwrap();
         std::fs::write(agents.join("reviewer.toml"), "[model]\nmodel = 'p/m'\nsummary_model = { mode = 'explicit', model = 'p/s', max_output_tokens = { mode = 'limit', tokens = 100 } }\nsecret = 'PRIVATE'\n").unwrap();
-        let sources = agent_views(root.path(), SourceScope::User).unwrap();
+        let sources = agent_views(&canonical_root, SourceScope::User).unwrap();
         assert!(sources[0].source.authored.is_none());
         let diagnostic = sources[0].source.diagnostic.as_ref().unwrap();
         assert!(
