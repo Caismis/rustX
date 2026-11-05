@@ -149,6 +149,10 @@ pub(crate) async fn summary_prefix(
     .map_err(|e| failure(ContextErrorKind::MalformedHistory, &e))?;
     let monotone = engine.supports_monotone_compaction(&complete);
     drop(complete);
+    // Historical progress is judged on the whole projected history, without
+    // request-only or staged inputs. The candidate uses the same accounting
+    // path as the final checkpoint validation.
+    let history_before = engine.estimate_model_input(input, "", &[]);
     let mut search = Search {
         engine,
         input,
@@ -169,7 +173,9 @@ pub(crate) async fn summary_prefix(
     let selected = if monotone && eligible > 0 {
         // Primary fit chooses retirement; summary capacity chooses chunks later.
         let upper = eligible;
-        let lower = search.partition(|cost| cost.primary > limit).await?;
+        let lower = search
+            .partition(|cost| cost.primary > limit || cost.history >= history_before)
+            .await?;
         if lower >= upper {
             None
         } else {
@@ -188,7 +194,7 @@ pub(crate) async fn summary_prefix(
         let examined = eligible.min(MAX_GENERIC_CANDIDATES);
         for index in (0..eligible).rev().take(examined) {
             let cost = search.cost(index).await?;
-            if cost.primary <= limit {
+            if cost.primary <= limit && cost.history < history_before {
                 fallback = Some(index);
                 if cost.recent >= engine.config().keep_recent_tokens {
                     preferred = Some(index);
@@ -215,17 +221,28 @@ pub(crate) async fn summary_prefix(
             .map(|cost| cost.primary)
             .min()
             .unwrap_or(u64::MAX);
+        // A synthetic price is proof only when the estimator certifies this
+        // Summary shape as its lower bound. Monotone prefix deletion alone
+        // does not establish that property for arbitrary estimators.
+        let fit_witness = search.cache.values().any(|cost| cost.primary <= limit);
+        let kind = if !engine.supports_summary_floor() {
+            ContextErrorKind::SearchIncomplete
+        } else if fit_witness {
+            ContextErrorKind::NoProgress
+        } else {
+            ContextErrorKind::CannotFit
+        };
         return Err(failure(
-            ContextErrorKind::CannotFit,
+            kind,
             &format!(
-                "no complete historical prefix satisfies primary fit and protected-input constraints; {}",
+                "no synthetic Summary candidate both satisfies primary fit and demonstrates historical reduction; {}",
                 primary_fit_evidence(engine, input, prompt, tools, constraints, best, limit)
             ),
         ));
     };
     // A proof narrows search, never replaces authoritative whole-candidate pricing.
     let cost = search.cost(index).await?;
-    if cost.primary > limit {
+    if cost.primary > limit || cost.history >= history_before {
         return Err(failure(
             ContextErrorKind::Internal,
             "estimator violated its monotone compaction contract",
@@ -293,6 +310,7 @@ pub(super) fn primary_fit_evidence(
 struct Cost {
     primary: u64,
     recent: u64,
+    history: u64,
 }
 struct Search<'a, 'c> {
     engine: &'a ContextEngine,
@@ -312,10 +330,14 @@ impl Search<'_, '_> {
         }
         let n = self.boundaries[index];
         let mut remaining = self.input.range(n..self.input.len());
-        // Price the minimum valid rendered Summary in the primary accounting
-        // path, including its message wrapper. Summary output tokens belong to
-        // another model and cannot be added as primary input tokens.
+        // Price the shortest rendered Summary shape in the primary accounting
+        // path, including its message wrapper. It is a candidate witness, not
+        // a lower bound on an arbitrary estimator's price for other Summaries.
+        // Summary output tokens belong to another model and cannot be added
+        // as primary input tokens.
         remaining.insert(0, minimum_summary());
+        let history = self.engine.estimate_model_input(&remaining, "", &[]);
+        cancellation_point(self.cancellation).await?;
         let planned = assemble_context_input(
             &remaining,
             self.constraints.staged_request_context,
@@ -331,7 +353,11 @@ impl Search<'_, '_> {
             self.engine
                 .estimate_model_input(&self.input.range(n..self.input.len()), "", &[]);
         cancellation_point(self.cancellation).await?;
-        let cost = Cost { primary, recent };
+        let cost = Cost {
+            primary,
+            recent,
+            history,
+        };
         self.cache.insert(index, cost);
         Ok(cost)
     }
@@ -354,11 +380,11 @@ impl Search<'_, '_> {
 pub(crate) fn minimum_summary() -> ModelInputMessage {
     let text = super::summary_content::render(serde_json::json!({
         "goal": "x",
-        "constraints_and_preferences": [],
-        "progress": {"done": [], "in_progress": [], "blocked": []},
-        "key_decisions": [],
-        "next_steps": [],
-        "critical_context": []
+        "constraints_and_preferences": ["x"],
+        "progress": {"done": ["x"], "in_progress": ["x"], "blocked": ["x"]},
+        "key_decisions": ["x"],
+        "next_steps": ["x"],
+        "critical_context": ["x"]
     }))
     .expect("the minimum Summary satisfies the internal domain contract")
     .trim_end()

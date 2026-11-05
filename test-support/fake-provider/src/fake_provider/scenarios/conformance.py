@@ -790,7 +790,7 @@ def image_tool_round_trip() -> Scenario:
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL, no_direct_tools=True,
                     body_contains=("retired-conversation", "artifact_1"),
                     body_excludes=("image/png", "image_url")),
-             Stream(Text("Image read and text-only delegation completed."), Finish("stop"))),
+             Stream(Text(summary_json("Image read and text-only delegation completed.")), Finish("stop"))),
     )
 
 

@@ -482,6 +482,15 @@ async fn summary_fragment_covers_the_frozen_upload_path_without_reading_the_file
         "short".into(),
     )]));
     let mut context = runtime(10_000, summarizer.clone());
+    context.engine = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 10_000,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(ScriptedEstimator::new(100, 100, 0)),
+    )
+    .unwrap();
     context
         .engine
         .set_upload_resolver(Arc::new(FixedUpload(ResolvedUpload {
@@ -950,6 +959,245 @@ async fn run_pipeline(
     result
 }
 
+/// A soft recent target must not select a prefix that cannot shrink history.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Verify exact coverage and one durable checkpoint together.
+async fn retirement_expands_past_short_old_user_to_make_historical_progress() {
+    use rustx::context::{DefaultTokenEstimator, TokenEstimator};
+    use rustx::message::types::{AssistantContentBlock, AssistantMessageBlock};
+    use rustx::model::{ModelInputMessage, input::canonical_input};
+    use rustx::runtime::inbound::FreshInboundTurn;
+
+    let history = vec![
+        user_message("old-user", "first"),
+        MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("old-assistant"),
+            content: vec![AssistantContentBlock::Text(TextBlock {
+                text: "earlier assistant work ".repeat(250),
+            })],
+        }),
+        user_message("fresh", "new request"),
+    ];
+    let inputs = canonical_input(&history);
+    let before = DefaultTokenEstimator.estimate_input(&inputs, "", &[]);
+    let recent = 500;
+    assert!(DefaultTokenEstimator.estimate_input(&inputs[1..], "", &[]) >= recent);
+    let minimum = crate::context::planning::minimum_summary();
+    assert!(
+        DefaultTokenEstimator.estimate_input(
+            &[minimum.clone(), inputs[1].clone(), inputs[2].clone()],
+            "",
+            &[],
+        ) >= before
+    );
+    assert!(DefaultTokenEstimator.estimate_input(&[minimum, inputs[2].clone()], "", &[]) < before);
+
+    // The scripted Context seam returns the same Markdown the real structured
+    // Summary consumer produces after validating a completed JSON object.
+    let json = serde_json::json!({
+        "goal": "Complete the requested task",
+        "constraints_and_preferences": [],
+        "progress": {"done": ["Earlier assistant work"], "in_progress": [], "blocked": []},
+        "key_decisions": [],
+        "next_steps": ["Address the new request"],
+        "critical_context": []
+    });
+    let validated = crate::context::summary_content::response_schema()
+        .validate_output(&json.to_string())
+        .unwrap();
+    let summary = crate::context::summary_content::render(validated).unwrap();
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        summary,
+    )]));
+    let context = ContextRuntime::with_scripted_summarizer(
+        ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 10_000,
+                reserve_tokens: 0,
+                keep_recent_tokens: recent,
+            },
+            Arc::new(DefaultTokenEstimator),
+        )
+        .unwrap(),
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(1, 1, 1_000_000),
+    );
+    let store = SqliteConversationStore::in_memory(conversation()).unwrap();
+    store.initialize(&history).unwrap();
+    let head = store.load_head().unwrap();
+    let mut state = ConversationState::from_durable_head(
+        history.clone(),
+        head.active_message_ids,
+        head.revision,
+        head.compaction_generation,
+    )
+    .unwrap();
+    let fresh = FreshInboundTurn::new(vec![MessageId::new("fresh")]).unwrap();
+    crate::context::compaction::execute_compaction(
+        &mut state,
+        &context,
+        &conversation(),
+        &store,
+        &[],
+        None,
+        "",
+        &CompactionConstraints {
+            fresh_inbound: Some(&fresh),
+            ..CompactionConstraints::default()
+        },
+        &CancellationSignal::new(),
+        crate::context::compaction::CompactionAttribution::default(),
+    )
+    .await
+    .expect("a larger eligible retirement commits");
+
+    let requests = summarizer.requests();
+    assert_eq!(requests.len(), 1);
+    let fragment = requests[0].fragment.as_ref().unwrap();
+    assert_eq!(
+        fragment
+            .ranges
+            .iter()
+            .map(|range| range.projection_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert!(fragment.text.contains("[User]: first"));
+    assert!(fragment.text.contains("earlier assistant work"));
+    assert!(!fragment.text.contains("new request"));
+    assert_eq!(store.load_canonical().unwrap(), history);
+    assert_eq!(
+        store
+            .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64)
+            .unwrap()
+            .len(),
+        1
+    );
+    let projected = store.projected_history().unwrap();
+    assert_eq!(projected.messages.len(), 2);
+    assert!(matches!(
+        &projected.messages[0],
+        ModelInputMessage::Derived(_)
+    ));
+    assert_eq!(
+        projected.messages[1].canonical_id(),
+        Some(&MessageId::new("fresh"))
+    );
+}
+
+/// An unproven synthetic fit still tries already-admitted carryover alternatives.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One real-Store transition verifies pre-summary replanning.
+async fn incomplete_synthetic_fit_replans_with_frozen_carryover_degradation() {
+    use rustx::context::CompactionCarryover;
+    use rustx::model::{
+        CarryoverDetailLevel, ModelInputMessage, RenderedCarryoverRecord,
+        RenderedCarryoverToolCall, RenderedUnresolvedOutputCarryover, RequestOnlyInsertionAnchor,
+        RequestOnlyModelContext, UnresolvedOutputSettlement,
+    };
+    use rustx::runtime::identity::{PublicationStreamId, ToolCallId, ToolId};
+
+    let history = vec![
+        user_message("old", "old history"),
+        user_message("recent", "protected recent history"),
+    ];
+    let store = SqliteConversationStore::in_memory(conversation()).unwrap();
+    store.initialize(&history).unwrap();
+    let head = store.load_head().unwrap();
+    let mut state = ConversationState::from_durable_head(
+        history.clone(),
+        head.active_message_ids,
+        head.revision,
+        head.compaction_generation,
+    )
+    .unwrap();
+    let estimator = rustx::context::ClosureTokenEstimator::new(|messages, _, _| {
+        messages
+            .iter()
+            .map(|message| match message {
+                ModelInputMessage::Canonical(block) if block.id().as_str() == "old" => 1_000,
+                ModelInputMessage::Canonical(_) => 100,
+                ModelInputMessage::Derived(_) => 50,
+                ModelInputMessage::RequestOnly(
+                    RequestOnlyModelContext::UnresolvedOutputCarryover(carryover),
+                ) if carryover.records.iter().any(|record| {
+                    matches!(record, RenderedCarryoverRecord::ProposedToolCall(call) if call.arguments.is_some())
+                }) => 250,
+                ModelInputMessage::RequestOnly(_) => 10,
+            })
+            .sum()
+    });
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "small accepted summary".into(),
+    )]));
+    let context = ContextRuntime::with_scripted_summarizer(
+        ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 300,
+                reserve_tokens: 0,
+                keep_recent_tokens: 100,
+            },
+            Arc::new(estimator),
+        )
+        .unwrap(),
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(1, 1, 1_000_000),
+    );
+    let carryover = RenderedUnresolvedOutputCarryover {
+        source_stream_id: PublicationStreamId::new("preplan-carryover"),
+        source_settlement: UnresolvedOutputSettlement::Incomplete,
+        records: vec![RenderedCarryoverRecord::ProposedToolCall(
+            RenderedCarryoverToolCall {
+                call_id: ToolCallId::new("call"),
+                tool_id: ToolId::new("tool"),
+                name: "tool".into(),
+                complete: false,
+                arguments: Some("partial".into()),
+                omitted_argument_bytes: 0,
+            },
+        )],
+        omitted_blocks: rustx::model::CarryoverOmissionCounts::default(),
+    };
+    let fallbacks = [CompactionCarryover {
+        level: CarryoverDetailLevel::Reduced,
+        value: Some(carryover.degraded(CarryoverDetailLevel::Reduced)),
+    }];
+    let protected = [MessageId::new("recent")];
+    let anchor = RequestOnlyInsertionAnchor::AfterCanonical;
+    let result = crate::context::compaction::execute_compaction(
+        &mut state,
+        &context,
+        &conversation(),
+        &store,
+        &[],
+        None,
+        "",
+        &CompactionConstraints {
+            protected_context_ids: &protected,
+            carryover: Some(&carryover),
+            carryover_fallbacks: &fallbacks,
+            carryover_anchor: Some(&anchor),
+            ..CompactionConstraints::default()
+        },
+        &CancellationSignal::new(),
+        crate::context::compaction::CompactionAttribution::default(),
+    )
+    .await
+    .expect("reduced frozen carryover makes the candidate admissible");
+    assert_eq!(result.carryover_level, Some(CarryoverDetailLevel::Reduced));
+    assert_eq!(summarizer.requests().len(), 1);
+    assert_eq!(store.load_canonical().unwrap(), history);
+    assert_eq!(
+        store
+            .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
 /// Asserts the complete failure-atomicity contract: neither the hot state
 /// nor the durable authority shows any part of the aborted transition.
 fn assert_no_transition(store: &dyn ConversationStore, history: &[MessageBlock]) {
@@ -1218,12 +1466,21 @@ async fn delayed_older_receipt_installs_current_projection_head() {
     let store = Arc::new(SqliteConversationStore::in_memory(conversation()).unwrap());
     let history = vec![user_message("history", "immutable fact")];
     store.initialize(&history).unwrap();
-    let context = runtime(
+    let mut context = runtime(
         10_000,
         Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
             "first summary".into(),
         )])),
     );
+    context.engine = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 10_000,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(ScriptedEstimator::new(100, 100, 0)),
+    )
+    .unwrap();
     let (committed_tx, committed_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     store.arm_projection_commit_return_probe(move || {
@@ -1249,7 +1506,10 @@ async fn delayed_older_receipt_installs_current_projection_head() {
         .unwrap();
         (state, completed)
     });
-    committed_rx.await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), committed_rx)
+        .await
+        .expect("first projection commit must reach the return probe")
+        .expect("first projection commit probe remains connected");
     let first = store.projection_head().unwrap().unwrap();
     let mut candidate = first.candidate.clone();
     candidate.checkpoint_id = CheckpointId::new("newer-head");

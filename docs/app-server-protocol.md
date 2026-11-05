@@ -7,6 +7,8 @@ persisted facts; cold historical progress is not live execution. Manual
 `context/compact` accepts an optional focus of at most 4096 UTF-8 bytes while
 the Agent is idle. A skipped result is distinct from a completed checkpoint,
 and cancellation remains typed.
+The native `context_compaction_skipped` observation publishes the matching
+manual receipt and current context without a completed-compaction marker.
 
 App Server v72 and Runtime Client v83 retain optional `reasoningProfileOrder` on full
 Model catalog views and `reasoning_profile_order` on authored Models. It is a

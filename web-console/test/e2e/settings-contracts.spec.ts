@@ -13,7 +13,8 @@ for (const auxiliary of ['Summary', 'Title', 'Classification', 'BTW'] as const) 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const fixture = await startDogfood();
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  const summary = `${auxiliary.toLowerCase()}_model = { mode = "explicit", model = "summary-a", profile = "deep", max_output_tokens = { mode = "limit", tokens = 2048 }, request_params = \'{"temperature":0.2}\' }\n`;
+  const outputLimit = auxiliary === 'Summary' ? '' : 'max_output_tokens = { mode = "limit", tokens = 2048 }, ';
+  const summary = `${auxiliary.toLowerCase()}_model = { mode = "explicit", model = "summary-a", profile = "deep", ${outputLimit}request_params = \'{"temperature":0.2}\' }\n`;
   const model = '[model]\nmodel = "fixture/console-model"\n' + summary;
   try {
     mkdirSync(join(fixture.workspaceA, '.agents/agents'), { recursive: true });
@@ -67,22 +68,26 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       if (owner === 'Agent') {
         expect(preserved).not.toMatch(/^(description|instructions)\s*=/m);
       }
-      for (const fact of ['summary-b', 'deep', '2048', '0.2']) expect(preserved).toContain(fact);
+      for (const fact of ['summary-b', 'deep', '0.2']) expect(preserved).toContain(fact);
+      if (auxiliary !== 'Summary') expect(preserved).toContain('2048');
       // Native writes keep provider-native parameters as JSON strings.
       expect(preserved).toMatch(/request_params = '\{"temperature":0\.2\}'/);
       // Acknowledge then reread: clean forms follow the native source, not old drafts.
       await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
       const nested = form.getByRole('group', { name: `Explicit ${auxiliary} Model settings`, exact: true });
       await expect(nested.getByRole('button', { name: new RegExp(`Profile \\(${auxiliary}\\)$`) })).toContainText('deep');
-      await expect(nested.getByLabel(`Output limit (${auxiliary})`)).toHaveValue('2048');
+      const limit = nested.getByLabel(`Output limit (${auxiliary})`);
+      if (auxiliary === 'Summary') await expect(limit).toHaveCount(0);
+      else await expect(limit).toHaveValue('2048');
       await expect(nested.getByLabel(`Request parameter overrides (${auxiliary})`, {exact:true})).toHaveText('{\n  "temperature": 0.2\n}', {useInnerText:true});
       await choose(nested, `Profile (${auxiliary})`, 'quick');
-      await nested.getByLabel(`Output limit (${auxiliary})`).fill('1024');
+      if (auxiliary !== 'Summary') await limit.fill('1024');
       await nested.getByLabel(`Request parameter overrides (${auxiliary})`, {exact:true}).fill('{"seed": 7, "stop": [null]}');
       await save();
       const authored = readFileSync(sourceFile, 'utf8');
       expect(authored).toContain('summary-b'); expect(authored).toContain('quick');
-      expect(authored).toContain('1024');
+      if (auxiliary === 'Summary') expect(authored).not.toMatch(/max_output_tokens\s*=\s*\{/);
+      else expect(authored).toContain('1024');
       expect(authored).toMatch(/request_params = '\{"seed":7,"stop":\[null\]\}'/);
       if (owner === 'Root') {
         await nested.evaluate(el => el.scrollIntoView({ block: 'start' }));

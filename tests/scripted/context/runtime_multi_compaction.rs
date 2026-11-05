@@ -243,9 +243,11 @@ fn summary_turn(value: &str) -> Vec<FakeStep> {
 
 /// Bounded, nonperiodic prior output makes a later Summary a real reduction.
 fn historical_output(label: &str) -> String {
-    let entries = (0..96)
-        .map(|index| format!("step-{index:03};"))
-        .collect::<String>();
+    use std::fmt::Write as _;
+    let mut entries = String::new();
+    for index in 0..96 {
+        write!(entries, "step-{index:03};").unwrap();
+    }
     format!("{label}: {entries}")
 }
 
@@ -1133,7 +1135,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     let attachment_a_id = attachment_a.attachment_id().clone();
 
     // Attempt 1 under the first attachment.
-    submit(&attachment_a, 1, "first");
+    submit(&attachment_a, 1, &historical_output("first"));
     let first_events = receive_until(&subscription_a, settled).await;
     assert_last_attempt_completed(&first_events);
     await_request_history_len(host, 1).await;
@@ -1223,6 +1225,23 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     await_request_history_len(host, 5).await;
     assert_eq!(compaction_generations(&live), [2]);
 
+    let ledger = await_ledger(
+        host,
+        fixture.runtime.tool_runtime().durable_store().as_ref(),
+    )
+    .await;
+    assert_eq!(
+        ledger.len(),
+        7,
+        "three inbounds, one status, and three outputs"
+    );
+    assert!(matches!(&ledger[0], MessageBlock::User(u) if u.kind == InboundKind::Message));
+    assert!(is_agent_status(&ledger[1]));
+    assert!(matches!(&ledger[2], MessageBlock::Assistant(_)));
+    assert!(matches!(&ledger[3], MessageBlock::User(u) if u.kind == InboundKind::Message));
+    assert!(matches!(&ledger[4], MessageBlock::Assistant(_)));
+    assert!(matches!(&ledger[5], MessageBlock::User(u) if u.kind == InboundKind::Message));
+    assert!(matches!(&ledger[6], MessageBlock::Assistant(_)));
     let checkpoint = host.checkpoint().expect("bounded checkpoint");
     let snapshot = &checkpoint.snapshot;
     assert_eq!(snapshot.context.compaction_count, 2);
@@ -1235,11 +1254,15 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
             .generation,
         2
     );
-    assert_eq!(snapshot.messages.len(), 8, "bounded canonical display head");
+    assert_eq!(
+        snapshot.messages.len(),
+        ledger.len(),
+        "bounded canonical display head"
+    );
     let keys = canonical_keys(&attachment_b, &checkpoint);
     assert_eq!(
         keys.len(),
-        8,
+        ledger.len(),
         "bounded pages retain the whole canonical directory"
     );
 
@@ -1263,12 +1286,6 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
             *request
         );
     }
-    let ledger = await_ledger(
-        host,
-        fixture.runtime.tool_runtime().durable_store().as_ref(),
-    )
-    .await;
-    assert_eq!(ledger.len(), 8);
     let canonical = serde_json::to_string(&ledger).unwrap();
     assert!(
         !canonical.contains("SUMMARY-ONE") && !canonical.contains("SUMMARY-TWO"),
@@ -1352,7 +1369,7 @@ async fn session_summary_mode_freezes_the_attempt_summary_model_against_mid_atte
     let host = &fixture.host;
     let (attachment, subscription) = attach(host);
 
-    submit(&attachment, 1, "first");
+    submit(&attachment, 1, &historical_output("first"));
     let first_events = receive_until(&subscription, settled).await;
     assert_last_attempt_completed(&first_events);
     await_request_history_len(host, 1).await;

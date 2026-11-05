@@ -197,6 +197,19 @@ fn one_turn_stop() -> Vec<FakeStep> {
     ]
 }
 
+/// A schema-valid Summary response with the goal retained as fixture evidence.
+fn summary_json(goal: &str) -> String {
+    serde_json::json!({
+        "goal": goal,
+        "constraints_and_preferences": [],
+        "progress": { "done": [], "in_progress": [], "blocked": [] },
+        "key_decisions": [],
+        "next_steps": [],
+        "critical_context": [],
+    })
+    .to_string()
+}
+
 /// A turn that assembles one tool call, parks, and only then completes.
 fn parked_tool_turn(
     call: &ScriptedCall,
@@ -537,7 +550,7 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
                 FakeStep::Emit(ModelEvent::Started),
                 FakeStep::Emit(ModelEvent::TextDelta {
                     block_index: ContentBlockIndex::new(0),
-                    text: "compact summary".to_owned(),
+                    text: summary_json("compact summary"),
                 }),
                 FakeStep::Emit(ModelEvent::Completed {
                     finish_reason: ModelFinishReason::Stop,
@@ -634,7 +647,7 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
                 FakeStep::Emit(ModelEvent::Started),
                 FakeStep::Emit(ModelEvent::TextDelta {
                     block_index: ContentBlockIndex::new(0),
-                    text: "compact summary".to_owned(),
+                    text: summary_json("compact summary"),
                 }),
                 FakeStep::Emit(ModelEvent::Completed {
                     finish_reason: ModelFinishReason::Stop,
@@ -748,7 +761,7 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
             FakeStep::Emit(ModelEvent::Started),
             FakeStep::Emit(ModelEvent::TextDelta {
                 block_index: ContentBlockIndex::new(0),
-                text: "frozen summary".to_owned(),
+                text: summary_json("frozen summary"),
             }),
             FakeStep::Emit(ModelEvent::Completed {
                 finish_reason: ModelFinishReason::Stop,
@@ -877,7 +890,7 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
             FakeStep::Emit(ModelEvent::Started),
             FakeStep::Emit(ModelEvent::TextDelta {
                 block_index: ContentBlockIndex::new(0),
-                text: text.to_owned(),
+                text: summary_json(text),
             }),
             FakeStep::Emit(ModelEvent::Completed {
                 finish_reason: ModelFinishReason::Stop,
@@ -916,7 +929,9 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
     .await;
     let (attachment, subscription) = attach(&host);
 
-    submit(&attachment, 1, "start");
+    // A real structured Summary has a nontrivial minimum rendered size;
+    // retain enough source content for the committed replacement to shrink.
+    submit(&attachment, 1, &"retained original fact ".repeat(200));
     await_parked(&alpha.handle).await;
     // Session selection commits, while the running Attempt retains High.
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
@@ -961,7 +976,7 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
     // The compaction summary used the admitted Summary profile.
     let summaries = summary.handle.requests();
     assert_eq!(summaries.len(), 1);
-    assert_eq!(summaries[0].max_output_tokens(), 256);
+    assert_eq!(summaries[0].max_output_tokens(), 1024);
     assert_eq!(
         serde_json::Value::Object(summaries[0].request_params().clone()),
         serde_json::json!({"summary_tag": "brief", "summary_seed": [null]})
@@ -1242,10 +1257,11 @@ fn a_session_override_may_not_claim_a_profile_owned_key() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rejected_model_update_changes_nothing() {
     let alpha = Provider::new(ALPHA, "model-a", vec![one_turn_stop()]);
-    // A model whose window cannot accommodate the configured output.
+    // The catalog accepts 99 < 100, but output plus the automatic five-token
+    // safety margin cannot fit the selected model's window.
     let tiny = Provider::new(BETA, "tiny", vec![one_turn_stop()])
         .window(100)
-        .output(100);
+        .output(99);
     let host = runtime(session_model(
         &[&alpha, &tiny],
         SessionModelConfig::of(alpha.reference()),

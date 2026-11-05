@@ -122,15 +122,24 @@ async fn manual_compaction_commits_and_restores_the_idle_conversation() {
     let active = runtime
         .coordinator_active_ids()
         .expect("restored canonical working set");
+    let projection = runtime.inner.store.projected_history().unwrap();
+    let projected_originals: Vec<_> = projection
+        .messages
+        .iter()
+        .filter_map(|message| message.canonical_id().cloned())
+        .collect();
+    assert_eq!(active, projected_originals);
     assert!(
-        active.is_empty(),
-        "a Derived summary cannot acquire canonical identity"
+        active
+            .iter()
+            .all(|id| canonical_before.iter().any(|message| message.id() == id)),
+        "the Derived summary cannot acquire a canonical identity"
     );
     let checkpoint = runtime.inner.store.projection_head().unwrap().unwrap();
     assert_eq!(checkpoint.candidate.checkpoint_id, outcome.checkpoint_id);
     assert_eq!(checkpoint.activation.activation, outcome.activation_id);
     assert!(matches!(
-        runtime.inner.store.projected_history().unwrap().messages[0],
+        projection.messages[0],
         crate::model::ModelInputMessage::Derived(_)
     ));
     assert_eq!(model.requests().len(), 2, "turn plus summary request");
@@ -180,10 +189,27 @@ async fn manual_compaction_commits_and_restores_the_idle_conversation() {
     };
     assert_eq!(detail.checkpoint.checkpoint_id, outcome.checkpoint_id);
     assert_eq!(detail.checkpoint.activation_id, outcome.activation_id);
-    assert_eq!(detail.items.len(), 1);
+    assert_eq!(detail.items.len(), 1 + active.len());
+    assert!(detail.items[0].content.message_id.is_none());
+    assert!(matches!(
+        &detail.items[0].content.provenance,
+        crate::observation::trace::TraceInputProvenance::Derived { transformations, .. }
+            if transformations.contains(&crate::model::projected::SemanticTransformation::Summary)
+    ));
     assert!(matches!(&detail.items[0].content.blocks[0],
         crate::observation::trace::TraceContentBlock::Text { text }
             if text.text.starts_with("## Goal\n\n- compact factual summary\n")));
+    assert_eq!(
+        detail.items[1..]
+            .iter()
+            .map(|item| item
+                .content
+                .message_id
+                .clone()
+                .expect("retained Original identity"))
+            .collect::<Vec<_>>(),
+        active
+    );
 
     let completed = host.checkpoint().expect("native compaction completion cut");
     let manual = completed
@@ -232,9 +258,33 @@ async fn manual_compaction_commits_and_restores_the_idle_conversation() {
         canonical_before
     );
     assert!(completed.cursor > before_release.cursor);
+}
 
-    // A projection containing only the checkpoint summary has no new source
-    // coverage. A second manual request skips without another Summary Call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn summary_only_manual_compaction_skips_and_publishes_receipt() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (runtime, model) = headless_runtime_with_options(
+        &dir,
+        vec![summary_turn_script("retained facts")],
+        None,
+        None,
+        HeadlessRuntimeOptions {
+            initial_messages: vec![seed_user("old", &"original historical fact ".repeat(128))],
+            ..HeadlessRuntimeOptions::default()
+        },
+    )
+    .await;
+    let host = crate::runtime_client::host::RuntimeClientHost::new(
+        crate::runtime_client::host::RuntimeClientHostConfig {
+            runtime: runtime.clone(),
+            replay_limit: None,
+        },
+    )
+    .expect("native client source owner");
+    runtime.activate();
+    let outcome = committed_view(runtime.compact_context(None, None).await.unwrap());
+    assert!(runtime.coordinator_active_ids().unwrap().is_empty());
+    // Rewriting a projection containing only a Summary covers no new source.
     let skipped = runtime
         .compact_context(Some("summary-only".to_owned().try_into().unwrap()), None)
         .await
@@ -258,7 +308,7 @@ async fn manual_compaction_commits_and_restores_the_idle_conversation() {
             .checkpoint_id,
         outcome.checkpoint_id
     );
-    assert_eq!(model.requests().len(), 2);
+    assert_eq!(model.requests().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -364,8 +414,10 @@ async fn manual_compaction_exact_fit_includes_default_and_frozen_skill_guidance(
                                 if derived.transformations.contains(&crate::model::projected::SemanticTransformation::Summary)
                         ) {
                             10_000
+                        } else if message.canonical_id().is_some_and(|id| id.as_str() == "recent") {
+                            15_000
                         } else {
-                            350_000
+                            550_000
                         }
                     })
                     .sum::<u64>();
@@ -406,8 +458,8 @@ async fn manual_compaction_exact_fit_includes_default_and_frozen_skill_guidance(
             .await
             .expect("one-message retirement fits without Skill guidance"),
     );
-    assert_eq!(without_outcome.tokens_before.input_tokens, 1_100_000);
-    assert_eq!(without_outcome.estimated_tokens_after, 760_000);
+    assert_eq!(without_outcome.tokens_before.input_tokens, 1_165_000);
+    assert_eq!(without_outcome.estimated_tokens_after, 625_000);
     assert_eq!(
         runtime_without_skill
             .coordinator_active_ids()
@@ -451,8 +503,8 @@ async fn manual_compaction_exact_fit_includes_default_and_frozen_skill_guidance(
             .await
             .expect("a larger retirement span fits with frozen Skill guidance"),
     );
-    assert_eq!(with_outcome.tokens_before.input_tokens, 1_500_000);
-    assert_eq!(with_outcome.estimated_tokens_after, 810_000);
+    assert_eq!(with_outcome.tokens_before.input_tokens, 1_565_000);
+    assert_eq!(with_outcome.estimated_tokens_after, 475_000);
     assert_eq!(
         runtime_with_skill
             .coordinator_active_ids()

@@ -802,6 +802,28 @@ fn one_turn_stop() -> Vec<GatedStep> {
     ]
 }
 
+fn summary_turn_stop(goal: &str) -> Vec<GatedStep> {
+    let summary = serde_json::json!({
+        "goal": goal,
+        "constraints_and_preferences": [],
+        "progress": {"done": [], "in_progress": [], "blocked": []},
+        "key_decisions": [],
+        "next_steps": [],
+        "critical_context": []
+    });
+    vec![
+        GatedStep::Emit(ModelEvent::Started),
+        GatedStep::Emit(ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: summary.to_string(),
+        }),
+        GatedStep::Emit(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        }),
+    ]
+}
+
 struct DurableHistoryFixture {
     conversation_id: ConversationId,
     store: Arc<SqliteConversationStore>,
@@ -2796,17 +2818,7 @@ async fn settled_host_retains_distinct_overflow_request_snapshots() {
                     generation: None,
                 },
             })],
-            vec![
-                GatedStep::Emit(ModelEvent::Started),
-                GatedStep::Emit(ModelEvent::TextDelta {
-                    block_index: ContentBlockIndex::new(0),
-                    text: "historical summary".to_owned(),
-                }),
-                GatedStep::Emit(ModelEvent::Completed {
-                    finish_reason: ModelFinishReason::Stop,
-                    usage: None,
-                }),
-            ],
+            summary_turn_stop("historical summary"),
             one_turn_stop(),
         ],
         ToolRegistry::new(),
@@ -2823,7 +2835,7 @@ async fn settled_host_retains_distinct_overflow_request_snapshots() {
 
     attachment.handle_request(RuntimeClientRequest::SubmitInbound {
         id: crate::runtime_client::RequestId::new(1),
-        content: submit_content("first"),
+        content: submit_content(&"first historical request and its facts; ".repeat(32)),
     });
     receive_until(&subscription, |event| {
         event

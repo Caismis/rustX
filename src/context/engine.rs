@@ -625,6 +625,10 @@ impl ContextEngine {
             .is_ok_and(|rendered| self.estimator.supports_monotone_selected(&rendered))
     }
 
+    pub(crate) fn supports_summary_floor(&self) -> bool {
+        self.estimator.supports_summary_floor()
+    }
+
     /// Price final provider-visible input without selecting resources again.
     #[must_use]
     pub fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {

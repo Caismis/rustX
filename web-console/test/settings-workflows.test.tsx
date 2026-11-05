@@ -132,7 +132,7 @@ it('S2-03 each setting has exactly one primary editor across the six pages', asy
   expect(seen.get('Root instructions')).toBe('Agent');
   expect(seen.get('Native Tools')).toBe('Tools & Permissions');
   expect(seen.get('Todo extension')).toBe('Extensions');
-  expect(seen.get('Context policy')).toBe('Advanced');
+  expect(seen.has('Context policy')).toBe(false);
 });
 
 // ── S2-04 Agent guidance and Tool permissions follow tasks ──────────────────

@@ -30482,6 +30482,34 @@
           ]
         },
         {
+          "description": "Native compaction found no eligible history; no checkpoint was committed.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/RuntimeClientContextView"
+            },
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttemptId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "context_compaction_skipped"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "context"
+          ]
+        },
+        {
           "description": "A context compaction operation failed before a semantic commit.",
           "type": "object",
           "properties": {

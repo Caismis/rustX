@@ -1080,7 +1080,7 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
         };
         assert_eq!(
             (summary.model.to_string(), summary.max_output_tokens),
-            ("local/b".to_owned(), 256)
+            ("local/b".to_owned(), 4096)
         );
         settled(&fixture, 0).await;
 

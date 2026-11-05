@@ -844,7 +844,7 @@ async fn summarizer_consumes_generation_and_liveness_progress_without_retry() {
         FakeStep::ParkUntilReleased(release_two_rx),
         FakeStep::Emit(ModelEvent::TextDelta {
             block_index: ContentBlockIndex::new(0),
-            text: "summary".to_owned(),
+            text: r#"{"goal":"summary","constraints_and_preferences":[],"progress":{"done":[],"in_progress":[],"blocked":[]},"key_decisions":[],"next_steps":[],"critical_context":[]}"#.to_owned(),
         }),
         FakeStep::Emit(ModelEvent::Completed {
             finish_reason: ModelFinishReason::Stop,
@@ -894,7 +894,7 @@ async fn summarizer_consumes_generation_and_liveness_progress_without_retry() {
     .expect("summary progress test must settle")
     .expect("valid generation progress must not fail summary");
     controller.await.expect("summary controller completes");
-    assert_eq!(summary, "summary");
+    assert!(summary.starts_with("## Goal\n\n- summary\n"));
     assert_eq!(model.requests().len(), 1, "summarizer has no generic retry");
 }
 

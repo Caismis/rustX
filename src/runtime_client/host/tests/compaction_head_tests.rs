@@ -190,7 +190,9 @@ impl Drop for ParkedProjection<'_> {
 async fn completed_turn(fixture: &HostFixture, subscription: &EventSubscription) {
     fixture
         .runtime
-        .submit_inbound(submit_content("original turn before compaction"))
+        .submit_inbound(submit_content(
+            &"original turn and its retained facts before compaction; ".repeat(32),
+        ))
         .unwrap();
     receive_until(subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
@@ -230,7 +232,12 @@ fn assert_compaction_head(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn committed_compaction_head_is_atomic_with_context_while_domain_reads_are_parked() {
     let (model, fixture) = host_fixture(
-        (0..4).map(|_| one_turn_stop()).collect(),
+        vec![
+            one_turn_stop(),
+            summary_turn_stop("first checkpoint"),
+            one_turn_stop(),
+            summary_turn_stop("second checkpoint"),
+        ],
         ToolRegistry::new(),
         status_engine(),
     )
@@ -410,7 +417,7 @@ impl Drop for ProjectionHeaderFault {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn manual_compaction_receipt_survives_unavailable_published_context() {
     let (model, fixture) = host_fixture(
-        vec![one_turn_stop(), one_turn_stop()],
+        vec![one_turn_stop(), summary_turn_stop("checkpoint")],
         ToolRegistry::new(),
         status_engine(),
     )
@@ -471,7 +478,12 @@ async fn manual_compaction_receipt_survives_unavailable_published_context() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn manual_compaction_wire_receipt_keeps_a_after_a_valid_successor_b_commits() {
     let (model, fixture) = host_fixture(
-        (0..4).map(|_| one_turn_stop()).collect(),
+        vec![
+            one_turn_stop(),
+            summary_turn_stop("first checkpoint"),
+            one_turn_stop(),
+            summary_turn_stop("second checkpoint"),
+        ],
         ToolRegistry::new(),
         status_engine(),
     )
@@ -555,7 +567,7 @@ async fn manual_compaction_lost_stdio_response_reconciles_without_replaying_oper
     use tokio::io::AsyncWriteExt as _;
 
     let (model, fixture) = host_fixture(
-        vec![one_turn_stop(), one_turn_stop()],
+        vec![one_turn_stop(), summary_turn_stop("checkpoint")],
         ToolRegistry::new(),
         status_engine(),
     )

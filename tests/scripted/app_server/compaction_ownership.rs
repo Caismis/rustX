@@ -237,11 +237,14 @@ async fn catalog_observer_is_registered_before_activation_and_never_competes_aft
         let compaction = authority
             .admit_compaction_transfer(None, None)
             .expect("post-Loaded observer startup owns no semantic admission boundary");
-        assert!(compaction.await.is_err(), "empty history cannot compact");
+        assert!(matches!(
+            compaction.await.unwrap(),
+            crate::runtime_client::types::RuntimeClientResult::ContextCompactionSkipped
+        ));
         assert_eq!(
             events(&runtime)
                 .iter()
-                .filter(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
+                .filter(|event| matches!(event, RuntimeEvent::CompactionSkipped { .. }))
                 .count(),
             1
         );
@@ -314,10 +317,10 @@ async fn native_compaction_transfer_releases_its_lease_before_reply_or_waiter_lo
             release_tx.send(()).unwrap();
             finished_rx.await.unwrap();
             if let Some(reply) = reply {
-                assert!(
-                    reply.await.unwrap().is_err(),
-                    "empty history cannot compact"
-                );
+                assert!(matches!(
+                    reply.await.unwrap().unwrap(),
+                    crate::runtime_client::types::RuntimeClientResult::ContextCompactionSkipped
+                ));
             }
             assert!(f.provider.request_bodies().is_empty());
             f.close().await;
@@ -450,6 +453,7 @@ fn assert_one_summary_chain(
                 RuntimeEvent::CompactionStarted { .. }
                     | RuntimeEvent::CompactionCompleted { .. }
                     | RuntimeEvent::CompactionFailed { .. }
+                    | RuntimeEvent::CompactionCancelled { .. }
                     | RuntimeEvent::AuxiliaryCallStarted { .. }
                     | RuntimeEvent::AuxiliaryCallSettled { .. }
                     | RuntimeEvent::ModelRequestStarted {
@@ -570,7 +574,10 @@ fn assert_one_summary_chain(
         RuntimeEvent::CompactionFailed {
             operation_id: terminal_operation,
             ..
-        } if !checkpoint_committed => assert_eq!(terminal_operation, operation_id),
+        } if completed && !checkpoint_committed => assert_eq!(terminal_operation, operation_id),
+        RuntimeEvent::CompactionCancelled {
+            operation_id: terminal_operation,
+        } if !completed && !checkpoint_committed => assert_eq!(terminal_operation, operation_id),
         event => panic!("wrong business terminal: {event:?}"),
     }
     operation_id.clone()
