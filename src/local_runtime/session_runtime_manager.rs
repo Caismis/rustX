@@ -489,10 +489,10 @@ struct RegistryState {
     #[cfg(test)]
     source_watch_settled: tokio::sync::watch::Sender<u64>,
     /// Parks the catalog observer between its cut of the runtime's binding
-    /// revision and its write of the retained binding: it meets the test at
-    /// the first barrier, then waits for it at the second.
+    /// revision and its write of the retained binding. Consumed by the next
+    /// observer; the test's scoped release also unblocks assertion unwinding.
     #[cfg(test)]
-    catalog_rebase_cut: Option<Arc<(std::sync::Barrier, std::sync::Barrier)>>,
+    catalog_rebase_cut: Option<Arc<crate::runtime::conversation_runtime::Gate>>,
     #[cfg(test)]
     configuration_settlement: Arc<tests::AsyncGate>,
     #[cfg(test)]

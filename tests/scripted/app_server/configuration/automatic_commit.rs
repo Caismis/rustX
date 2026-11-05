@@ -1060,7 +1060,18 @@ async fn a_catalog_rebase_never_rewinds_a_binding_a_commit_retained() {
     bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
         let id = fixture.sessions[0].id.clone();
+        // Drive the observer explicitly below. Its initial live pass must not
+        // supersede the staged candidate before the test takes its cut.
+        let observer = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let observer_release = observer.arm_scoped();
+        *fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id)
+            .catalog_observer_start
+            .lock()
+            .unwrap() = Some(observer.clone());
         fixture.manager.load(&id, None).await.unwrap();
+        gate_entered(&observer).await;
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         let retained = |fixture: &Fixture| {
             fixture
@@ -1089,9 +1100,17 @@ async fn a_catalog_rebase_never_rewinds_a_binding_a_commit_retained() {
             staged.units[&ApplyUnit::Instructions],
             UnitApplication::Ready
         );
+        // Ready publishes before the preparation worker's final iteration.
+        // Let it exit before holding its lock across the observer cut, so it
+        // cannot strand the runtime's commit wake on a blocked Tokio worker.
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
         let before = runtime.configuration_cut().binding_revision;
+        assert!(runtime.has_staged_configuration());
         assert_eq!(retained(&fixture), before);
-        let hook = Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
+        let hook = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let rebase_release = hook.arm_scoped();
         fixture
             .manager
             .registry
@@ -1107,7 +1126,7 @@ async fn a_catalog_rebase_never_rewinds_a_binding_a_commit_retained() {
         tokio::task::spawn_blocking({
             let hook = hook.clone();
             move || {
-                hook.0.wait();
+                hook.wait_entered();
             }
         })
         .await
@@ -1120,31 +1139,29 @@ async fn a_catalog_rebase_never_rewinds_a_binding_a_commit_retained() {
             .wait_until_terminal(&execution_id)
             .await
             .unwrap();
-        fixture.gates[0].wait_entered().await;
-        fixture.gates[0].release();
+        // Preparing the background continuation's provider request can need
+        // the application lock this observer holds. Observe the commit at
+        // the coordinator before releasing that lock, not at the provider.
         while runtime.configuration_cut().binding_revision == before {
             tokio::task::yield_now().await;
         }
         let committed = runtime.configuration_cut().binding_revision;
         assert_eq!(retained(&fixture), committed);
-        tokio::task::spawn_blocking(move || {
-            hook.1.wait();
-        })
-        .await
-        .unwrap();
+        drop(rebase_release);
         rebase.await.unwrap();
+        // The same observer can run again without re-entering the test gate.
+        // This also covers a live publication racing the explicit rebase.
         fixture
             .manager
-            .registry
-            .0
-            .lock()
-            .unwrap()
-            .catalog_rebase_cut = None;
+            .rebase_runtime_catalog(&id, incarnation, &runtime);
         assert_eq!(
             retained(&fixture),
             committed,
             "the observer rewound the retained binding to its stale cut"
         );
+        drop(observer_release);
+        fixture.gates[0].wait_entered().await;
+        fixture.gates[0].release();
         applied(&fixture, 0).await;
         let selected = crate::model::session::SessionModelConfig::of(
             crate::model::catalog::ModelRef::parse("local/b").unwrap(),

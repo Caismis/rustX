@@ -52,7 +52,7 @@ impl SessionRuntimeManager {
             let _admission = admission;
             #[cfg(test)]
             if let Some(gate) = start_gate {
-                gate.enter();
+                tokio::task::block_in_place(|| gate.enter());
             }
             let mut observed = 0;
             loop {
@@ -120,10 +120,9 @@ impl SessionRuntimeManager {
                 .lock()
                 .expect("registry mutex")
                 .catalog_rebase_cut
-                .clone();
+                .take();
             if let Some(hook) = hook {
-                hook.0.wait();
-                hook.1.wait();
+                tokio::task::block_in_place(|| hook.enter());
             }
         }
         // A staged commit retains its binding from inside the runtime's
