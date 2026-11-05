@@ -9,8 +9,8 @@ use super::{
     random_name, read, safe_hex, write_with_sync,
 };
 use crate::runtime::identity::ConversationId;
-use nix::fcntl::{Flock, FlockArg, OFlag, openat};
-use nix::sys::stat::{Mode, mkdirat};
+use nix::fcntl::{AtFlags, Flock, FlockArg, OFlag, openat};
+use nix::sys::stat::{Mode, fstatat, mkdirat};
 use nix::unistd::{UnlinkatFlags, unlinkat};
 use rustix::fs::{RenameFlags, renameat_with};
 use serde::{Deserialize, Serialize};
@@ -219,7 +219,8 @@ impl Arena {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Point {
     BeforeMove,
-    AfterMove,
+    AfterRenameBeforeValidation,
+    AfterValidation,
     AfterMarkerRemoval,
 }
 
@@ -303,27 +304,23 @@ pub(super) fn cleanup(
         };
         let retirement = binding.retirement.as_ref().expect("retirement prepared");
         if !retirement.confirmed {
-            if missing(directory_at(&arena, OsStr::new(&slot)))?.is_none() {
-                let Some(original) = missing(binding.open(owner, conversation))? else {
-                    // Neither source nor reserved slot exists: settle any
-                    // earlier interrupted rename before confirming absence.
-                    directory(source_parent)?.sync_all()?;
-                    arena.sync_all()?;
-                    ownership.namespaces[index]
-                        .retirement
-                        .as_mut()
-                        .unwrap()
-                        .confirmed = true;
-                    write_with_sync(&ownership, true)?;
-                    continue;
-                };
-                move_namespace(&binding, &ownership, &original, &arena, &slot, hook)?;
-            }
-            let moved = directory_at(&arena, OsStr::new(&slot))?;
-            private_directory(&moved, binding.device, binding.inode)?;
-            if marker::<Marker>(&moved)? != binding.marker(owner, conversation) {
-                return Err(invalid());
-            }
+            let moved = match inspect_unconfirmed_slot(&binding, &ownership, &arena, &slot)? {
+                Some(moved) => Some(moved),
+                None => move_namespace(&binding, &ownership, &arena, &slot, hook)?,
+            };
+            let Some(moved) = moved else {
+                // Neither source nor reserved slot exists: settle any earlier
+                // interrupted rename before confirming absence.
+                directory(source_parent)?.sync_all()?;
+                arena.sync_all()?;
+                ownership.namespaces[index]
+                    .retirement
+                    .as_mut()
+                    .unwrap()
+                    .confirmed = true;
+                write_with_sync(&ownership, true)?;
+                continue;
+            };
             // This also covers restart after rename but before either sync.
             directory(source_parent)?.sync_all()?;
             arena.sync_all()?;
@@ -333,46 +330,95 @@ pub(super) fn cleanup(
                 .unwrap()
                 .confirmed = true;
             write_with_sync(&ownership, true)?;
+            drop(moved);
         }
         remove_slot(&arena, &binding, owner, conversation, &slot, hook)?;
     }
     Ok(())
 }
 
+/// A reserved slot may contain any directory entry captured at the public name.
+/// Live cleanup and restart recovery must return every unverified entry, even
+/// when opening it as a directory or reading its marker fails.
+fn inspect_unconfirmed_slot(
+    binding: &Binding,
+    ownership: &Ownership,
+    arena: &File,
+    slot: &str,
+) -> io::Result<Option<File>> {
+    let validation = (|| -> io::Result<Option<File>> {
+        match fstatat(arena, slot, AtFlags::AT_SYMLINK_NOFOLLOW) {
+            Ok(_) => {}
+            Err(nix::errno::Errno::ENOENT) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        }
+        let moved = directory_at(arena, OsStr::new(slot))?;
+        private_directory(&moved, binding.device, binding.inode)?;
+        if marker::<Marker>(&moved)? != binding.marker(&ownership.owner, &ownership.conversation) {
+            return Err(invalid());
+        }
+        Ok(Some(moved))
+    })();
+    validation.map_err(|error| restore_unconfirmed_entry(binding, arena, slot, &error))
+}
+
+fn restore_unconfirmed_entry(
+    binding: &Binding,
+    arena: &File,
+    slot: &str,
+    validation: &io::Error,
+) -> io::Error {
+    let restoration = (|| -> io::Result<()> {
+        let parent = directory(binding.root.parent().ok_or_else(invalid)?)?;
+        renameat_with(
+            arena,
+            slot,
+            &parent,
+            binding.root.file_name().ok_or_else(invalid)?,
+            RenameFlags::NOREPLACE,
+        )?;
+        parent.sync_all()?;
+        arena.sync_all()?;
+        Ok(())
+    })();
+    let recovery = match restoration {
+        Ok(()) => format!("entry restored to {}", binding.root.display()),
+        Err(error) => format!(
+            "restoration to {} did not complete: {error}",
+            binding.root.display(),
+        ),
+    };
+    // A successful reverse move restores location, not ownership authority.
+    // Keep the reserved intent and report pending until cleanup can revalidate.
+    io::Error::other(format!(
+        "unconfirmed temporary output entry failed validation: {validation}; {recovery}; cleanup remains pending",
+    ))
+}
+
 fn move_namespace(
     binding: &Binding,
     ownership: &Ownership,
-    original: &File,
     arena: &File,
     slot: &str,
     hook: &mut dyn FnMut(Point, &Path) -> io::Result<()>,
-) -> io::Result<()> {
-    let owner = &ownership.owner;
-    let conversation = &ownership.conversation;
+) -> io::Result<Option<File>> {
+    let Some(original) = missing(binding.open(&ownership.owner, &ownership.conversation))? else {
+        return Ok(None);
+    };
     let source_parent = binding.root.parent().ok_or_else(invalid)?;
     let source_leaf = binding.root.file_name().ok_or_else(invalid)?;
     let parent = directory(source_parent)?;
     hook(Point::BeforeMove, &binding.root)?;
     renameat_with(&parent, source_leaf, arena, slot, RenameFlags::NOREPLACE)?;
-    let moved = directory_at(arena, OsStr::new(slot))?;
-    if private_directory(
-        &moved,
-        original.metadata()?.dev(),
-        original.metadata()?.ino(),
-    )
-    .is_err()
-        || marker::<Marker>(&moved)? != binding.marker(owner, conversation)
-    {
-        // A public-path substitution was captured. Never delete it
-        // or overwrite a new occupant while trying to restore it.
-        let _ = renameat_with(arena, slot, &parent, source_leaf, RenameFlags::NOREPLACE);
-        return Err(invalid());
-    }
-    hook(
-        Point::AfterMove,
-        &binding.retirement.as_ref().unwrap().arena.root.join(slot),
-    )?;
-    Ok(())
+    let retired_path = binding.retirement.as_ref().unwrap().arena.root.join(slot);
+    hook(Point::AfterRenameBeforeValidation, &retired_path)?;
+    let moved = inspect_unconfirmed_slot(binding, ownership, arena, slot)?
+        .ok_or_else(|| io::Error::other("temporary output entry disappeared before validation"))?;
+    // Keep the original inode pinned through post-rename validation, preventing
+    // reuse while the public name can be substituted before the move.
+    drop(original);
+    hook(Point::AfterValidation, &retired_path)?;
+    Ok(Some(moved))
 }
 
 fn remove_slot(
@@ -436,6 +482,8 @@ mod tests {
     use super::super::{BINDINGS, Namespaces};
     use super::*;
     use std::io::Write;
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt, symlink};
+    use std::os::unix::process::ExitStatusExt;
     use std::process::{Command, Stdio};
     const ID: &str = "conv_01900000-0000-7000-8000-000000000001";
     const CHILD: &str = "tools::managed_output::storage::retirement::tests::cleanup_process";
@@ -467,6 +515,127 @@ mod tests {
         command
     }
 
+    fn run_cleanup(root: &Path, mode: &str) {
+        let output = command(root, mode).output().unwrap();
+        assert!(
+            output.status.success(),
+            "cleanup child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn kill_at_frontier(root: &Path, mode: &str) {
+        use std::io::BufRead;
+        let mut child = command(root, mode).stdout(Stdio::piped()).spawn().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in io::BufReader::new(stdout).lines() {
+                if line.unwrap().contains("RETIREMENT_FRONTIER") {
+                    tx.send(()).unwrap();
+                    return;
+                }
+            }
+        });
+        let frontier = rx.recv_timeout(std::time::Duration::from_secs(10));
+        let killed = child.kill();
+        let status = child.wait().unwrap();
+        reader.join().unwrap();
+        frontier.unwrap();
+        killed.unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+    }
+
+    fn reserved_slot(owner: &Path, id: &ConversationId) -> PathBuf {
+        let ownership = read(owner, id).unwrap();
+        let retirement = ownership.namespaces[0].retirement.as_ref().unwrap();
+        assert!(!retirement.confirmed);
+        retirement.arena.root.join(format!("{ID}-n0"))
+    }
+
+    fn replacement(root: &Path, kind: &str) -> PathBuf {
+        let path = root.join("replacement");
+        match kind {
+            "directory" => {
+                std::fs::create_dir(&path).unwrap();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+                std::fs::write(path.join("payload"), "foreign payload").unwrap();
+            }
+            "file" => std::fs::write(&path, "foreign payload").unwrap(),
+            "symlink" | "dangling-symlink" => {
+                let target = root.join("symlink-target");
+                if kind == "symlink" {
+                    std::fs::write(&target, "protected target").unwrap();
+                }
+                symlink(target, &path).unwrap();
+            }
+            "fifo" => nix::unistd::mkfifo(&path, Mode::S_IRUSR | Mode::S_IWUSR).unwrap(),
+            _ => panic!("unknown replacement type"),
+        }
+        path
+    }
+
+    fn assert_replacement(path: &Path, expected: &std::fs::Metadata, root: &Path, kind: &str) {
+        let actual = std::fs::symlink_metadata(path).unwrap();
+        assert_eq!(
+            (actual.dev(), actual.ino(), actual.mode()),
+            (expected.dev(), expected.ino(), expected.mode()),
+            "{kind}"
+        );
+        match kind {
+            "directory" => assert_eq!(
+                std::fs::read_to_string(path.join("payload")).unwrap(),
+                "foreign payload"
+            ),
+            "file" => assert_eq!(std::fs::read_to_string(path).unwrap(), "foreign payload"),
+            "symlink" | "dangling-symlink" => {
+                assert_eq!(
+                    std::fs::read_link(path).unwrap(),
+                    root.join("symlink-target")
+                );
+                if kind == "symlink" {
+                    assert_eq!(
+                        std::fs::read_to_string(root.join("symlink-target")).unwrap(),
+                        "protected target"
+                    );
+                } else {
+                    assert_missing(&root.join("symlink-target"));
+                }
+            }
+            "fifo" => assert!(actual.file_type().is_fifo()),
+            _ => unreachable!(),
+        }
+    }
+
+    fn remove_replacement(path: &Path, kind: &str) {
+        if kind == "directory" {
+            std::fs::remove_dir_all(path).unwrap();
+        } else {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    fn assert_missing(path: &Path) {
+        assert_eq!(
+            std::fs::symlink_metadata(path).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    fn assert_original_payload(path: &Path) {
+        let files: Vec<_> = std::fs::read_dir(path)
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|entry| entry.file_name().to_str().unwrap().starts_with("r-"))
+            .collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(files[0].path()).unwrap(),
+            "original output"
+        );
+    }
+
     #[test]
     fn cleanup_process() {
         let Some(root) = std::env::var_os("RUSTX_OUTPUT_RETIREMENT_TEST_ROOT") else {
@@ -474,15 +643,20 @@ mod tests {
         };
         let root = PathBuf::from(root);
         let mode = std::env::var("RUSTX_OUTPUT_RETIREMENT_TEST_MODE").unwrap();
-        cleanup(
+        let result = cleanup(
             &root,
             &root.join("private"),
             &ConversationId::new(ID),
-            &mut |point, _| {
+            &mut |point, path| {
+                if mode == "substitute" && point == Point::BeforeMove {
+                    std::fs::rename(path, path.with_extension("moved"))?;
+                    std::fs::rename(root.join("replacement"), path)?;
+                }
                 if (mode == "stop" && point == Point::AfterMarkerRemoval)
-                    || (mode == "move" && point == Point::AfterMove)
+                    || (mode == "validated" && point == Point::AfterValidation)
+                    || (mode == "substitute" && point == Point::AfterRenameBeforeValidation)
                 {
-                    println!("RETIREMENT_MARKER_REMOVED");
+                    println!("RETIREMENT_FRONTIER");
                     io::stdout().flush()?;
                     loop {
                         std::thread::park();
@@ -490,45 +664,35 @@ mod tests {
                 }
                 Ok(())
             },
-        )
-        .unwrap();
+        );
+        if mode == "restore" {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("cleanup remains pending")
+            );
+        } else {
+            result.unwrap();
+        }
     }
 
     #[test]
-    fn process_death_after_rename_or_marker_unlink_preserves_public_replacement() {
-        use std::io::BufRead;
-        for mode in ["move", "stop"] {
+    fn process_death_after_validation_or_marker_unlink_preserves_public_replacement() {
+        for mode in ["validated", "stop"] {
             let root = tempfile::tempdir().unwrap();
             let (owner, id, public) = fixture(root.path());
-            let mut child = command(root.path(), mode)
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap();
-            let stdout = child.stdout.take().unwrap();
-            let (tx, rx) = std::sync::mpsc::channel();
-            let reader = std::thread::spawn(move || {
-                for line in io::BufReader::new(stdout).lines() {
-                    if line.unwrap().contains("RETIREMENT_MARKER_REMOVED") {
-                        tx.send(()).unwrap();
-                        return;
-                    }
-                }
-            });
-            let frontier = rx.recv_timeout(std::time::Duration::from_secs(10));
-            child.kill().unwrap();
-            child.wait().unwrap();
-            reader.join().unwrap();
-            frontier.unwrap();
+            kill_at_frontier(root.path(), mode);
             let ownership = read(&owner, &id).unwrap();
             let retired = ownership.namespaces[0].retirement.as_ref().unwrap();
             assert_eq!(retired.confirmed, mode == "stop");
             let slot = retired.arena.root.join(format!("{ID}-n0"));
             assert!(slot.is_dir());
-            assert_eq!(slot.join(MARKER).exists(), mode == "move");
+            assert_eq!(slot.join(MARKER).exists(), mode == "validated");
             assert!(retired.arena.root.join(MARKER).is_file());
             std::fs::create_dir(&public).unwrap();
-            assert!(command(root.path(), "finish").status().unwrap().success());
-            assert!(!slot.exists());
+            run_cleanup(root.path(), "finish");
+            assert_missing(&slot);
             assert!(public.is_dir());
             assert!(retired.arena.root.join(MARKER).is_file());
             super::super::cleanup(root.path(), &owner, &id).unwrap();
@@ -538,27 +702,154 @@ mod tests {
 
     #[test]
     fn public_substitution_after_validation_is_preserved_and_original_remains_owned() {
-        let root = tempfile::tempdir().unwrap();
-        let (owner, id, public) = fixture(root.path());
-        let original = public.with_extension("moved");
-        let mut swapped = false;
-        let result = cleanup(root.path(), &owner, &id, &mut |point, path| {
-            if point == Point::BeforeMove && !swapped {
-                std::fs::rename(path, &original)?;
-                std::fs::create_dir(path)?;
-                swapped = true;
+        for kind in ["directory", "file", "symlink", "dangling-symlink", "fifo"] {
+            let root = tempfile::tempdir().unwrap();
+            let (owner, id, public) = fixture(root.path());
+            let foreign = replacement(root.path(), kind);
+            let expected = std::fs::symlink_metadata(&foreign).unwrap();
+            let original = public.with_extension("moved");
+            let result = cleanup(root.path(), &owner, &id, &mut |point, path| {
+                if point == Point::BeforeMove {
+                    std::fs::rename(path, &original)?;
+                    std::fs::rename(&foreign, path)?;
+                }
+                Ok(())
+            });
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("entry restored"), "{error}");
+            assert_replacement(&public, &expected, root.path(), kind);
+            assert_missing(&reserved_slot(&owner, &id));
+            assert_original_payload(&original);
+            assert!(super::super::cleanup(root.path(), &owner, &id).is_err());
+            assert_replacement(&public, &expected, root.path(), kind);
+            remove_replacement(&public, kind);
+            std::fs::rename(original, &public).unwrap();
+            super::super::cleanup(root.path(), &owner, &id).unwrap();
+            assert!(!public.exists());
+        }
+    }
+
+    #[test]
+    fn every_marker_or_identity_validation_failure_restores_the_unconfirmed_entry() {
+        for fault in ["missing", "malformed", "fifo", "mode"] {
+            let root = tempfile::tempdir().unwrap();
+            let (owner, id, public) = fixture(root.path());
+            let expected = std::fs::metadata(&public).unwrap();
+            let proof = std::fs::read(public.join(MARKER)).unwrap();
+            let result = cleanup(root.path(), &owner, &id, &mut |point, path| {
+                if point == Point::AfterRenameBeforeValidation {
+                    match fault {
+                        "missing" => std::fs::remove_file(path.join(MARKER))?,
+                        "malformed" => std::fs::write(path.join(MARKER), "invalid JSON")?,
+                        "fifo" => {
+                            std::fs::remove_file(path.join(MARKER))?;
+                            nix::unistd::mkfifo(&path.join(MARKER), Mode::S_IRUSR | Mode::S_IWUSR)?;
+                        }
+                        "mode" => {
+                            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o750))?;
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                Ok(())
+            });
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("entry restored"), "{fault}: {error}");
+            let actual = std::fs::metadata(&public).unwrap();
+            assert_eq!(
+                (actual.dev(), actual.ino()),
+                (expected.dev(), expected.ino())
+            );
+            assert_original_payload(&public);
+            assert_missing(&reserved_slot(&owner, &id));
+            std::fs::set_permissions(&public, std::fs::Permissions::from_mode(0o700)).unwrap();
+            if fault == "fifo" {
+                std::fs::remove_file(public.join(MARKER)).unwrap();
             }
-            Ok(())
-        });
-        assert!(result.is_err());
-        assert!(public.is_dir());
-        assert_eq!(std::fs::read_dir(&public).unwrap().count(), 0);
-        assert!(original.join(MARKER).is_file());
-        assert_eq!(std::fs::read_dir(&original).unwrap().count(), 2);
-        std::fs::remove_dir(&public).unwrap();
-        std::fs::rename(original, &public).unwrap();
-        super::super::cleanup(root.path(), &owner, &id).unwrap();
-        assert!(!public.exists());
+            std::fs::write(public.join(MARKER), &proof).unwrap();
+            std::fs::set_permissions(public.join(MARKER), std::fs::Permissions::from_mode(0o600))
+                .unwrap();
+            super::super::cleanup(root.path(), &owner, &id).unwrap();
+            assert!(!public.exists());
+        }
+    }
+
+    #[test]
+    fn occupied_public_path_preserves_both_entries_until_restoration_can_retry() {
+        for kind in ["directory", "file", "symlink", "dangling-symlink", "fifo"] {
+            let root = tempfile::tempdir().unwrap();
+            let (owner, id, public) = fixture(root.path());
+            let foreign = replacement(root.path(), kind);
+            let expected = std::fs::symlink_metadata(&foreign).unwrap();
+            let original = public.with_extension("moved");
+            let result = cleanup(root.path(), &owner, &id, &mut |point, path| {
+                if point == Point::BeforeMove {
+                    std::fs::rename(path, &original)?;
+                    std::fs::rename(&foreign, path)?;
+                }
+                if point == Point::AfterRenameBeforeValidation {
+                    std::fs::write(&public, "later occupant")?;
+                }
+                Ok(())
+            });
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("restoration to"), "{error}");
+            assert!(error.contains("cleanup remains pending"));
+            let slot = reserved_slot(&owner, &id);
+            assert_replacement(&slot, &expected, root.path(), kind);
+            let occupant = std::fs::metadata(&public).unwrap();
+            assert!(super::super::cleanup(root.path(), &owner, &id).is_err());
+            assert_eq!(std::fs::metadata(&public).unwrap().ino(), occupant.ino());
+            assert_eq!(std::fs::read_to_string(&public).unwrap(), "later occupant");
+            assert_replacement(&slot, &expected, root.path(), kind);
+            std::fs::remove_file(&public).unwrap();
+            assert!(
+                super::super::cleanup(root.path(), &owner, &id)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("entry restored")
+            );
+            assert_missing(&slot);
+            assert_replacement(&public, &expected, root.path(), kind);
+            assert_original_payload(&original);
+            remove_replacement(&public, kind);
+            std::fs::rename(original, &public).unwrap();
+            super::super::cleanup(root.path(), &owner, &id).unwrap();
+        }
+    }
+
+    #[test]
+    fn process_death_before_validation_restores_each_foreign_entry_on_restart() {
+        for kind in ["directory", "file", "symlink", "dangling-symlink", "fifo"] {
+            let root = tempfile::tempdir().unwrap();
+            let (owner, id, public) = fixture(root.path());
+            let foreign = replacement(root.path(), kind);
+            let expected = std::fs::symlink_metadata(&foreign).unwrap();
+            kill_at_frontier(root.path(), "substitute");
+            let slot = reserved_slot(&owner, &id);
+            assert_missing(&public);
+            assert_replacement(&slot, &expected, root.path(), kind);
+            let original = public.with_extension("moved");
+            assert_original_payload(&original);
+            if kind == "directory" {
+                std::fs::write(&public, "later occupant").unwrap();
+                let occupant = std::fs::metadata(&public).unwrap();
+                run_cleanup(root.path(), "restore");
+                assert_eq!(std::fs::metadata(&public).unwrap().ino(), occupant.ino());
+                assert_eq!(std::fs::read_to_string(&public).unwrap(), "later occupant");
+                assert_replacement(&slot, &expected, root.path(), kind);
+                std::fs::remove_file(&public).unwrap();
+            }
+            run_cleanup(root.path(), "restore");
+            assert_replacement(&public, &expected, root.path(), kind);
+            assert_missing(&slot);
+            assert_original_payload(&original);
+            assert!(owner.join(BINDINGS).is_file());
+            remove_replacement(&public, kind);
+            std::fs::rename(original, &public).unwrap();
+            run_cleanup(root.path(), "finish");
+            assert!(!public.exists());
+        }
     }
 
     #[test]
@@ -657,6 +948,6 @@ mod tests {
         std::fs::remove_dir(&slot).unwrap();
         std::fs::rename(original, &slot).unwrap();
         super::super::cleanup(root.path(), &owner, &id).unwrap();
-        assert!(!slot.exists());
+        assert_missing(&slot);
     }
 }

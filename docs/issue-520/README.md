@@ -53,6 +53,18 @@ preserved. Confirmed retirement can finish a markerless slot after process death
 the arena's own ownership marker remains intact throughout Session deletion.
 Slots use the permanently reserved Conversation identity plus namespace ordinal.
 
+Live cleanup and restart recovery share unconfirmed-slot validation. Every failed
+validation, including non-directory entries and missing or malformed markers,
+attempts a no-replace reverse move to the original public name. A later public
+occupant is never overwritten: both entries and the reserved pending intent stay
+available for retry. A successful reverse move restores location without granting
+cleanup authority or reporting successful deletion. The same recovery applies to
+process death immediately after rename, before any moved-object validation.
+
+These transitions follow the repository's [process-death fault model](../invariants.md):
+a healthy OS retains accepted writes across process termination. They do not add
+a machine-failure or power-loss guarantee for disposable output.
+
 `<ProductRoot>/output-retirement/` stores one directly addressed arena binding per
 canonical temp parent, with a publication lock. It contains no output index or
 retrieval mapping, and cleanup performs no temp-root scan. Empty arena scaffolding
@@ -82,7 +94,8 @@ security sandbox.
 | Planted symlinks, FIFO/regular replacements and allocation-handle settlement | `planted_leaf_symlink_is_a_collision_and_never_written`; `fifo_replacements_fail_without_waiting_for_a_peer`; `regular_background_replacement_is_rejected_and_settlement_releases_handle` |
 | Runtime drop, real cold process restart, vanished files/directories and unavailable current temp root | `genuine_cold_restart_keeps_the_original_locator`; `cold_reconstruction_retains_valid_references_and_changes_allocation_namespace`; `external_removal_rotates_namespace_without_repairing_old_locators`; `recovery_does_not_require_the_current_temporary_root` |
 | Marker loss rotates allocation; temp/workspace overlap has a clear diagnostic | `partial_cleanup_retires_the_current_namespace_without_repairing_it`; Native Bash `a_replaced_namespace_rotates_without_losing_foreground_output`; `a_temporary_root_inside_the_workspace_reports_configuration_conflict` |
-| Crash after marker unlink and deterministic public-path substitution | `storage::retirement::tests::{process_death_after_rename_or_marker_unlink_preserves_public_replacement,public_substitution_after_validation_is_preserved_and_original_remains_owned,replacement_at_public_path_before_final_rmdir_is_untouched,a_foreign_replacement_in_a_retired_slot_never_grants_authority}` |
+| Crash after marker unlink and deterministic public-path substitution | `storage::retirement::tests::{process_death_after_validation_or_marker_unlink_preserves_public_replacement,public_substitution_after_validation_is_preserved_and_original_remains_owned,replacement_at_public_path_before_final_rmdir_is_untouched,a_foreign_replacement_in_a_retired_slot_never_grants_authority}` |
+| Unconfirmed capture restores directory/file/symlink/FIFO identity and content; conflicting public occupants remain untouched | `storage::retirement::tests::{public_substitution_after_validation_is_preserved_and_original_remains_owned,every_marker_or_identity_validation_failure_restores_the_unconfirmed_entry,occupied_public_path_preserves_both_entries_until_restoration_can_retry,process_death_before_validation_restores_each_foreign_entry_on_restart}` |
 | Retirement infrastructure loss preserves or renews only proven authority | `storage::retirement::tests::{missing_arena_marker_keeps_confirmed_cleanup_pending,losing_an_unconfirmed_arena_retries_only_with_valid_original_authority}` |
 | Concurrent allocation and cleanup isolation across owners/products | `concurrent_conversations_and_products_do_not_mix_or_delete_each_other`; `foreign_or_traversing_metadata_never_grants_cleanup_authority`; `markerless_empty_directory_is_not_cleanup_authority` |
 | External unlink preserves detached writer exclusion; Session deletion removes only owned namespaces | `local_runtime::session::tests::deletion_tests::lifecycle::temporary_outputs_keep_writer_exclusion_and_cleanup_only_the_owned_session` |

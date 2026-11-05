@@ -8326,6 +8326,8 @@ Original admission scope, current controller and result reservation precede nati
   before private metadata is removed. Missing namespaces are idempotent; other
   errors remain cleanup-pending. Cleanup durably records and confirms a no-replace
   move into a product-owned private retirement arena before deleting content.
+  Unconfirmed entries share live/restart validation and no-replace restoration
+  for every validation error; a later public occupant keeps both entries pending.
   The arena retains its marker; confirmed private slots can finish after marker
   unlink and process death. Final removal never re-resolves the public locator.
   Shared arena bindings contain no output index and remain outside the Session

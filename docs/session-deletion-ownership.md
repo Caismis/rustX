@@ -326,3 +326,10 @@ uses the arena descriptor, so a replacement at the original published path is
 untouched. Arena scaffolding is retained shared infrastructure, not a spill
 index; no scans or reference counting are introduced. See [the contract and
 process-death regressions](issue-520/README.md).
+
+An unconfirmed captured entry is validated and conservatively restored through
+the same path in live cleanup and restart recovery. Failed directory opens,
+metadata checks and marker reads all attempt a no-replace reverse move. A new
+public occupant blocks restoration without losing either entry or the pending
+record. The validation-before-confirmation boundary includes a real process-death
+regression immediately after rename, before any validation of the captured entry.

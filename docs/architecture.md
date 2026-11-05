@@ -7508,3 +7508,8 @@ locator. A durable confirmed slot plus the arena's retained marker permits
 restart completion after the slot marker was unlinked. Shared arena bindings and
 empty scaffolding remain outside the Session cascade; they contain no spill index
 and require no temp-root scan. See [the lifecycle contract](issue-520/README.md).
+
+Unconfirmed retirement validation and no-replace restoration are shared by live
+cleanup and restart. Failed validation of any captured directory entry restores
+its public location when free; a later public occupant preserves both entries
+and pending authority. No deletion or successful cleanup follows failed proof.
