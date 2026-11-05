@@ -1,7 +1,7 @@
 # Automatic sequential compaction validation
 
-The implementation started from `origin/main` at
-`d4645468282dc6df56015fd72d0ad442946694c5`. It replaces authored compaction
+The implementation is based on `origin/main` at
+`c9ad6e345473b407b08870aebe6498c986c6b145`. It replaces authored compaction
 tuning with a model-derived policy and one sequential Summary pipeline. The
 background operation lifecycle and final Web/TUI presentation are separate
 changes.
@@ -56,29 +56,28 @@ usage components explicitly unknown.
 
 ## Recorded verification
 
-The following checks passed on the initial implementation base before the
-local Linux filesystem failure:
+Verification for implementation commit
+`6ae62f65902e92037285356e140d8f4bc4d14208` includes:
 
-- Rust 1.98.1: all targets and features compiled, including real executables.
-- Context engine 31 tests, compaction pipeline 21 tests, runtime integration
-  42 tests, and the durable Call-admission-frontier regression.
-- Agent request preparation 15 tests and compaction control 6 tests, including
-  live native progress followed by cancellation.
-- The real HTTP provider-emulator tests for more than twelve accepted chunks
-  with one Native-to-Prompt downgrade, explicit cross-Provider/Profile
-  selection, ordinary Summary selection, and repeated compaction.
-- Provider emulator: 58 Python tests; protocol, Web and TUI typechecks;
-  245 focused Web tests; 199 focused TUI tests; 42 launcher tests.
-- Web production build, i18n, 336 source-provenance records, dependency notices
-  for 349 packages, 64 repository-metadata tests and 37 benchmark-controller
-  tests.
+- Rust 1.98.1 formatting and strict all-target/all-feature Clippy.
+- An uninterrupted complete native library and boundary run: 5286 passed,
+  zero failed and 10 intentionally ignored.
+- External contracts 31, Provider 188, durable 147, real-process 67,
+  subagent 45, tools 135, configuration catalog 27 and managed-output 2 tests.
+- Real HTTP provider-emulator conformance for more than twelve accepted
+  chunks, Native-to-Prompt downgrade, cross-Provider/Profile selection,
+  repeated compaction and cancellation; all 58 emulator Python tests.
+- Authoritative Rust schema/TypeScript regeneration and protocol, Web and
+  TUI typechecks; Web production build, i18n, 336 source-provenance records,
+  notices for 349 dependencies, and 42 launcher tests.
+- Real App Server browser checks with the pinned Playwright image, including
+  compaction in English/light and Chinese/dark and the updated Settings view.
 
-The final manual-compaction, rollback-allowance, small-history overflow and
-multi-compaction fixture corrections require a fresh complete run. The local
-full-library run was interrupted when the host drive backing WSL filled and
-the Linux filesystem became read-only; that run is not a pass. Final format,
-strict Clippy, complete native lanes, generated-protocol drift, full clients,
-real browser acceptance and macOS verification remain required CI gates.
+The [FULL CI run](https://github.com/Caismis/rustX/actions/runs/42115386352)
+also passed Linux deterministic contracts and boundary suites, format/lint,
+generated-protocol drift, complete TUI and Web/Host/launcher suites, both
+browser acceptance shards and coverage, and the macOS Desktop adapter/Host
+job. The macOS full platform-boundary job remains a required merge gate.
 
 The semantic corpus is maintained separately in
 [`tests/fixtures/compaction-quality`](../tests/fixtures/compaction-quality/README.md).
