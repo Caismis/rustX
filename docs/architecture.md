@@ -7500,3 +7500,11 @@ child Conversations allocate independently. Archives omit full auxiliary output.
 A later OS cleanup can make output unavailable without breaking Session recovery,
 history browsing, or continued conversation. Complete oversized output is not
 necessarily reconstructible. See [the full contract](issue-520/README.md).
+
+Temporary output deletion durably retires namespaces into a product-owned private
+arena on the source filesystem before unlinking content. The moved object is
+revalidated, and final removal uses the arena descriptor rather than the public
+locator. A durable confirmed slot plus the arena's retained marker permits
+restart completion after the slot marker was unlinked. Shared arena bindings and
+empty scaffolding remain outside the Session cascade; they contain no spill index
+and require no temp-root scan. See [the lifecycle contract](issue-520/README.md).

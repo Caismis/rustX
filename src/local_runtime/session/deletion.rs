@@ -177,7 +177,11 @@ impl CleanupWork {
                 }
                 File::open(self.root.root())?.sync_all()?;
             }
-            crate::tools::managed_output::storage::cleanup(&path, scope.conversation())?;
+            crate::tools::managed_output::storage::cleanup(
+                self.root.root(),
+                &path,
+                scope.conversation(),
+            )?;
             match fs::remove_dir_all(&path) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

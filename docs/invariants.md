@@ -8311,7 +8311,9 @@ Original admission scope, current controller and result reservation precede nati
 - Exclusive directory/file creation, bounded collision retries, private POSIX
   modes and descriptor-relative operations prevent overwrite and symlink
   redirection. Issued names stay consumed within an allocator; restart or
-  external namespace removal lazily starts a fresh namespace, never aliases old output.
+  external namespace removal or lost ownership proof lazily starts a fresh namespace,
+  never repairs or aliases old output. A temp root inside the workspace is an
+  explicit configuration conflict.
 - Trusted Conversation-local bindings, rather than canonical history strings,
   establish cleanup authority. They retain original roots across restart and
   participate in the deletion ownership revision. Active stores and writers
@@ -8322,8 +8324,13 @@ Original admission scope, current controller and result reservation precede nati
   not change that record. Current allocation/write failures still fail explicitly.
 - Session cleanup runs under committed deletion and Conversation exclusion,
   before private metadata is removed. Missing namespaces are idempotent; other
-  errors remain cleanup-pending. Fork/clone history grants no source deletion
-  authority and archives omit auxiliary files. No global sweep, registry,
+  errors remain cleanup-pending. Cleanup durably records and confirms a no-replace
+  move into a product-owned private retirement arena before deleting content.
+  The arena retains its marker; confirmed private slots can finish after marker
+  unlink and process death. Final removal never re-resolves the public locator.
+  Shared arena bindings contain no output index and remain outside the Session
+  cascade. Fork/clone history grants no source deletion authority and archives
+  omit auxiliary files. No global sweep, spill registry,
   reference counting, compatibility path, or full-output reconstruction exists.
 
 See [the storage and lifecycle contract](issue-520/README.md).

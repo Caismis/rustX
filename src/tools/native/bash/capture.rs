@@ -270,12 +270,10 @@ mod settlement_tests {
                 directory.path().join("tool-output"),
             )
             .unwrap();
-            let results = store.root().unwrap();
             if write_failure {
                 store.fail_writes_after(0);
             } else {
-                std::fs::remove_dir_all(&results).unwrap();
-                std::fs::write(&results, "not a directory").unwrap();
+                store.set_force_open_failures(true);
             }
             let (tx, rx) = tokio::sync::mpsc::channel(1);
             let (failed, failure) = tokio::sync::oneshot::channel();
@@ -319,7 +317,7 @@ mod settlement_tests {
                 assert!(cause.contains("test-forced output write failure"));
             } else {
                 assert!(cause.contains("cannot allocate the foreground result spill"));
-                assert!(cause.contains(&results.display().to_string()));
+                assert!(cause.contains("forced"));
             }
             {
                 let drain = await_drain(&mut stdout, &mut stderr, &mut combined);

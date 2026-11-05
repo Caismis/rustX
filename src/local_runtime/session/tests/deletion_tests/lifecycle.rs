@@ -1189,7 +1189,8 @@ fn temporary_cleanup_failure_stays_pending_and_missing_namespace_is_idempotent()
         .parent()
         .unwrap()
         .to_owned();
-    let output = ManagedToolOutput::new_in_temp_root(conversation, &private, &temporary).unwrap();
+    let output =
+        ManagedToolOutput::new_in_temp_root(conversation.clone(), &private, &temporary).unwrap();
     let namespace = output.root().unwrap();
     std::fs::create_dir(namespace.join("unexpected")).unwrap();
     drop(output);
@@ -1209,7 +1210,17 @@ fn temporary_cleanup_failure_stays_pending_and_missing_namespace_is_idempotent()
     ));
     assert!(private.join("output-namespaces.json").exists());
     assert!(catalog.snapshot(&preview.session_id).is_err());
-    std::fs::remove_dir_all(&namespace).unwrap();
+    assert!(!namespace.exists());
+    let binding: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(private.join("output-namespaces.json")).unwrap())
+            .unwrap();
+    assert_eq!(binding["namespaces"][0]["retirement"]["confirmed"], true);
+    let arena = PathBuf::from(
+        binding["namespaces"][0]["retirement"]["arena"]["root"]
+            .as_str()
+            .unwrap(),
+    );
+    std::fs::remove_dir_all(arena.join(format!("{conversation}-n0"))).unwrap();
     let work = catalog.recover_delete(&preview.session_id).unwrap();
     let result = work.run();
     assert!(result.is_ok());
@@ -1217,6 +1228,8 @@ fn temporary_cleanup_failure_stays_pending_and_missing_namespace_is_idempotent()
         catalog.finish_delete(&work.record, result),
         SessionDeleteResult::Deleted { .. }
     ));
+    assert!(arena.join(".owner").is_file());
+    assert!(!private.exists());
 }
 
 #[test]

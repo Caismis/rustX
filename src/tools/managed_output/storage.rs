@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
@@ -13,6 +12,8 @@ use nix::unistd::{UnlinkatFlags, unlinkat};
 use serde::{Deserialize, Serialize};
 
 use crate::runtime::identity::ConversationId;
+
+mod retirement;
 
 const BINDINGS: &str = "output-namespaces.json";
 const MARKER: &str = ".owner";
@@ -25,6 +26,7 @@ struct Binding {
     device: u64,
     inode: u64,
     token: String,
+    retirement: Option<retirement::Retirement>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -155,14 +157,23 @@ fn lock(owner: &Path) -> io::Result<Flock<File>> {
 }
 
 fn write(ownership: &Ownership) -> io::Result<()> {
+    write_with_sync(ownership, false)
+}
+
+fn write_with_sync(ownership: &Ownership, durable: bool) -> io::Result<()> {
     let mut file = tempfile::NamedTempFile::new_in(&ownership.owner)?;
     serde_json::to_writer(file.as_file_mut(), ownership).map_err(io::Error::other)?;
     file.flush()?;
-    // One binding publication per namespace, never one write/fsync per output.
-    // Losing this auxiliary metadata at machine failure only forfeits cleanup;
-    // it cannot corrupt canonical Conversation data or authorize another root.
+    if durable {
+        file.as_file().sync_all()?;
+    }
+    // Namespace allocation avoids per-output durability costs; retirement
+    // transitions must be durable before their filesystem effects.
     file.persist(ownership.owner.join(BINDINGS))
         .map_err(|e| e.error)?;
+    if durable {
+        directory(&ownership.owner)?.sync_all()?;
+    }
     Ok(())
 }
 
@@ -269,6 +280,24 @@ impl Namespaces {
         name: &mut dyn FnMut() -> io::Result<String>,
         workspace: Option<&Path>,
     ) -> io::Result<Binding> {
+        if let Some(workspace) = workspace
+            && temp_root.starts_with(workspace)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "temporary output root {} is inside workspace {}; managed output namespaces must be disjoint from the workspace",
+                    temp_root.display(),
+                    workspace.display(),
+                ),
+            ));
+        }
+        if temp_root.starts_with(&ownership.owner) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "temporary output root must be outside the Conversation private allocation",
+            ));
+        }
         let parent = directory(temp_root)?;
         for _ in 0..RETRIES {
             let leaf = format!("rx-{}", name()?);
@@ -292,6 +321,7 @@ impl Namespaces {
                 device: metadata.dev(),
                 inode: metadata.ino(),
                 token: random_name()?,
+                retirement: None,
             };
             let mut marker = File::from(openat(
                 &dir,
@@ -332,8 +362,10 @@ impl Namespaces {
         if let Some(current) = &self.current {
             match current.open(&self.owner, &self.conversation) {
                 Ok(dir) => return Ok(dir),
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e),
+                // A missing marker, replacement, or other loss of namespace
+                // trust retires it for allocation only. Historical locators
+                // and cleanup still require their original ownership proof.
+                Err(_) => self.current = None,
             }
         }
         // Recovery reads trusted bindings without touching the current temp
@@ -464,76 +496,22 @@ pub(crate) fn ownership_revision(
 }
 
 /// Called only under the Session's committed deletion and allocation exclusion.
-pub(crate) fn cleanup(owner: &Path, conversation: &ConversationId) -> io::Result<()> {
-    let ownership = match read(owner, conversation) {
-        Ok(value) => value,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e),
-    };
-    for binding in ownership.namespaces {
-        let dir = match binding.open(&ownership.owner, &ownership.conversation) {
-            Ok(dir) => dir,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            // Even an empty directory needs its ownership marker: inode
-            // identities may be reused after external removal or restart.
-            Err(e) => return Err(e),
-        };
-        // Managed output is flat. Unexpected subdirectories fail closed rather
-        // than granting arbitrary recursive deletion authority.
-        let mut entries = nix::dir::Dir::from_fd(dir.try_clone()?.into())?;
-        let names = entries
-            .iter()
-            .map(|e| e.map(|e| e.file_name().to_owned()))
-            .collect::<Result<Vec<_>, _>>()?;
-        for name in names {
-            if [b".".as_slice(), b"..", MARKER.as_bytes()].contains(&name.as_bytes()) {
-                continue;
-            }
-            match unlinkat(
-                &dir,
-                OsStr::from_bytes(name.as_bytes()),
-                UnlinkatFlags::NoRemoveDir,
-            ) {
-                Ok(()) | Err(nix::errno::Errno::ENOENT) => {}
-                Err(e) => return Err(e.into()),
-            }
-        }
-        // Leave the marker until all content was removed, so a failed cleanup
-        // can revalidate the same namespace on retry.
-        match unlinkat(&dir, MARKER, UnlinkatFlags::NoRemoveDir) {
-            Ok(()) | Err(nix::errno::Errno::ENOENT) => {}
-            Err(e) => return Err(e.into()),
-        }
-        match std::fs::remove_dir(&binding.root) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => {
-                let mut marker = File::from(openat(
-                    &dir,
-                    MARKER,
-                    OFlag::O_WRONLY
-                        | OFlag::O_CREAT
-                        | OFlag::O_EXCL
-                        | OFlag::O_NOFOLLOW
-                        | OFlag::O_CLOEXEC,
-                    Mode::from_bits_truncate(0o600),
-                )?);
-                serde_json::to_writer(
-                    &mut marker,
-                    &binding.marker(&ownership.owner, &ownership.conversation),
-                )
-                .map_err(io::Error::other)?;
-                return Err(e);
-            }
-        }
-    }
-    Ok(())
+pub(crate) fn cleanup(
+    product: &Path,
+    owner: &Path,
+    conversation: &ConversationId,
+) -> io::Result<()> {
+    retirement::cleanup(product, owner, conversation, &mut |_, _| Ok(()))
 }
 
 /// The existing uncommitted child rollback owner retires output before metadata.
 /// The Conversation allocation itself remains a burned identity reservation.
-pub(crate) fn rollback(owner: &Path, conversation: &ConversationId) -> io::Result<()> {
-    cleanup(owner, conversation)?;
+pub(crate) fn rollback(
+    product: &Path,
+    owner: &Path,
+    conversation: &ConversationId,
+) -> io::Result<()> {
+    cleanup(product, owner, conversation)?;
     let dir = match directory(owner) {
         Ok(dir) => dir,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -595,7 +573,7 @@ mod tests {
             None,
         )
         .unwrap();
-        cleanup(&owner, &conversation).unwrap();
+        cleanup(root.path(), &owner, &conversation).unwrap();
         assert!(!binding.root.exists());
         // Recorded identities stay consumed even after external deletion.
         let mut attempts = 0;
@@ -631,11 +609,11 @@ mod tests {
         let mut forged = read(&a, &conversation).unwrap();
         forged.namespaces = second.bindings.clone();
         write(&forged).unwrap();
-        assert!(cleanup(&a, &conversation).is_err());
+        assert!(cleanup(root.path(), &a, &conversation).is_err());
         assert_eq!(std::fs::read_to_string(&user).unwrap(), "keep");
         forged.namespaces[0].root = root.path().join("../rx-0000000000000001");
         write(&forged).unwrap();
-        assert!(cleanup(&a, &conversation).is_err());
+        assert!(cleanup(root.path(), &a, &conversation).is_err());
         assert!(first.root().unwrap().exists());
         assert!(user.exists());
     }

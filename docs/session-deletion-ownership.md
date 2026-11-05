@@ -208,6 +208,7 @@ runtime/                              stable ownership-transition lock inode
     .inspection-live                 disposable child inspection lease
     incarnation-*/                    exclusively allocated child-private resources
   .<inspection-token>                 short child inspection socket
+  output-retirement/                  shared arena bindings/lock; outside the cascade
   environments/                       shared; outside the cascade
 ```
 
@@ -314,3 +315,14 @@ Fork/clone references and imported archive history do not transfer namespace
 ownership. Child Conversation bindings belong to the Session selected by native
 ownership commits. Temporary removal cannot corrupt required history or artifacts.
 See [the output contract](issue-520/README.md).
+
+Temporary output cleanup first durably records a private retirement slot, moves
+with no-replace rename on the source filesystem, validates the moved object,
+and durably confirms retirement before unlinking content. The shared product
+arena keeps its ownership marker throughout Session cleanup. Only confirmed
+slots inside that proven arena may be markerless during restart recovery;
+markerless public directories never grant authority. The final directory removal
+uses the arena descriptor, so a replacement at the original published path is
+untouched. Arena scaffolding is retained shared infrastructure, not a spill
+index; no scans or reference counting are introduced. See [the contract and
+process-death regressions](issue-520/README.md).

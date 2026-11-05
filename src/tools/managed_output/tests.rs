@@ -220,6 +220,7 @@ fn concurrent_conversations_and_products_do_not_mix_or_delete_each_other() {
     let first_root = first.root().unwrap();
     drop(first);
     storage::cleanup(
+        &dir.path().join("product-a"),
         &dir.path().join("product-a/private").canonicalize().unwrap(),
         &ConversationId::new(CONVERSATION),
     )
@@ -242,15 +243,24 @@ fn cleanup_rejects_replaced_directory_and_unexpected_subdirectory() {
     std::fs::rename(&root, &original).unwrap();
     symlink(dir.path(), &root).unwrap();
     let owner = dir.path().join("private").canonicalize().unwrap();
-    assert!(storage::cleanup(&owner, &ConversationId::new(CONVERSATION)).is_err());
+    assert!(storage::cleanup(dir.path(), &owner, &ConversationId::new(CONVERSATION)).is_err());
     std::fs::remove_file(&root).unwrap();
     std::fs::rename(&original, &root).unwrap();
     std::fs::create_dir(root.join("unexpected")).unwrap();
-    assert!(storage::cleanup(&owner, &ConversationId::new(CONVERSATION)).is_err());
-    assert!(root.join(".owner").exists());
-    std::fs::remove_dir(root.join("unexpected")).unwrap();
-    storage::cleanup(&owner, &ConversationId::new(CONVERSATION)).unwrap();
-    storage::cleanup(&owner, &ConversationId::new(CONVERSATION)).unwrap();
+    assert!(storage::cleanup(dir.path(), &owner, &ConversationId::new(CONVERSATION)).is_err());
+    let binding: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(owner.join("output-namespaces.json")).unwrap())
+            .unwrap();
+    let arena = PathBuf::from(
+        binding["namespaces"][0]["retirement"]["arena"]["root"]
+            .as_str()
+            .unwrap(),
+    );
+    let retired = arena.join(format!("{CONVERSATION}-n0"));
+    assert!(retired.join(".owner").exists());
+    std::fs::remove_dir(retired.join("unexpected")).unwrap();
+    storage::cleanup(dir.path(), &owner, &ConversationId::new(CONVERSATION)).unwrap();
+    storage::cleanup(dir.path(), &owner, &ConversationId::new(CONVERSATION)).unwrap();
     assert!(!root.exists());
 }
 
@@ -416,9 +426,81 @@ fn markerless_empty_directory_is_not_cleanup_authority() {
     let namespace = output.root().unwrap();
     std::fs::remove_file(namespace.join(".owner")).unwrap();
     let owner = dir.path().join("private").canonicalize().unwrap();
-    assert!(storage::cleanup(&owner, &ConversationId::new(CONVERSATION)).is_err());
+    assert!(storage::cleanup(dir.path(), &owner, &ConversationId::new(CONVERSATION)).is_err());
     assert!(namespace.is_dir());
     assert!(owner.join("output-namespaces.json").exists());
     std::fs::remove_dir(&namespace).unwrap();
-    storage::cleanup(&owner, &ConversationId::new(CONVERSATION)).unwrap();
+    storage::cleanup(dir.path(), &owner, &ConversationId::new(CONVERSATION)).unwrap();
+}
+
+#[test]
+fn partial_cleanup_retires_the_current_namespace_without_repairing_it() {
+    use crate::tools::output::ForegroundOutputCapture;
+    let dir = tempfile::tempdir().unwrap();
+    let output = store(dir.path());
+    let mut old = output.open_spill().unwrap();
+    old.write_all("published output").unwrap();
+    let old_path = old.path().to_owned();
+    let old_root = old_path.parent().unwrap().to_owned();
+    drop(old);
+    std::fs::remove_file(old_root.join(".owner")).unwrap();
+
+    let mut capture = ForegroundOutputCapture::with_limit(1);
+    capture.push("fresh foreground output", &output).unwrap();
+    let foreground = capture.finish(true).output_locator.unwrap();
+    assert_ne!(foreground.parent().unwrap(), old_root);
+    assert_eq!(
+        std::fs::read_to_string(&foreground).unwrap(),
+        "fresh foreground output"
+    );
+    let execution = output.execution_identity().unwrap();
+    let background = output.allocate_background_output(&execution).unwrap();
+    output
+        .open_background_output_sink(&execution)
+        .unwrap()
+        .append("fresh background output")
+        .unwrap();
+    assert_eq!(background.parent(), foreground.parent());
+    assert_eq!(
+        std::fs::read_to_string(background).unwrap(),
+        "fresh background output"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&old_path).unwrap(),
+        "published output"
+    );
+    assert!(!old_root.join(".owner").exists());
+    assert!(output.validate_locator(&old_path).is_err());
+}
+
+#[test]
+fn a_temporary_root_inside_the_workspace_reports_configuration_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    for nested in [false, true] {
+        let temporary = if nested {
+            workspace.join(".tmp")
+        } else {
+            workspace.clone()
+        };
+        std::fs::create_dir_all(&temporary).unwrap();
+        let output = ManagedToolOutput::new_in_temp_root(
+            ConversationId::new(CONVERSATION),
+            &dir.path()
+                .join(if nested { "private-b" } else { "private-a" }),
+            &temporary,
+        )
+        .unwrap()
+        .with_workspace_root(&workspace.canonicalize().unwrap());
+        let diagnostic = output.open_spill().unwrap_err().to_string();
+        assert!(diagnostic.contains("inside workspace"), "{diagnostic}");
+        assert!(!diagnostic.contains("collision"), "{diagnostic}");
+        assert!(output.roots().is_empty());
+        assert!(
+            output
+                .allocate_background_output(&output.execution_identity().unwrap())
+                .is_err()
+        );
+    }
 }

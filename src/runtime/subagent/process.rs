@@ -232,7 +232,7 @@ pub(crate) struct PhysicalChildRuntimeRoot {
     path: PathBuf,
     /// The stable child Message Ledger/Event Journal database, when this is a
     /// production-allocated root. Test-only roots do not own a durable store.
-    durable_store: Option<(ConversationId, PathBuf)>,
+    durable_store: Option<(ConversationId, PathBuf, PathBuf)>,
     physical_owner: Option<std::sync::Arc<super::physical_recovery::ParentPhysicalLease>>,
 }
 
@@ -346,8 +346,11 @@ impl PhysicalChildRuntimeRoot {
                 Ok(()) => {
                     return Ok(Self {
                         path,
-                        durable_store: (!existing)
-                            .then_some((conversation_id.clone(), durable_store)),
+                        durable_store: (!existing).then_some((
+                            conversation_id.clone(),
+                            durable_store,
+                            product.root().to_owned(),
+                        )),
                         physical_owner: None,
                     });
                 }
@@ -402,7 +405,7 @@ impl PhysicalChildRuntimeRoot {
     /// committed child never calls this method: its durable conversation is
     /// retained after the physical execution root is settled.
     fn remove_durable_store(&self) -> std::io::Result<()> {
-        let Some((conversation_id, database)) = &self.durable_store else {
+        let Some((conversation_id, database, product)) = &self.durable_store else {
             return Ok(());
         };
         let mut failures = Vec::new();
@@ -421,8 +424,11 @@ impl PhysicalChildRuntimeRoot {
         // model-readable outputs have the same rollback owner as its database.
         // Retain the Conversation directory itself as the no-overwrite reservation.
         if let Some(conversation) = database.parent()
-            && let Err(error) =
-                crate::tools::managed_output::storage::rollback(conversation, conversation_id)
+            && let Err(error) = crate::tools::managed_output::storage::rollback(
+                product,
+                conversation,
+                conversation_id,
+            )
         {
             failures.push(format!("temporary outputs for {conversation_id}: {error}"));
         }

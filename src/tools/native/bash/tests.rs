@@ -302,17 +302,14 @@ async fn written_pid(path: &std::path::Path) -> i32 {
     panic!("{} never received a pid", path.display());
 }
 
-/// A spill write failure is represented explicitly: the invocation fails
-/// instead of reporting ordinary success while losing the promised retained
-/// output. The command provably crosses the preview bound, so the lazy
-/// spill allocation is actually reached. If the spill opens but its first
-/// write fails, the typed result reports the retained file as Partial.
+/// External replacement invalidates the old namespace. Oversized Native Bash
+/// output must rotate safely and retain every byte at its new real locator.
 #[tokio::test]
-async fn spill_write_failure_fails_the_invocation_explicitly() {
+async fn a_replaced_namespace_rotates_without_losing_foreground_output() {
     let (_dir, artifacts, tool_output, workspace) = fixture();
-    let results = tool_output.root().unwrap();
-    std::fs::remove_dir_all(&results).unwrap();
-    std::fs::write(&results, "not a directory").unwrap();
+    let namespace = tool_output.root().unwrap();
+    std::fs::remove_dir_all(&namespace).unwrap();
+    std::fs::write(&namespace, "unrelated replacement").unwrap();
     let result = run_with(
         "yes x | head -c 40000",
         &artifacts,
@@ -320,14 +317,23 @@ async fn spill_write_failure_fails_the_invocation_explicitly() {
         &workspace,
     )
     .await;
-    assert!(
-        matches!(result.status, ToolExecutionStatus::Failed { .. }),
-        "a spill capture failure must be an explicit failed result, got {:?}",
-        result.status
+    assert!(matches!(result.status, ToolExecutionStatus::Success));
+    let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
+        result.managed_output.as_deref()
+    else {
+        panic!(
+            "successful capture must retain complete output: {:?}",
+            result.managed_output
+        );
+    };
+    assert_ne!(locator.parent(), Some(namespace.as_path()));
+    assert_eq!(
+        std::fs::read_to_string(locator).unwrap(),
+        "x\n".repeat(20000)
     );
-    assert!(
-        !matches!(result.status, ToolExecutionStatus::Success),
-        "successful retention must never be reported while full output is lost"
+    assert_eq!(
+        std::fs::read_to_string(&namespace).unwrap(),
+        "unrelated replacement"
     );
 }
 
@@ -356,7 +362,6 @@ async fn spill_allocation_failure_fails_the_invocation_explicitly() {
     let ToolExecutionStatus::Failed { error } = &result.status else {
         unreachable!()
     };
-    assert!(error.contains("cannot allocate the foreground result spill"));
     assert!(error.contains("cannot allocate the foreground result spill"));
     let Some(crate::tools::types::ManagedOutputContinuation::Unavailable { diagnostic }) =
         result.managed_output.as_deref()
