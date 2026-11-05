@@ -1,4 +1,5 @@
-import type { WorkflowFileDocument, WorkflowSource } from '../../protocol/app-server/v70';
+import type { WorkflowFileDocument } from '../../protocol/app-server/v71';
+import type { WorkflowSource } from '../../protocol/app-server/workflow-documents.ts';
 import { exampleSource } from './workflow-fixtures';
 
 /** A complete, natively valid Workflow whose Tool arguments hold both a

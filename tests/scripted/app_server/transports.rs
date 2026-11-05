@@ -122,6 +122,42 @@ async fn attach(client: &impl AppServerConformanceDriver, f: &Fixture) -> Attach
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t12_workflow_scratch_disconnect_retains_physical_request_until_settlement() {
+    use base64::Engine as _;
+    use futures_util::FutureExt as _;
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncWriteExt as _;
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 0).await;
+        let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+        super::protocol::initialize(&connection).await;
+        let target = crate::local_runtime::configuration::settings::SourceTarget::User;
+        let bytes = serde_json::to_vec(&serde_json::json!({"description":"owned scratch", "block":{"input":{"type":"object","properties":{},"additionalProperties":false},"nodes":{"start":{"type":"start"},"done":{"type":"return","outputs":[]}},"edges":[{"from":"start","to":"done"}]}})).unwrap();
+        let MethodResult::WorkflowDocument { reference } = super::protocol::call(&connection, 710, Method::WorkflowDocumentBegin { target: target.clone(), byte_length: u32::try_from(bytes.len()).unwrap(), sha256: format!("{:x}", Sha256::digest(&bytes)) }).await else { panic!("scratch reference") };
+        super::protocol::call(&connection, 711, Method::WorkflowDocumentWrite { target: target.clone(), reference: reference.clone(), offset: 0, data: base64::engine::general_purpose::STANDARD.encode(&bytes) }).await;
+        let (entered, release) = connection.gate_workflow_finish_for_test();
+        let (mut input, reader) = tokio::io::duplex(65_536);
+        let serving = tokio::spawn(stdio::serve(connection.clone(), reader, tokio::io::sink(), CancellationToken::new()));
+        let request = Request { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(712), call: Method::WorkflowDocumentFinish { target, reference } };
+        input.write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes()).await.unwrap();
+        entered.await.unwrap();
+        let mut operations = fixture.host.request_operations();
+        assert_eq!(*operations.borrow(), 1);
+        input.shutdown().await.unwrap();
+        serving.await.unwrap().unwrap();
+        assert!(connection.closed_for_test());
+        assert_eq!(*operations.borrow(), 1, "EOF must not release the physical job's request capacity");
+        let draining = fixture.host.drain();
+        tokio::pin!(draining);
+        assert!(draining.as_mut().now_or_never().is_none(), "host drain must await the scratch worker");
+        release.send(()).unwrap();
+        operations.wait_for(|count| *count == 0).await.unwrap();
+        assert!(draining.await.is_empty());
+        fixture.close().await;
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t08_t12_content_range_error_is_typed_correlated_and_keeps_connection_following() {
     use crate::observation::content::{CanonicalContentComponent, ContentSource};
     use base64::Engine as _;
@@ -464,7 +500,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         let mut request = "ws://localhost/".into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v70, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v71, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -875,7 +911,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         let mut request = url.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v70, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v71, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -1074,11 +1110,11 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         ));
         let token = driver::TOKEN;
         for offered in [
-            format!("rustx.app-server.v70, rustx-delivery-access.{DELIVERY}"),
-            format!("rustx.app-server.v70, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
-            format!("rustx.app-server.v70, rustx-token.{token}, rustx-delivery-access.{token}"),
-            format!("rustx.app-server.v70, rustx-token.{token}, rustx-delivery-access.wrong"),
-            format!("rustx.app-server.v70, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
+            format!("rustx.app-server.v71, rustx-delivery-access.{DELIVERY}"),
+            format!("rustx.app-server.v71, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
+            format!("rustx.app-server.v71, rustx-token.{token}, rustx-delivery-access.{token}"),
+            format!("rustx.app-server.v71, rustx-token.{token}, rustx-delivery-access.wrong"),
+            format!("rustx.app-server.v71, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
         ] {
             assert!(driver::try_socket(&url, &offered).await.is_err(), "{offered}");
         }
@@ -1088,7 +1124,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         // A Product Host secret offered on the ordinary lane is not delivery access.
         let ordinary = driver::websocket_offering(
             &url,
-            &format!("rustx.app-server.v70, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
+            &format!("rustx.app-server.v71, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
         )
         .await;
         assert!(!delivery_access(&ordinary).await);
@@ -1098,7 +1134,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         ordinary.close().await;
         let granted = driver::websocket_offering(
             &url,
-            &format!("rustx.app-server.v70, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+            &format!("rustx.app-server.v71, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
         )
         .await;
         assert!(delivery_access(&granted).await);
@@ -1115,7 +1151,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v70, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+                &format!("rustx.app-server.v71, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
             )
             .await
             .is_err()
@@ -1985,7 +2021,7 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
             request.headers_mut().insert(
                 "sec-websocket-protocol",
                 format!(
-                    "rustx.app-server.v70, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
+                    "rustx.app-server.v71, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
                     driver::TOKEN
                 )
                 .parse()
@@ -2125,7 +2161,7 @@ async fn delivery_websocket(
     request.headers_mut().insert(
         "sec-websocket-protocol",
         format!(
-            "rustx.app-server.v70, rustx-token.{}, rustx-delivery-access.{credential}",
+            "rustx.app-server.v71, rustx-token.{}, rustx-delivery-access.{credential}",
             driver::TOKEN
         )
         .parse()

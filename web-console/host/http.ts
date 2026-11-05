@@ -20,10 +20,9 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
       if (request.method !== 'POST' || request.headers['content-type'] !== 'application/json') throw new Error('Expected JSON POST');
       if (request.headers.origin && new URL(request.headers.origin).host !== request.headers.host) throw new Error('Cross-origin Host request refused');
       const chunks: Buffer[] = []; let size = 0;
-      // A Workflow candidate carries one whole native program (bounded at
-      // 512 KiB natively); it is admitted up to the native App Server message
-      // bound and no further. Every other Host request stays small.
-      const limit = request.url === '/product-host/workflow' ? 1024 * 1024 : 65536;
+      // HTTP carries the independently bounded Workflow wire representation plus a small
+      // operation envelope. Native RPC uses 64 KiB chunks and keeps its 1 MiB record bound.
+      const limit = request.url === '/product-host/workflow' ? 32 * 1024 * 1024 + 65536 : 65536;
       for await (const chunk of request) {
         const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         size += bytes.byteLength; if (size > limit) throw new Error('Host request too large');

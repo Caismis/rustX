@@ -61,6 +61,7 @@
 //! Python-specific framing, parsing, or recovery.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -78,6 +79,8 @@ use crate::tools::mcp::{McpServerBinding, McpTransportConfig};
 use crate::tools::types::ToolInvocationPolicy;
 #[cfg(test)]
 use crate::tools::workspace::Workspace;
+
+mod requirements;
 
 /// The exact `FastMCP` build every managed Python package is prepared with.
 ///
@@ -144,20 +147,96 @@ pub enum PythonToolError {
     Environment(String),
 }
 
-/// One discovered package: the frozen in-memory snapshot of every package
-/// byte, already validated against the package contract.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One validated package with an owned, file-backed source snapshot.
+#[derive(Debug, Clone)]
 pub struct PythonToolPackage {
     /// The package name: its folder name, validated identifier-safe.
-    pub name: String,
+    name: String,
     /// The workspace folder the snapshot was read from (diagnostics only;
     /// the server never runs from this live root).
-    pub root: PathBuf,
+    root: PathBuf,
     /// Every package file, sorted by package-relative path.
-    pub files: Vec<(PathBuf, Vec<u8>)>,
+    files: Vec<PathBuf>,
+    source: Arc<PythonSource>,
+    source_digest: String,
     /// The normalized dependency lines of `requirements.txt` (comments and
     /// blank lines removed), in file order.
-    pub requirements: Vec<String>,
+    requirements: Vec<String>,
+}
+
+/// One anonymous backing file, with bounded in-memory file coordinates. Its last
+/// Arc closes the descriptor; the kernel owns cleanup even after cancellation.
+#[derive(Debug)]
+struct PythonSource {
+    file: std::fs::File,
+    entries: BTreeMap<PathBuf, (u64, u64, std::fs::Permissions)>,
+}
+impl PythonSource {
+    fn copy_to(
+        &self,
+        relative: &Path,
+        destination: &Path,
+        cancellation: &crate::runtime::CancellationSignal,
+    ) -> Result<(), PythonToolError> {
+        use std::os::unix::fs::FileExt;
+        let (offset, length, permissions) = self
+            .entries
+            .get(relative)
+            .ok_or_else(|| PythonToolError::Storage("unknown captured Python file".into()))?;
+        std::fs::create_dir_all(
+            destination
+                .parent()
+                .ok_or_else(|| PythonToolError::Storage("destination has no parent".into()))?,
+        )
+        .map_err(io_error)?;
+        let mut output = std::fs::File::create_new(destination).map_err(io_error)?;
+        let mut copied = 0;
+        let mut buffer = vec![0; crate::package_io::CHUNK_BYTES];
+        while copied < *length {
+            crate::package_io::check_cancelled(cancellation).map_err(io_error)?;
+            let count =
+                usize::try_from((*length - copied).min(buffer.len() as u64)).map_err(io_error)?;
+            let read = self
+                .file
+                .read_at(&mut buffer[..count], offset + copied)
+                .map_err(io_error)?;
+            if read == 0 {
+                return Err(PythonToolError::Storage(
+                    "captured Python file was truncated".into(),
+                ));
+            }
+            output.write_all(&buffer[..read]).map_err(io_error)?;
+            copied += read as u64;
+        }
+        output
+            .set_permissions(permissions.clone())
+            .map_err(io_error)?;
+        crate::package_io::check_cancelled(cancellation).map_err(io_error)
+    }
+}
+
+impl PythonToolPackage {
+    /// Validated package identity, immutable after capture.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    /// Normalized declarations parsed from the same captured source bytes.
+    #[must_use]
+    pub fn requirements(&self) -> &[String] {
+        &self.requirements
+    }
+
+    /// Logical paths of the captured source; supporting bytes stay on disk.
+    #[must_use]
+    pub fn files(&self) -> &[PathBuf] {
+        &self.files
+    }
+    /// Complete content identity of the owned captured bytes.
+    #[must_use]
+    pub fn source_digest(&self) -> &str {
+        &self.source_digest
+    }
 }
 
 /// The discovery outcome of one folder below `.agents/tools/`: either the
@@ -188,11 +267,18 @@ thread_local! {
 pub(crate) fn discover_package(
     root: &Path,
     name: &str,
+    cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<PythonToolPackage, PythonToolError> {
     #[cfg(test)]
     PACKAGE_PARSE_COUNT.with(|count| count.set(count.get() + 1));
     let invalid = |message: String| {
         PythonToolError::InvalidPackage(format!("package {name:?} ({}): {message}", root.display()))
+    };
+    let requirements_error = |error| match error {
+        PythonToolError::InvalidPackage(message) => {
+            invalid(format!("{REQUIREMENTS_FILE}: {message}"))
+        }
+        other => other,
     };
     let metadata = std::fs::symlink_metadata(root).map_err(io_error)?;
     if metadata.file_type().is_symlink() {
@@ -208,103 +294,143 @@ pub(crate) fn discover_package(
         PythonToolError::InvalidPackage(message) => invalid(message),
         other => other,
     })?;
-    let files = collect_files(root)?;
-    let server_key = Path::new(SERVER_FILE);
-    if !files.iter().any(|(path, _)| path == server_key) {
+    let files = collect_files(root, cancellation)?;
+    let mut source_file = tempfile::tempfile().map_err(io_error)?;
+    let directory = crate::package_io::PackageDirectory::open(root).map_err(io_error)?;
+    let mut hash = sha2::Sha256::new();
+    hash.update(b"rustx:managed-python-source:v2\0");
+    let mut entries = BTreeMap::new();
+    let mut offset = 0_u64;
+    let mut requirements = requirements::Parser::default();
+    for path in &files {
+        if path == Path::new(REQUIREMENTS_FILE) {
+            requirements = requirements::Parser::new(offset);
+        }
+        let mut parsing_error = None;
+        let name = path.as_os_str().as_encoded_bytes();
+        hash.update((name.len() as u64).to_be_bytes());
+        hash.update(name);
+        let evidence = crate::package_io::stream(&directory, path, cancellation, |bytes| {
+            source_file.write_all(bytes)?;
+            if path == Path::new(REQUIREMENTS_FILE)
+                && let Err(message) = requirements.push(bytes, &source_file)
+            {
+                parsing_error = Some(message);
+                return Err(std::io::Error::other("invalid requirements"));
+            }
+            Ok(())
+        })
+        .map_err(|error| match parsing_error {
+            Some(error) => requirements_error(error),
+            None => io_error(error),
+        })?;
+        hash.update(evidence.metadata.len().to_be_bytes());
+        hash.update(evidence.digest);
+        let metadata = evidence.metadata;
+        entries.insert(
+            path.clone(),
+            (offset, metadata.len(), metadata.permissions()),
+        );
+        offset = offset
+            .checked_add(metadata.len())
+            .ok_or_else(|| PythonToolError::Storage("captured package length overflow".into()))?;
+    }
+    let source_digest = format!("sha256:{}", hex_digest(&hash.finalize()));
+    let source = PythonSource {
+        file: source_file,
+        entries,
+    };
+    if !files.iter().any(|path| path == Path::new(SERVER_FILE)) {
         return Err(invalid(format!(
             "the package has no {SERVER_FILE} (the managed FastMCP server)"
         )));
     }
-    let requirements_key = Path::new(REQUIREMENTS_FILE);
-    let Some((_, requirements_bytes)) = files.iter().find(|(path, _)| path == requirements_key)
-    else {
+    if !files
+        .iter()
+        .any(|path| path == Path::new(REQUIREMENTS_FILE))
+    {
         return Err(invalid(format!(
             "the package has no {REQUIREMENTS_FILE} (required, even when empty)"
         )));
-    };
-    let requirements = parse_requirements(requirements_bytes, root)
-        .map_err(|message| invalid(format!("{REQUIREMENTS_FILE}: {message}")))?;
+    }
+    // Only declarations require text parsing. Binary supporting assets are copied
+    // and hashed as bytes and are never held in the parsed package representation.
+    let requirements = requirements
+        .finish(&source.file)
+        .map_err(requirements_error)?;
     Ok(PythonToolPackage {
         name: name.to_owned(),
         root: root.to_path_buf(),
         files,
+        source: Arc::new(source),
+        source_digest,
         requirements,
     })
 }
 
-/// Reads one package tree into memory: sorted, deterministic, symlink-free.
-fn collect_files(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, PythonToolError> {
+impl PartialEq for PythonToolPackage {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.root == other.root
+            && self.files == other.files
+            && self.source_digest == other.source_digest
+            && self.requirements == other.requirements
+    }
+}
+impl Eq for PythonToolPackage {}
+
+/// Enumerate metadata through anchored directory handles, without opening links.
+fn collect_files(
+    root: &Path,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<Vec<PathBuf>, PythonToolError> {
     fn walk(
-        root: &Path,
-        current: &Path,
-        output: &mut Vec<(PathBuf, Vec<u8>)>,
+        directory: &crate::package_io::PackageDirectory,
+        prefix: &Path,
+        files: &mut Vec<PathBuf>,
         remaining: &mut usize,
-        bytes_left: &mut usize,
         depth: usize,
+        cancellation: &crate::runtime::CancellationSignal,
     ) -> Result<(), PythonToolError> {
+        crate::package_io::check_cancelled(cancellation).map_err(io_error)?;
         if depth > 64 {
             return Err(PythonToolError::InvalidPackage(
                 "package nesting exceeds 64".into(),
             ));
         }
-        let mut entries = std::fs::read_dir(current)
-            .map_err(io_error)?
-            .take(1025)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(io_error)?;
-        if entries.len() > 1024 {
-            return Err(PythonToolError::InvalidPackage(
-                "package directory exceeds 1024 entries".into(),
-            ));
-        }
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
+        for name in directory.names(1024).map_err(io_error)? {
             *remaining = remaining.checked_sub(1).ok_or_else(|| {
                 PythonToolError::InvalidPackage("package exceeds 4096 entries".into())
             })?;
-            let path = entry.path();
-            let metadata = std::fs::symlink_metadata(&path).map_err(io_error)?;
-            if metadata.file_type().is_symlink() {
-                return Err(PythonToolError::InvalidPackage(format!(
-                    "package symlink is rejected: {}",
-                    path.display()
-                )));
+            let path = prefix.join(&name);
+            if path.to_str().is_none() {
+                return Err(PythonToolError::InvalidPackage(
+                    "package paths must be valid UTF-8".into(),
+                ));
             }
-            if metadata.is_dir() {
-                walk(root, &path, output, remaining, bytes_left, depth + 1)?;
-            } else if metadata.is_file() {
-                let relative = path
-                    .strip_prefix(root)
-                    .map_err(|_| {
-                        PythonToolError::Storage("cannot relativize package file".to_owned())
-                    })?
-                    .to_path_buf();
-                if relative.to_str().is_none() {
-                    return Err(PythonToolError::InvalidPackage(
-                        "package paths must be valid UTF-8".to_owned(),
-                    ));
-                }
-                let bytes = crate::bounded_file::read_bounded(&path)
-                    .map_err(PythonToolError::InvalidPackage)?;
-                *bytes_left = bytes_left.checked_sub(bytes.len()).ok_or_else(|| {
-                    PythonToolError::InvalidPackage("package exceeds 16 MiB".into())
-                })?;
-                output.push((relative, bytes));
+            if let Ok(child) = directory.child(name.as_os_str()) {
+                walk(&child, &path, files, remaining, depth + 1, cancellation)?;
+            } else {
+                // Includes symlinks, FIFOs and unsupported entry kinds: the
+                // opened descriptor, not a prior path check, decides.
+                directory.file(&name).map_err(|e| PythonToolError::InvalidPackage(format!("package entry {} is not a regular file or directory (symlinks are rejected): {e}", path.display())))?;
+                files.push(path);
             }
         }
         Ok(())
     }
-    let mut output = Vec::new();
+    let directory = crate::package_io::PackageDirectory::open(root).map_err(io_error)?;
+    let mut files = Vec::new();
     walk(
-        root,
-        root,
-        &mut output,
+        &directory,
+        Path::new(""),
+        &mut files,
         &mut 4096,
-        &mut (16 * 1024 * 1024),
         0,
+        cancellation,
     )?;
-    output.sort_by(|left, right| left.0.cmp(&right.0));
-    Ok(output)
+    files.sort();
+    Ok(files)
 }
 
 pub(crate) fn validate_identifier(identifier: &str) -> Result<(), PythonToolError> {
@@ -330,49 +456,48 @@ pub(crate) fn validate_identifier(identifier: &str) -> Result<(), PythonToolErro
 /// rustX-pinned, so a package may never declare it. Everything else is
 /// validated only far enough to become a `pyproject.toml` dependency entry;
 /// real dependency semantics (resolution, markers, indexes) belong to uv.
-fn parse_requirements(bytes: &[u8], _package_root: &Path) -> Result<Vec<String>, String> {
-    let text = std::str::from_utf8(bytes).map_err(|_| "the file is not valid UTF-8".to_owned())?;
-    let mut requirements = Vec::new();
-    for (index, raw_line) in text.lines().enumerate() {
-        // A requirements-file comment starts at `#` following whitespace,
-        // outside quoted marker text. URL fragments have no preceding
-        // whitespace and remain part of the declaration.
-        let line = strip_requirement_comment(raw_line).trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with('-') {
-            return Err(format!(
-                "line {}: option lines are not supported; declare PEP 508 dependencies only",
-                index + 1
-            ));
-        }
-        if line.ends_with('\\') {
-            return Err(format!(
-                "line {}: line continuations are not supported",
-                index + 1
-            ));
-        }
-        if contains_environment_variable_reference(line) {
-            return Err(format!(
-                "line {}: environment-variable expansion is not supported",
-                index + 1
-            ));
-        }
-        let requirement = pep_508::parse(line)
-            .map_err(|error| format!("line {}: {}", index + 1, safe_pep508_diagnostic(&error)))?;
-        let name = uv_normalize::PackageName::from_str(requirement.name)
-            .map_err(|_| format!("line {}: invalid dependency declaration", index + 1))?;
-        if name.as_ref() == "fastmcp" {
-            return Err(format!(
-                "line {}: the `fastmcp` dependency is managed by rustX \
-                 (pinned to fastmcp=={MANAGED_FASTMCP_VERSION}); remove it",
-                index + 1
-            ));
-        }
-        requirements.push(line.to_owned());
+fn parse_requirement(line: &str, number: usize) -> Result<String, String> {
+    if line.starts_with('-') {
+        return Err(format!(
+            "line {number}: option lines are not supported; declare PEP 508 dependencies only"
+        ));
     }
-    Ok(requirements)
+    if line.ends_with('\\') {
+        return Err(format!(
+            "line {number}: line continuations are not supported"
+        ));
+    }
+    if contains_environment_variable_reference(line) {
+        return Err(format!(
+            "line {number}: environment-variable expansion is not supported"
+        ));
+    }
+    let requirement = pep_508::parse(line)
+        .map_err(|error| format!("line {number}: {}", safe_pep508_diagnostic(&error)))?;
+    let name = uv_normalize::PackageName::from_str(requirement.name)
+        .map_err(|_| format!("line {number}: invalid dependency declaration"))?;
+    if name.as_ref() == "fastmcp" {
+        return Err(format!(
+            "line {number}: the `fastmcp` dependency is managed by rustX \
+                 (pinned to fastmcp=={MANAGED_FASTMCP_VERSION}); remove it"
+        ));
+    }
+    Ok(line.to_owned())
+}
+
+#[cfg(test)]
+fn parse_requirements(bytes: &[u8], _package_root: &Path) -> Result<Vec<String>, String> {
+    let invalid = |error| match error {
+        PythonToolError::InvalidPackage(message) => message,
+        other => other.to_string(),
+    };
+    let mut file = tempfile::tempfile().unwrap();
+    let mut parser = requirements::Parser::default();
+    for chunk in bytes.chunks(7) {
+        file.write_all(chunk).unwrap();
+        parser.push(chunk, &file).map_err(invalid)?;
+    }
+    parser.finish(&file).map_err(invalid)
 }
 
 /// The requirements-file layer rejects only pip's documented `${NAME}`
@@ -429,41 +554,25 @@ fn safe_pep508_diagnostic(errors: &[chumsky::error::Simple<'_, char>]) -> String
     reason
 }
 
-fn strip_requirement_comment(line: &str) -> &str {
-    let mut quote = None;
-    let mut escaped = false;
-    let mut previous: Option<char> = None;
-    for (index, character) in line.char_indices() {
-        if escaped {
-            escaped = false;
-        } else if character == '\\' && quote.is_some() {
-            escaped = true;
-        } else if matches!(character, '\'' | '\"') {
-            if quote == Some(character) {
-                quote = None;
-            } else if quote.is_none() {
-                quote = Some(character);
-            }
-        } else if quote.is_none()
-            && character == '#'
-            && (index == 0 || previous.is_some_and(char::is_whitespace))
-        {
-            return &line[..index];
-        }
-        previous = Some(character);
-    }
-    line
-}
-
 /// The deterministic content digest of the package source bytes alone.
-fn source_digest(files: &[(PathBuf, Vec<u8>)]) -> String {
-    let mut canonical = Vec::new();
-    canonical.extend_from_slice(b"rustx:managed-python-source:v1\0");
-    for (path, bytes) in files {
-        append_bytes(&mut canonical, path.to_string_lossy().as_bytes());
-        append_bytes(&mut canonical, bytes);
+fn source_digest(
+    root: &Path,
+    files: &[PathBuf],
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<String, PythonToolError> {
+    let directory = crate::package_io::PackageDirectory::open(root).map_err(io_error)?;
+    let mut hash = sha2::Sha256::new();
+    hash.update(b"rustx:managed-python-source:v2\0");
+    for path in files {
+        let name = path.as_os_str().as_encoded_bytes();
+        hash.update((name.len() as u64).to_be_bytes());
+        hash.update(name);
+        let evidence = crate::package_io::stream(&directory, path, cancellation, |_| Ok(()))
+            .map_err(io_error)?;
+        hash.update(evidence.metadata.len().to_be_bytes());
+        hash.update(evidence.digest);
     }
-    format!("sha256:{}", hex_digest(&sha2::Sha256::digest(canonical)))
+    Ok(format!("sha256:{}", hex_digest(&hash.finalize())))
 }
 
 /// The full preparation fingerprint: the package identity (the synthesized
@@ -515,7 +624,7 @@ fn package_fingerprint_with(
         &mut canonical,
         python_server_id(&package.name).as_str().as_bytes(),
     );
-    append_bytes(&mut canonical, source_digest(&package.files).as_bytes());
+    append_bytes(&mut canonical, package.source_digest.as_bytes());
     append_bytes(&mut canonical, python_identity.as_bytes());
     append_bytes(&mut canonical, uv_identity.as_bytes());
     append_bytes(&mut canonical, fastmcp_version.as_bytes());
@@ -682,9 +791,9 @@ impl Drop for BuildOwnerGuard {
     }
 }
 
-#[derive(Clone)]
 struct PythonToolStoreInner {
     root: PathBuf,
+    pending_cleanup: Mutex<std::collections::BTreeSet<PathBuf>>,
     runner: Arc<dyn SupervisedProcessRunner>,
     uv_binary: PathBuf,
     python_binary: PathBuf,
@@ -727,9 +836,11 @@ impl PythonToolStore {
             crate::local_runtime::static_effects::Effect::Preparation,
         );
         Self::establish(&root)?;
+        let root = std::fs::canonicalize(root).map_err(io_error)?;
         Ok(Self {
             inner: Arc::new(PythonToolStoreInner {
                 root,
+                pending_cleanup: Mutex::default(),
                 runner: Arc::new(RunnerBackedProcessRunner::default()),
                 uv_binary: resolve_executable("uv"),
                 python_binary: resolve_executable("python3"),
@@ -763,9 +874,11 @@ impl PythonToolStore {
         runner: Arc<dyn SupervisedProcessRunner>,
     ) -> Result<Self, PythonToolError> {
         Self::establish(&root)?;
+        let root = std::fs::canonicalize(root).map_err(io_error)?;
         Ok(Self {
             inner: Arc::new(PythonToolStoreInner {
                 root,
+                pending_cleanup: Mutex::default(),
                 runner,
                 uv_binary,
                 python_binary,
@@ -807,6 +920,37 @@ impl PythonToolStore {
             .expect("build join observer") = Some(observer);
     }
 
+    async fn settle_pending_cleanup(&self) -> Result<(), PythonToolError> {
+        let cleanup_owner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut pending = cleanup_owner
+                .pending_cleanup
+                .lock()
+                .expect("Python cleanup");
+            let paths: Vec<_> = pending.iter().cloned().collect();
+            for path in paths {
+                match std::fs::remove_dir_all(&path) {
+                    Ok(()) => {
+                        pending.remove(&path);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        pending.remove(&path);
+                    }
+                    Err(error) => {
+                        return Err(PythonToolError::Storage(format!(
+                            "cannot clean retained Python staging {}: {error}",
+                            path.display()
+                        )));
+                    }
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(io_error)??;
+        Ok(())
+    }
+
     /// Ensures the prepared environment state of one frozen package:
     /// probes the runtime identities, computes the fingerprint, reuses a
     /// valid published state, or builds and publishes a new one.
@@ -832,17 +976,26 @@ impl PythonToolStore {
         package: &PythonToolPackage,
         cancellation: &crate::runtime::CancellationSignal,
     ) -> Result<PreparedPythonPackage, PythonToolError> {
+        self.settle_pending_cleanup().await?;
         let (python_identity, uv_identity) =
             probe_runtime_identity(&self.inner, cancellation).await?;
         let fingerprint = package_fingerprint(package, &python_identity, &uv_identity);
         let state_dir = self.inner.root.join(PACKAGES_DIRECTORY).join(&fingerprint);
-        if let Some(prepared) = read_prepared_state(
-            &state_dir,
-            package,
-            &fingerprint,
-            &python_identity,
-            &uv_identity,
-        )? {
+        let verification = (
+            state_dir.clone(),
+            package.clone(),
+            fingerprint.clone(),
+            python_identity.clone(),
+            uv_identity.clone(),
+            cancellation.clone(),
+        );
+        if let Some(prepared) = tokio::task::spawn_blocking(move || {
+            let (directory, package, fingerprint, python, uv, signal) = verification;
+            read_prepared_state(&directory, &package, &fingerprint, &python, &uv, &signal)
+        })
+        .await
+        .map_err(io_error)??
+        {
             return Ok(prepared);
         }
         let key = fingerprint.clone();
@@ -902,7 +1055,9 @@ impl PythonToolStore {
                 owner_guard.finish(result);
             }));
         }
-        state.wait().await
+        let result = state.wait().await;
+        crate::package_io::check_cancelled(cancellation).map_err(io_error)?;
+        result
     }
 }
 
@@ -991,12 +1146,15 @@ fn read_prepared_state(
     fingerprint: &str,
     python_identity: &str,
     uv_identity: &str,
+    cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<Option<PreparedPythonPackage>, PythonToolError> {
     if !state_dir.exists() {
         return Ok(None);
     }
     let manifest_path = state_dir.join(MANIFEST_FILE);
-    let bytes = std::fs::read(&manifest_path).map_err(io_error)?;
+    crate::package_io::check_cancelled(cancellation).map_err(io_error)?;
+    let bytes =
+        crate::bounded_file::read_bounded(&manifest_path).map_err(PythonToolError::Storage)?;
     let manifest: PreparedManifest = serde_json::from_slice(&bytes).map_err(|error| {
         PythonToolError::Storage(format!(
             "invalid prepared-state manifest {}: {error}",
@@ -1023,8 +1181,8 @@ fn read_prepared_state(
         )));
     }
     let source_root = state_dir.join(SOURCE_DIRECTORY);
-    let files = collect_files(&source_root)?;
-    if source_digest(&files) != manifest.source_digest {
+    let files = collect_files(&source_root, cancellation)?;
+    if source_digest(&source_root, &files, cancellation)? != manifest.source_digest {
         return Err(PythonToolError::Storage(format!(
             "prepared state source {} does not hash back to its manifest",
             source_root.display()
@@ -1032,7 +1190,7 @@ fn read_prepared_state(
     }
     // The reopened package must be the one whose fingerprint this state
     // answers to: same source digest.
-    if source_digest(&package.files) != manifest.source_digest {
+    if package.source_digest != manifest.source_digest {
         return Err(PythonToolError::Storage(format!(
             "prepared state {} source digest does not match the discovered package",
             state_dir.display()
@@ -1183,14 +1341,9 @@ async fn materialize_package(
     cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<PreparedPythonPackage, PythonToolError> {
     let staging =
-        state_dir.with_file_name(format!(".build-{}-{}", fingerprint, std::process::id()));
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging).map_err(io_error)?;
-    }
-    // On every failure below the staging directory is scratch: it is never
-    // renamed into place, so a failed build can never publish a partial
-    // state. A crashed process may leave the staging directory behind; it
-    // is removed by the next build attempt of the same fingerprint.
+        state_dir.with_file_name(format!(".build-{}-{}", fingerprint, uuid::Uuid::now_v7()));
+    // The existing Python store owns any failed cleanup and retries it before
+    // its next preparation. In-flight staging is not in that cleanup set.
     let result = stage_and_build(
         inner,
         package,
@@ -1201,45 +1354,78 @@ async fn materialize_package(
         cancellation,
     )
     .await;
-    let staging_result = match result {
-        Ok(manifest) => {
-            let manifest_bytes = serde_json::to_vec(&manifest).map_err(io_error)?;
-            std::fs::write(staging.join(MANIFEST_FILE), manifest_bytes).map_err(io_error)?;
-            match std::fs::rename(&staging, state_dir) {
-                Ok(()) => Ok(()),
-                Err(error) if state_dir.exists() => {
-                    // A concurrent builder won the publish. The staging
-                    // scratch is removed and the winner's state is validated
-                    // by the caller-side reopen, exactly as if this process
-                    // had found it published.
-                    let _ = std::fs::remove_dir_all(&staging);
-                    let _ = error;
-                    Ok(())
-                }
+    let owner = inner.root.clone();
+    let package = package.clone();
+    let destination = state_dir.to_path_buf();
+    let fingerprint = fingerprint.to_owned();
+    let python_identity = python_identity.to_owned();
+    let uv_identity = uv_identity.to_owned();
+    let cancellation = cancellation.clone();
+    let (result, residue) = tokio::task::spawn_blocking(move || {
+        let publication = (|| {
+            let manifest = result?;
+            crate::package_io::check_cancelled(&cancellation).map_err(io_error)?;
+            std::fs::write(staging.join(MANIFEST_FILE), serde_json::to_vec(&manifest).map_err(io_error)?).map_err(io_error)?;
+            // Verify the complete staged package again after dependency setup,
+            // before making the directory addressable as prepared state.
+            read_prepared_state(&staging, &package, &fingerprint, &python_identity, &uv_identity, &cancellation)?
+                .ok_or_else(|| PythonToolError::Storage("Python staging did not materialize".into()))?;
+            crate::package_io::check_cancelled(&cancellation).map_err(io_error)?;
+            match std::fs::rename(&staging, &destination) {
+                Ok(()) => Ok(PreparedPythonPackage { fingerprint: fingerprint.clone(), state_dir: destination.clone() }),
+                Err(_) if destination.exists() => read_prepared_state(&destination, &package, &fingerprint, &python_identity, &uv_identity, &cancellation)?
+                    .ok_or_else(|| PythonToolError::Storage("concurrent Python publication disappeared".into())),
                 Err(error) => Err(io_error(error)),
             }
+        })();
+        let cleanup = match std::fs::remove_dir_all(&staging) {
+            Ok(()) => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => Some(error),
+        };
+        match cleanup {
+            None => (publication, None),
+            Some(error) => (Err(PythonToolError::Storage(format!("Python staging cleanup failed at {} (store {}): {error}; preparation: {publication:?}", staging.display(), owner.display()))), Some(staging)),
         }
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(&staging);
-            Err(error)
+    }).await.map_err(io_error)?;
+    if let Some(path) = residue {
+        inner
+            .pending_cleanup
+            .lock()
+            .expect("Python cleanup")
+            .insert(path);
+    }
+    result
+}
+
+async fn stage_source(
+    package: &PythonToolPackage,
+    source_root: &Path,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<(), PythonToolError> {
+    // The frozen source copy: the server runs these snapshotted bytes,
+    // never the live workspace files.
+    let snapshot = package.clone();
+    let copy_root = source_root.to_path_buf();
+    let copy_cancellation = cancellation.clone();
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&copy_root).map_err(io_error)?;
+        for relative in &snapshot.files {
+            snapshot
+                .source
+                .copy_to(relative, &copy_root.join(relative), &copy_cancellation)?;
         }
-    };
-    staging_result?;
-    // Publish through validation, never through trust: the handle returned
-    // is the re-validated on-disk state, whoever built it.
-    read_prepared_state(
-        state_dir,
-        package,
-        fingerprint,
-        python_identity,
-        uv_identity,
-    )?
-    .ok_or_else(|| {
-        PythonToolError::Storage(format!(
-            "prepared state {} did not materialize",
-            state_dir.display()
-        ))
+        if source_digest(&copy_root, &snapshot.files, &copy_cancellation)? != snapshot.source_digest
+        {
+            return Err(PythonToolError::Storage(
+                "captured Python source changed before installation".into(),
+            ));
+        }
+        Ok(())
     })
+    .await
+    .map_err(io_error)??;
+    Ok(())
 }
 
 async fn stage_and_build(
@@ -1252,16 +1438,7 @@ async fn stage_and_build(
     cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<PreparedManifest, PythonToolError> {
     let source_root = staging.join(SOURCE_DIRECTORY);
-    std::fs::create_dir_all(&source_root).map_err(io_error)?;
-    // The frozen source copy: the server runs these snapshotted bytes,
-    // never the live workspace files.
-    for (relative, bytes) in &package.files {
-        let destination = source_root.join(relative);
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent).map_err(io_error)?;
-        }
-        std::fs::write(&destination, bytes).map_err(io_error)?;
-    }
+    stage_source(package, &source_root, cancellation).await?;
     std::fs::write(
         staging.join("pyproject.toml"),
         generated_pyproject(package, python_identity),
@@ -1361,7 +1538,7 @@ async fn stage_and_build(
         uv: uv_identity.to_owned(),
         os: std::env::consts::OS.to_owned(),
         arch: std::env::consts::ARCH.to_owned(),
-        source_digest: source_digest(&package.files),
+        source_digest: package.source_digest.clone(),
     })
 }
 
@@ -1414,6 +1591,25 @@ mod tests {
             ),
             (REQUIREMENTS_FILE, b"# none\n"),
         ]
+    }
+
+    fn change_source(package: &mut PythonToolPackage, path: &str, bytes: &[u8]) {
+        let directory = tempfile::tempdir().unwrap();
+        for relative in &package.files {
+            let to = directory.path().join(relative);
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            package
+                .source
+                .copy_to(relative, &to, &crate::runtime::CancellationSignal::new())
+                .unwrap();
+        }
+        std::fs::write(directory.path().join(path), bytes).unwrap();
+        *package = discover_package(
+            &directory.path().canonicalize().unwrap(),
+            &package.name,
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .unwrap();
     }
 
     fn package(name: &str) -> PythonToolPackage {
@@ -1472,7 +1668,11 @@ mod tests {
     fn package_parser_rejects_invalid_folder_names() {
         for name in ["Bad", "under_score", "-lead", "trail-", "double--dash"] {
             let (_directory, workspace) = workspace_with(&[(name, &valid_package_files())]);
-            let result = discover_package(&workspace.root().join(".agents/tools").join(name), name);
+            let result = discover_package(
+                &workspace.root().join(".agents/tools").join(name),
+                name,
+                &crate::runtime::CancellationSignal::new(),
+            );
             assert!(
                 matches!(result, Err(PythonToolError::InvalidPackage(message))
                 if message.contains("invalid package name")),
@@ -1668,7 +1868,8 @@ mod tests {
             ],
         )]);
         let package = workspace.root().join(".agents/tools/demo");
-        let error = discover_package(&package, "demo").expect_err("invalid name");
+        let error = discover_package(&package, "demo", &crate::runtime::CancellationSignal::new())
+            .expect_err("invalid name");
         let PythonToolError::InvalidPackage(message) = error else {
             panic!("PEP 508 parse errors remain package validation errors");
         };
@@ -1825,15 +2026,18 @@ mod tests {
         );
 
         let mut changed_bytes = package.clone();
-        changed_bytes.files[0].1.push(b'\n');
+        change_source(&mut changed_bytes, SERVER_FILE, b"# changed\n");
         assert_ne!(
             fingerprint,
             package_fingerprint(&changed_bytes, python_identity, uv_identity),
             "a source edit is a new fingerprint"
         );
         let mut changed_requirements = package.clone();
-        changed_requirements.files[1] =
-            (PathBuf::from(REQUIREMENTS_FILE), b"six==1.16.0\n".to_vec());
+        change_source(
+            &mut changed_requirements,
+            REQUIREMENTS_FILE,
+            b"six==1.16.0\n",
+        );
         assert_ne!(
             fingerprint,
             package_fingerprint(&changed_requirements, python_identity, uv_identity),
@@ -2001,11 +2205,22 @@ mod tests {
         uv_identity: &str,
     ) -> (String, PathBuf) {
         let fingerprint = package_fingerprint(package, python_identity, uv_identity);
-        let state_dir = store_root.join(PACKAGES_DIRECTORY).join(&fingerprint);
+        let state_dir = store_root
+            .canonicalize()
+            .unwrap()
+            .join(PACKAGES_DIRECTORY)
+            .join(&fingerprint);
         let source_root = state_dir.join(SOURCE_DIRECTORY);
         std::fs::create_dir_all(&source_root).expect("source root");
-        for (relative, bytes) in &package.files {
-            std::fs::write(source_root.join(relative), bytes).expect("frozen source");
+        for relative in &package.files {
+            package
+                .source
+                .copy_to(
+                    relative,
+                    &source_root.join(relative),
+                    &crate::runtime::CancellationSignal::new(),
+                )
+                .expect("frozen source");
         }
         let program = venv_python(&state_dir);
         std::fs::create_dir_all(program.parent().expect("bin")).expect("venv bin");
@@ -2021,7 +2236,7 @@ mod tests {
             uv: uv_identity.to_owned(),
             os: std::env::consts::OS.to_owned(),
             arch: std::env::consts::ARCH.to_owned(),
-            source_digest: source_digest(&package.files),
+            source_digest: package.source_digest.clone(),
         };
         std::fs::write(
             state_dir.join(MANIFEST_FILE),
@@ -2037,9 +2252,16 @@ mod tests {
         let package = package("demo");
         let (fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
 
-        let reopened = read_prepared_state(&state_dir, &package, &fingerprint, "py", "uv")
-            .expect("valid state")
-            .expect("state exists");
+        let reopened = read_prepared_state(
+            &state_dir,
+            &package,
+            &fingerprint,
+            "py",
+            "uv",
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .expect("valid state")
+        .expect("state exists");
         assert_eq!(reopened.fingerprint, fingerprint);
         assert_eq!(reopened.state_dir, state_dir);
 
@@ -2054,6 +2276,7 @@ mod tests {
                 "sha256:other",
                 "py",
                 "uv",
+                &crate::runtime::CancellationSignal::new()
             )
             .expect("absent state"),
             None
@@ -2080,8 +2303,15 @@ mod tests {
             serde_json::to_vec(&manifest).expect("manifest"),
         )
         .expect("tamper");
-        let error = read_prepared_state(&state_dir, &package, &fingerprint, "py", "uv")
-            .expect_err("a tampered manifest fails closed");
+        let error = read_prepared_state(
+            &state_dir,
+            &package,
+            &fingerprint,
+            "py",
+            "uv",
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .expect_err("a tampered manifest fails closed");
         assert!(
             matches!(&error, PythonToolError::Storage(message) if message.contains("does not match its claimed identity")),
             "{error}"
@@ -2094,8 +2324,15 @@ mod tests {
             b"mcp = 'tampered'\n",
         )
         .expect("tamper source");
-        let error = read_prepared_state(&state_dir, &package, &fingerprint, "py", "uv")
-            .expect_err("a tampered source fails closed");
+        let error = read_prepared_state(
+            &state_dir,
+            &package,
+            &fingerprint,
+            "py",
+            "uv",
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .expect_err("a tampered source fails closed");
         assert!(
             matches!(&error, PythonToolError::Storage(message) if message.contains("does not hash back")),
             "{error}"
@@ -2130,8 +2367,15 @@ mod tests {
             .expect("tamper");
         };
         let expect_rejection = |label: &str| {
-            let error = read_prepared_state(&state_dir, &package, &fingerprint, "py", "uv")
-                .expect_err(label);
+            let error = read_prepared_state(
+                &state_dir,
+                &package,
+                &fingerprint,
+                "py",
+                "uv",
+                &crate::runtime::CancellationSignal::new(),
+            )
+            .expect_err(label);
             assert!(
                 matches!(&error, PythonToolError::Storage(message) if message.contains("does not match its claimed identity")),
                 "{label}: {error}"
@@ -2168,8 +2412,15 @@ mod tests {
         let package = package("demo");
         let (fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
         std::fs::remove_file(venv_python(&state_dir)).expect("remove the interpreter");
-        let error = read_prepared_state(&state_dir, &package, &fingerprint, "py", "uv")
-            .expect_err("a missing venv interpreter fails closed");
+        let error = read_prepared_state(
+            &state_dir,
+            &package,
+            &fingerprint,
+            "py",
+            "uv",
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .expect_err("a missing venv interpreter fails closed");
         assert!(
             matches!(&error, PythonToolError::Storage(message) if message.contains("no venv interpreter")),
             "{error}"
@@ -2402,11 +2653,124 @@ mod tests {
 
         // A changed package is a new fingerprint and a new build.
         let mut changed = package.clone();
-        changed.files[0].1.push(b'\n');
+        change_source(&mut changed, SERVER_FILE, b"# changed\n");
         let rebuilt = store
             .ensure_prepared(&changed, &CancellationSignal::new())
             .await
             .expect("rebuild");
         assert_ne!(rebuilt.fingerprint, first.fingerprint);
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn issue527_file_backed_packages_scale_without_retaining_asset_bytes() {
+        use std::os::unix::fs::MetadataExt;
+        for size_mib in [17_u64, 64, 256] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            let source = root.join("demo");
+            std::fs::create_dir(&source).unwrap();
+            std::fs::write(
+                source.join(SERVER_FILE),
+                b"from fastmcp import FastMCP\nmcp = FastMCP('demo')\n",
+            )
+            .unwrap();
+            std::fs::write(source.join(REQUIREMENTS_FILE), b"# none\n").unwrap();
+            std::fs::File::create(source.join("asset.bin"))
+                .unwrap()
+                .set_len(size_mib * 1024 * 1024)
+                .unwrap();
+            let started = std::time::Instant::now();
+            let cancellation = crate::runtime::CancellationSignal::new();
+            let package = discover_package(&source, "demo", &cancellation).unwrap();
+            assert_eq!(
+                package.source.file.metadata().unwrap().nlink(),
+                0,
+                "capture has no named cleanup residue"
+            );
+            assert_eq!(package.source.entries.len(), 3);
+            let captured_bytes = package.source.file.metadata().unwrap().len();
+            assert!(captured_bytes > size_mib * 1024 * 1024);
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(source.join("asset.bin"))
+                .unwrap()
+                .write_all(b"changed")
+                .unwrap();
+            let runner = Arc::new(FakeRunner::default());
+            let store = PythonToolStore::with_binaries_and_runner(
+                root.join("store"),
+                PathBuf::from("/usr/bin/uv"),
+                PathBuf::from("/usr/bin/python3"),
+                runner,
+            )
+            .unwrap();
+            let prepared = store
+                .ensure_prepared(&package, &cancellation)
+                .await
+                .unwrap();
+            let installed_root = prepared.state_dir.join(SOURCE_DIRECTORY);
+            assert_eq!(
+                std::fs::metadata(installed_root.join("asset.bin"))
+                    .unwrap()
+                    .len(),
+                size_mib * 1024 * 1024
+            );
+            assert_eq!(
+                source_digest(&installed_root, &package.files, &cancellation).unwrap(),
+                package.source_digest
+            );
+            let changed = discover_package(&source, "demo", &cancellation).unwrap();
+            assert_ne!(changed.source_digest, package.source_digest);
+            eprintln!(
+                "issue527 Python {size_mib} MiB: {:?}; anonymous capture disk={captured_bytes} bytes; package files={}; I/O buffer={} bytes",
+                started.elapsed(),
+                package.files.len(),
+                crate::package_io::CHUNK_BYTES
+            );
+        }
+    }
+
+    #[derive(Default)]
+    struct CancelBeforePublication(FakeRunner);
+    impl SupervisedProcessRunner for CancelBeforePublication {
+        fn run(
+            &self,
+            spec: SupervisedCommandSpec,
+            control: Option<crate::runtime::process_runner::RunnerTestControl>,
+        ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
+            if spec.command.contains("sync") {
+                spec.cancellation.cancel();
+            }
+            self.0.run(spec, control)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn issue527_cancelled_preparation_settles_and_cannot_publish_ready() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = PythonToolStore::with_binaries_and_runner(
+            temporary.path().to_path_buf(),
+            PathBuf::from("/usr/bin/uv"),
+            PathBuf::from("/usr/bin/python3"),
+            Arc::new(CancelBeforePublication::default()),
+        )
+        .unwrap();
+        let cancellation = crate::runtime::CancellationSignal::new();
+        let package = package("demo");
+        assert!(
+            store
+                .ensure_prepared(&package, &cancellation)
+                .await
+                .is_err()
+        );
+        assert!(cancellation.is_cancelled());
+        assert!(store.inner.in_flight.lock().unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_dir(temporary.path().join(PACKAGES_DIRECTORY))
+                .unwrap()
+                .count(),
+            0,
+            "no published or partial package remains after settlement"
+        );
+        assert!(store.inner.pending_cleanup.lock().unwrap().is_empty());
     }
 }

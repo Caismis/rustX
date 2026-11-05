@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v70.ts';
+import type { Request1 } from './v71.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -96,7 +96,12 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   // Exact scoped Workflow file reads and offline candidate checks: they
   // execute, prepare and write nothing (Issue #491).
   'workflow/list': { effect: 'read' },
-  'workflow/read': { effect: 'read' },
+  'workflow/read': { effect: 'connection_local' },
+  'workflow/documentBegin': { effect: 'connection_local' },
+  'workflow/documentWrite': { effect: 'connection_local' },
+  'workflow/documentFinish': { effect: 'connection_local' },
+  'workflow/documentRead': { effect: 'read' },
+  'workflow/documentRelease': { effect: 'connection_local' },
   'workflow/modelChoices': { effect: 'read' },
   'workflow/toolCatalog': { effect: 'read', unbounded: true },
   'workflow/check': { effect: 'read' },

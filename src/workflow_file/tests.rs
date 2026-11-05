@@ -161,3 +161,69 @@ fn annotations_are_bounded_and_do_not_change_structural_compatibility() {
             .is_err()
     );
 }
+
+fn sized_code_document(target: usize) -> WorkflowFileDocument {
+    let mut document: WorkflowFileDocument = serde_json::from_value(json!({
+        "description": "Large authored Workflow",
+        "block": {"input":{"type":"object","properties":{},"additionalProperties":false},
+            "nodes": {"start":{"type":"start"},
+                "code":{"type":"code","code_language":"python3","variables":{},"code":format!("def main(): return {{'result': 1}} #{}", "\\".repeat(1024)), "outputs":{"result":"number"}},
+                "done":{"type":"return","outputs":[]}},
+            "edges":[{"from":"start","to":"code"},{"from":"code","to":"done"}]}
+    })).unwrap();
+    let base = serde_json::to_vec(&document).unwrap().len();
+    let crate::runtime::workflow::WorkflowNodeDefinition::Code { code, .. } =
+        document.definition.block.nodes.get_mut("code").unwrap()
+    else {
+        unreachable!()
+    };
+    code.push_str(&"x".repeat(target - base));
+    assert_eq!(serde_json::to_vec(&document).unwrap().len(), target);
+    document
+}
+
+#[test]
+fn issue527_expanded_document_exact_byte_bound_and_canonical_round_trip() {
+    for size in [768 * 1024 + 1, 1024 * 1024 + 1, MAX_WORKFLOW_DOCUMENT_BYTES] {
+        let document = sized_code_document(size);
+        document.validate().unwrap();
+        WorkflowProgram::compile(
+            WorkflowId::parse("large").unwrap(),
+            document.definition.clone(),
+        )
+        .unwrap();
+        let bytes = document.canonical_bytes().unwrap();
+        assert!(bytes.len() <= MAX_WORKFLOW_FILE_BYTES);
+        assert_eq!(
+            serde_yaml::from_slice::<WorkflowFileDocument>(&bytes).unwrap(),
+            document
+        );
+    }
+    assert!(
+        sized_code_document(MAX_WORKFLOW_DOCUMENT_BYTES + 1)
+            .validate()
+            .unwrap_err()
+            .reason
+            .contains("expanded Workflow document exceeds 16 MiB")
+    );
+}
+
+#[test]
+fn issue527_unicode_and_json_escaping_measure_encoded_bytes_independently() {
+    let mut document = file();
+    document.description = "中文 🦀 \"\\\n\t".into();
+    assert_eq!(
+        serde_yaml::from_slice::<WorkflowFileDocument>(&document.canonical_bytes().unwrap())
+            .unwrap(),
+        document
+    );
+    let mut document = sized_code_document(1024 * 1024);
+    let crate::runtime::workflow::WorkflowNodeDefinition::Code { code, .. } =
+        document.definition.block.nodes.get_mut("code").unwrap()
+    else {
+        unreachable!()
+    };
+    *code = "\u{1}".repeat(3 * 1024 * 1024);
+    assert!(serde_yaml::to_string(&document).unwrap().len() < MAX_WORKFLOW_FILE_BYTES);
+    assert!(document.validate().unwrap_err().reason.contains("expanded"));
+}

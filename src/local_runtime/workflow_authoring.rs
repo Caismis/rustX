@@ -196,7 +196,8 @@ pub struct WorkflowVocabulary {
 /// The complete authorized source of one exact Workflow file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct WorkflowSource {
+#[schemars(rename = "WorkflowSource")]
+pub struct WorkflowSource<D = Box<WorkflowFileDocument>> {
     pub target: SourceTarget,
     pub id: WorkflowId,
     pub path: PathBuf,
@@ -207,7 +208,7 @@ pub struct WorkflowSource {
     pub modified_ms: Option<i64>,
     /// The parsed native definition. Absent for a missing, unparseable or
     /// browser-unrepresentable file, whose bytes stay untouched on disk.
-    pub document: Option<Box<WorkflowFileDocument>>,
+    pub document: Option<D>,
     /// The first structural (parse or compile) or representability failure.
     pub diagnostic: Option<WorkflowDiagnostic>,
     pub vocabulary: WorkflowVocabulary,
@@ -346,6 +347,27 @@ pub(super) fn unrepresentable_number(
     })
 }
 
+fn read_diagnostic(error: &crate::runtime_client::types::RuntimeClientError) -> WorkflowDiagnostic {
+    if matches!(error, crate::runtime_client::types::RuntimeClientError::InvalidRequest { message } if message.contains("authored source exceeds 16 MiB"))
+    {
+        let mut diagnostic = WorkflowDiagnostic::new(
+            "$",
+            "source_size",
+            "Workflow serialized source exceeds 16 MiB (16777216 bytes)",
+        );
+        diagnostic.correction = Some(
+            "reduce the serialized file with an external editor before loading it again".into(),
+        );
+        diagnostic
+    } else {
+        WorkflowDiagnostic::new(
+            "$",
+            "resource",
+            "Workflow file cannot be read as one regular file",
+        )
+    }
+}
+
 /// Parse a present file into an editable document, or explain why not.
 fn parse(
     id: &WorkflowId,
@@ -356,18 +378,6 @@ fn parse(
         Ok(definition) => definition,
         Err(error) => return (None, Some(WorkflowDiagnostic::from_resource(&error))),
     };
-    if serde_json::to_vec(&definition).map_or(true, |json| {
-        json.len() > crate::workflow_file::MAX_WORKFLOW_DOCUMENT_BYTES
-    }) {
-        return (
-            None,
-            Some(WorkflowDiagnostic::new(
-                "$",
-                "size",
-                "the expanded Workflow document exceeds 768 KiB",
-            )),
-        );
-    }
     if let Some(diagnostic) = unrepresentable_number(&definition) {
         return (None, Some(diagnostic));
     }
@@ -415,12 +425,10 @@ fn summarize(
     let bytes = match directory.read(name) {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return None,
-        Err(_) => {
-            summary.diagnostic = Some(WorkflowDiagnostic::new(
-                "$",
-                "resource",
-                "Workflow file cannot be read as one bounded regular file",
-            ));
+        Err(error) => {
+            summary.byte_length =
+                std::fs::symlink_metadata(path).map_or(0, |metadata| metadata.len());
+            summary.diagnostic = Some(read_diagnostic(&error));
             return Some(summary);
         }
     };
@@ -554,7 +562,9 @@ impl UserConfigManager {
         // Reads are relative to the directory handle the listing admitted;
         // a redirected directory or symlinked file is never followed.
         let directory = match SourceDirectory::observe(&scope.directory) {
-            Ok(Some(directory)) => directory,
+            Ok(Some(directory)) => {
+                directory.with_byte_limit(crate::workflow_file::MAX_WORKFLOW_FILE_BYTES as u64)
+            }
             Ok(None) => return Ok(library),
             Err(_) => {
                 target.validate()?;
@@ -608,8 +618,11 @@ impl UserConfigManager {
             .map_err(|_| target.validate().err().unwrap_or(SettingsError::Invalid))?;
         let bytes = match SourceDirectory::observe(&scope.directory) {
             Ok(Some(directory)) => directory
+                .with_byte_limit(crate::workflow_file::MAX_WORKFLOW_FILE_BYTES as u64)
                 .read(OsStr::new(&file_name(id)))
-                .map_err(|_| SettingsError::Io)?,
+                .map_err(|error| {
+                    SettingsError::InvalidWorkflow(Box::new(read_diagnostic(&error)))
+                })?,
             Ok(None) => None,
             Err(_) => return Err(target.validate().err().unwrap_or(SettingsError::Invalid)),
         };

@@ -1,3 +1,4 @@
+import { readWorkflowSource, withWorkflowDocument, type WorkflowRequest } from '../../protocol/app-server/workflow-documents.ts';
 import { materializeSource } from '../../protocol/app-server/source-observation.ts';
 import { analysisMatches } from '../../protocol/app-server/workflow-analysis.ts';
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
@@ -140,7 +141,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     return this.readFile(scope, read, FILE_PREVIEW_LIMITS.fileBytes, signal);
   }
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v70.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v71.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
     this.mutationScope(scope); validateDeliveryObservation(read, file);
     if (this.config.nativeFilesystem !== 'shared') throw new Error('Native filesystem observation unavailable on this Product Host');
     const probe = async (signal: AbortSignal) => {
@@ -526,6 +527,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       const unchanged = async () => {
         if (!await current()) throw new WorkspaceHostError('Workspace authority changed', 'workspace_unavailable');
       };
+      const request: WorkflowRequest = (operation, expected) => client.call(operation.method, operation.params, expected);
       switch (operation.kind) {
         case 'list': {
           const { library } = await client.call('workflow/list', { target }, 'workflow_library');
@@ -533,7 +535,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'list', library };
         }
         case 'read': {
-          const { source } = await client.call('workflow/read', { target, id: operation.id }, 'workflow_source');
+          const source = await readWorkflowSource(client, request, target, operation.id);
           await unchanged();
           return { kind: 'read', source };
         }
@@ -553,23 +555,24 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'tool_catalog', catalog };
         }
         case 'analyze': {
-          const { report } = await client.call('workflow/analyze', { target, id: operation.id, document: operation.document, generation: operation.generation, query: operation.query }, 'workflow_analysis');
+          const { report } = await withWorkflowDocument(client, request, target, operation.document, reference => client.call('workflow/analyze', { target, id: operation.id, document: reference, generation: operation.generation, query: operation.query }, 'workflow_analysis'));
           await unchanged();
           if (!analysisMatches(report, target, operation.id, operation.generation, operation.query)) throw new Error('Mismatched Workflow analysis target or query');
           return { kind: 'analyze', report };
         }
         case 'check': {
-          const { report } = await client.call('workflow/check', { target, id: operation.id, document: operation.document, explain: false }, 'workflow_check');
+          const { report } = await withWorkflowDocument(client, request, target, operation.document, reference => client.call('workflow/check', { target, id: operation.id, document: reference, explain: false }, 'workflow_check'));
           await unchanged();
           return { kind: 'check', report };
         }
         case 'write': {
           // The native write is the linearization point; its reread is a
           // separate fact that can fail without undoing the commit.
-          const acknowledgement = await client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit: operation.edit } }, 'sources_written');
+          const commit = (edit: import('../../protocol/app-server/v71.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
+          const acknowledgement = operation.edit.operation === 'replace' ? await withWorkflowDocument(client, request, target, operation.edit.document, reference => commit({ operation: 'replace', document: reference })) : await commit(operation.edit);
           let reread: WorkflowReread;
           try {
-            const { source } = await client.call('workflow/read', { target, id: operation.id }, 'workflow_source');
+            const source = await readWorkflowSource(client, request, target, operation.id);
             reread = await current() ? { status: 'observed', source } : { status: 'failed', error: 'Workspace authority changed during the authoritative reread' };
           } catch (error) { reread = { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
           return { kind: 'write', commit: { acknowledgement: { revision: acknowledgement.revision, configuration_revision: acknowledgement.configuration_revision ?? null }, reread } };

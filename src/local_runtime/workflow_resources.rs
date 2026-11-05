@@ -9,6 +9,7 @@ use std::path::Path;
 
 /// Discover and compile canonical Workflow files before resource publication.
 /// A missing Workspace means User-only discovery, with no cwd-derived authority.
+#[allow(clippy::too_many_lines)] // One two-scope discovery and diagnostic transaction.
 pub(crate) fn load(
     workspace: Option<&Path>,
     user_root: &Path,
@@ -79,18 +80,31 @@ pub(crate) fn load(
         locations.clear();
     }
     for (id, (path, boundary)) in candidates {
-        let result = super::resource_directory::read_resource(&boundary, &path)
-            .and_then(|bytes| parse_source(&id, &path, &bytes))
-            .and_then(|document| {
-                let warnings: Vec<_> = document.presentation_diagnostics().into_iter().map(|diagnostic| {
-                    let mut error = RuntimeResourceLoadError::new(diagnostic.reason).at(&path, diagnostic.path)
-                        .because("presentation target no longer exists; authored content is retained");
+        let result = super::resource_directory::read_resource(
+            &boundary,
+            &path,
+            MAX_WORKFLOW_FILE_BYTES as u64,
+        )
+        .and_then(|bytes| parse_source(&id, &path, &bytes))
+        .and_then(|document| {
+            let warnings: Vec<_> = document
+                .presentation_diagnostics()
+                .into_iter()
+                .map(|diagnostic| {
+                    let mut error = RuntimeResourceLoadError::new(diagnostic.reason)
+                        .at(&path, diagnostic.path)
+                        .because(
+                            "presentation target no longer exists; authored content is retained",
+                        );
                     error.inspection.category = Some("workflow_presentation");
                     error
-                }).collect();
-                if !warnings.is_empty() { presentation.insert(id.clone(), warnings); }
-                compile_definition(&id, &path, document.definition)
-            });
+                })
+                .collect();
+            if !warnings.is_empty() {
+                presentation.insert(id.clone(), warnings);
+            }
+            compile_definition(&id, &path, document.definition)
+        });
         match result {
             Ok(program) => programs.push(program),
             Err(error) => {
@@ -121,6 +135,17 @@ pub(super) fn parse_source(
             path.display()
         ))
         .at(path, format!("workflows.{id}")));
+    }
+    if !crate::workflow_file::yaml_expansion_within_bound(bytes) {
+        let mut failure = RuntimeResourceLoadError::new(
+            "Workflow YAML expansion exceeds the 32 MiB decoder bound",
+        )
+        .at(path, "$")
+        .because(
+            "reduce YAML alias expansion; source and normalized document limits are independent",
+        );
+        failure.inspection.category = Some("workflow_file");
+        return Err(failure);
     }
     let document: WorkflowFileDocument = serde_path_to_error::deserialize(serde_yaml::Deserializer::from_slice(bytes)).map_err(
         |error| {
@@ -319,6 +344,94 @@ mod tests {
                     .invalid()
             );
             assert_eq!(catalog.entries().len(), 2);
+        }
+    }
+}
+
+#[cfg(test)]
+mod large_source_tests {
+    use super::*;
+    use std::fmt::Write as _;
+    const MINIMAL: &str = "description: Large source\nblock:\n  input: {type: object, properties: {}, additionalProperties: false}\n  nodes: {start: {type: start}, done: {type: return, outputs: []}}\n  edges: [{from: start, to: done}]\n";
+
+    #[test]
+    fn issue527_source_exact_bound_is_inclusive_and_discovery_has_no_hidden_shared_reader_cap() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("workflows")).unwrap();
+        let path = root.join("workflows/large.yaml");
+        let id = WorkflowId::parse("large").unwrap();
+        let mut source = MINIMAL.as_bytes().to_vec();
+        source.extend_from_slice("# 中文 🦀 ".as_bytes());
+        source.resize(MAX_WORKFLOW_FILE_BYTES, b'x');
+        assert_eq!(source.len(), 16_777_216);
+        let document = parse_source(&id, &path, &source).unwrap();
+        compile_definition(&id, &path, document.definition.clone()).unwrap();
+        std::fs::write(&path, &source).unwrap();
+        assert!(load(None, &root).unwrap().entries().contains_key(&id));
+        source.push(b'x');
+        assert!(
+            parse_source(&id, &path, &source)
+                .unwrap_err()
+                .to_string()
+                .contains("16777216-byte bound")
+        );
+    }
+
+    #[test]
+    fn issue527_yaml_expansion_is_independent_of_source_bytes_and_preflights_dangerous_aliases() {
+        for count in [34, 70] {
+            let mut source = String::from(
+                "description: Alias expansion\nblock:\n  input: {type: object, properties: {}, additionalProperties: false}\n  nodes:\n    start: {type: start}\n",
+            );
+            for index in 0..count {
+                let code = if index == 0 {
+                    format!("&body '{}'", "x".repeat(512 * 1024))
+                } else {
+                    "*body".into()
+                };
+                writeln!(source, "    code{index}: {{type: code, code_language: python3, variables: {{}}, outputs: {{result: number}}, code: {code}}}").unwrap();
+            }
+            source.push_str(
+                "    done: {type: return, outputs: []}\n  edges: [{from: start, to: done}]\n",
+            );
+            assert!(source.len() < 1024 * 1024);
+            let error = parse_source(
+                &WorkflowId::parse("large").unwrap(),
+                Path::new("large.yaml"),
+                source.as_bytes(),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains(if count == 34 {
+                    "expanded Workflow document exceeds 16 MiB"
+                } else {
+                    "32 MiB decoder bound"
+                }),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn issue527_yaml_numeric_and_collection_aliases_are_bounded_before_typed_allocation() {
+        for value in ["0", "[]"] {
+            let array = format!("[{}{}]", format!("{value},").repeat(200_000), value);
+            let source = format!(
+                "description: Numeric aliases\nblock:\n  input:\n    original: &values {array}\n    copies: [{}*values]\n  nodes: {{start: {{type: start}}, done: {{type: return, outputs: []}}}}\n  edges: [{{from: start, to: done}}]\n",
+                "*values,".repeat(100)
+            );
+            assert!(source.len() < 1024 * 1024);
+            let error = parse_source(
+                &WorkflowId::parse("large").unwrap(),
+                Path::new("large.yaml"),
+                source.as_bytes(),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("32 MiB decoder bound"),
+                "{error}"
+            );
         }
     }
 }

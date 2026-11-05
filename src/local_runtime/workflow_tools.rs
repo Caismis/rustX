@@ -263,7 +263,11 @@ fn capture(
             }),
         });
     }
-    if let Ok(python) = super::managed_python_resources::discover(directory, &user_root) {
+    if let Ok(python) = super::managed_python_resources::discover_controlled(
+        directory,
+        &user_root,
+        &owner.resource_io,
+    ) {
         for (source, package) in python.packages() {
             plans.push(Plan {
                 source_id: source.to_string(),

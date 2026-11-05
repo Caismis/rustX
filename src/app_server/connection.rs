@@ -177,6 +177,7 @@ pub struct AppServerConnection {
     deliveries: Arc<super::delivery_access::Operations>,
     associations: Arc<super::admission::Associations>,
     mcp_draft: crate::local_runtime::mcp_drafts::McpDraftScope,
+    workflow_documents: Arc<super::workflow_documents::WorkflowDocuments>,
 }
 
 /// One response and, for a delivery request, the owner of its publication
@@ -339,6 +340,7 @@ impl AppServerConnection {
             ownership_invalidations_delivered: Arc::new(Mutex::new(delivered)),
             sessions,
             mcp_draft: host.manager().mcp_draft_scope(),
+            workflow_documents: Arc::default(),
             host,
             initialized: Arc::new(Mutex::new(None)),
             routes: Arc::new(Mutex::new(RouteTable::default())),
@@ -464,6 +466,7 @@ impl AppServerConnection {
             route.capacity.release();
         }
         self.mcp_draft.close();
+        self.workflow_documents.clear();
         self.associations.close();
         self.changed.notify_one();
     }
@@ -471,6 +474,16 @@ impl AppServerConnection {
     #[cfg(test)]
     pub(crate) fn closed_for_test(&self) -> bool {
         self.routes.lock().expect("routes mutex").closed
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gate_workflow_finish_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        self.workflow_documents.gate_finish()
     }
 
     /// Decode a strict JSON-RPC request before performing any semantic action.
@@ -797,7 +810,8 @@ impl AppServerConnection {
         call: Method,
         association: super::admission::Association,
     ) -> Result<MethodResult, RpcError> {
-        // Catalog mutations retain their owner if the protocol waiter leaves.
+        // Catalog operations and blocking materialization retain their owner
+        // if the protocol waiter leaves.
         // Runtime operations already transfer ownership at start_operation;
         // attachment reservations intentionally remain caller-cancellable.
         if matches!(
@@ -825,6 +839,14 @@ impl AppServerConnection {
                 | Method::SourcesRead { .. }
                 | Method::SourcesPage { .. }
                 | Method::SourcesValueRead { .. }
+                | Method::WorkflowRead { .. }
+                | Method::WorkflowDocumentBegin { .. }
+                | Method::WorkflowDocumentWrite { .. }
+                | Method::WorkflowDocumentFinish { .. }
+                | Method::WorkflowDocumentRead { .. }
+                | Method::WorkflowDocumentRelease { .. }
+                | Method::WorkflowCheck { .. }
+                | Method::WorkflowAnalyze { .. }
                 | Method::SettingsRead { .. }
                 | Method::SettingsValueRead { .. }
                 | Method::SessionApplicationValueRead { .. }

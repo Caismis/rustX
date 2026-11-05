@@ -1232,12 +1232,23 @@ impl CapabilityCoordinator {
         // discovers current inputs. Both use the same Skill discovery owner
         // and this preparation/publication path. Filesystem enumeration never
         // becomes published capability state directly.
-        let discovered = match discovered {
-            Some(discovered) => discovered,
-            None => {
-                SkillDiscovery::with_config(&self.inner.workspace, inputs.skill_discovery.clone())
+        let discovered = if let Some(discovered) = discovered {
+            discovered
+        } else {
+            let workspace = self.inner.workspace.clone();
+            let config = inputs.skill_discovery.clone();
+            let signal = cancellation.cloned().unwrap_or_default();
+            let discovered = tokio::task::spawn_blocking(move || {
+                SkillDiscovery::with_config(&workspace, config)
+                    .with_cancellation(signal)
                     .discover()
+            })
+            .await
+            .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?;
+            if cancellation.is_some_and(crate::runtime::CancellationSignal::is_cancelled) {
+                return Err(CapabilityPreparationError::ConversationInactive);
             }
+            discovered
         };
         let merged = merge_dependency_manifests(&discovered.packages)?;
         let python = self
@@ -3272,7 +3283,11 @@ body
         use crate::capabilities::{CapabilitySourceState, ToolSourceId};
 
         let dir = tempfile::tempdir().expect("temp dir");
-        let workspace_root = dir.path().join("workspace");
+        let workspace_root = dir
+            .path()
+            .canonicalize()
+            .expect("canonical root")
+            .join("workspace");
         let package_root = workspace_root.join(".agents/tools/demo");
         std::fs::create_dir_all(&package_root).expect("package folder");
         std::fs::write(
@@ -3296,7 +3311,11 @@ body
                 crate::runtime::resources::ManagedPythonCatalog::new(
                     [(
                         ToolSourceId::ManagedPython("demo".into()),
-                        crate::tools::python::discover_package(&package_root, "demo"),
+                        crate::tools::python::discover_package(
+                            &package_root,
+                            "demo",
+                            &crate::runtime::CancellationSignal::new(),
+                        ),
                     )]
                     .into(),
                 ),
@@ -3341,7 +3360,11 @@ body
         inputs.source_demand.managed_python = crate::runtime::resources::ManagedPythonCatalog::new(
             [(
                 source_id.clone(),
-                crate::tools::python::discover_package(&package_root, "demo"),
+                crate::tools::python::discover_package(
+                    &package_root,
+                    "demo",
+                    &crate::runtime::CancellationSignal::new(),
+                ),
             )]
             .into(),
         );

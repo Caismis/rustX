@@ -1,4 +1,4 @@
-import type { CheckpointPage, CheckpointReadCut, TraceRecord, WorkflowRunId } from '../../protocol/app-server/v70';
+import type { CheckpointPage, CheckpointReadCut, TraceRecord, WorkflowRunId } from '../../protocol/app-server/v71';
 import type { TraceCache, TraceFieldReader } from '../src/client/trace';
 import type { WorkflowTraceNode } from '../src/app/trajectory/workflow';
 import { traceRecord, traceTool } from './trace-fixture';

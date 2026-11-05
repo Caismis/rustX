@@ -149,8 +149,8 @@ fn documentation_guard_distinguishes_current_paths_and_negative_spellings() {
         "--config",
         "configuration/reconcile",
         "Plugins default off",
-        "rustx.app-server.v70",
-        "protocol/app-server/v70.ts",
+        "rustx.app-server.v71",
+        "protocol/app-server/v71.ts",
     ] {
         assert!(!obsolete_contract(current), "{current}");
     }

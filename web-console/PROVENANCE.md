@@ -5142,7 +5142,7 @@ conditions, reuse exact numeric comparison, preserve prompt editor DOM during
 bounded expansion, correct inline variable spacing and narrow Loop/Assigner
 rows, and avoid automatic Output-name collisions. Dify's stores, component
 source and assets are not copied. No dependencies are added. Vision and AI
-generation controls are omitted. App Server v69 is the sole wire contract;
+generation controls are omitted. App Server v71 is the sole wire contract;
 v67 artifacts are removed. Runtime Client v81 is unchanged.
 
 Actual desktop and touch browser checks use the repository's exact pinned
@@ -5271,7 +5271,7 @@ configure/clear controls and keyboard-operable moves, inspired by ZCode's ordere
 reasoning control. No upstream mapping code or dependencies are imported. Profile
 identities remain stable keys, and the existing JSON editor and native whole-Model
 transaction retain parameter validation, scope and revision ownership. The mandatory
-App Server v70 imports are regenerated from Rust; Runtime Client is v82. Updated
+App Server v71 imports are regenerated from Rust; Runtime Client is v82. Updated
 local hashes and import inventories record these adaptations against the unchanged
 upstream baselines. Browser plugin is unavailable; validation uses the repository's
 pinned Playwright container and production native API path.

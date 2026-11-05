@@ -18,6 +18,7 @@
 //! `repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_cancellation`.
 //! Parent history and subagent state prove terminal uniqueness here.
 
+use std::io::Write;
 use std::sync::Arc;
 
 use crate::parent::{Parent, ParentBindings};
@@ -107,6 +108,24 @@ async fn spawn_parent(root: &std::path::Path, models: &str, session: &str, key: 
         "---\nname: conformance\ndescription: Issue 138 conformance skill.\n---\n\nUse the ordinary child runtime.\n",
     )
     .expect("skill manifest");
+    let mut body = std::fs::OpenOptions::new()
+        .append(true)
+        .open(skill.join("SKILL.md"))
+        .unwrap();
+    body.write_all(b"LARGE_SKILL_BODY_NOT_PROMPT\n").unwrap();
+    let mut chunk = vec![b'x'; 65_536];
+    for offset in (63..chunk.len()).step_by(64) {
+        chunk[offset] = b'\n';
+    }
+    for _ in 0..17 * 16 {
+        body.write_all(&chunk).unwrap();
+    }
+    drop(body);
+
+    std::fs::File::create(skill.join("large-asset.bin"))
+        .unwrap()
+        .set_len(17 * 1024 * 1024)
+        .unwrap();
     let mut document: serde_json::Value = rustx::toml_authoring::parse(session.as_bytes()).unwrap();
     crate::launch_fixture::write_roles(&workspace, &mut document["subagents"]);
     std::fs::write(
@@ -340,6 +359,7 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
             body.contains("count the workspace files") && !body.contains("please delegate")
         })
         .expect("the child request body");
+    assert!(!first_child_request.contains("LARGE_SKILL_BODY_NOT_PROMPT"));
     assert!(
         first_child_request.contains("Workspace Skill root")
             && first_child_request.contains("skills/workspace")
