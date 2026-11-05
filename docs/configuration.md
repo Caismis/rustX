@@ -1214,9 +1214,10 @@ example `subagents.max_concurrent = 0`) is left unchanged and reported
 `unresolved` with that constraint's location. Facts another scope may supply —
 Model definitions, the default selection — are never part of it. An unresolved
 receipt is withdrawn only when the source satisfies this contract, at a later
-boundary or after a committed `configuration/sourceWrite`; a committed write that
-leaves it still invalid replaces the receipt with the current observation. A
-write never creates a receipt for a source that had none.
+boundary or after a committed `configuration/sourceWrite`. Managed writes reject
+source-intrinsically invalid candidates before publication, preserving the source
+and any unresolved receipt. A write never creates a receipt for a source that had
+none.
 
 A semantic failure of Session resolution names the document that authored the
 failing field, decided from the overlay provenance of the composition: every
@@ -1227,10 +1228,13 @@ when both documents define Models — names no file: it belongs to the
 composition.
 
 Manual `repair_config` remains the editor for documents that fail their own source
-contract — syntax, types, Workspace `app_server`, a foreign schema version —
-including TOML-parsable ones; ordinary semantic-unit writes require a document that
-satisfies it, and the source projection marks a document violating it as not
-loaded.
+contract — syntax, types, Workspace `app_server`, a foreign schema version or any
+source-intrinsic semantic constraint — including TOML-parsable ones. Ordinary
+semantic-unit writes require a document that satisfies it, and the source
+projection marks a document violating it as not loaded, exposing whole-document
+repair. A complete valid replacement must match the observed source revision;
+invalid replacements and stale revisions leave the original unchanged. Missing
+Providers or default selections supplied by another scope do not require repair.
 
 ## Durable identity and retention
 

@@ -320,7 +320,7 @@ pub enum ConfigMutation {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // Finite wire command; parsed and consumed once per CAS operation.
 pub enum SourceMutation {
-    /// Explicit repair of an unparseable configuration document. Never used
+    /// Explicit repair of a configuration document violating its source contract. Never used
     /// for ordinary semantic-unit editing and never accepts an invalid source.
     RepairConfig {
         document: String,

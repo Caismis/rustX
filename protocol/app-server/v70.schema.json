@@ -14664,7 +14664,7 @@
     "SourceMutation": {
       "oneOf": [
         {
-          "description": "Explicit repair of an unparseable configuration document. Never used\nfor ordinary semantic-unit editing and never accepts an invalid source.",
+          "description": "Explicit repair of a configuration document violating its source contract. Never used\nfor ordinary semantic-unit editing and never accepts an invalid source.",
           "type": "object",
           "properties": {
             "document": {
