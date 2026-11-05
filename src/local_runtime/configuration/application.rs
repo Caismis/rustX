@@ -85,6 +85,11 @@ pub struct ConfigurationApplication {
     pub units: BTreeMap<ApplyUnit, UnitApplication>,
 }
 
+pub(crate) enum ApplicationRead {
+    Busy,
+    Ready(Option<ConfigurationApplication>),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ConfigurationApplications {
     inner: Arc<Mutex<ApplicationState>>,
@@ -192,6 +197,16 @@ impl ConfigurationApplications {
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, ApplicationState> {
         self.inner.lock().expect("configuration application owner")
+    }
+
+    pub(crate) fn try_lock(&self) -> Option<MutexGuard<'_, ApplicationState>> {
+        match self.inner.try_lock() {
+            Ok(state) => Some(state),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                panic!("configuration application owner")
+            }
+        }
     }
 
     /// Attach `runtime` to its scope's application when `current` confirms,

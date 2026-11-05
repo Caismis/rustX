@@ -1092,6 +1092,49 @@ async fn ready_control_admission_does_not_wait_for_continuous_notifications() {
     .await;
 }
 
+/// Slow source ingestion may delay an application notice, but never the
+/// independent events of an already admitted attachment.
+#[tokio::test]
+async fn pending_application_observation_does_not_block_attachment_notifications() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        let connection = AppServerConnection::new(f.host.clone());
+        let direct = app_server_conformance::DirectDriver(&connection);
+        initialize(&direct).await;
+        let target = attach(&direct, &f).await;
+        let managed = f.manager.load(&target.session_id, None).await.unwrap();
+        let native = managed.inspect_runtime().unwrap();
+        let owner = f.manager.clone();
+        let (entered, held) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let ingestion = std::thread::spawn(move || {
+            let _application = owner.applications.lock();
+            entered.send(()).unwrap();
+            released
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .is_ok()
+        });
+        held.await.unwrap();
+        replenish_observation(&native);
+        loop {
+            if matches!(connection.next_notification().await.notification,
+                NotificationMethod::Event { target: observed, .. } if observed == target)
+            {
+                break;
+            }
+        }
+        let released = release.send(()).is_ok();
+        assert!(
+            ingestion.join().unwrap(),
+            "attachment events waited for ingestion"
+        );
+        assert!(released);
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
 // Delivery access is a separate owner-only credential, additive to the
 // ordinary transport token. It never substitutes for it, a wrong value fails
 // the handshake closed, and native credential removal revokes live grants.

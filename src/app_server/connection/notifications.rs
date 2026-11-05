@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use super::{AppServerConnection, Route, release_route};
 use crate::app_server::protocol::{JsonRpcVersion, Method, Notification, NotificationMethod};
+use crate::local_runtime::configuration::application::ApplicationRead;
 use crate::runtime_client::host::EventDelivery;
 
 #[allow(clippy::large_enum_variant)] // The existing bounded Projection event stays inline through fan-in.
@@ -221,8 +222,13 @@ impl AppServerConnection {
         // Advance the connection cursor only after this cancellable read returns.
         let application = loop {
             if interest.reading.is_none() {
-                let versions = interest.versions.clone();
                 let manager = self.host.manager().clone();
+                match manager.try_next_configuration_application(&interest.versions) {
+                    ApplicationRead::Ready(Some(application)) => break application,
+                    ApplicationRead::Ready(None) => return None,
+                    ApplicationRead::Busy => {}
+                }
+                let versions = interest.versions.clone();
                 interest.read_version = *manager.configuration_changes().borrow();
                 interest.reading = Some(tokio::task::spawn_blocking(move || {
                     manager.next_configuration_application(&versions)
@@ -343,16 +349,27 @@ impl AppServerConnection {
             .lock()
             .expect("task catalog changes")
             .clone();
+        let level_notification = |notification| {
+            (
+                Notification {
+                    jsonrpc: JsonRpcVersion::V2,
+                    notification,
+                },
+                None,
+            )
+        };
         loop {
-            if let Some(notification) = self.next_level_notification().await {
-                return (
-                    Notification {
-                        jsonrpc: JsonRpcVersion::V2,
-                        notification,
-                    },
-                    None,
-                );
-            }
+            let levels = self.next_level_notification();
+            tokio::pin!(levels);
+            // A large source capture can delay an application read. Its
+            // pending notification must not hold up ready attachment events.
+            let levels_pending = match futures_util::poll!(&mut levels) {
+                std::task::Poll::Ready(Some(notification)) => {
+                    return level_notification(notification);
+                }
+                std::task::Poll::Ready(None) => false,
+                std::task::Poll::Pending => true,
+            };
             let changed = self.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
@@ -366,6 +383,11 @@ impl AppServerConnection {
                 .collect();
             if routes.is_empty() {
                 tokio::select! {
+                    notification = &mut levels, if levels_pending => {
+                        if let Some(notification) = notification {
+                            return level_notification(notification);
+                        }
+                    },
                     () = &mut changed => {},
                     _ = configuration_changes.changed() => {},
                     _ = summary_invalidations.changed() => {},
@@ -402,6 +424,12 @@ impl AppServerConnection {
                 })
                 .collect();
             let (route, delivery, observed, registration) = tokio::select! {
+                notification = &mut levels, if levels_pending => {
+                    if let Some(notification) = notification {
+                        return level_notification(notification);
+                    }
+                    continue;
+                },
                 () = &mut changed => continue,
                 _ = configuration_changes.changed() => continue,
                 _ = summary_invalidations.changed() => continue,

@@ -376,6 +376,18 @@ impl SessionRuntimeManager {
         self.applications.lock().next_view(versions)
     }
 
+    /// Read immediately when ingestion does not own the application lock.
+    pub(crate) fn try_next_configuration_application(
+        &self,
+        versions: &std::collections::BTreeMap<String, u64>,
+    ) -> super::super::configuration::application::ApplicationRead {
+        use super::super::configuration::application::ApplicationRead;
+        let Some(application) = self.applications.try_lock() else {
+            return ApplicationRead::Busy;
+        };
+        ApplicationRead::Ready(application.next_view(versions))
+    }
+
     pub(crate) async fn reconcile_configuration(
         &self,
         target: &super::super::configuration::settings::SourceTarget,
