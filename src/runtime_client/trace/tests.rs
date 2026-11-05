@@ -2352,7 +2352,7 @@ fn identity_bounds_make_canonical_trace_details_explicitly_partial() {
 fn managed_storage_failure_diagnostics_preserve_native_execution_facts() {
     use crate::tools::managed_output::ManagedToolOutput;
     use crate::tools::output::{ForegroundOutputCapture, continuation_for_capture};
-    let private_path = "/private/rustx-managed-output/example/tasks/result.output";
+    let private_path = "temporary-output-allocation";
     for available in [false, true] {
         let store = store("conv_ac56fc5d-a6f5-7885-8745-ac1fad19bb38");
         let directory = tempfile::tempdir().unwrap();
@@ -2364,17 +2364,7 @@ fn managed_storage_failure_diagnostics_preserve_native_execution_facts() {
         if available {
             output.fail_writes_after(0);
         } else {
-            // A real allocation error includes the private results directory.
-            let results = output.root().join("results");
-            std::fs::remove_dir(&results).unwrap();
-            std::fs::write(&results, "not a directory").unwrap();
-            assert!(
-                output
-                    .open_spill()
-                    .unwrap_err()
-                    .to_string()
-                    .contains(private_path)
-            );
+            output.set_force_open_failures(true);
         }
         let mut capture = ForegroundOutputCapture::with_limit(1);
         let diagnostic = capture.push("retained output", &output).unwrap_err();
@@ -2423,11 +2413,11 @@ fn managed_storage_failure_diagnostics_preserve_native_execution_facts() {
         if available {
             assert!(diagnostic.contains("test-forced output write failure"));
         } else {
-            assert!(diagnostic.contains(private_path));
+            assert!(diagnostic.contains("test-forced output open failure"));
             assert!(
                 serde_json::to_string(&detail)
                     .unwrap()
-                    .contains(private_path)
+                    .contains("test-forced output open failure")
             );
         }
     }

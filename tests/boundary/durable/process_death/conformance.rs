@@ -2159,7 +2159,30 @@ fn assert_cut_lineage(scenario: &str) {
         })
         .expect("source owns a durable Agent");
     assert!(copied.contains(agent.as_str()));
-    assert!(copied.contains(&format!("conversations/{source_conversation}/")));
+    let output_path = source
+        .canonical()
+        .iter()
+        .find_map(|message| {
+            let MessageBlock::Tool(tool) = message else {
+                return None;
+            };
+            tool.result.content.iter().find_map(|content| {
+                let crate::tools::types::ToolResultContent::Json { value } = content else {
+                    return None;
+                };
+                value.get("output_path")?.as_str().map(str::to_owned)
+            })
+        })
+        .expect("the source Accepted result owns its literal output locator");
+    assert!(copied.contains(&output_path));
+    assert!(
+        std::path::Path::new(&output_path)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("e-")
+    );
 
     // …and every one of those identities is inert. The destination Journal is
     // empty, so nothing was resolved, adopted, reattached, relaunched, or

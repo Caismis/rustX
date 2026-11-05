@@ -731,18 +731,18 @@ fn bounded_projection_text(text: &str, bound: usize, marker: &str) -> String {
 /// root — it is a locator, never filesystem authority.
 ///
 /// The two managed-output lifecycles both use this type: a foreground
-/// result references its lazy result spill (`results/result_N.txt`) only
+/// result references its lazy result spill (`r-<16 hex>.txt`) only
 /// when the complete representation crossed the shared preview threshold,
 /// while a background result references its dispatch-allocated live-output
-/// file (`tasks/exec_N.output`). A size-only cutoff is never a semantic tool
+/// file (`e-<16 hex>.output`). A size-only cutoff is never a semantic tool
 /// failure; `Partial`/`Unavailable` make output-storage failure explicit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum ManagedOutputContinuation {
-    /// The complete textual output of the result is retained at the
-    /// absolute managed-output locator; the bounded result content is a
-    /// preview of it.
+    /// Capture retained complete output at this absolute temporary locator.
+    /// The bounded result content is a preview. Later OS removal does not
+    /// rewrite this capture-time fact or guarantee full-output reconstruction.
     Complete {
         /// The absolute locator inside the managed tool-output root.
         locator: std::path::PathBuf,
@@ -1462,7 +1462,7 @@ mod tests {
             workflow: None,
             managed_output: Some(Box::new(super::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(
-                    "/owned/conversation/tool-output/results/result_01900000-0000-7000-8000-000000000007.txt",
+                    "/tmp/rx-0000000000000001/r-0000000000000007.txt",
                 ),
             })),
         };
@@ -1475,7 +1475,7 @@ mod tests {
         assert!(
             text.contains("Tool call failed: input schema validation failed: query is required")
         );
-        assert!(text.contains("Complete output: /owned/conversation/tool-output/results/result_01900000-0000-7000-8000-000000000007.txt"));
+        assert!(text.contains("Complete output: /tmp/rx-0000000000000001/r-0000000000000007.txt"));
         assert!(text.contains("Read or Grep"));
         assert!(text.contains("tool-owned result content truncated"));
         assert_eq!(result.status, status, "typed status remains authoritative");
@@ -1525,7 +1525,7 @@ mod tests {
             workflow: None,
             managed_output: Some(Box::new(super::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(
-                    "/owned/conversation/tool-output/results/result_01900000-0000-7000-8000-000000000008.txt",
+                    "/tmp/rx-0000000000000001/r-0000000000000008.txt",
                 ),
             })),
         };
@@ -1535,7 +1535,7 @@ mod tests {
         let text = projection.as_text();
         assert!(text.contains("Tool call failed: e"));
         assert!(text.contains("...[tool status truncated]"));
-        assert!(text.contains("Complete output: /owned/conversation/tool-output/results/result_01900000-0000-7000-8000-000000000008.txt"));
+        assert!(text.contains("Complete output: /tmp/rx-0000000000000001/r-0000000000000008.txt"));
         assert!(text.contains("Read or Grep"));
         assert_eq!(result.status, status, "typed status remains authoritative");
     }

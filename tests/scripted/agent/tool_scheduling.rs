@@ -530,7 +530,7 @@ async fn mixed_foreground_background_group_does_not_wait_for_detached_terminal()
         accepted_json["output_path"]
             .as_str()
             .unwrap()
-            .ends_with(&format!("tasks/{execution_id}.output"))
+            .ends_with(".output")
     );
     assert_eq!(
         accepted_json["job_id"],
@@ -697,7 +697,7 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         accepted["output_path"]
             .as_str()
             .unwrap()
-            .ends_with(&format!("tasks/{execution_id}.output"))
+            .ends_with(".output")
     );
     assert_eq!(accepted["job_id"], serde_json::json!(execution_id.as_str()));
     assert!(matches!(

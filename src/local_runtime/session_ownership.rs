@@ -105,8 +105,6 @@ impl SessionOwnership {
             } else {
                 None
             };
-            root.confined(&private_root.join("tool-output"))
-                .map_err(|_| Error::Invalid)?;
             conversations.insert(
                 id.clone(),
                 (
@@ -126,6 +124,14 @@ impl SessionOwnership {
                 unavailable.get_or_insert(Error::ConversationUnavailable { descendant });
                 continue;
             };
+            // Required canonical storage owns the unavailable/descendant
+            // classification. Auxiliary metadata must not turn a missing
+            // Conversation allocation into an invalid-ownership diagnostic.
+            crate::tools::managed_output::storage::ownership_revision(
+                database.parent().ok_or(Error::Invalid)?,
+                &id,
+            )
+            .map_err(|_| Error::Invalid)?;
             for (child, agent) in read_children(&store, &check)? {
                 if agent_owners
                     .insert(agent, (id.clone(), child.clone()))
