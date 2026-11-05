@@ -22,7 +22,7 @@ import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
 import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v71';
 import { conversation } from '../../bindings/projection';
-import { agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../../bindings/agent-status';
+import { agentStatusPlacement, isContextInjection, statusesAt } from '../../bindings/agent-status';
 import { TranscriptContinuation } from './TranscriptContinuation';
 import { Feedback } from '../components/ConversationFeedback';
 import { AgentStatusAnnotation } from './AgentStatus';
@@ -47,13 +47,14 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
 import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v71';
 /** Standalone Tool-result bodies are suppressed: the native call projection
- * already renders their content beside the call. Suppressing a body does not
+ * already renders their content beside the call. Context injections are
+ * Harness hidden rows in every work-detail mode. Suppressing a body does not
  * erase the entry's authoritative transcript position, so a `PostToolBatch`
  * annotation anchored there still renders in place — as an annotation-only slot. */
 const hasInlineBody = (entry: RuntimeClientTranscriptEntry) => entry.item.type === 'publication_audit'
   ? entry.item.audit.content.some(block => block.kind !== 'proposed_tool_call' && block.text.trim() !== '')
   : entry.item.type === 'configuration_applied' ? hasConfigurationChangeRow(entry.item.change)
-    : entry.item.type !== 'message' || entry.item.message.role !== 'tool';
+    : entry.item.type !== 'message' || entry.item.message.role !== 'tool' && !isContextInjection(entry.item.message);
 /** A native `ask_user` questionnaire is already told by its call's question row
  * (Harness shows no separate interaction record), so its request and settlement
  * audits keep their transcript positions without a body of their own. Other
@@ -104,7 +105,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   }>({ scope: toolScope, client: presentationClient.current, presentation: presentation?.owner, values: new Map(), display: new Map() });
   if (headOwners.current.scope !== toolScope || headOwners.current.client !== presentationClient.current || headOwners.current.presentation !== presentation?.owner)
     headOwners.current = { scope: toolScope, client: presentationClient.current, presentation: presentation?.owner, values: new Map(), display: new Map() };
-  const hasBody = (entry: RuntimeClientTranscriptEntry) => !(entry.item.type === 'message' && isRuntimeStatusContext(entry.item.message)) && hasInlineBody(entry) || entry.item.type === 'publication_audit'
+  const hasBody = (entry: RuntimeClientTranscriptEntry) => hasInlineBody(entry) || entry.item.type === 'publication_audit'
     && (presentation?.content ?? []).some(binding => binding.content_ref.readable_end > 0
       && binding.content_ref.source.type === 'durable_transcript_audit' && entry.item.type === 'publication_audit'
       && binding.content_ref.source.stream_id === entry.item.audit.stream_id
@@ -140,7 +141,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const auditHeads: RuntimeClientTranscriptEntry[] = history?.window ? [] : publicationHeads.filter(head => head.read_cut.read.conversation_id === snapshot.conversation_id && !loaded.some(entry => entry.cursor === head.transcript_cursor))
     .map(head => ({ cursor: head.transcript_cursor, item: { type: 'publication_audit', audit: head.audit } }));
   const entries = auditHeads.length ? [...loaded, ...auditHeads].sort((a,b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1) : loaded;
-  const descriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], history?.page ?? snapshot.transcript, entries, !!history?.window).filter(descriptor => !isRuntimeStatusContext(descriptor));
+  const descriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], history?.page ?? snapshot.transcript, entries, !!history?.window).filter(descriptor => !isContextInjection(descriptor));
   // Harness Chat hides system-prompt and ordinary Context rows; committed
   // Tool changes arrive as their own transcript facts, never from requests.
   const requestFeedback = suppliedFeedback ?? noFeedback;
@@ -337,9 +338,9 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next;
     })}/>{requestFeedback?.attempts.get(attemptOwnerKey(group.owner))}</>;
   };
-  // Agent Status has its own anchored annotation, so its canonical Context message
-  // must not reappear here as ordinary chat or as purported current context.
-  const currentContext = messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id) && !isRuntimeStatusContext(message));
+  // Context injections are hidden rows (Agent Status has its own anchored
+  // annotation): only a not-yet-durable Goal continuation remains here.
+  const currentContext = messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id) && !isContextInjection(message));
   const runningAttempt = !history?.window && !!snapshot.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type) ? snapshot.attempt : undefined;
   const latestTurn = snapshot.transcript.statistics?.latest_turn;
   const startedAt = runningAttempt && (latestTurn?.attempt_id != null && latestTurn.attempt_id === runningAttempt.attempt_id ? latestTurn.started_at

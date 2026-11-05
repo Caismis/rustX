@@ -123,7 +123,10 @@ Server protocol/connection layer.
   landing after that capture is always notified. A platform rescan (events
   may have been lost, such as an overflowed inotify queue) names no path: it
   re-registers every watch and recaptures every known source target, and
-  unchanged sources stay no-ops. A notification path is respelled with the
+  unchanged sources stay no-ops. Notifications merge into a bounded set of
+  distinct paths that a pass takes at once; past the bound they give way to
+  one such rescan, so a flood costs bounded memory, each pass a bounded batch,
+  and neither capture nor stopping is starved. A notification path is respelled with the
   fixed names the loaders open (each component of a resource root —
   `rustx/.agents` beneath the User home, `.agents` in a Workspace — a source
   entry, a guidance file, `rustx.toml`, the User document) wherever its own spelling
@@ -206,6 +209,9 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | An absolute link's final target and every link an absolute directory link passes through are observed; an input outside its Workspace observes a link among its parents; a selected file whose authorization fails before it is read (its directory is a regular file) recovers from repairing only the directory | `automatic_commit::an_edited_absolute_link_target_reaches_the_resident_runtime`, `automatic_commit::a_repointed_intermediate_link_reaches_the_resident_runtime`, `automatic_commit::a_repointed_parent_link_of_an_external_user_input_reaches_the_resident_runtime`, `automatic_commit::a_selected_file_beneath_a_non_directory_recovers_when_the_directory_is_repaired`, `source_watch::tests::an_absolute_link_is_observed_through_its_target`, `source_watch::tests::an_absolute_link_through_an_intermediate_link_observes_that_link`, `source_watch::tests::an_external_input_observes_a_link_among_its_parents` |
 | A single changed Tool whose name the native byte bound omitted shows the count title, never an empty name | `web-console/test/configuration-change-row.test.tsx` |
 | A platform rescan without a path recaptures a Workspace whose notifications were lost; a repeated rescan records nothing | `automatic_commit::a_rescan_recaptures_sources_whose_notifications_were_lost` |
+| A notification flood during a slow capture stays bounded, saturates into one rescan that reaches an edit no notification named, and does not delay stopping | `source_watch::tests::pending_notifications_are_bounded_and_saturate_into_one_rescan`, `automatic_commit::a_notification_flood_stays_bounded_and_rescans_into_the_edit` |
+| A catalog observer whose cut predates a staged commit never rewinds the binding that commit retained; the next model selection succeeds | `automatic_commit::a_catalog_rebase_never_rewinds_a_binding_a_commit_retained` |
+| Ordinary Context injections (native or extension environment, runtime Tool observations, Agent and Goal status) are Harness hidden rows in every work-detail mode — from the loaded transcript, as not-yet-durable current context and from the descriptor fallback — while a Goal continuation stays visible | Web `context-hidden-rows.test.tsx` (compact, standard, detailed, verbose), `agent-status.test.tsx`, `subagents.test.tsx` |
 | A parameter change of a model only a direct Workflow Model node names is one Model fact; an unselected model records nothing | `automatic_commit::a_workflow_model_node_is_a_model_that_runs` |
 | An environment value change changes `subagent` and execution policy; the catalog names the variable, never its value | `automatic_commit::an_environment_value_change_is_recorded_without_its_value` |
 | A credential reference switch on a source only a lazy child runs on changes `subagent`; no credential reaches the catalog | `mcp_readiness::a_hidden_source_credential_switch_changes_the_tool_that_runs_it` |

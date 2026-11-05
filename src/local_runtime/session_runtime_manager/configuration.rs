@@ -101,7 +101,7 @@ impl SessionRuntimeManager {
         self.resident_incarnation(session) == Some(incarnation)
     }
 
-    fn rebase_runtime_catalog(
+    pub(super) fn rebase_runtime_catalog(
         &self,
         session: &SessionId,
         incarnation: super::RuntimeIncarnationId,
@@ -112,12 +112,31 @@ impl SessionRuntimeManager {
             return;
         }
         let revision = runtime.configuration_cut().binding_revision;
+        #[cfg(test)]
+        {
+            let hook = self
+                .registry
+                .0
+                .lock()
+                .expect("registry mutex")
+                .catalog_rebase_cut
+                .clone();
+            if let Some(hook) = hook {
+                hook.0.wait();
+                hook.1.wait();
+            }
+        }
+        // A staged commit retains its binding from inside the runtime's
+        // coordinator, without this lock, so it may have retained a newer
+        // revision since the cut. Binding revisions only grow (a reload
+        // restores the persisted one), so an older cut never replaces it.
         if let Some(binding) = self
             .sessions
             .configuration_bindings
             .lock()
             .expect("Session configuration bindings")
             .get_mut(session)
+            .filter(|binding| binding.binding_revision < revision)
         {
             binding.binding_revision = revision;
         }

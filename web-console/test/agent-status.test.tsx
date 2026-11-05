@@ -163,9 +163,9 @@ describe('Agent Status has one representation, and current Todo is never read fr
     expect(isRuntimeStatusContext(environment)).toBe(false);
     const base = withTranscript(CONVERSATION(), [status('s1', fresh('u1'), [todoSection('Todo A')])]);
     const ui = render(<AgentTranscript snapshot={{ ...base, messages: [agentStatusMessage, environment] }} />);
-    const current = screen.getByText('Current context').parentElement as HTMLElement;
-    expect(current.textContent).toContain('Environment context');
-    expect(current.textContent).not.toContain('Todo A is in progress');
+    // Ordinary Context is a hidden row too: neither appears as current context.
+    expect(screen.queryByText('Current context')).toBeNull();
+    expect(ui.container.textContent).not.toContain('Environment context');
     // Exactly one representation of the composition: the anchored annotation.
     expect(annotations(ui.container)).toEqual([['s1', 'message:u1']]);
     expect(ui.container.textContent).not.toContain('Todo A is in progress');

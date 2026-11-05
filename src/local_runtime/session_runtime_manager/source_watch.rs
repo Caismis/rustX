@@ -27,6 +27,11 @@
 //! target is captured again and every watch registered again. Unchanged
 //! sources stay no-ops, so a repeated rescan records nothing.
 //!
+//! Notifications are merged into a bounded set of distinct paths that a pass
+//! takes at once, so a stream of them costs bounded memory and each pass a
+//! bounded batch, and capture and stopping are never starved. Past the bound
+//! the paths give way to one rescan, as a platform queue overflow does.
+//!
 //! A notification names a path as the volume reports it. A resource root,
 //! source entry, guidance file or document reported in another case of the
 //! same entry (a volume that folds case) is respelled with the fixed name the
@@ -414,31 +419,64 @@ pub(super) struct UserSourceRoots {
     pub(super) resources: PathBuf,
 }
 
-/// What one platform notification invalidates.
-#[derive(Debug)]
-pub(super) enum Signal {
-    /// A path that may have changed.
-    Path(PathBuf),
-    /// Notifications may have been lost: every source may have changed.
-    Rescan,
+/// The most distinct paths the watch holds between passes. Beyond it the
+/// paths give way to one rescan, which captures every known source again:
+/// like a platform queue overflow, the intake stays bounded and no change is
+/// lost.
+pub(super) const PENDING_PATHS: usize = 1024;
+
+/// Notifications no pass has taken yet. The platform callback merges into
+/// them and a pass takes them all at once, so a stream of notifications
+/// costs bounded memory and each pass a bounded batch.
+#[derive(Debug, Default)]
+pub(super) struct Pending {
+    notified: std::sync::Mutex<Notified>,
+    wake: tokio::sync::Notify,
 }
 
-/// Forward one platform notification as the signals it carries. A rescan
-/// carries no path, so it is kept apart from the paths it may also name.
-pub(super) fn forward(
-    result: notify::Result<notify::Event>,
-    sender: &tokio::sync::mpsc::UnboundedSender<Signal>,
-) {
-    let Ok(event) = result else {
-        return;
-    };
-    if event.need_rescan() {
-        let _ = sender.send(Signal::Rescan);
-    }
-    if !event.kind.is_access() {
-        for path in event.paths {
-            let _ = sender.send(Signal::Path(path));
+/// One pass's notifications: the distinct paths that may have changed, or a
+/// rescan when notifications may have been lost.
+#[derive(Debug, Default)]
+struct Notified {
+    paths: std::collections::BTreeSet<PathBuf>,
+    rescan: bool,
+}
+
+impl Pending {
+    /// Merge one platform notification. A rescan carries no path and makes
+    /// every path redundant.
+    pub(super) fn forward(&self, result: notify::Result<notify::Event>) {
+        let Ok(event) = result else {
+            return;
+        };
+        {
+            let mut notified = self.notified.lock().expect("source watch notifications");
+            if event.need_rescan() {
+                notified.rescan = true;
+            }
+            if !event.kind.is_access() && !notified.rescan {
+                notified.paths.extend(event.paths);
+                if notified.paths.len() > PENDING_PATHS {
+                    notified.paths.clear();
+                    notified.rescan = true;
+                }
+            }
         }
+        self.wake.notify_one();
+    }
+
+    /// Take everything merged so far, or nothing when no notification is
+    /// pending.
+    fn take(&self) -> Option<Notified> {
+        let notified =
+            std::mem::take(&mut *self.notified.lock().expect("source watch notifications"));
+        (notified.rescan || !notified.paths.is_empty()).then_some(notified)
+    }
+
+    #[cfg(test)]
+    pub(super) fn held(&self) -> (usize, bool) {
+        let notified = self.notified.lock().expect("source watch notifications");
+        (notified.paths.len(), notified.rescan)
     }
 }
 
@@ -581,20 +619,26 @@ impl SessionRuntimeManager {
     /// would. Returns `false` while no source watch has started.
     #[cfg(test)]
     pub(crate) fn notify_source_watch(&self, event: notify::Event) -> bool {
-        let registry = self.registry.0.lock().expect("registry mutex");
-        let Some(sender) = &registry.source_watch_signals else {
+        let Some(pending) = self
+            .registry
+            .0
+            .lock()
+            .expect("registry mutex")
+            .source_watch_signals
+            .clone()
+        else {
             return false;
         };
-        forward(Ok(event), sender);
+        pending.forward(Ok(event));
         true
     }
 
-    /// The platform watcher that forwards notifications to `sender`, or,
+    /// The platform watcher that merges notifications into `pending`, or,
     /// where a test turned platform watches off, one that registers nothing.
     #[cfg_attr(not(test), allow(clippy::unused_self))] // the switch is a test hook
     fn platform_watcher(
         &self,
-        sender: tokio::sync::mpsc::UnboundedSender<Signal>,
+        pending: std::sync::Arc<Pending>,
     ) -> Result<Box<dyn Watcher + Send>, String> {
         #[cfg(test)]
         let platform = self
@@ -608,7 +652,7 @@ impl SessionRuntimeManager {
         Ok(if platform {
             Box::new(
                 notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-                    forward(result, &sender);
+                    pending.forward(result);
                 })
                 .map_err(|error| error.to_string())?,
             )
@@ -656,16 +700,16 @@ impl SessionRuntimeManager {
         &self,
         stop: tokio_util::sync::CancellationToken,
     ) -> Result<(), String> {
-        let (sender, mut signals) = tokio::sync::mpsc::unbounded_channel::<Signal>();
+        let pending = std::sync::Arc::new(Pending::default());
         #[cfg(test)]
         {
             self.registry
                 .0
                 .lock()
                 .expect("registry mutex")
-                .source_watch_signals = Some(sender.clone());
+                .source_watch_signals = Some(pending.clone());
         }
-        let mut watcher = self.platform_watcher(sender)?;
+        let mut watcher = self.platform_watcher(pending.clone())?;
         let mut changes = self.configuration_changes();
         let mut active = BTreeMap::<PathBuf, RecursiveMode>::new();
         // Nothing is watched before the first pass, so every input the first
@@ -689,66 +733,65 @@ impl SessionRuntimeManager {
                 .expect("registry mutex")
                 .source_watch_settled
                 .send_modify(|passes| *passes += 1);
-            tokio::select! {
-                () = stop.cancelled() => return Ok(()),
-                result = changes.changed() => if result.is_err() { return Ok(()) },
-                Some(signal) = signals.recv() => {
-                    // Coalesce everything already queued into one capture per
-                    // owning target, in a stable order: User composes first.
-                    #[cfg(test)]
-                    let aliased = self
-                        .registry
-                        .0
-                        .lock()
-                        .expect("registry mutex")
-                        .source_watch_case_aliases;
-                    #[cfg(not(test))]
-                    let aliased = false;
-                    let same = |actual: &Path, fixed: &Path| aliased || same_entry(actual, fixed);
-                    let mut targets = Vec::new();
-                    let mut next = Some(signal);
-                    while let Some(signal) = next {
-                        let owners = match signal {
-                            Signal::Path(path) => {
-                                notified(&path, &sources, &same, &mut active)
-                            }
-                            Signal::Rescan => {
-                                active.clear();
-                                std::iter::once(SourceTarget::User)
-                                    .chain(sources.workspaces.iter().map(|directory| {
-                                        SourceTarget::Workspace {
-                                            directory: directory.clone(),
-                                        }
-                                    }))
-                                    .collect::<Vec<_>>()
-                            }
-                        };
-                        for target in owners {
-                            if !targets.contains(&target) {
-                                targets.push(target);
-                            }
+            let batch = loop {
+                tokio::select! {
+                    () = stop.cancelled() => return Ok(()),
+                    result = changes.changed() => if result.is_err() { return Ok(()) } else { break None },
+                    () = pending.wake.notified() => if let Some(batch) = pending.take() {
+                        break Some(batch);
+                    },
+                }
+            };
+            let Some(Notified { paths, rescan }) = batch else {
+                continue;
+            };
+            // Coalesce the batch into one capture per owning target, in a
+            // stable order: User composes first.
+            #[cfg(test)]
+            let aliased = self
+                .registry
+                .0
+                .lock()
+                .expect("registry mutex")
+                .source_watch_case_aliases;
+            #[cfg(not(test))]
+            let aliased = false;
+            let same = |actual: &Path, fixed: &Path| aliased || same_entry(actual, fixed);
+            let mut targets = Vec::new();
+            if rescan {
+                active.clear();
+                targets.push(SourceTarget::User);
+                targets.extend(sources.workspaces.iter().map(|directory| {
+                    SourceTarget::Workspace {
+                        directory: directory.clone(),
+                    }
+                }));
+            } else {
+                for path in paths {
+                    for target in notified(&path, &sources, &same, &mut active) {
+                        if !targets.contains(&target) {
+                            targets.push(target);
                         }
-                        next = signals.try_recv().ok();
-                    }
-                    // Watch the replacements before capturing them, so an
-                    // edit after the capture reads is always notified.
-                    settle(watcher.as_mut(), &mut active, &sources);
-                    targets.sort_by_key(|target| target.workspace().is_some());
-                    for target in targets {
-                        self.observe_source_change(&target).await;
-                    }
-                    #[cfg(test)]
-                    {
-                        let gate = self
-                            .registry
-                            .0
-                            .lock()
-                            .expect("registry mutex")
-                            .source_watch_captured
-                            .clone();
-                        gate.park().await;
                     }
                 }
+            }
+            // Watch the replacements before capturing them, so an edit after
+            // the capture reads is always notified.
+            settle(watcher.as_mut(), &mut active, &sources);
+            targets.sort_by_key(|target| target.workspace().is_some());
+            for target in targets {
+                self.observe_source_change(&target).await;
+            }
+            #[cfg(test)]
+            {
+                let gate = self
+                    .registry
+                    .0
+                    .lock()
+                    .expect("registry mutex")
+                    .source_watch_captured
+                    .clone();
+                gate.park().await;
             }
         }
     }
@@ -1395,6 +1438,31 @@ mod tests {
         assert!(desired(&sources()).contains_key(&workspace.join("policies")));
         assert_eq!(routed("policies/a.md"), reader);
         assert!(routed("policies/b.md").is_empty());
+    }
+
+    /// Pending notifications stay bounded: duplicates merge, and past the
+    /// bound the paths give way to one rescan that a pass takes at once.
+    #[test]
+    fn pending_notifications_are_bounded_and_saturate_into_one_rescan() {
+        let pending = Pending::default();
+        let modified = |path: PathBuf| {
+            Ok(
+                notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
+                    .add_path(path),
+            )
+        };
+        for _ in 0..10 {
+            pending.forward(modified(PathBuf::from("/w/rustx.toml")));
+        }
+        assert_eq!(pending.held(), (1, false));
+        for index in 0..10 * PENDING_PATHS {
+            pending.forward(modified(PathBuf::from(format!("/w/noise-{index}"))));
+            assert!(pending.held().0 <= PENDING_PATHS);
+        }
+        assert_eq!(pending.held(), (0, true));
+        let batch = pending.take().unwrap();
+        assert!(batch.rescan && batch.paths.is_empty());
+        assert!(pending.take().is_none());
     }
 
     /// An absolute link is walked again from the filesystem root: its final

@@ -1051,6 +1051,115 @@ async fn live_model_selection_supersedes_a_candidate_blocked_by_background_owner
     .await;
 }
 
+/// The catalog observer cuts the runtime's binding revision without the
+/// lock a staged commit retains its binding under: a commit that lands
+/// between that cut and the observer's write keeps its newer revision, so the
+/// next model selection is not refused as a conflict.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_catalog_rebase_never_rewinds_a_binding_a_commit_retained() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let retained = |fixture: &Fixture| {
+            fixture
+                .manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap()
+                .get(&id)
+                .unwrap()
+                .binding_revision
+        };
+        let (execution_id, mut started, release) =
+            start_background(&runtime, "call-rebase-background");
+        started.wait_for(|entered| *entered).await.unwrap();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("committed between the cut and the write".into()),
+            },
+        )
+        .await;
+        let staged = settled(&fixture, 0).await;
+        assert_eq!(
+            staged.units[&ApplyUnit::Instructions],
+            UnitApplication::Ready
+        );
+        let before = runtime.configuration_cut().binding_revision;
+        assert_eq!(retained(&fixture), before);
+        let hook = Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
+        fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .catalog_rebase_cut = Some(hook.clone());
+        let incarnation = fixture.manager.resident_incarnation(&id).unwrap();
+        let rebase = tokio::task::spawn_blocking({
+            let (manager, id, runtime) = (fixture.manager.clone(), id.clone(), runtime.clone());
+            move || manager.rebase_runtime_catalog(&id, incarnation, &runtime)
+        });
+        tokio::task::spawn_blocking({
+            let hook = hook.clone();
+            move || {
+                hook.0.wait();
+            }
+        })
+        .await
+        .unwrap();
+        // The observer holds its cut at `before`; the staged commit lands now.
+        release.send_replace(true);
+        runtime
+            .tool_runtime()
+            .background()
+            .wait_until_terminal(&execution_id)
+            .await
+            .unwrap();
+        fixture.gates[0].wait_entered().await;
+        fixture.gates[0].release();
+        while runtime.configuration_cut().binding_revision == before {
+            tokio::task::yield_now().await;
+        }
+        let committed = runtime.configuration_cut().binding_revision;
+        assert_eq!(retained(&fixture), committed);
+        tokio::task::spawn_blocking(move || {
+            hook.1.wait();
+        })
+        .await
+        .unwrap();
+        rebase.await.unwrap();
+        fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .catalog_rebase_cut = None;
+        assert_eq!(
+            retained(&fixture),
+            committed,
+            "the observer rewound the retained binding to its stale cut"
+        );
+        applied(&fixture, 0).await;
+        let selected = crate::model::session::SessionModelConfig::of(
+            crate::model::catalog::ModelRef::parse("local/b").unwrap(),
+        );
+        fixture
+            .manager
+            .set_model(&id, selected.clone())
+            .await
+            .unwrap();
+        assert_eq!(runtime.model_view().configured, selected);
+        fixture.close().await;
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t11_background_ownership_defers_commit_until_it_settles() {
     bounded(async {
@@ -2459,6 +2568,105 @@ async fn an_edited_selected_instruction_file_reaches_the_resident_runtime() {
         };
         let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
         watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
+fn pending_notifications(fixture: &Fixture) -> std::sync::Arc<super::super::source_watch::Pending> {
+    fixture
+        .manager
+        .registry
+        .0
+        .lock()
+        .unwrap()
+        .source_watch_signals
+        .clone()
+        .unwrap()
+}
+
+/// A flood of notifications while a capture is slow stays bounded: the
+/// watch holds at most a fixed number of paths, then one rescan, which still
+/// reaches an edit no notification named; and the watch stops while the
+/// flood goes on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_notification_flood_stays_bounded_and_rescans_into_the_edit() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        injected_only(&fixture);
+        let captured = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_captured
+            .clone();
+        captured.arm();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let workspace = fixture.workspaces[0].clone();
+        let observe = async {
+            watch_settled(&fixture).await;
+            let config = workspace.join("rustx.toml");
+            assert!(fixture.manager.notify_source_watch(modified(&config)));
+            // The pass is parked after its capture: everything below arrives
+            // while the watch is busy.
+            captured.entered().await;
+            let mut document = std::fs::read_to_string(&config).unwrap();
+            document.push_str("\n[agent]\ninstructions = \"reached by the rescan\"\n");
+            std::fs::write(&config, document).unwrap();
+            let pending = pending_notifications(&fixture);
+            let bound = super::super::source_watch::PENDING_PATHS;
+            for index in 0..4 * bound {
+                fixture
+                    .manager
+                    .notify_source_watch(modified(&workspace.join(format!("noise-{index}"))));
+                fixture
+                    .manager
+                    .notify_source_watch(modified(&workspace.join("noise-0")));
+                assert!(pending.held().0 <= bound, "{:?}", pending.held());
+            }
+            assert_eq!(
+                pending.held(),
+                (0, true),
+                "the flood saturated into a rescan"
+            );
+            captured.release();
+            captured.parked(0).await;
+            while instructions(&runtime) != "reached by the rescan" {
+                applied(&fixture, 0).await;
+                tokio::task::yield_now().await;
+            }
+            // Stopping is not starved by notifications that keep arriving.
+            let flooding = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let flood = tokio::spawn({
+                let (manager, flooding, workspace) =
+                    (fixture.manager.clone(), flooding.clone(), workspace.clone());
+                async move {
+                    let mut index = 0_usize;
+                    while flooding.load(std::sync::atomic::Ordering::SeqCst) {
+                        manager.notify_source_watch(modified(
+                            &workspace.join(format!("churn-{index}")),
+                        ));
+                        index = index.wrapping_add(1);
+                        tokio::task::yield_now().await;
+                    }
+                }
+            });
+            stop.cancel();
+            (flood, flooding)
+        };
+        let (watched, (flood, flooding)) =
+            tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
+        watched.unwrap();
+        flooding.store(false, std::sync::atomic::Ordering::SeqCst);
+        flood.await.unwrap();
         fixture.close().await;
     })
     .await;

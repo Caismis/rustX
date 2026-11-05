@@ -84,6 +84,17 @@ export function statusesAt(placement: AgentStatusPlacement, entry: { messageId?:
  * It is request-scoped model history with its own annotation presentation, so it
  * must not reappear through generic Context / "Current context" chrome as a second
  * ordinary-chat representation or as purported live state. */
+/** Whether `message` is a Context injection: native or extension
+ * environment, a runtime Tool observation, Agent or Goal status. Harness hides
+ * these rows from Chat in every work-detail mode; Agent/Goal status keep their
+ * own surfaces and Trace keeps the content. A Goal continuation is not one. */
+export function isContextInjection(message: { role: string; kind?: unknown }): boolean {
+  if (message.role !== 'user') return false;
+  const kind = message.kind;
+  if (typeof kind === 'string') return kind.startsWith('context/');
+  return !!kind && typeof kind === 'object' && 'context' in kind;
+}
+
 export function isRuntimeStatusContext(message: { role: string; kind?: unknown }): boolean {
   if (message.role !== 'user') return false;
   const kind = message.kind;

@@ -335,14 +335,14 @@ it('a parent canonical head keeps its bubble, time and Copy when the native tran
   expect(ui.container.querySelectorAll('[data-chat-flow-kind="user"]')).toHaveLength(1);
 });
 
-it('nested children match only their direct parent; sibling reports and runtime context remain disclosures', () => {
+it('nested children match only their direct parent; sibling reports stay disclosures and runtime context is a hidden row', () => {
   const nested = { ...agent, agent_id: 'grandchild', parent_agent_id: 'child' };
   const ui = render(<AgentConversationContext value={nested}><Message message={report}/></AgentConversationContext>);
   expect(ui.getByRole('article', { name: 'Message from parent agent' })).toBeTruthy();
   ui.rerender(<AgentConversationContext value={nested}><Message message={{ ...report, source: { agent: { agent_id: 'sibling' } } }}/></AgentConversationContext>);
   expect(ui.queryByRole('article')).toBeNull(); expect(ui.container.querySelector('[data-inbound-source="agent"]')).toBeTruthy();
   ui.rerender(<AgentConversationContext value={nested}><Message message={{ ...report, kind: { context: 'native_environment' } }}/></AgentConversationContext>);
-  expect(ui.queryByRole('article')).toBeNull(); expect(ui.container.querySelector('details')).toBeTruthy();
+  expect(ui.queryByRole('article')).toBeNull(); expect(ui.container.textContent).toBe('');
 });
 
 it('T20 resident Child views have an eight-view bound and require explicit close without evicting drafts', async () => {

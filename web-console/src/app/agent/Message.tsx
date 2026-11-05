@@ -1,4 +1,4 @@
-import { isRuntimeStatusContext } from '../../bindings/agent-status';
+import { isContextInjection } from '../../bindings/agent-status';
 import { InboundMessage, isUserBubble } from './InboundMessage';
 import { AgentConversationContext } from './subagent-context';
 import { useConversationPreferences } from '../conversation-preferences';
@@ -60,7 +60,9 @@ function MessageText({ messageId, publicationStream, index, text, markdown, stre
 }
 export function Message({ message, publicationStream, tools = [], actions, streaming = false, stopped = false, blocks, reasoningHidden = false, include }: { reasoningHidden?: boolean; message: MessageBlock; publicationStream?: string; tools?: ForegroundToolExecution[]; actions?: ReactNode; streaming?: boolean; stopped?: boolean; blocks?: (AssistantContentBlock | InFlightBlock)[]; include?: readonly number[] }) {
   const tx = useTranslation(), receiver = useContext(AgentConversationContext);
-  if (message.role === 'tool' || isRuntimeStatusContext(message)) return null; // Results belong to the native call projection, never paired here.
+  // Results belong to the native call projection; Context injections are
+  // Harness hidden rows, whose content Trace keeps.
+  if (message.role === 'tool' || isContextInjection(message)) return null;
   if (message.role === 'user' && message.kind && message.kind !== 'message') return <details><summary>{tx('agent:message.context')}{' '}{Object.keys(message.kind)[0]}</summary><Content messageId={message.id} blocks={message.content} markdown/></details>;
   if (message.role === 'user' && !isUserBubble(message, receiver?.parent_agent_id)) return <InboundMessage message={message}/>;
   return message.role === 'user' ? <UserMessageContent message={message} label={tx(message.source === 'human' ? 'agent:message.your-message' : 'common:subagents.parent-message')} actions={actions}/>

@@ -475,7 +475,7 @@ struct RegistryState {
     #[cfg(test)]
     source_watch_captured: Arc<tests::AsyncGate>,
     #[cfg(test)]
-    source_watch_signals: Option<tokio::sync::mpsc::UnboundedSender<source_watch::Signal>>,
+    source_watch_signals: Option<Arc<source_watch::Pending>>,
     /// Treats every case variant as the entry the loaders open, as a
     /// case-folding volume does.
     #[cfg(test)]
@@ -488,6 +488,11 @@ struct RegistryState {
     /// every newly found input captured again.
     #[cfg(test)]
     source_watch_settled: tokio::sync::watch::Sender<u64>,
+    /// Parks the catalog observer between its cut of the runtime's binding
+    /// revision and its write of the retained binding: it meets the test at
+    /// the first barrier, then waits for it at the second.
+    #[cfg(test)]
+    catalog_rebase_cut: Option<Arc<(std::sync::Barrier, std::sync::Barrier)>>,
     #[cfg(test)]
     configuration_settlement: Arc<tests::AsyncGate>,
     #[cfg(test)]
@@ -789,6 +794,8 @@ impl SessionRuntimeManager {
                 source_watch_platform: true,
                 #[cfg(test)]
                 source_watch_settled: tokio::sync::watch::Sender::new(0),
+                #[cfg(test)]
+                catalog_rebase_cut: None,
                 #[cfg(test)]
                 configuration_settlement: Arc::default(),
                 #[cfg(test)]
