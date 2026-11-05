@@ -345,10 +345,19 @@ fn current_product_surfaces_cannot_reintroduce_obsolete_authoring() {
         // CLI unit tests deliberately exercise rejected historical spellings.
         let product = text.split("#[cfg(test)]").next().unwrap();
         for spelling in obsolete {
-            assert!(
-                !product.contains(spelling),
-                "{path} contains obsolete {spelling}"
-            );
+            // Match obsolete identifiers, allowing the distinct Model-owned
+            // reasoning_profile_order / reasoningProfileOrder metadata.
+            let present = if matches!(
+                spelling,
+                "reasoning_profile" | "reasoningProfile" | "ReasoningProfile"
+            ) {
+                product
+                    .split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .any(|token| token == spelling)
+            } else {
+                product.contains(spelling)
+            };
+            assert!(!present, "{path} contains obsolete {spelling}");
         }
     }
 }

@@ -595,93 +595,122 @@ request_params = '''
 request_params = '{{"temperature":0.2}}'
 "#
         );
-        let catalog = ModelCatalog::from_toml_slice(source.as_bytes()).expect("catalog");
-        let registry = ModelBindingRegistry::new(
-            catalog
-                .resolve(&MapCredentialEnvironment::default())
-                .expect("resolved"),
-        )
-        .expect("registry");
-        let mut selection = ModelSelection::of(ModelRef::parse("p/m").expect("reference"));
-        selection.request_params =
-            params(serde_json::json!({"metadata": {"trace": null}, "seed": 7}));
-        let invocation = registry
-            .resolve(&selection)
-            .expect("default profile resolves");
-        assert_eq!(invocation.profile().expect("profile").as_str(), "deep");
-
-        let mut request = crate::common::simple_request(protocol.model_protocol(), "unused", "hi");
-        request.invocation = invocation.invocation_config();
-        let mut baseline = request.clone();
-        baseline.invocation.request_params = RequestParams::new();
-        for request in [request, baseline] {
-            let events =
-                crate::common::collect_events(invocation.adapter().as_ref(), request).await;
-            assert!(
-                matches!(events.last(), Some(ModelEvent::Completed { .. })),
-                "{}",
-                crate::common::describe_events(&events)
+        let mut bodies = Vec::new();
+        for (position, order) in [
+            None,
+            Some("[\"quick\", \"deep\"]"),
+            Some("[\"deep\", \"quick\"]"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let source = order.map_or_else(
+                || source.clone(),
+                |order| {
+                    source.replace(
+                        "default_profile = \"deep\"",
+                        &format!("default_profile = \"deep\"\nreasoning_profile_order = {order}"),
+                    )
+                },
             );
-        }
-        let body: serde_json::Value =
-            serde_json::from_str(&server.request_body(0)).expect("JSON body");
-        let baseline: serde_json::Value =
-            serde_json::from_str(&server.request_body(1)).expect("JSON body");
-        let opaque = serde_json::json!({
-            "vendor": {"mode": "deep", "budget": [1, null, {"x": null}]},
-            "explicit_null": null,
-            "metadata": {"trace": null},
-            "seed": 7
-        });
-        let mut expected = baseline.as_object().expect("object").clone();
-        for (key, value) in opaque.as_object().expect("object") {
-            assert!(
-                !expected.contains_key(key),
-                "{key} is not a runtime-owned field"
-            );
-            expected.insert(key.clone(), value.clone());
-        }
-        assert_eq!(body, serde_json::Value::Object(expected), "{name}");
-        assert_eq!(body["model"], "wire-test", "{name}");
-        assert_eq!(body["stream"], true, "{name}");
-        assert_eq!(
-            body[budget_field], 2048,
-            "{name}: the profile default budget"
-        );
-
-        // An explicit selection limit replaces the profile default, within
-        // the Model hard maximum, through the same adapter-owned spelling.
-        selection.max_output_tokens = Some(4096);
-        assert_eq!(
-            registry
+            let catalog = ModelCatalog::from_toml_slice(source.as_bytes()).expect("catalog");
+            let registry = ModelBindingRegistry::new(
+                catalog
+                    .resolve(&MapCredentialEnvironment::default())
+                    .expect("resolved"),
+            )
+            .expect("registry");
+            let mut selection = ModelSelection::of(ModelRef::parse("p/m").expect("reference"));
+            selection.request_params =
+                params(serde_json::json!({"metadata": {"trace": null}, "seed": 7}));
+            let invocation = registry
                 .resolve(&selection)
-                .expect("budget")
-                .invocation_config()
-                .max_output_tokens,
-            4096
-        );
-        // No opaque layer may author a runtime-owned output field: a second
-        // output budget is a protected-key failure, never a wire value.
-        for key in [
-            "max_tokens",
-            "max_completion_tokens",
-            "max_output_tokens",
-            "model",
-            "stream",
-        ] {
-            let protected = rustx::model::invocation::protected_keys(protocol.model_protocol());
-            if !protected.contains(&key) {
-                continue;
+                .expect("default profile resolves");
+            assert_eq!(invocation.profile().expect("profile").as_str(), "deep");
+
+            let mut request =
+                crate::common::simple_request(protocol.model_protocol(), "unused", "hi");
+            request.invocation = invocation.invocation_config();
+            let mut baseline = request.clone();
+            baseline.invocation.request_params = RequestParams::new();
+            for request in [request, baseline] {
+                let events =
+                    crate::common::collect_events(invocation.adapter().as_ref(), request).await;
+                assert!(
+                    matches!(events.last(), Some(ModelEvent::Completed { .. })),
+                    "{}",
+                    crate::common::describe_events(&events)
+                );
             }
-            let mut contested = ModelSelection::of(ModelRef::parse("p/m").expect("reference"));
-            contested.request_params = params(serde_json::json!({key: 1}));
-            assert!(
-                matches!(
-                    registry.resolve(&contested),
-                    Err(rustx::model::ModelInvocationError::ProtectedKey(_))
-                ),
-                "{name}: {key}"
+            let body: serde_json::Value =
+                serde_json::from_str(&server.request_body(position * 2)).expect("JSON body");
+            let baseline: serde_json::Value =
+                serde_json::from_str(&server.request_body(position * 2 + 1)).expect("JSON body");
+            bodies.push(body.clone());
+            let opaque = serde_json::json!({
+                "vendor": {"mode": "deep", "budget": [1, null, {"x": null}]},
+                "explicit_null": null,
+                "metadata": {"trace": null},
+                "seed": 7
+            });
+            let mut expected = baseline.as_object().expect("object").clone();
+            for (key, value) in opaque.as_object().expect("object") {
+                assert!(
+                    !expected.contains_key(key),
+                    "{key} is not a runtime-owned field"
+                );
+                expected.insert(key.clone(), value.clone());
+            }
+            assert_eq!(body, serde_json::Value::Object(expected), "{name}");
+            assert_eq!(body["model"], "wire-test", "{name}");
+            assert_eq!(body["stream"], true, "{name}");
+            assert_eq!(
+                body[budget_field], 2048,
+                "{name}: the profile default budget"
             );
+
+            // An explicit selection limit replaces the profile default, within
+            // the Model hard maximum, through the same adapter-owned spelling.
+            selection.max_output_tokens = Some(4096);
+            assert_eq!(
+                registry
+                    .resolve(&selection)
+                    .expect("budget")
+                    .invocation_config()
+                    .max_output_tokens,
+                4096
+            );
+            // No opaque layer may author a runtime-owned output field: a second
+            // output budget is a protected-key failure, never a wire value.
+            for key in [
+                "max_tokens",
+                "max_completion_tokens",
+                "max_output_tokens",
+                "model",
+                "stream",
+            ] {
+                let protected = rustx::model::invocation::protected_keys(protocol.model_protocol());
+                if !protected.contains(&key) {
+                    continue;
+                }
+                let mut contested = ModelSelection::of(ModelRef::parse("p/m").expect("reference"));
+                contested.request_params = params(serde_json::json!({key: 1}));
+                assert!(
+                    matches!(
+                        registry.resolve(&contested),
+                        Err(rustx::model::ModelInvocationError::ProtectedKey(_))
+                    ),
+                    "{name}: {key}"
+                );
+            }
         }
+        assert_eq!(
+            bodies[0], bodies[1],
+            "configured order changes no wire parameters"
+        );
+        assert_eq!(
+            bodies[0], bodies[2],
+            "reordering changes no wire parameters"
+        );
     }
 }

@@ -15580,6 +15580,16 @@
             }
           ]
         },
+        "reasoning_profile_order": {
+          "description": "Optional complete Profile order, from lower to higher declared reasoning strength.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ModelProfileId"
+          }
+        },
         "profiles": {
           "type": [
             "object",
@@ -33610,6 +33620,16 @@
               "type": "null"
             }
           ]
+        },
+        "reasoningProfileOrder": {
+          "description": "Optional complete Profile order, lowest declared reasoning strength first.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ModelProfileId"
+          }
         },
         "credentialSource": {
           "description": "The redacted credential source of the model's provider.",

@@ -1,4 +1,4 @@
-import type { RuntimeClientAgent, SubagentState, ForegroundToolExecution } from '../../../protocol/app-server/v69';
+import type { RuntimeClientAgent, SubagentState, ForegroundToolExecution } from '../../../protocol/app-server/v70';
 import type { TranslationKey } from '../locale/translation';
 
 export interface AgentToolItem {

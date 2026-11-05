@@ -5263,3 +5263,20 @@ following the rustX editor's kind families. Foreground/background mixes adapt
 to the active theme; unknown historical kinds remain neutral. Kind colors do
 not stand for an execution outcome. Native headers supply the kind directly;
 no current workflow definition or execution data is inferred or changed.
+
+## Model reasoning order (#524)
+
+The existing native Profile editor adds an optional complete low-to-high order,
+configure/clear controls and keyboard-operable moves, inspired by ZCode's ordered
+reasoning control. No upstream mapping code or dependencies are imported. Profile
+identities remain stable keys, and the existing JSON editor and native whole-Model
+transaction retain parameter validation, scope and revision ownership. The mandatory
+App Server v70 imports are regenerated from Rust; Runtime Client is v82. Updated
+local hashes and import inventories record these adaptations against the unchanged
+upstream baselines. Browser plugin is unavailable; validation uses the repository's
+pinned Playwright container and production native API path.
+
+Explicit Model-dialog Cancel discards the whole unsaved Model unit through its
+existing transaction actor, including Profile membership and reasoning order.
+Close and navigation retain that draft for later editing; no transaction state
+or native configuration action is added.

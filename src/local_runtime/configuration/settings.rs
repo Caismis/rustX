@@ -737,6 +737,12 @@ fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
         base_url: String,
         api_key: String,
     }
+    // Every managed configuration candidate, including manual source repair,
+    // validates whole Model definitions before encoding or publishing bytes.
+    crate::model::catalog::ModelCatalog::validate_entries(super::semantics::catalog_document(
+        &document,
+    ))
+    .map_err(|_| SettingsError::Invalid)?;
     // Encoding stays inside native authority, so the authored environment keeps
     // its literal values here; only the wire projection redacts them.
     let document = document.project(

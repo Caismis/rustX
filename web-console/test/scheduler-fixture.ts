@@ -1,4 +1,4 @@
-import type { ScheduleHeader, ScheduleSnapshot, ScheduleCommandResult, ScheduledWorkflowRecovery } from '../../protocol/app-server/v69';
+import type { ScheduleHeader, ScheduleSnapshot, ScheduleCommandResult, ScheduledWorkflowRecovery } from '../../protocol/app-server/v70';
 import { Server } from './fixture';
 export const nodeA = 'node_00000000-0000-7000-8000-000000000001';
 export const nodeB = 'node_00000000-0000-7000-8000-000000000002';

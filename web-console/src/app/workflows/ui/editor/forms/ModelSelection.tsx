@@ -1,7 +1,7 @@
 import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react-dom';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { WorkflowModelPolicy, WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../../../../../../protocol/app-server/v69';
+import type { WorkflowModelPolicy, WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../../../../../../protocol/app-server/v70';
 import { useTranslation } from '../../../../../locale/react';
 import { encodeField, type FieldAddress, type FieldStep } from '../../../document/fields';
 import type { WorkflowScopePort } from '../../../port';

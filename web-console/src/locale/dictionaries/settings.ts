@@ -1,5 +1,16 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "models-page.reasoning-order": "Reasoning order (low to high)",
+  "models-page.configure-reasoning-order": "Configure reasoning order",
+  "models-page.clear-reasoning-order": "Clear reasoning order",
+  "models-page.reasoning-requires-profiles": "Add Profiles before configuring reasoning order.",
+  "models-page.reasoning-not-configured": "Not configured",
+  "models-page.reasoning-draft-help": "Configuring starts in identity order; new Profiles start at the end. No strength is inferred. Review the arrangement before Save.",
+  "models-page.reasoning-appended": "Profile {p0} was placed last in this draft. Adjust its position before Save.",
+  "models-page.reasoning-help": "Relative to this Model only. Does not change the default Profile or compaction/title behavior.",
+  "models-page.reasoning-move-up": "Move {p0} up",
+  "models-page.reasoning-move-down": "Move {p0} down",
+
   "models.authority-offline": "Disconnected. Reconnect to edit or save.",
   "models.authority-failed": "Settings could not be read. Close this dialog to inspect the error and retry.",
   "models.authority-loading": "Reading settings… Editing resumes when they are ready.",
@@ -533,7 +544,7 @@ export const en = {
   "tools-page.execution": "execution",
   "tools-page.concurrency": "concurrency",
   "tools-page.approval-2": "approval",
-  "copy.app-server-v69": "· App Server v69",
+  "copy.app-server-v70": "· App Server v70",
   "copy.language": "Language",
   "copy.light": "Light",
   "copy.dark": "Dark",
@@ -700,6 +711,17 @@ export const en = {
 } as const;
 export type SettingsKey = keyof typeof en;
 export const zh = {
+  "models-page.reasoning-order": "推理顺序（由低到高）",
+  "models-page.configure-reasoning-order": "配置推理顺序",
+  "models-page.clear-reasoning-order": "清除推理顺序",
+  "models-page.reasoning-requires-profiles": "添加模型预设后可配置推理顺序。",
+  "models-page.reasoning-not-configured": "未配置",
+  "models-page.reasoning-draft-help": "初次配置按标识排列，新增预设放在末尾，不推断推理强度。请调整后保存。",
+  "models-page.reasoning-appended": "预设 {p0} 已放在草稿末尾，请调整位置后保存。",
+  "models-page.reasoning-help": "顺序仅在当前模型内有效，不改变默认预设或压缩与标题生成行为。",
+  "models-page.reasoning-move-up": "上移 {p0}",
+  "models-page.reasoning-move-down": "下移 {p0}",
+
   "models.authority-offline": "连接已断开，暂时无法编辑或保存。",
   "models.authority-failed": "无法读取设置。请关闭此窗口查看错误详情并重试。",
   "models.authority-loading": "正在读取设置，完成后可继续编辑。",
@@ -1233,7 +1255,7 @@ export const zh = {
   "tools-page.execution": "执行",
   "tools-page.concurrency": "并发",
   "tools-page.approval-2": "审批",
-  "copy.app-server-v69": "· App Server v69",
+  "copy.app-server-v70": "· App Server v70",
   "copy.language": "语言",
   "copy.light": "浅色",
   "copy.dark": "深色",
