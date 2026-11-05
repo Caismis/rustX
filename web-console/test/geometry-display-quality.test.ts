@@ -18,7 +18,7 @@ it('keeps all geometry, authored material and UV during motion, and restores opt
   try { quality.draw(scene, true, camera(), 480, () => { expect(mesh.geometry).toBe(geometry); expect(mesh.material).toBe(material); expect(line.visible).toBe(false); expect(mesh.geometry.getAttribute('uv')).toBe(geometry.getAttribute('uv')); }); expect(line.visible).toBe(true); }
   finally { quality.dispose(); disposeScene([scene]); line.geometry.dispose(); line.material.dispose(); }
 });
-it('uses a bounded bridge with original shading only while background work is pending, and restores on exceptions', () => {
+it('keeps bounded shaded motion after optional preparation times out and restores exact settled geometry', () => {
   const { prepared, mesh } = generated(), original = mesh.geometry, material = mesh.material, scene = new Scene(); scene.add(prepared.scene); prepared.markPreviews([0]);
   const quality = createDisplayQuality(prepared.scene), line = new LineSegments(new BufferGeometry(), new ShaderMaterial()); scene.add(line); let sample: BufferGeometry | undefined;
   try {
@@ -28,7 +28,8 @@ it('uses a bounded bridge with original shading only while background work is pe
     })).toThrow('submission failed');
     expect(mesh.geometry).toBe(original); expect(mesh.material).toBe(material); expect(line.visible).toBe(true);
     const disposed = vi.spyOn(sample!, 'dispose'); prepared.finishPreviews();
-    quality.draw(scene, true, camera(), 480, () => expect(mesh.geometry).toBe(original)); expect(disposed).toHaveBeenCalledOnce();
+    quality.draw(scene, true, camera(), 480, () => expect(mesh.geometry === sample).toBe(true)); expect(disposed).not.toHaveBeenCalled();
+    quality.draw(scene, false, camera(), 480, () => expect(mesh.geometry).toBe(original));
   } finally { quality.dispose(); disposeScene([prepared.scene]); line.geometry.dispose(); line.material.dispose(); }
 });
 it('adopts a complete surface LOD without changing materials and releases it exactly once', () => {

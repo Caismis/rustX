@@ -14,7 +14,7 @@ export function parseGeometry(bytes: Uint8Array<ArrayBuffer>, format: Exclude<Ge
   if (bytes.length > L.sourceBytes) return Promise.reject(new GeometryError('limit'));
   if (active >= L.owners) return Promise.reject(new GeometryError('capacity'));
   active++;
-  return admittedGeometry(bytes, format, signal, performance.now() + L.timeoutMs, onStage, takeBytes);
+  return admittedGeometry(bytes, format, signal, performance.now() + (format === 'stl' ? L.timeoutMs : L.cadTimeoutMs), onStage, takeBytes);
 }
 
 // This mutable input is the continuation's only source reference. Cancellation

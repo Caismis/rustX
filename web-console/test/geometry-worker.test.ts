@@ -58,7 +58,7 @@ it('bounds aggregate workers and rejects stale completion after cancellation', a
 it('terminates timed-out and crashed workers and refuses invalid output before upload', async () => {
   vi.stubGlobal('Worker', ImportWorker); vi.useFakeTimers();
   const timed = parseGeometry(new Uint8Array(), 'step', new AbortController().signal), rejection = expect(timed).rejects.toMatchObject({ code: 'timeout' });
-  await vi.advanceTimersByTimeAsync(GEOMETRY_LIMITS.timeoutMs); await rejection;
+  await vi.advanceTimersByTimeAsync(GEOMETRY_LIMITS.cadTimeoutMs); await rejection;
   const crashed = parseGeometry(new Uint8Array(), 'step', new AbortController().signal); await Promise.resolve(); ImportWorker.instances[1].onerror!();
   await expect(crashed).rejects.toMatchObject({ code: 'worker' });
   const invalid = parseGeometry(new Uint8Array(), 'step', new AbortController().signal), broken = model(); await Promise.resolve(); broken.meshes[0].positions[0] = Infinity;
@@ -92,7 +92,7 @@ it('stage notifications neither extend the original deadline nor publish after c
   expect(stage).toHaveBeenCalledExactlyOnceWith('initializing'); expect(worker.terminated).toBe(1);
   const timed = parseGeometry(new Uint8Array([1]), 'step', new AbortController().signal, stage); await Promise.resolve(); const timedWorker = ImportWorker.instances[1];
   const rejected = expect(timed).rejects.toMatchObject({ code: 'timeout' });
-  await vi.advanceTimersByTimeAsync(GEOMETRY_LIMITS.timeoutMs - 1);
+  await vi.advanceTimersByTimeAsync(GEOMETRY_LIMITS.cadTimeoutMs - 1);
   timedWorker.onmessage!({ data: { kind: 'stage', stage: 'initializing' } });
   await vi.advanceTimersByTimeAsync(1); await rejected; expect(timedWorker.terminated).toBe(1);
 });
@@ -127,7 +127,7 @@ it('keeps the original deadline while awaiting code and fences a late successful
   code.load.mockReturnValue(new Promise(resolve => { complete = resolve; }));
   const source = new Uint8Array([1,2,3]), slice = vi.spyOn(source, 'slice');
   const pending = parseGeometry(source, 'step', new AbortController().signal), timed = expect(pending).rejects.toMatchObject({ code: 'timeout' });
-  await vi.advanceTimersByTimeAsync(GEOMETRY_LIMITS.timeoutMs); await timed;
+  await vi.advanceTimersByTimeAsync(GEOMETRY_LIMITS.cadTimeoutMs); await timed;
   complete(module); await Promise.resolve(); expect(ImportWorker.instances).toHaveLength(1); expect(ImportWorker.instances[0].terminated).toBe(1); expect(ImportWorker.instances[0].input).toBeUndefined(); expect(slice).not.toHaveBeenCalled();
   const controller = new AbortController(), next = parseGeometry(source, 'stl', controller.signal), cancelled = expect(next).rejects.toMatchObject({ name: 'AbortError' });
   expect(ImportWorker.instances).toHaveLength(2); controller.abort(); await cancelled;

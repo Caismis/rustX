@@ -75,6 +75,12 @@ function Fixture() {
 }
 Object.assign(window, { geometryContract: {
   reads, activity, source: (name: string) => [...files.get(name)!.data],
+  async loadLargeStep() {
+    const response = await fetch('/test/fixtures/large-step.step');
+    if (!response.ok) throw new Error(`Large STEP fixture response: ${response.status}`);
+    const data = new Uint8Array(await response.arrayBuffer());
+    files.set('cube.step', { data, version: 1 }); return { bytes: data.byteLength };
+  },
   async measureImport(name: string) {
     const bytes = files.get(name)!.data, format = geometryFormat(name), signal = new AbortController().signal;
     if (format === 'glb') {

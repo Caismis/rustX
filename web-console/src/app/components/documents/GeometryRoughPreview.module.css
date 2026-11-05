@@ -1,0 +1,6 @@
+.root { position: absolute; inset: 0; z-index: 2; background: var(--dsw-alias-bg-document-preview); }
+.root svg { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; outline-offset: -3px; }
+.root svg:active { cursor: grabbing; }
+.surface { fill: #98a7bc; stroke: #dbe4f1; stroke-width: 1; }
+.status { position: absolute; bottom: 12px; left: 12px; margin: 0; padding: 6px 10px; border-radius: 6px; color: #e2e8f0; background: #30343bdd; font-size: 12px; pointer-events: none; }
+.status span { margin-left: 8px; opacity: .8; }

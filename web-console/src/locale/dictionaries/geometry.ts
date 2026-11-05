@@ -1,4 +1,5 @@
 export const en = {
+  rough: 'Rough preview', roughLoading: 'Loading full geometry…',
   preview: '3D model preview', loading: 'Loading model…', reading: 'Reading model…', initializing: 'Initializing CAD runtime…', importing: 'Importing model…', preparing: 'Preparing display…', canvas: '3D model. Drag to rotate, right-drag or use arrow keys to pan, scroll to zoom.',
   controls: 'Model controls', view: 'View angle',
   projection: 'Projection', perspective: 'Perspective', orthographic: 'Orthographic',
@@ -21,6 +22,7 @@ export const en = {
   capacity: 'Preview is busy. Try again in a moment.',
 } as const;
 export const zh = {
+  rough: '粗略预览', roughLoading: '正在加载完整几何…',
   preview: '三维模型预览', loading: '正在加载模型…', reading: '正在读取模型…', initializing: '正在初始化 CAD 运行环境…', importing: '正在导入模型…', preparing: '正在准备显示…', canvas: '三维模型。拖动旋转，右键拖动或使用方向键平移，滚动缩放。',
   controls: '模型控件', view: '视角',
   projection: '投影', perspective: '透视投影', orthographic: '正交投影',

@@ -72,7 +72,7 @@ test('two actual split CAD owners share code and allocate fresh import Workers a
   await page.getByRole('button', { name: 'Show delivery', exact: true }).click(); await ready(page, 2); await settledOutlines(page);
   const reopenedMs = performance.now() - start, after = await counts(page);
   expect(after.workers - before.workers).toBe(2); expect(after.modules - before.modules).toBe(2); expect(fetches).toBe(1);
-  for (const name of ['cube.step', 'cube-inch.step']) expect(await page.evaluate(name => (window as any).geometryContract.reads.filter((read: any) => read.name === name && !read.probe).length, name)).toBe(1);
+  for (const name of ['cube.step', 'cube-inch.step']) expect(await page.evaluate(name => (window as any).geometryContract.reads.filter((read: any) => read.name === name && !read.probe).length, name)).toBe(2);
   const phases = await page.evaluate(() => performance.getEntriesByType('measure').filter(entry => entry.name.startsWith('geometry:')).map(entry => ({ name: entry.name, ms: entry.duration })));
   for (const name of ['cube.step', 'cube-inch.step']) await page.getByRole('button', { name: `Close preview ${name}`, exact: true }).click();
   await expect.poll(() => resources(page)).toEqual(retired);

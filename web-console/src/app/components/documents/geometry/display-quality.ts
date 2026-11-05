@@ -2,8 +2,8 @@ import { BufferAttribute, BufferGeometry, LineSegments, Mesh, ShaderMaterial, Ve
 import { GEOMETRY_LIMITS as L } from './limits';
 import { geometryPreviewState, takeGeometryPreview } from './scene-resources';
 
-/** Original materials always render. Samples are only a temporary bridge while
- * the import Worker prepares a bounded, complete-surface representation. */
+/** Original materials always render. A bounded bridge keeps motion responsive
+ * when optional surface preparation cannot finish; settled draws stay exact. */
 export function createDisplayQuality(root: Object3D) {
   const meshes: Mesh[] = [], bridges = new Map<BufferGeometry, BufferGeometry>(), lods = new Map<BufferGeometry, { geometry: BufferGeometry; error: number }>();
   let triangles = 0;
@@ -29,7 +29,7 @@ export function createDisplayQuality(root: Object3D) {
     const original = mesh.geometry, state = geometryPreviewState(original), incoming = takeGeometryPreview(original);
     if (incoming) lods.set(original, incoming);
     const lod = lods.get(original);
-    if (!state?.pending) { bridges.get(original)?.dispose(); bridges.delete(original); }
+    if (lod) { bridges.get(original)?.dispose(); bridges.delete(original); }
     if (lod) {
       if (!camera) return lod.geometry;
       const sphere = original.boundingSphere!, scale = mesh.matrixWorld.getMaxScaleOnAxis(); center.copy(sphere.center).applyMatrix4(mesh.matrixWorld);
@@ -37,12 +37,11 @@ export function createDisplayQuality(root: Object3D) {
       const pixels = height * camera.projectionMatrix.elements[5] / 2 / (perspective ? Math.max(1e-12, distance) : 1);
       return lod.error * scale * pixels <= 1 ? lod.geometry : original;
     }
-    return state?.pending ? bridge(original) : original;
+    return state ? bridge(original) : original;
   }
-  const sampled = <T>(work: (changed: boolean) => T, camera?: Camera, height?: number) => {
-    let changed = false;
+  const sampled = <T>(work: () => T, camera?: Camera, height?: number) => {
     if (camera) eye.setFromMatrixPosition(camera.matrixWorld);
-    try { meshes.forEach(mesh => { const next = representation(mesh, camera, height); changed ||= next !== mesh.geometry; mesh.geometry = next; }); return work(changed); }
+    try { meshes.forEach(mesh => { mesh.geometry = representation(mesh, camera, height); }); return work(); }
     finally { meshes.forEach((mesh, index) => { mesh.geometry = originals[index]; }); }
   };
   return {
@@ -59,7 +58,7 @@ export function createDisplayQuality(root: Object3D) {
     // A display approximation cannot prove foreground occlusion. Geometry refs
     // are already restored after each submission; pick those admitted originals.
     pick(raycaster: Raycaster, candidates: Mesh[]) { return raycaster.intersectObjects(candidates, false)[0]; },
-    refresh() { for (const original of originals) { const incoming = takeGeometryPreview(original); if (incoming) lods.set(original, incoming); if (!geometryPreviewState(original)?.pending) { bridges.get(original)?.dispose(); bridges.delete(original); } } },
+    refresh() { for (const original of originals) { const incoming = takeGeometryPreview(original); if (incoming) { lods.set(original, incoming); bridges.get(original)?.dispose(); bridges.delete(original); } } },
     dispose() { for (const sample of bridges.values()) sample.dispose(); for (const value of lods.values()) value.geometry.dispose();bridges.clear();lods.clear(); },
   };
 }

@@ -165,8 +165,8 @@ importers:
         specifier: 1.1.0
         version: 1.1.0
       occt-import-js:
-        specifier: 0.0.23
-        version: 0.0.23
+        specifier: file:vendor/occt-import-js
+        version: file:vendor/occt-import-js
       papaparse:
         specifier: 5.5.3
         version: 5.5.3
@@ -1975,8 +1975,8 @@ packages:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
     engines: {node: '>=12.20.0'}
 
-  occt-import-js@0.0.23:
-    resolution: {integrity: sha512-RFfYQXYFX5C1mB1Aywm0ShcUKzXOr/VzTnlzhBSDJOR6YCAPt1HYCzeXWg1vwwjn/cUxwqRNhhtf1dlewoZYCQ==}
+  occt-import-js@file:vendor/occt-import-js:
+    resolution: {directory: vendor/occt-import-js, type: directory}
 
   once@1.4.0:
     resolution: {integrity: sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==}
@@ -4357,7 +4357,7 @@ snapshots:
 
   obug@2.2.1: {}
 
-  occt-import-js@0.0.23: {}
+  occt-import-js@file:vendor/occt-import-js: {}
 
   once@1.4.0:
     dependencies:

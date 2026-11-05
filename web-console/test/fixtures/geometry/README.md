@@ -56,3 +56,25 @@ topology or engineering-accuracy references.
 ```sh
 uv run --no-project --with cadquery-ocp-novtk==7.9.3.1.1 python web-console/test/fixtures/geometry/generate-showcase.py
 ```
+
+## Large STEP source
+
+`generate-large-step.py` is original MIT test-authoring code using the same
+pinned exporter. Its default 1450-by-1450 degree-three B-spline control net
+defines one curved open face in millimeters. All 2,102,500 poles are referenced;
+no padding, unused entities or duplicate comments increase the file size.
+The control hull is `[0, 0, -5]` to `[1000, 1000, 5]` mm.
+
+```sh
+uv run --no-project --with cadquery-ocp-novtk==7.9.3.1.1 python \
+  web-console/test/fixtures/geometry/generate-large-step.py \
+  --output work/step-performance/large-bspline.step
+```
+
+The STEP (200,761,968 bytes in the recorded exporter run) and its SHA-256
+manifest stay outside Git. Exporter timestamps are normalized for repeatable
+authoring. This workload exercises large source parsing with a small final
+tessellation, not a large assembly or many-faceted CAD model. Use a separate
+customer model to certify that class. The browser/native source clocks, final
+geometry equivalence and resource scopes are recorded in
+[`docs/issue-516/step-200mb-validation.md`](../../../../docs/issue-516/step-200mb-validation.md).

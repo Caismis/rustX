@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Box3, type Object3D } from 'three';
+import { Box3, Vector3, type Object3D } from 'three';
+import type { GeometryRoughPose } from '../../../../client/geometry-rough';
 import { useLocale } from '../../../../locale/react';
 import { en, zh } from '../../../../locale/dictionaries/geometry';
 import type { PreviewViewState, PreviewViewStateProps } from '../../../../presentation/right-panel/preview-view-state';
@@ -21,11 +22,11 @@ import { Tooltip } from '../../../../presentation/primitives/Tooltip';
 import { IconChecklistOutline14, IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import css from './GeometryPreview.module.css';
 
-export interface GeometryPreviewProps extends PreviewViewStateProps { bytes: Uint8Array<ArrayBuffer>; name: string; copyId: string; signal: AbortSignal; current: () => boolean; takeSource?: () => Uint8Array<ArrayBuffer> | undefined; releaseSource?: () => void; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
-export default function GeometryPreview({ bytes, name, copyId, signal, current, takeSource, releaseSource, viewState, onViewStateChange, onGeometryRetire }: GeometryPreviewProps) {
+export interface GeometryPreviewProps extends PreviewViewStateProps { bytes: Uint8Array<ArrayBuffer>; name: string; copyId: string; signal: AbortSignal; current: () => boolean; takeSource?: () => Uint8Array<ArrayBuffer> | undefined; releaseSource?: () => void; initialPose?:()=>GeometryRoughPose|undefined; onDisplay?:()=>void; onFailure?:()=>void; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
+export default function GeometryPreview({ bytes, name, copyId, signal, current, takeSource, releaseSource, initialPose, onDisplay, onFailure, viewState, onViewStateChange, onGeometryRetire }: GeometryPreviewProps) {
   const locale = useLocale(), t = locale.active === 'zh' ? zh : en;
   const container = useRef<HTMLDivElement>(null), active = useRef<ReturnType<typeof mountGeometry>>(undefined), outlineAction = useRef(0);
-  const latest = useRef({ viewState, onViewStateChange, t }); latest.current = { viewState, onViewStateChange, t };
+  const latest = useRef({ viewState, onViewStateChange, t, initialPose, onDisplay, onFailure }); latest.current = { viewState, onViewStateChange, t, initialPose, onDisplay, onFailure };
   const [state, setState] = useState<{ stage?: GeometryImportStage; parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; selected?: string; hidden?: string[]; isolation?: string; projection?: Projection; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
   const [menu, setMenu] = useState(false);
   const [partsOpen, setPartsOpen] = useState(false), partsId = useId();
@@ -53,7 +54,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
     if (!live()) { retire(); return; }
     void (async () => {
       let object: Object3D, bounds: Box3, displayStart: number, prepared = Promise.resolve(), startPreview: (() => void) | undefined;
-      const graphicsLost = () => { const publish = live(); retire(); if (publish) setState({ error: 'webgl' }); };
+      const graphicsLost = () => { const publish = live(); retire(); if (publish) {setState({ error: 'webgl' });latest.current.onFailure?.();} };
       if (format === 'glb') stage('importing');
       const pending = format === 'glb' ? importGlb(bytes, controller.signal)
         : parseGeometry(bytes, format, controller.signal, stage, () => live() ? takeSource?.() : undefined);
@@ -69,7 +70,9 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
       if (!live()) { retire(); return; }
       releaseSource?.();
       stage('preparing');
-      const props = latest.current, saved = props.viewState.geometry?.copyId === copyId ? props.viewState.geometry : undefined;
+      const props = latest.current;let saved = props.viewState.geometry?.copyId === copyId ? props.viewState.geometry : undefined;
+      const seed=props.initialPose?.();
+      if(seed){const size=bounds.getSize(new Vector3()),radius=Math.max(size.length()/2,1e-6),span=Math.max(size.x,size.y,size.z),target=new Vector3().fromArray(seed.target).multiplyScalar(span),position=target.clone().add(new Vector3().fromArray(seed.direction).multiplyScalar(radius/Math.sin(Math.PI/8)*1.1/seed.zoom));const projection=saved?.camera?.projection==='orthographic'?{projection:'orthographic' as const,verticalSpan:2*radius*1.1/seed.zoom}:{projection:'perspective' as const};saved={...saved,copyId,camera:{position:position.toArray(),target:target.toArray(),up:[0,1,0],...projection}};}
       mounted = mountGeometry(container.current!, object, bounds, saved, props.t, patch => {
         if (!live()) return;
         latest.current.onViewStateChange({ geometry: { copyId, ...patch } });
@@ -78,17 +81,18 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
           selection = { selected: patch.selected, hidden: patch.hidden, isolation: patch.isolation?.target, projection };
           setState(value => ({ ...value, ...selection, inspection: mounted?.inspect() }));
         }
-      }, graphicsLost, { generated: format !== 'glb', pendingPreview: !!startPreview, onFirstGpuReady: startPreview, graphics });
+      }, graphicsLost, { generated: format !== 'glb', pendingPreview: !!startPreview, onFirstGpuReady:()=>{if(live()){startPreview?.();latest.current.onDisplay?.();}}, graphics });
       // Keep only the latest measurement per supported format, rather than an
       // unbounded browser-lifetime history of preview openings.
       const measure = `geometry:display-prepare:${format}`;
       performance.clearMeasures(measure); performance.measure(measure, { start: displayStart });
       active.current = mounted;
       setState(value => ({ ...value, parts: mounted!.parts, projection: mounted!.projection, inspection: mounted!.inspect(), dimensions: [bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z] }));
-      void prepared.then(() => { if (!live() || !mounted) return; mounted.refreshPreview(); if (saved?.outlines !== false) requestOutlines(true); });
+      if (saved?.outlines !== false) requestOutlines(true);
+      void prepared.then(() => { if (!live() || !mounted) return; mounted.refreshPreview(); });
     })().catch(error => {
       const publish = live(); retire();
-      if (publish) setState({ error: error instanceof GeometryError ? error.code : 'invalid' });
+      if (publish) {setState({ error: error instanceof GeometryError ? error.code : 'invalid' });latest.current.onFailure?.();}
     });
     return () => { signal.removeEventListener('abort', retire); retire(); };
   }, [bytes, format, copyId, signal]);

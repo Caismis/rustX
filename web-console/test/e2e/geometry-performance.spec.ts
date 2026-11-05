@@ -60,7 +60,7 @@ for (const workload of [
   });
   const canvas = page.locator('[data-geometry-format] canvas'), box = (await canvas.boundingBox())!;
   const contentReads = () => page.evaluate(name => (window as any).geometryContract.reads.filter((read: any) => read.name === name && !read.probe).length, workload.name);
-  const expectedReads = workload.id.startsWith('stl') ? Math.ceil(12_250_084 / FILE_PREVIEW_LIMITS.pageBytes) : 1;
+  const expectedReads = workload.id.startsWith('stl') ? Math.ceil(12_250_084 / FILE_PREVIEW_LIMITS.pageBytes) : 2;
   expect(await contentReads()).toBe(expectedReads);
   const activity = async (button: 'left' | 'right') => {
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);

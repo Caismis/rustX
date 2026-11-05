@@ -1,17 +1,17 @@
 # PR 517 comment implementation status
 
-Checked on 2026-11-05, Asia/Shanghai, against all thirteen top-level/review timeline
+Checked on 2026-11-05, Asia/Shanghai, against all fourteen top-level/review timeline
 entries, their IDs and update times, and the complete review-thread response.
-Comment 6636090073 adds a dense-foreground picking regression;
+Comment 6641379632 adds pending-preparation outline serialization and preference coverage;
 the inline-thread list was empty. This is an implementation inventory, not a public reply or an
 acceptance of the remaining latency budget. The current implementation and
-verification are recorded in [the surface-preview report](surface-preview-optimization.md).
+verification are recorded in [the large STEP report](step-200mb-validation.md).
 
 ## Requested PR work still open
 
 | Request | Current state | Source |
 | --- | --- | --- |
-| Approximately 200 MiB geometry: first usable picture within 200 ms, every interaction below 50 ms, complete geometry when settled | Still unachieved. Bounded surface approximations preserve original shading and complete settled draws are enforced. The gate checks maximum input latency and includes the large closed STL; loading text, P95 and historical smaller workloads do not certify the requirement. | [Surface-preview evidence](surface-preview-optimization.md) |
+| Approximately 200 MB geometry: first usable picture within 200 ms, every interaction below 50 ms, complete geometry when settled | The 200.762-MB STEP reference passes three native Host strict-gate runs with coarse/fine interaction maxima, complete settled triangles and retirement checks. General model-class acceptance remains open: the coordinate envelope omits topology/placements, and the historical large-STL first-display failure remains unrecertified. Loading text, P95 or smaller workloads cannot replace the gate. | [STEP evidence](step-200mb-validation.md), [historical surface evidence](surface-preview-optimization.md) |
 
 ## Roadmap and evidence follow-ups
 
@@ -32,6 +32,7 @@ These follow-ups are not represented as disabled placeholder controls.
 
 | Comment | Implementation status |
 | --- | --- |
+| [6641379632](https://github.com/Caismis/rustX/pull/517#issuecomment-6641379632) | Manual outlines wait for the same import/surface retirement barrier as automatic requests. Only the latest preference can start a Worker; Off and disposal cancel queued work. A real-owner two-pane regression first reached four live Workers, then passed with a peak of two. A component regression preserves explicit Off after surface settlement. Worker/GPU boundaries are controlled in these deterministic tests; browser retirement is checked separately. |
 | [6636090073](https://github.com/Caismis/rustX/pull/517#issuecomment-6636090073) | Picking intersects admitted original geometry, independently of temporary display quality. A real-Raycaster dense-foreground/background test first reproduced the omitted-triangle error, then passed in both moving and complete modes. Original material/geometry references remain intact. Browser selection search is rerun in the current production-fixture validation. |
 | [6625398717](https://github.com/Caismis/rustX/pull/517#issuecomment-6625398717) | Preserve intended camera position/quaternion/zoom across real OrbitControls construction before applying the retained target and limits. Front/Top real-controls reproductions and the browser Focus/projection roundtrip cover tiny off-origin occurrences. Current verification and the still-failing performance gate are recorded in [the budget follow-up](budget-follow-up.md). |
 | [6623187578](https://github.com/Caismis/rustX/pull/517#issuecomment-6623187578) | Shared request classifiers distinguish actual WASM bytes and executable CAD glue/Workers from Vite URL-import metadata. Cancellation, two-owner reuse and STL lazy-loading assertions retain their original resource and lifetime requirements. Default Vite and production-fixture validation is recorded in [the takeover report](takeover-validation.md). |

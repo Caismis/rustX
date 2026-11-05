@@ -4755,6 +4755,7 @@
       "retained_dependencies": [
         "../../../shared/file-observation.ts",
         "../../../shared/file-preview",
+        "../../client/geometry-rough",
         "../../client/geometry-source",
         "../../client/preview-content",
         "../../locale/react",
@@ -4797,7 +4798,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "bcf0a69ac42f1e550a87314db0698df85961206f4854195dfac43b02e04fb402"
+      "local_sha256": "10bcc5d1b4ee823b14782e26e76a1d73c1414b7b0d76c4f06efbe97ed0deff36"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5768,7 +5769,7 @@
         "./resources",
         "react"
       ],
-      "local_sha256": "3d83e2796f043eb36cdd0cb3d7c38c736f720262f78f9b8cc2e6ed218d2d50f6"
+      "local_sha256": "c14221de032b59fc2a1e0f10826f9257bbb98f31bd1b18e3c4de29e03334006a"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",

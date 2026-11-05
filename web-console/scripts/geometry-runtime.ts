@@ -1,5 +1,5 @@
 /** Verify the reviewed CAD binary/glue and their actual memory maximum. */
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
@@ -7,7 +7,7 @@ import { GEOMETRY_LIMITS } from '../src/app/components/documents/geometry/limits
 const root = new URL('../', import.meta.url), cad = new URL('./', import.meta.resolve('occt-import-js'));
 const importer = JSON.parse(readFileSync(new URL('../package.json', cad), 'utf8'));
 const renderer = JSON.parse(readFileSync(new URL('../package.json', import.meta.resolve('three')), 'utf8'));
-if (importer.version !== '0.0.23' || renderer.version !== '0.187.0') throw new Error('Unreviewed geometry dependency version');
+if (importer.version !== '0.0.23-rustx.1' || renderer.version !== '0.187.0') throw new Error('Unreviewed geometry dependency version');
 const assets = Object.fromEntries(['occt-import-js.js', 'occt-import-js.wasm', 'license.occt-import-js.txt', 'license.occt.txt'].map(name => {
   const bytes = readFileSync(new URL(name, cad));
   return [name, { bytes: bytes.length, gzipBytes: gzipSync(bytes).length, sha256: createHash('sha256').update(bytes).digest('hex') }];
@@ -25,6 +25,7 @@ while (at < binary.length) {
 if (maximum !== GEOMETRY_LIMITS.wasmBytes) throw new Error(`WASM memory maximum changed: ${maximum}`);
 const record = { importer: `${importer.name}@${importer.version}`, renderer: `${renderer.name}@${renderer.version}`,
   importerCommit: 'c2148e54b456b571238d35cac037d304053d64b2', occtCommit: 'd2abb6d844231cb8f29be6894440874a4700e4a5',
+  modifiedSourceSha256: createHash('sha256').update(readFileSync(new URL('../src/js-interface.cpp', cad))).digest('hex'),
   wasmMaximumBytes: maximum, assets };
 const path = new URL('geometry-runtime.json', root), content = `${JSON.stringify(record, null, 2)}\n`;
 if (process.argv.includes('--write')) writeFileSync(path, content);
@@ -33,5 +34,11 @@ if (process.argv.includes('--artifact')) {
   const directory = new URL('dist/assets/', root);
   const shipped = readdirSync(directory).filter(name => name.endsWith('.wasm')).map(name => readFileSync(new URL(name, directory)));
   if (!shipped.some(bytes => createHash('sha256').update(bytes).digest('hex') === assets['occt-import-js.wasm'].sha256)) throw new Error('Reviewed CAD WASM missing from production assets');
+  // Distribute the complete modified source and rebuild instructions alongside
+  // the binary, without requiring access to a particular repository branch.
+  for (const file of ['README.md', 'LICENSE.md', 'UPSTREAM.json', 'rebuild.sh', 'src/js-interface.cpp', 'dist/license.occt-import-js.txt', 'dist/license.occt.txt']) {
+    const source = readFileSync(new URL(`../${file}`, cad)), target = new URL(`dist/cad-runtime-source/${file}`, root);
+    mkdirSync(new URL('./', target), { recursive: true }); writeFileSync(target, source);
+  }
 }
 console.log(`Verified geometry runtime assets and ${maximum / 1024 / 1024} MiB WASM maximum (${fileURLToPath(path)})`);

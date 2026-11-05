@@ -13,6 +13,22 @@ import { viewersForPath, loadsBytes } from '../src/app/components/workbench-docu
 
 const cadModule = await WebAssembly.compile(readFileSync(new URL('../node_modules/occt-import-js/dist/occt-import-js.wasm', import.meta.url)));
 const fixture = (name: string) => new Uint8Array(readFileSync(fileURLToPath(new URL(`./fixtures/geometry/${name}`, import.meta.url))));
+it.each([['cube.step','step'],['cube.iges','iges'],['cube.brep','brep']] as const)('relinquishes exclusively owned %s bytes only after native copy, preserving exact geometry', async (file,format) => {
+  const source=fixture(file),owned=source.slice();
+  const expected=await importCad(source,format,cadModule),actual=await importCad(owned,format,cadModule,undefined,true);
+  expect(owned.byteLength).toBe(0);expect(source.byteLength).toBeGreaterThan(0);expect(actual).toEqual(expected);
+});
+it.each(['uncolored','same-color','base-color'])('admits many CAD faces without charging each %s face as a draw call', mode => {
+  const count=1024,color=mode==='uncolored'?null:[.2,.4,.6];
+  const model=convertCadResult({success:true,root:{name:'',meshes:[0],children:[]},meshes:[{name:'Dense CAD',...(mode==='base-color'?{color}:{}),attributes:{position:{array:[0,0,0,1,0,0,0,1,0]}},index:{array:Array.from({length:count*3},(_,i)=>i%3)},brep_faces:Array.from({length:count},(_,i)=>({first:i,last:i,color}))}]});
+  expect(model.meshes[0].indices!.length).toBe(count*3);
+  expect(model.meshes[0].groups).toEqual(mode==='same-color'?[{start:0,count:count*3,color}]:[]);
+});
+it('preserves CAD color gaps and continues to bound actual alternating material ranges', () => {
+  const model = (colors: (number[]|null)[]) => ({success:true,root:{name:'',meshes:[0],children:[]},meshes:[{name:'',attributes:{position:{array:[0,0,0,1,0,0,0,1,0]}},index:{array:Array.from({length:colors.length*3},(_,i)=>i%3)},brep_faces:colors.map((color,i)=>({first:i,last:i,color}))}]});
+  expect(convertCadResult(model([[0,0,1],null,[0,0,1]])).meshes[0].groups).toEqual([{start:0,count:3,color:[0,0,1]},{start:6,count:3,color:[0,0,1]}]);
+  expect(()=>convertCadResult(model(Array.from({length:513},(_,i)=>i%2?[1,0,0]:[0,0,1])))).toThrow('limit');
+});
 it('rejects instance initialization failure without falling through to the pinned asset loader', async () => {
   const Native = WebAssembly, read = vi.spyOn(fs, 'readFile');
   const Instance = new Proxy(Native.Instance, { construct() { throw new WebAssembly.RuntimeError('Instance unavailable'); } });

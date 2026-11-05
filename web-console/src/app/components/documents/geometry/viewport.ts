@@ -85,6 +85,8 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   let frame = 0, disposed = false, initial = true, restoring = true, inputDrawQueued = false;
   let moving = true, refinement: ReturnType<typeof setTimeout> | undefined, drawingRatio = 0, drawingWidth = 0, drawingHeight = 0;
   let backgroundPending=options?.pendingPreview===true;
+  let releaseBackground: (() => void) | undefined;
+  const backgroundDone = backgroundPending ? new Promise<void>(resolve => { releaseBackground = resolve; }) : Promise.resolve();
   let cameraDirty = false, interacting = false, lastPublished = -Infinity, publication: ReturnType<typeof setTimeout> | undefined;
   const projection = (): Projection => camera instanceof OrthographicCamera ? 'orthographic' : 'perspective';
   const verticalSpan = () => camera instanceof OrthographicCamera ? (camera.top - camera.bottom) / camera.zoom : 2 * camera.position.distanceTo(controls.target) * Math.tan(camera.fov * Math.PI / 360) / camera.zoom;
@@ -198,6 +200,8 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     if (disposed) return 'off'; outlinesWanted = enabled; emit();
     try {
       if (!outlines && !enabled) return 'off';
+      if (enabled && backgroundPending) await backgroundDone;
+      if (disposed || request !== outlineRequest) return 'off';
       if (!outlines) {
         const { createOutlines } = await import('./outlines');
         if (disposed || request !== outlineRequest) return 'off';
@@ -312,7 +316,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   canvas.addEventListener('pointerdown', pointerDown); canvas.addEventListener('pointerup', pointerUp); canvas.addEventListener('webglcontextlost', contextLost);
   function dispose() {
     if (disposed) return; flush(); if (disposed) return;
-    disposed = true; outlineRequest++; outlines?.dispose(); quality.dispose(); batches.dispose(); clearTimeout(refinement); clearTimeout(publication); cancelAnimationFrame(frame); cancelAnimationFrame(presentationFrame); observer.disconnect(); themeObserver.disconnect(); resolution.removeEventListener('change', resolutionChanged);
+    disposed = true; outlineRequest++; releaseBackground?.(); releaseBackground = undefined; outlines?.dispose(); quality.dispose(); batches.dispose(); clearTimeout(refinement); clearTimeout(publication); cancelAnimationFrame(frame); cancelAnimationFrame(presentationFrame); observer.disconnect(); themeObserver.disconnect(); resolution.removeEventListener('change', resolutionChanged);
     canvas.removeEventListener('pointerdown', pointerDown); canvas.removeEventListener('pointerup', pointerUp); canvas.removeEventListener('webglcontextlost', contextLost);
     canvas.ownerDocument.removeEventListener('pointermove', inputMoved, true); canvas.removeEventListener('keydown', inputFinished, true);
     controls.removeEventListener('change', changed); controls.removeEventListener('start', started); controls.removeEventListener('end', ended); controls.dispose();
@@ -328,7 +332,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     restoring = false; emit();
   } catch (error) { dispose(); throw error; }
   return { parts: structure.parts, fit, reset, focus, select, visibility, inspect: structure.inspect,
-    setOutlines, setProjection, refreshPreview: () => { backgroundPending=false;quality.refresh();if(moving){refine();render();} }, get projection() { return projection(); },
+    setOutlines, setProjection, refreshPreview: () => { backgroundPending=false;releaseBackground?.();releaseBackground=undefined;quality.refresh();if(moving){refine();render();} }, get projection() { return projection(); },
     isolate: () => structureAction(structure.isolate), restore: () => structureAction(structure.restore), showAll: () => structureAction(structure.showAll),
     relabel: (value: AxisLabels & { canvas: string }) => { canvas.setAttribute('aria-label', value.canvas); canvas.setAttribute('aria-description', value.axes); navigation.relabel(value); }, flush, dispose };
 }

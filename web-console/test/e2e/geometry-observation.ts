@@ -65,8 +65,16 @@ export const resources = (page: Page) => page.evaluate(() => ({ ...(window as an
 /** One capture per page; first-frame proxy and trusted input diagnostics. */
 export async function observeGeometryLatency(page: Page, startSelector = 'button[aria-label^="Preview "]') {
   await page.evaluate(startSelector => {
-    const state = { start: 0, first: 0, firstGpuReady: 0, pending: 0, cancelled: 0, samples: [] as number[], gpuSamples: [] as number[], stages: [] as { dispatch: number; submission: number; gpu: number; renderOpportunity: number }[] };
+    const state = { start: 0, first: 0, firstGpuReady: 0, coarseFirst:0, coarsePending:0, coarseSamples:[] as number[], pending: 0, cancelled: 0, samples: [] as number[], gpuSamples: [] as number[], stages: [] as { dispatch: number; submission: number; gpu: number; renderOpportunity: number }[] };
     const waiting: { start: number; received: number }[] = [];
+    const coarseWaiting:number[]=[];let coarseScheduled=false;
+    const coarseObserver=new MutationObserver(records=>{
+      const svg=document.querySelector<SVGSVGElement>('svg[data-geometry-rough]');
+      if(!svg?.querySelector('path')?.getAttribute('d')||!state.start)return;
+      if(!state.coarseFirst&&!coarseScheduled){coarseScheduled=true;requestAnimationFrame(()=>requestAnimationFrame(()=>{if(svg.isConnected)state.coarseFirst=performance.now()-state.start;else coarseScheduled=false;}));}
+      if(records.some(record=>record.target===svg&&record.attributeName==='data-geometry-rough-render')&&coarseWaiting.length){const inputs=coarseWaiting.splice(0);requestAnimationFrame(()=>requestAnimationFrame(()=>{if(svg.isConnected)for(const start of inputs)state.coarseSamples.push(performance.now()-start);else state.cancelled+=inputs.length;state.coarsePending-=inputs.length;}));}
+    });
+    coarseObserver.observe(document,{childList:true,subtree:true,attributes:true,attributeFilter:['data-geometry-rough-render']});
     let firstSubmitted = false;
     // This test-only event runs at the microtask checkpoint AFTER the actual
     // model-render callback, including all parts and axes. A busy renderer's
@@ -112,6 +120,7 @@ export async function observeGeometryLatency(page: Page, startSelector = 'button
       if (event.target instanceof Element && event.target.closest(startSelector)) state.start = event.timeStamp;
     }, { capture: true });
     document.addEventListener('pointermove', event => {
+      if(event.isTrusted&&event.buttons&&event.target instanceof SVGElement&&event.target.closest('svg[data-geometry-rough]')){state.coarsePending++;coarseWaiting.push(event.timeStamp);return;}
       if (!event.isTrusted || !event.buttons || !(event.target instanceof HTMLCanvasElement)) return;
       state.pending++;
       waiting.push({ start: event.timeStamp, received: performance.now() });

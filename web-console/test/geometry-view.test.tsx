@@ -12,7 +12,7 @@ const imports = vi.hoisted(() => ({ pending: [] as { resolve: (value: unknown) =
 vi.mock('../src/app/components/documents/geometry/glb', () => ({ importGlb: () => new Promise((resolve, reject) => { imports.pending.push({ resolve, reject }); }) }));
 vi.mock('../src/app/components/documents/geometry/parse', () => ({ parseGeometry: (_bytes: unknown, _format: unknown, _signal: unknown, stage: (stage: GeometryImportStage) => void) => new Promise(resolve => { imports.cad.push({ stage, resolve }); }) }));
 vi.mock('../src/app/components/documents/geometry/viewport', () => ({ prepareGeometryGraphics:graphics,mountGeometry: (_element: unknown, _object: unknown, _bounds: unknown, saved: unknown, _labels: unknown, publish: (patch: unknown) => void) => {
-  const control = { fit: vi.fn(), reset: vi.fn(), focus: vi.fn(), isolate: vi.fn(), restore: vi.fn(), showAll: vi.fn(), refreshPreview: vi.fn(), projection: 'perspective', setProjection: vi.fn(), setOutlines: vi.fn(async () => 'on'), relabel: vi.fn(), inspect: () => ({ name: 'Body', triangles: 12, visibleTriangles: 12, min: [-5, -5, -5], max: [5, 5, 5], dimensions: [10, 10, 10] }), dispose: vi.fn(), publish, saved, pending: undefined as unknown, flush: vi.fn((save = publish) => { if (control.pending) { const patch = control.pending; control.pending = undefined; save(patch); } }), select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }] }; imports.mounts.push(control); return control;
+  const control = { fit: vi.fn(), reset: vi.fn(), focus: vi.fn(), isolate: vi.fn(), restore: vi.fn(), showAll: vi.fn(), refreshPreview: vi.fn(), projection: 'perspective', setProjection: vi.fn(), setOutlines: vi.fn(async (enabled:boolean) => enabled?'on':'off'), relabel: vi.fn(), inspect: () => ({ name: 'Body', triangles: 12, visibleTriangles: 12, min: [-5, -5, -5], max: [5, 5, 5], dimensions: [10, 10, 10] }), dispose: vi.fn(), publish, saved, pending: undefined as unknown, flush: vi.fn((save = publish) => { if (control.pending) { const patch = control.pending; control.pending = undefined; save(patch); } }), select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }] }; imports.mounts.push(control); return control;
 } }));
 afterEach(() => { cleanup(); imports.pending = []; imports.cad = []; imports.mounts = []; });
 function graph() {
@@ -24,6 +24,20 @@ it('reports early graphics failure and disposes an import that completes after r
   const source = graph(), ui = render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="copy" signal={new AbortController().signal} current={() => true} viewState={{}} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
   await act(async () => {}); expect(ui.getByRole('alert')).toBeDefined(); expect(imports.mounts).toHaveLength(0);
   await act(async () => imports.pending[0].resolve(source.value)); expect(source.disposed).toHaveBeenCalledOnce();
+});
+it('keeps an explicit Off choice after optional surface preparation settles', async () => {
+  const source=graph();let settle!:()=>void;const ready=new Promise<void>(resolve=>{settle=resolve;});
+  const ui=render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.step" copyId="copy" signal={new AbortController().signal} current={()=>true} viewState={{geometry:{copyId:'copy',outlines:true}}} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
+  await act(async()=>imports.cad[0].resolve({scene:source.value.scene,bounds:source.value.bounds,dispose:source.value.dispose,prepareStart:performance.now(),ready,pendingPreview:true,startPreview:vi.fn()}));
+  const button=ui.getByRole('button',{name:'Model outlines'});expect(button.getAttribute('aria-pressed')).toBe('true');
+  await act(async()=>fireEvent.click(button));expect(button.getAttribute('aria-pressed')).toBe('false');
+  await act(async()=>settle());expect(button.getAttribute('aria-pressed')).toBe('false');expect(imports.mounts[0].setOutlines).toHaveBeenLastCalledWith(false);
+});
+it('hands the coarse view direction and normalized pan into the admitted full-model camera',async()=>{
+  const source=graph(),initialPose=()=>({direction:[0,0,1] as [number,number,number],target:[.1,0,0] as [number,number,number],zoom:2});
+  render(<GeometryPreview bytes={new Uint8Array([1])} name="cube.glb" copyId="copy" signal={new AbortController().signal} current={()=>true} initialPose={initialPose} viewState={{}} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
+  await act(async()=>imports.pending[0].resolve(source.value));const saved=imports.mounts[0].saved as {camera:{position:number[];target:number[]}};
+  expect(saved.camera.target).toEqual([1,0,0]);expect(saved.camera.position[0]).toBe(1);expect(saved.camera.position[1]).toBe(0);expect(saved.camera.position[2]).toBeGreaterThan(10);expect(saved.camera.position[2]).toBeLessThan(15);
 });
 it.each([undefined, true, false])('starts outlines by default and respects the saved preference: %s', async preference => {
   const source = graph();

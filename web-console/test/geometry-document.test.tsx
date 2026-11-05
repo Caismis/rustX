@@ -1,4 +1,4 @@
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { GeometryPreviewProps } from '../src/app/components/documents/geometry/GeometryPreview';
 
@@ -15,8 +15,26 @@ it('mounts resolved runtime code without a Suspense fallback timer', async () =>
   expect(ui.getByRole('status').textContent).toContain('Loading model');
   await act(async () => {});
   await act(async () => resolve({ default: Viewer }));
-  expect(ui.getByTestId('model')).toBeTruthy(); expect(received).toHaveBeenCalledWith(value);
+  expect(ui.getByTestId('model')).toBeTruthy(); expect(received).toHaveBeenCalledWith(expect.objectContaining(value));
   expect(ui.queryByRole('status')).toBeNull();
+});
+it('waits for quiet through rough sampling and gestures, then retains the rough picture until fine GPU readiness',async()=>{
+  vi.useFakeTimers();
+  try{
+  const received=vi.fn(),Viewer=(value:GeometryPreviewProps)=>{received(value);return <div data-testid="full-model"/>;};
+  vi.doMock('../src/app/components/documents/geometry/GeometryPreview',()=>({default:Viewer}));
+  const {GeometryDocument}=await import('../src/app/components/documents/GeometryDocument');
+  const value={...props(new AbortController().signal),name:'part.step',rough:{version:'one',positions:new Float32Array([0,0,0,1,0,0,0,1,0,0,0,1])}};
+  const ui=render(<GeometryDocument {...value}/>);await act(async()=>{});expect(ui.queryByTestId('full-model')).toBeNull();
+  const svg=ui.getByRole('img');Object.assign(svg,{setPointerCapture:vi.fn()});
+  fireEvent.pointerDown(svg);
+  ui.rerender(<GeometryDocument {...value} rough={{...value.rough,positions:new Float32Array([...value.rough.positions,2,0,0])}}/>);
+  await act(async()=>vi.advanceTimersByTime(1000));expect(ui.queryByTestId('full-model')).toBeNull();
+  fireEvent.pointerUp(svg);await act(async()=>vi.advanceTimersByTime(119));expect(ui.queryByTestId('full-model')).toBeNull();
+  fireEvent.keyDown(svg,{code:'ArrowLeft'});await act(async()=>vi.advanceTimersByTime(119));expect(ui.queryByTestId('full-model')).toBeNull();
+  await act(async()=>vi.advanceTimersByTime(1));expect(ui.getByTestId('full-model')).toBeTruthy();expect(ui.container.querySelector('svg[data-geometry-rough]')).not.toBeNull();
+  act(()=>received.mock.lastCall![0].onDisplay());expect(ui.container.querySelector('svg[data-geometry-rough]')).toBeNull();
+  }finally{vi.useRealTimers();}
 });
 it('cannot initialize a viewer after its body retires while code is arriving', async () => {
   let resolve!: (module: { default: () => null }) => void;

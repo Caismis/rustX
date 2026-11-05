@@ -76,7 +76,7 @@
     "micromark-util-sanitize-uri": "2.0.1",
     "micromark-util-symbol": "2.0.1",
     "node-pty": "1.1.0",
-    "occt-import-js": "0.0.23",
+    "occt-import-js": "file:vendor/occt-import-js",
     "papaparse": "5.5.3",
     "pdfjs-dist": "6.4.299",
     "react": "19.3.0",

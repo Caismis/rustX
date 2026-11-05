@@ -5,6 +5,7 @@ import { outlineData } from '../src/app/components/documents/geometry/outline-da
 import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/limits';
 import { validateScene, modelScene } from '../src/app/components/documents/geometry/scene-resources';
 import { en } from '../src/locale/dictionaries/geometry';
+import { parseGeometry } from '../src/app/components/documents/geometry/parse';
 const runtime = vi.hoisted(() => ({ renderers: [] as any[], controls: [] as any[] }));
 vi.mock('three', async original => {
   const actual = await original<typeof import('three')>();
@@ -49,6 +50,34 @@ function mount(object = new Group(), saved?: Parameters<typeof mountGeometry>[3]
 }
 function draw() { while(microtasks.length)microtasks.shift()!();const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); }
 function move(control: any, x: number) { control.object.position.x = x; control.update(); }
+it('serializes two panes manual outlines behind pending import Workers and preserves Off through settlement', async () => {
+  const workers: any[] = []; let live = 0, peak = 0;
+  vi.stubGlobal('Worker', class {
+    onmessage: any; onerror: any; onmessageerror: any; ended = false;
+    constructor(_url: unknown, readonly options: WorkerOptions) { workers.push(this); peak = Math.max(peak, ++live); }
+    postMessage(input: any) {
+      if (input.inputs) void Promise.resolve().then(() => this.onmessage?.({data:{ok:true,data:input.inputs.map((value:Parameters<typeof outlineData>[0])=>outlineData(value,L.outlineSegments,performance.now()+2000))}}));
+    }
+    terminate() { if (!this.ended) { this.ended = true; live--; } }
+  });
+  const owners: Awaited<ReturnType<typeof parseGeometry>>[] = [], views: ReturnType<typeof mountGeometry>[] = [], changes: ReturnType<typeof vi.fn>[] = [];
+  try {
+    for (let i=0;i<2;i++) {
+      const pending = parseGeometry(new Uint8Array([1]),'stl',new AbortController().signal);
+      workers.at(-1).onmessage({data:{ok:true,model:{meshes:[{name:'',positions:new Float32Array([0,0,0,1,0,0,0,1,0]),normals:new Float32Array([0,0,1,0,0,1,0,0,1]),groups:[]}],root:{name:'',meshes:[0],children:[]}},pendingPreviews:[0]}});
+      const owner = await pending; owners.push(owner);
+      const element=document.createElement('div');Object.defineProperties(element,{clientWidth:{value:640},clientHeight:{value:480}});
+      const changed=vi.fn();changes.push(changed);views.push(mountGeometry(element,owner.scene,owner.bounds,undefined,en,changed,vi.fn(),{generated:true,pendingPreview:true}));
+    }
+    const requests=views.map(view=>view.setOutlines(true));
+    await vi.dynamicImportSettled(); expect(live).toBe(2); expect(peak).toBe(2);
+    const off=views[0].setOutlines(false); expect(await off).toBe('off');
+    for (const worker of workers.slice(0,2)) worker.onmessage?.({data:{kind:'preview',previews:[]}});
+    await Promise.all(owners.map(owner=>owner.ready)); views.forEach(view=>view.refreshPreview());
+    expect(await Promise.all(requests)).toEqual(['off','on']); expect(peak).toBe(2); expect(live).toBe(0);
+    expect(changes[0].mock.lastCall![0].outlines).toBe(false); expect(views[0].inspect().triangles).toBe(1);
+  } finally { views.forEach(view=>view.dispose());owners.forEach(owner=>owner.dispose()); }
+});
 it('owns bounded early shader preparation without submitting a model or leaking context admission', () => {
   const lost = vi.fn(), first = prepareGeometryGraphics(true, lost), second = prepareGeometryGraphics(false, lost);
   try {

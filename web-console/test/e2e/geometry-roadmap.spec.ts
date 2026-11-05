@@ -304,7 +304,7 @@ for (const workload of ['planar-outline-envelope', 'cad-96-parts']) test(`two-pa
   const outputs = await page.evaluate(() => (window as any).roadmapOutlineOutputs as { segments: number; bytes: number }[]);
   expect(outputs).toHaveLength(2); for (const output of outputs) { expect(output.segments).toBeLessThanOrEqual(65536); expect(output.bytes).toBeLessThanOrEqual(65536 * 80); }
   expect(withOutlines.contexts).toBe(2); expect(withOutlines.workers).toBe(0);
-  const expectedReads = workload === 'planar-outline-envelope' ? Math.ceil((84 + 96_800 * 50) / FILE_PREVIEW_LIMITS.pageBytes) + 1 : 2;
+  const expectedReads = workload === 'planar-outline-envelope' ? Math.ceil((84 + 96_800 * 50) / FILE_PREVIEW_LIMITS.pageBytes) + 1 : 3;
   expect(browser.antialias).toBe(true); expect(await reads(page)).toBe(expectedReads);
   await refined(page);
   const draws = await page.evaluate(() => (window as any).geometryDrawCalls.calls); await page.waitForTimeout(1000); expect(await page.evaluate(() => (window as any).geometryDrawCalls.calls)).toBe(draws);

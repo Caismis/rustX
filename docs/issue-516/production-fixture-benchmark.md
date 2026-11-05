@@ -38,6 +38,51 @@ RUSTX_BROWSER_WS_ENDPOINT=ws://127.0.0.1:5277/ \
 
 Their attachments include observed compile/reuse wait times and complete resource retirement. These lifecycle observations include outline completion and any retained shader state; they are separate from cold acceptance.
 
+## Approximately 200 MB STEP
+
+Generate the original dense B-spline surface with the pinned authoring tool;
+the generator writes the STEP and a size/hash manifest outside Git:
+
+```sh
+uv run --no-project --with cadquery-ocp-novtk==7.9.3.1.1 python \
+  web-console/test/fixtures/geometry/generate-large-step.py \
+  --output work/step-performance/large-bspline.step --poles 1450
+```
+
+Its 200,761,968 bytes contain 2,102,500 referenced control poles, without padding
+or unused geometry. It exercises a large source and small final tessellation;
+it is not a representative multi-part assembly or universal STEP certificate.
+The manifest and [STEP report](step-200mb-validation.md) identify this workload.
+
+```sh
+RUSTX_BROWSER_WS_ENDPOINT=ws://127.0.0.1:5277/ RUSTX_GEOMETRY_BUDGET=1 \
+RUSTX_GEOMETRY_LARGE_STEP_PATH="$PWD/work/step-performance/large-bspline.step" \
+  bash web-console/scripts/geometry-performance.sh geometry-step-latency.spec.ts
+```
+
+The opt-in case keeps raw coarse and fine input samples separately, checks the
+200-ms first usable picture and every observed input below 50 ms, then verifies
+complete settled triangles and resource retirement. The fixture source is in
+memory before demand, so this case alone does not certify native file transport.
+The SVG endpoint observes a nonempty actual source envelope followed by two
+animation-frame opportunities; the full mesh endpoint retains the GPU fence
+and next-frame opportunity. Neither measures physical display presentation.
+
+For the existing production-application/native Host lane, set the same source
+path and budget variables while running `geometry-sidebar.spec.ts` with the
+default Playwright configuration and `--grep 'approximately 200 MB STEP'`.
+Build the production application and the native dogfood dependencies first,
+as for the other sidebar cases. This case opens a committed delivery through
+actual native file authorization and range transport, exercises coarse and
+fine gestures, and writes `step-native-first.json` before enforcing the gate.
+Without the source path both expensive STEP cases explicitly skip.
+
+After changing the local OCCT build or its package resolution, reinstall the
+locked dependencies and rebuild Vite's development dependency cache (the dev
+server's `--force` option). An old optimized JS glue module must not be paired
+with a different WASM asset. Production assets and source hashes are checked
+independently by `scripts/geometry-runtime.ts`.
+
 To include the STL lazy-loading regression, first serve the ordinary production
 application with `pnpm preview --port 5173 --strictPort` in another terminal,
 then run all three request-boundary cases through the production fixtures:

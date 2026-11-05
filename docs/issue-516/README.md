@@ -1,17 +1,23 @@
 # CAD sidebar validation
 
 Geometry previews admit up to 200 MiB through authorized, single-version byte
-ranges. Initial and moving pictures preserve original shading and use bounded
-surface approximations where eligible; a
+ranges. STEP can first show a labeled, source-version-bound coordinate envelope
+while full source reading and CAD import continue. Full-model moving pictures
+preserve original shading and use bounded surface approximations where eligible; a
 settled view restores every admitted triangle, original shading and full pixel
 quality, then stops drawing. The current acceptance requirement is a usable
 model picture within 200 ms and every interaction below 50 ms on the fixed
-browser/test machine. **The complete latency contract remains unmet.**
+browser/test machine. The 200.762-MB STEP reference passes its scoped strict
+gate; **the complete contract across formats and model classes remains open**.
 
-The [surface-preview optimization report](surface-preview-optimization.md) is the
-current validation record, including a same-machine comparison against
-`1d6c1e01d`, approximately 200-MiB closed STL, complete-geometry draws, input
-maxima, resource retirement and failed budget assertions. The
+The [large STEP validation](step-200mb-validation.md) records the current
+approximately 200-MB STEP workload, actual native Host and browser outcomes,
+resource retirement and scope limits. STEP must meet the same first-model
+and maximum-input contract as STL; the smaller 96-part assembly does not certify
+large STEP performance. The
+[surface-preview optimization report](surface-preview-optimization.md) retains
+the same-machine comparison at `3be97a1f4` against `1d6c1e01d`, including the
+approximately 200-MiB closed STL, complete draws and input maxima. The
 [large-model quality report](large-model-quality.md) retains the prior revision's
 measurements.
 Earlier [review](review-follow-up.md), [takeover](takeover-validation.md) and
@@ -40,11 +46,18 @@ directly into the ready import Worker and are evicted on hide; retained small
 copies keep their existing fixed-copy behavior.
 No warm parsed-model/Worker/WASM-instance cache is shipped.
 
-The 50-ms interaction maximum / 200-ms first-display contract remains unmet.
+Three independent native Host runs of the large STEP reference show a rough
+picture within 200 ms, every observed coarse/fine gesture below 50 ms and all
+admitted triangles after import. A coordinate envelope can omit topology,
+placements and concavities; it is not the authoritative geometry. Complete
+triangulation uses the unchanged CAD tolerances and the original numeric streams.
+The 50-ms maximum / 200-ms first-display contract remains open for the broader
+format/model matrix, including the historical large-STL first-display gap.
 Native GPU completion is reported
 separately from the next-rendering-opportunity proxy and the legacy display
 clock; none is silently substituted for independently observed presentation.
-The explicit budget-gate run fails, while correctness and lifecycle checks pass.
+The explicit STEP gate passes for the documented reference. Earlier failing
+workloads retain their original evidence and do not inherit this result.
 
 | Historical check at fbf0a875c | Result |
 | --- | --- |

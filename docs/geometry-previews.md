@@ -22,6 +22,42 @@ face-color ranges and hierarchy survive import. Unnamed parts receive localized
 ordinal labels. The independently exported cube fixtures cover STEP inch-to-mm
 normalization and unitless BREP/STL behavior.
 
+### STEP first picture
+
+STEP/STP reads can publish a small coordinate envelope before the complete
+source is available. The first authorized read is 32 KiB; up to four further
+32-KiB windows sample the file. Each window contributes at most 128 finite
+three-dimensional `CARTESIAN_POINT` records. The first noncollinear projection
+is drawn immediately; later samples improve its extent. Every read checks the
+same source version, total size, offset, length and EOF. Other geometry formats
+keep their existing read sizes. No model is invented when the samples cannot
+form an area.
+
+The localized **Rough preview** label distinguishes this projected convex
+coordinate envelope from the admitted CAD mesh. It may include construction
+and control points, omit disconnected parts and concavities, and does not apply
+assembly placements, topology or materials. It is unsuitable for picking,
+measurements or model metadata. It supports orbit, pan and zoom directly in a
+bounded SVG path without importing Three.js or compiling CAD code first. At
+most 640 points / 7,680 bytes belong to this provisional representation.
+
+The complete single-version source continues loading in the background. CAD
+runtime loading starts after that copy is ready and 120 ms without coarse
+input, so its large download and compilation do not compete with the first
+small probes or an active rough gesture. This quiet gate applies only to the
+initial full-view bootstrap; admitted imports continue in their Worker. The full admitted mesh
+replaces the rough envelope only after its first GPU-ready draw. Gestures in
+the rough view seed normalized direction, target and zoom in the full viewer.
+The rough data never enters the model graph or the final geometry streams.
+
+A fresh geometry range read authorizes itself; watch registration follows the
+complete copy instead of blocking first display. The existing reauthorization
+barrier still precedes reuse of a hidden retained copy. Version changes during
+reads, errors, hide, cancellation and authority retirement fence provisional
+publication. Incomplete rough copies are evicted on hide. Source reading yields
+between bounded tasks; cancellation does not release a physical read permit
+until its transport has settled.
+
 Generated mesh preparation is lossless. Exact float-bit tuples can share a
 vertex only when positions, authored normals and any colors all match; triangle
 order and winding remain intact. Missing normals and material ranges prevent
@@ -194,12 +230,14 @@ types, backing buffers, counts, exact source float bits, finite error and whole
 mesh extents before adopting it. Original geometry, materials, transforms,
 hierarchy, bounds and inspection counts remain authoritative.
 
-Only while that bounded background job is pending, evenly sampled source
-triangles bridge the first picture. The bridge copies all original attributes,
+While that bounded background job is pending, evenly sampled source triangles
+bridge the first picture. If the optional job cannot finish, that bounded
+representation remains available during motion so an input cannot unexpectedly
+submit millions of original triangles. The bridge copies all original attributes,
 including normals, and retains the original material. It visits at most 20,000
 triangles plus one rounding triangle per occurrence and shares repeated geometry.
-It is disposed as soon as background work finishes; unavailable, over-budget or
-ineligible approximations then use the original. Selection boxes and axis
+It is disposed when an accepted surface arrives or the body retires. Ineligible
+meshes retain original geometry; every settled draw uses the original. Selection boxes and axis
 navigation remain visible. Mesh outline shaders pause during motion and return
 with the settled picture. Geometry references are restored synchronously after
 every submission, including on exceptions. Picking always uses originals.
@@ -242,7 +280,8 @@ decoder download, CAD editing, exact measurement or format export is provided.
 
 Geometry uses an explicit `geometry` mode in `PreviewContentOwner`. It does not
 change a mutable reader into an immutable source or introduce a second source
-cache. A complete authorized read establishes the displayed copy. Geometry Session
+cache. A complete authorized read establishes the fixed full-source copy;
+version-bound rough envelopes are provisional display data. Geometry Session
 files and Workbench sources use the existing at-most-2-MiB byte ranges to assemble
 at most 200 MiB in one exact-size buffer. Every range reauthorizes its source and
 checks offset, size, version, EOF and response length. A changed version/size
@@ -291,19 +330,22 @@ limits. It does not grant a download above the 32-MiB complete-read limit.
 ## Runtime and resource limits
 
 `GeometryDocument` is the small shared lazy mount. Ordinary startup loads no
-Three.js geometry viewer. Explicit geometry demand starts code loading alongside
-the already-authorized source read. Resolved code mounts immediately through
-explicit component state, without a Suspense fallback throttle. GLB loads its
+Three.js geometry viewer. Except for STEP's rough-first path, explicit geometry
+demand starts code loading alongside the already-authorized source read.
+Resolved eligible code mounts through explicit component state, without a
+Suspense fallback throttle. GLB loads its
 GLTFLoader only for GLB demand and uses it on the main thread after preflight.
 STL and CAD use separate Worker entry bundles; STL cannot load CAD glue/WASM.
 Workers reuse one protocol, admission owner and cancellation/deadline handler.
 All assets are shipped locally, with no runtime CDN use.
-CAD code compilation starts on explicit visible CAD demand alongside source and
-viewer code loading. STL demand does not compile CAD. The original parent
+IGES/BREP code compilation starts on explicit visible demand alongside source
+and viewer code loading. STEP defers the full-view bootstrap until its source
+copy is complete and the rough view is quiet; STL demand does not compile CAD. The original parent
 deadline and two-owner reservation include any remaining compilation wait. Cancelled waiters
 clear their source and callbacks and cannot create a late Worker. A failed code
 compilation clears the shared promise for an explicit retry; static asset fetch
-has its own bounded timeout. The exact pinned binary/glue remain unchanged.
+has its own bounded timeout. Exact binary/glue hashes and the modified interface
+source are pinned and checked by the runtime provenance script.
 
 The following are per visible body unless stated otherwise:
 
@@ -314,12 +356,13 @@ The following are per visible body unless stated otherwise:
 | Vertices / rendered triangles | 13,000,000 / 5,000,000; repeated mesh instances also consume triangle admission |
 | Admitted scene nodes / parts / source hierarchy depth | 512 / 256 / 32; optional line objects are charged separately |
 | Materials / draw groups, including CAD face ranges | 256 / 512 |
+| CAD BREP-face metadata | 1,000,000 faces total; separate from material draw ranges. Adjacent equal-color ranges merge, and base-color faces require no override |
 | Decoded vertex/index/attribute buffers | 512 MiB |
 | Textures / dimension / aggregate source-image pixels | 8 / 2,048 per side / 8,388,608 pixels |
 | Coordinate / matrix magnitude | Finite, absolute value at most 1e12; resulting world bounds are checked too |
 | Canvas backing pixels / CSS dimension / pixel ratio | 4,194,304 / 4,096 per side / at most 2, reduced to fit the pixel budget |
 | Viewer lighting | One hemisphere and two directional lights per body; no environment render targets or shadow maps |
-| STL/CAD Worker deadline | 15 seconds, parent-owned, includes initialization |
+| STL / full CAD Worker deadline | 15 / 60 seconds, parent-owned, includes initialization and remaining code wait; separate from the 200-ms first-model requirement |
 | CAD WASM linear-memory maximum | 2 GiB, verified in both the shipped binary declaration and glue |
 | Aggregate renderer contexts / import Workers | 2 / 2, additionally restricted by existing visible-body ownership |
 | Submitted GPU frames / owned fences | 1 per visible body, 2 aggregate |
@@ -349,7 +392,10 @@ context loss or import failure disposes it under the same two-context cap.
 Trusted camera inputs submit the latest coalesced pose at the microtask checkpoint,
 avoiding an extra animation-frame wait while retaining the single GPU-fence limit.
 
-An outline Worker starts only after import and optional surface work settle; a visible body owns at
+An outline Worker starts only after import and optional surface work settle.
+Manual requests wait behind that same barrier, and only the latest preference
+can start work. Off cancels a queued request immediately; hide/disposal resolves
+waiting requests without creating a late Worker. A visible body owns at
 most one import or outline-preparation Worker at a time. Input buffers are
 separate copies; output backing buffers, values and segment/draw totals pass
 independent receiver checks. The adjacency job holds at most 300,000 edge records
@@ -382,9 +428,11 @@ manager's error callback, and retired work cannot start another image load.
 
 For two panes, admitted attribute buffers are at most 1 GiB and admitted image
 pixels at most 16,777,216. RGBA image storage is approximately 32 MiB per body
-before mipmaps/driver overhead. Each parent/Worker input copy is independently
-bounded by the 200-MiB geometry source limit. Two retained sources and two Worker
-input copies can total 800 MiB, additional to decoded buffers and WASM. Source
+before mipmaps/driver overhead. Each raw input buffer is independently bounded
+by the 200-MiB geometry source limit. Large STL/CAD transfer ownership instead
+of retaining a second copy; two such sources total at most 400 MiB. GLB may
+retain source and loader copies until admission, reaching 800 MiB for two bodies,
+additional to decoded buffers and WASM. Source
 size alone does not guarantee a model fits the separate decoded, node, material
 or runtime bounds. These are allocation/retention admission
 bounds, not a hard cap on browser RSS or graphics-driver memory.
@@ -394,7 +442,7 @@ case, two visible completed scenes coexist with two retiring decode batches:
 storage before mipmaps/driver overhead. Repeated cancellation cannot admit
 additional decode batches while those slots remain occupied.
 
-The stock importer constructs OCCT shapes and JavaScript result arrays before
+The importer constructs OCCT shapes and JavaScript result arrays before
 returning them for output admission. Its WASM maximum excludes JavaScript heap,
 temporary JSON/array objects, decoded images and the browser process. Browser
 Workers have no general JavaScript heap/RSS limit. Their deadline can terminate
@@ -412,8 +460,9 @@ follow physical settlement independently of browser cancellation.
 ## Runtime provenance and validation
 
 Three.js is pinned to 0.187.0 (MIT). The exact orientation predicate is supplied
-by robust-predicates 3.0.3 (Unlicense). occt-import-js is pinned to 0.0.23
-(LGPL-2.1), importer commit `c2148e54b456b571238d35cac037d304053d64b2`, with
+by robust-predicates 3.0.3 (Unlicense). The local occt-import-js build is pinned
+to 0.0.23-rustx.1 (LGPL-2.1), derived from importer commit
+`c2148e54b456b571238d35cac037d304053d64b2`, with
 OCCT submodule commit `d2abb6d844231cb8f29be6894440874a4700e4a5` from
 `https://git.dev.opencascade.org/repos/occt.git`.
 The exact distributed glue/WASM and both distributed license texts are recorded
@@ -424,9 +473,14 @@ importer and OCCT license texts in the shipped third-party notice file.
 
 Corresponding source and upstream build instructions are available at
 [the pinned importer revision](https://github.com/kovacsv/occt-import-js/tree/c2148e54b456b571238d35cac037d304053d64b2),
-including the pinned OCCT submodule and Emscripten build scripts. rustX ships the
-unchanged release runtime rather than maintaining a fork or changing compiled
-memory settings through an ineffective JavaScript option.
+including the pinned OCCT submodule and Emscripten build scripts. rustX ships
+a bounded-transfer build. Only the Embind interface changes: typed input copies
+in bulk, numeric output uses fixed 4096-double chunks, exclusively owned Worker
+input can be released after native copy, and native input is freed before mesh
+extraction. Geometry algorithms, CAD tolerances, allocator and the 2-GiB memory
+maximum remain intact. The complete modified C++ source, pinned revisions,
+licenses and rebuild script ship at `cad-runtime-source/` in the production
+artifact; the repository copy is `web-console/vendor/occt-import-js/`.
 
 Deterministic adapter tests, content-owner regressions, controlled Worker races,
 and view-generation tests accompany `test/e2e/geometry.spec.ts`. Browser tests
