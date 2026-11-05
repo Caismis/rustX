@@ -6104,11 +6104,6 @@
           "const": "instructions"
         },
         {
-          "description": "The context budgeting/projection policy.",
-          "type": "string",
-          "const": "context_policy"
-        },
-        {
           "description": "The model-facing Tool catalog.",
           "type": "string",
           "const": "tools"

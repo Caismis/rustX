@@ -3571,7 +3571,7 @@ export type ConfigurationChangeReason = 'source' | 'model_selection' | 'realloca
  * via the `definition` "ConfigurationDomain".
  */
 export type ConfigurationDomain =
-  'instructions' | 'context_policy' | 'tools' | 'skills' | 'model' | 'execution_policy';
+  'instructions' | 'tools' | 'skills' | 'model' | 'execution_policy';
 /**
  * The cursor domain of durable transcript paging.
  *

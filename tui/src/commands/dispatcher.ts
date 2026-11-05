@@ -546,10 +546,11 @@ export class CommandDispatcher {
     session: AppServerSession,
     argument: string,
   ): Promise<CommandOutcome> {
-    if (argument.length > 0) {
-      return transient("error", "usage: /compact");
+    if (new TextEncoder().encode(argument).length > 4096) {
+      return transient("error", "compaction instructions must not exceed 4096 UTF-8 bytes");
     }
-    const receipt = await session.compactContext();
+    const receipt = await session.compactContext(argument || undefined);
+    if (!receipt) return transient("info", "No eligible conversation context to compact.");
     return transient(
       "info",
       `context compacted to generation ${receipt.generation}: ${receipt.tokens_before.input_tokens} → ${receipt.estimated_tokens_after} tokens`,

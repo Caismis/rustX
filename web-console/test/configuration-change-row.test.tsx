@@ -11,7 +11,7 @@ const change = (added: BoundedNames, removed: BoundedNames, domains: Configurati
 });
 
 it('has a Chat row only for Tool additions and removals, as in the Harness hidden-rows contract', () => {
-  expect(hasConfigurationChangeRow(change(none, none, ['instructions', 'context_policy']))).toBe(false);
+  expect(hasConfigurationChangeRow(change(none, none, ['instructions', 'model']))).toBe(false);
   expect(hasConfigurationChangeRow({ ...change(none, none), tools: { added: none, removed: none, changed: { names: ['bash'], total: 1 } } })).toBe(false);
   expect(hasConfigurationChangeRow(change({ names: ['fetch'], total: 1 }, none))).toBe(true);
   const { container } = render(<ConfigurationChangeRow change={change(none, none, ['instructions'])}/>);

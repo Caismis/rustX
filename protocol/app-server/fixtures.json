@@ -238,7 +238,7 @@
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 72,
+      "protocol_version": 73,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -256,7 +256,7 @@
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 72,
+      "protocol_version": 73,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
@@ -1352,8 +1352,8 @@
             "file_name": "typed_agent.yaml",
             "id": "typed_agent",
             "relative_path": ".agents/workflows/typed_agent.yaml",
-            "revision": "sha256:33059cdea36fe64d187fe84288ac7f861e5f95c7b6572cc1f9496c4a8f0731c4",
-            "byte_length": "957",
+            "revision": "sha256:2dcedfe0e9f74a05b9c1ad809a24f83533ecf8cc2b6386b0ac5b7df3cbc54871",
+            "byte_length": "1000",
             "modified_ms": 1790000000000,
             "description": "Summarize a topic with one typed Agent result.",
             "display": null,
@@ -1366,8 +1366,8 @@
             "file_name": "parallel_checks.yaml",
             "id": "parallel_checks",
             "relative_path": ".agents/workflows/parallel_checks.yaml",
-            "revision": "sha256:503067129056de109d25a423ecc82427856c7109a40eca3c8a51f7b6961cdaf1",
-            "byte_length": "1780",
+            "revision": "sha256:f491f7b991336256eef6df5adf22ffe14c280cee473fa39f7a3f88c3062168fc",
+            "byte_length": "1848",
             "modified_ms": 1790000000000,
             "description": "Run two fixed keyed text checks and return both results.",
             "display": null,
@@ -1380,8 +1380,8 @@
             "file_name": "human_plan.yaml",
             "id": "human_plan",
             "relative_path": ".agents/workflows/human_plan.yaml",
-            "revision": "sha256:d55694dbd647baec687f6a8ff97921ac92a792e43b1f5c77f7c8a3b15801aa59",
-            "byte_length": "1185",
+            "revision": "sha256:b4fba09112b6362bd5476f2f377c70be42d7e951378fb30906017512d3301bd0",
+            "byte_length": "1241",
             "modified_ms": 1790000000000,
             "description": "Ask a person to approve or reject a bounded plan, and return the action they chose.",
             "display": null,
@@ -1394,8 +1394,8 @@
             "file_name": "parallel_review.yaml",
             "id": "parallel_review",
             "relative_path": ".agents/workflows/parallel_review.yaml",
-            "revision": "sha256:a0b8ff6cabf4b3953f709882841b1627f2fb613838d2dd5a89f417336c89f001",
-            "byte_length": "3370",
+            "revision": "sha256:07f32dce7b0ae7efd590daec3872f169ec2aee0ec4b286a02db780e4c6eb0d61",
+            "byte_length": "3500",
             "modified_ms": 1790000000000,
             "description": "Two scoped proposal reviews, including a fixed second quality pass; no Git required.",
             "display": null,
@@ -1408,8 +1408,8 @@
             "file_name": "implement_and_review.yaml",
             "id": "implement_and_review",
             "relative_path": ".agents/workflows/implement_and_review.yaml",
-            "revision": "sha256:8b60e7e6bf4ff085edffc84550b590306b23a26a79afec74953ad3adf1be4c66",
-            "byte_length": "12870",
+            "revision": "sha256:051cbdddb201d09fb14fa7a69c29ee08cd3120d184c7899eae801c038453e044",
+            "byte_length": "13341",
             "modified_ms": 1790000000000,
             "description": "Plan greeting.py, gate implementation on human plan acceptance, then implement and run real checks in the shared Session workspace up to three times.",
             "display": null,
@@ -1422,8 +1422,8 @@
             "file_name": "model_text.yaml",
             "id": "model_text",
             "relative_path": ".agents/workflows/model_text.yaml",
-            "revision": "sha256:5422c514e1c6389a8927227a31a390503fa5b62e9aa8875a916b5fc0ba3db43d",
-            "byte_length": "878",
+            "revision": "sha256:b3fa7c8f896a875f7cc0cc4d5bfd330fd5c04de5d9e6559ef013f5ca7f4c9031",
+            "byte_length": "920",
             "modified_ms": 1790000000000,
             "description": "Rewrite explicit input with one tool-free Auxiliary Call.",
             "display": null,
@@ -1436,8 +1436,8 @@
             "file_name": "model_json.yaml",
             "id": "model_json",
             "relative_path": ".agents/workflows/model_json.yaml",
-            "revision": "sha256:8bb2dd43b0078c1ba5c3dbe97e504a1af77d07ec01e49262c1a2f70b8f40cd53",
-            "byte_length": "1428",
+            "revision": "sha256:e424ddfa9ffca0d2d02f58fffc3a11ec370310a53107c20afc195d9a95d7a3c0",
+            "byte_length": "1489",
             "modified_ms": 1790000000000,
             "description": "Classify explicit input with one schema-validated Auxiliary Call.",
             "display": null,
@@ -1477,7 +1477,7 @@
         "id": "typed_agent",
         "path": "/workspace/fixture/.agents/workflows/typed_agent.yaml",
         "relative_path": ".agents/workflows/typed_agent.yaml",
-        "revision": "sha256:33059cdea36fe64d187fe84288ac7f861e5f95c7b6572cc1f9496c4a8f0731c4",
+        "revision": "sha256:2dcedfe0e9f74a05b9c1ad809a24f83533ecf8cc2b6386b0ac5b7df3cbc54871",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -1823,7 +1823,7 @@
         "id": "parallel_checks",
         "path": "/workspace/fixture/.agents/workflows/parallel_checks.yaml",
         "relative_path": ".agents/workflows/parallel_checks.yaml",
-        "revision": "sha256:503067129056de109d25a423ecc82427856c7109a40eca3c8a51f7b6961cdaf1",
+        "revision": "sha256:f491f7b991336256eef6df5adf22ffe14c280cee473fa39f7a3f88c3062168fc",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2169,7 +2169,7 @@
         "id": "human_plan",
         "path": "/workspace/fixture/.agents/workflows/human_plan.yaml",
         "relative_path": ".agents/workflows/human_plan.yaml",
-        "revision": "sha256:d55694dbd647baec687f6a8ff97921ac92a792e43b1f5c77f7c8a3b15801aa59",
+        "revision": "sha256:b4fba09112b6362bd5476f2f377c70be42d7e951378fb30906017512d3301bd0",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2515,7 +2515,7 @@
         "id": "parallel_review",
         "path": "/workspace/fixture/.agents/workflows/parallel_review.yaml",
         "relative_path": ".agents/workflows/parallel_review.yaml",
-        "revision": "sha256:a0b8ff6cabf4b3953f709882841b1627f2fb613838d2dd5a89f417336c89f001",
+        "revision": "sha256:07f32dce7b0ae7efd590daec3872f169ec2aee0ec4b286a02db780e4c6eb0d61",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2861,7 +2861,7 @@
         "id": "implement_and_review",
         "path": "/workspace/fixture/.agents/workflows/implement_and_review.yaml",
         "relative_path": ".agents/workflows/implement_and_review.yaml",
-        "revision": "sha256:8b60e7e6bf4ff085edffc84550b590306b23a26a79afec74953ad3adf1be4c66",
+        "revision": "sha256:051cbdddb201d09fb14fa7a69c29ee08cd3120d184c7899eae801c038453e044",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -3207,7 +3207,7 @@
         "id": "model_text",
         "path": "/workspace/fixture/.agents/workflows/model_text.yaml",
         "relative_path": ".agents/workflows/model_text.yaml",
-        "revision": "sha256:5422c514e1c6389a8927227a31a390503fa5b62e9aa8875a916b5fc0ba3db43d",
+        "revision": "sha256:b3fa7c8f896a875f7cc0cc4d5bfd330fd5c04de5d9e6559ef013f5ca7f4c9031",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -3553,7 +3553,7 @@
         "id": "model_json",
         "path": "/workspace/fixture/.agents/workflows/model_json.yaml",
         "relative_path": ".agents/workflows/model_json.yaml",
-        "revision": "sha256:8bb2dd43b0078c1ba5c3dbe97e504a1af77d07ec01e49262c1a2f70b8f40cd53",
+        "revision": "sha256:e424ddfa9ffca0d2d02f58fffc3a11ec370310a53107c20afc195d9a95d7a3c0",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -4070,7 +4070,7 @@
       "report": {
         "report_id": "report-fixture",
         "byte_length": 5194,
-        "sha256": "ce145234c252ea9321d39eefaa847d012f349743c98ae96125a842c73fc62008"
+        "sha256": "82677c21459e0bc97a440a62115a8e711652de0da685ffbf37289c1ff96d69f6"
       }
     }
   },
@@ -4083,7 +4083,7 @@
         "kind": "workspace",
         "directory": "/workspace/fixture"
       },
-      "expected_revision": "sha256:a0b8ff6cabf4b3953f709882841b1627f2fb613838d2dd5a89f417336c89f001",
+      "expected_revision": "sha256:07f32dce7b0ae7efd590daec3872f169ec2aee0ec4b286a02db780e4c6eb0d61",
       "mutation": {
         "kind": "workflow",
         "id": "parallel_review",

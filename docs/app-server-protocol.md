@@ -1981,7 +1981,7 @@ ContentSource                      configuration_instructions { journal_sequence
 `ConfigurationChange` carries the reason (`source`, `model_selection`,
 `reallocation`), previous and new binding revisions (equal for the
 independently published execution-policy unit, which never rebinds), the
-changed domains (`instructions`, `context_policy`, `tools`, `skills`, `model`,
+changed domains (`instructions`, `tools`, `skills`, `model`,
 `execution_policy` — approval mode, model timeout, Tool deadline and MCP
 startup policies), bounded Tool and Skill names — at most 16 and 1 KiB of
 encoded names per added/removed/changed list, each with its exact total — and
