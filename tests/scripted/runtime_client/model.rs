@@ -701,7 +701,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         panic!("the explicit summary policy survives the primary switch");
     };
     assert_eq!(summary.model, model_ref("summary/summary-model"));
-    assert_eq!(summary.max_output_tokens, 300);
+    assert_eq!(summary.max_output_tokens, 1024);
     assert_eq!(
         summary.request_params["summary_tag"],
         serde_json::json!("keep")

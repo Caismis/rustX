@@ -5,11 +5,14 @@ exact source ranges and a completed Summary generation. Only accepted chunks
 with native generation evidence produce these facts. Live callbacks publish the
 persisted facts; cold historical progress is not live execution. Manual
 `context/compact` accepts an optional focus of at most 4096 UTF-8 bytes while
-the Agent is idle. Skipped and cancelled outcomes remain distinct from a
-committed checkpoint.
+the Agent is idle. A skipped result is distinct from a completed checkpoint,
+and cancellation remains typed.
+The native `context_compaction_skipped` observation publishes the matching
+manual receipt and current context without a completed-compaction marker.
 
-App Server v73 combines automatic Session configuration commit with the large
-Workflow document transport. It replaces both v71 development contracts;
+App Server v73 extends automatic Session configuration commit and the large
+Workflow document transport with sequential Summary progress and manual outcomes.
+It replaces v72;
 server, Web and TUI clients upgrade together.
 
 App Server v73 and Runtime Client v84 add optional `reasoningProfileOrder` on full

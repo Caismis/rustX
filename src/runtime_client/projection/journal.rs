@@ -705,7 +705,10 @@ impl RuntimeClientProjection {
                 self.snapshot.context.compaction_progress = None;
                 self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = false;
-                Vec::new()
+                vec![RuntimeClientEvent::ContextCompactionSkipped {
+                    context: self.snapshot.context.clone(),
+                    attempt_id: attempt_id.cloned(),
+                }]
             }
             RuntimeEvent::CompactionCancelled { operation_id } => {
                 if self

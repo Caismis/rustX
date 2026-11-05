@@ -1924,7 +1924,7 @@ fn optional_explicit_malformed_and_typed_rejections_are_distinct() {
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
-            .contains("unknown field")
+            .contains("remove the obsolete [context]")
     );
     std::fs::write(
         f.host.launch_directory.join("rustx.toml"),
@@ -2245,7 +2245,7 @@ agents = ["role", "role"]
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
-            .contains("unknown field")
+            .contains("remove the obsolete [context]")
     );
     f.user(json!({"subagents": {}, "agent": {"model": {"model":"host/one"}, "agents": ["role","role"]}}));
     f.project(json!({"subagents":{}}));

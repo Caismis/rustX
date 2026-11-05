@@ -267,6 +267,7 @@ function foldOrdinaryEvent(state: Snapshot, event: Exclude<Event, {type: 'projec
     case 'context_compaction_started': return { ...state, context: event.context };
     case 'context_compaction_progressed': return { ...state, context: event.context };
     case 'context_compaction_cancelled': return { ...state, context: event.context };
+    case 'context_compaction_skipped': return { ...state, context: event.context };
     case 'context_compaction_failed': return { ...state, context: event.context };
     case 'context_compacted': return { ...state, context: event.context };
     case 'agent_status_composed': return { ...state, statuses: upsert((state.statuses ?? []).filter(status => !(event.evicted_status_message_id != null && status.status_message_id === event.evicted_status_message_id) && !(event.evicted_status_locator != null && status.source_locator != null && sameCanonicalLocator(status.source_locator, event.evicted_status_locator))), event.status, statusIdentity) };

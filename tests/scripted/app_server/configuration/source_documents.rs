@@ -499,7 +499,7 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
         let Some(crate::model::session::AuxiliaryModelView::Explicit(summary)) = view.summary else {
             panic!("explicit summary");
         };
-        assert_eq!(summary.max_output_tokens, 128);
+        assert_eq!(summary.max_output_tokens, 4096);
         assert_eq!(
             serde_json::Value::Object(summary.request_params.clone()),
             serde_json::json!({"top_p": 0.5, "unset": null, "summary_tag": [null]})

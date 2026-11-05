@@ -778,7 +778,7 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
         };
         assert_eq!(
             (summary.model.to_string(), summary.max_output_tokens),
-            ("local/b".to_owned(), 256)
+            ("local/b".to_owned(), 4096)
         );
         settled(&fixture, 0).await;
 

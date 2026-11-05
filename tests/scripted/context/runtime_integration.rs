@@ -2438,7 +2438,12 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
         "must not run".to_owned(),
     )]));
     let runtime = ContextRuntime::with_scripted_summarizer(
-        engine(500, 0, 0, weighted(10, 10, 0)),
+        engine(
+            500,
+            0,
+            0,
+            Arc::new(ScriptedEstimator::new(10, 10, 0).with_override("msg-user-1", 150)),
+        ),
         summarizer.clone(),
         Some(rustx::context::AgentStatusEngine::default()),
         CompactionBudgets::new(1, 1, 9),

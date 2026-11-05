@@ -145,9 +145,14 @@ breakdown, system and tool estimates are heuristic and messages are the remainin
 total, clamped at zero when the components exceed it.
 
 Planning indexes complete eligible historical prefixes, protects Fresh Inbound,
-current-generation Context and carryover anchors, and prices the complete retained
-primary request, including fixed inputs and the Summary output reservation. The
-complete Summary request is priced independently in its own model window. Each
+current-generation Context and carryover anchors, and prices the complete primary
+candidate with the minimally rendered Summary and all fixed request inputs. The
+shortest valid Summary rendering must permit historical reduction before the
+soft recent-history preference is applied. A tiny old prefix cannot prevent
+selection of a larger eligible prefix that can make progress. Only an estimator
+that certifies the Summary lower bound may prove infeasibility from it; an
+uncertified search without a feasible witness remains `SearchIncomplete`.
+The complete Summary request is priced independently in its own model window. Each
 selected retired transcript is processed sequentially in largest-fitting UTF-8
 source ranges. Each call merges the previous accepted private rolling JSON summary
 with the next range under a runtime-owned strict schema; the final validated value

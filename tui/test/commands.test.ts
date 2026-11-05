@@ -442,10 +442,9 @@ describe("CommandDispatcher", () => {
       model: "summary/model-s",
       profile: "compact",
       request_params: { summary_tag: "keep" },
-      max_output_tokens: 300,
     };
     const titlePolicy = { ...summaryPolicy, model: "title/model-t", max_output_tokens: 128 };
-    const classificationPolicy = { ...summaryPolicy, model: "classifier/model-c" };
+    const classificationPolicy = { ...summaryPolicy, model: "classifier/model-c", max_output_tokens: 300 };
     const btwPolicy = { mode: "session" as const };
     const h = await harness(
       snapshot({

@@ -240,7 +240,12 @@ pub(crate) async fn execute_compaction_in_operation(
         .await
         {
             Ok(count) => break count,
-            Err(error) if error.kind == ContextErrorKind::CannotFit => {
+            Err(error)
+                if matches!(
+                    error.kind,
+                    ContextErrorKind::CannotFit | ContextErrorKind::SearchIncomplete
+                ) =>
+            {
                 let Some(level) = advance_carryover(
                     &mut active_constraints,
                     &mut next_carryover,

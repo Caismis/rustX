@@ -384,6 +384,7 @@ function adaptTranscript(view: TranscriptView, event: RuntimeClientEvent, adapta
     case 'context_compaction_started':
     case 'context_compaction_progressed':
     case 'context_compaction_cancelled':
+    case 'context_compaction_skipped':
     case 'context_compaction_failed':
     case 'context_compacted':
     case 'agent_status_composed':

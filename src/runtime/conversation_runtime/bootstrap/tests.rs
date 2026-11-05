@@ -506,7 +506,7 @@ async fn cold_reopen_uses_current_resources_without_rewriting_history() {
 
     let (runtime_a, model_a) = headless_runtime_with_options(
         &dir,
-        vec![one_turn_script(), text_turn_script("summary-A")],
+        vec![one_turn_script(), summary_turn_script("summary-A")],
         None,
         None,
         HeadlessRuntimeOptions {
@@ -517,7 +517,9 @@ async fn cold_reopen_uses_current_resources_without_rewriting_history() {
     .await;
     runtime_a.activate();
     runtime_a
-        .submit_inbound(text_content("historical request A"))
+        .submit_inbound(text_content(
+            &"historical request A and its facts; ".repeat(32),
+        ))
         .expect("request A");
     let _ = await_settled_ledger(&runtime_a, 0).await;
     let snapshots_a = request_snapshots(&runtime_a.request_history());

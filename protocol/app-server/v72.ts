@@ -5552,6 +5552,11 @@ export type RuntimeClientEvent =
       type: 'context_compaction_cancelled';
     }
   | {
+      context: RuntimeClientContextView2;
+      attempt_id?: AttemptId | null;
+      type: 'context_compaction_skipped';
+    }
+  | {
       context: RuntimeClientContextView3;
       /**
        * The owning attempt for automatic compaction; absent for manual
@@ -16168,6 +16173,11 @@ export interface RuntimeClientProtocolEvent {
         context: RuntimeClientContextView2;
         attempt_id?: AttemptId | null;
         type: 'context_compaction_cancelled';
+      }
+    | {
+        context: RuntimeClientContextView2;
+        attempt_id?: AttemptId | null;
+        type: 'context_compaction_skipped';
       }
     | {
         context: RuntimeClientContextView3;
