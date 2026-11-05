@@ -7,7 +7,7 @@ import { schedulerModel, taskKey, taskRef } from '../src/app/scheduler/model';
 import { CreatedTasks, createdReceipt } from '../src/app/scheduler/CreatedTasks';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { checkpoint, snapshot } from './fixture';
-import type { ForegroundToolExecution } from '../../protocol/app-server/v69';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v70';
 import { timingDraft, timingValue, TimingInputError } from '../src/app/scheduler/timing';
 import { localeController } from '../src/locale/controller';
 import { schedulerFixture, task, header, nodeA, nodeB, workflowFixture } from './scheduler-fixture';

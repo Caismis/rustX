@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { CheckpointPage, WorkflowTraceNode } from '../../protocol/app-server/v69';
+import type { CheckpointPage, WorkflowTraceNode } from '../../protocol/app-server/v70';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
 import { preferredItem, selectionOf, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { prependTrace, type TraceCache, type TraceFieldReader } from '../src/client/trace';

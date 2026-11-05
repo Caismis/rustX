@@ -14664,7 +14664,7 @@
     "SourceMutation": {
       "oneOf": [
         {
-          "description": "Explicit repair of an unparseable configuration document. Never used\nfor ordinary semantic-unit editing and never accepts an invalid source.",
+          "description": "Explicit repair of a configuration document violating its source contract. Never used\nfor ordinary semantic-unit editing and never accepts an invalid source.",
           "type": "object",
           "properties": {
             "document": {
@@ -15579,6 +15579,16 @@
               "type": "null"
             }
           ]
+        },
+        "reasoning_profile_order": {
+          "description": "Optional complete Profile order, from lower to higher declared reasoning strength.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ModelProfileId"
+          }
         },
         "profiles": {
           "type": [
@@ -33610,6 +33620,16 @@
               "type": "null"
             }
           ]
+        },
+        "reasoningProfileOrder": {
+          "description": "Optional complete Profile order, lowest declared reasoning strength first.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ModelProfileId"
+          }
         },
         "credentialSource": {
           "description": "The redacted credential source of the model's provider.",

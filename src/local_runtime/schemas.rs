@@ -154,7 +154,9 @@ mod tests {
             }
             let text = schema.to_string();
             assert!(!text.contains("request_params_json"));
-            assert!(!text.contains("reasoning_profile"));
+            // The obsolete per-invocation field remains absent; the optional
+            // Model-owned reasoning_profile_order is a separate contract.
+            assert!(!text.contains("\"reasoning_profile\""));
             assert!(!text.contains("\"RequestParams\""), "{name}");
             let parameter_schema =
                 json!({"$ref":"#/$defs/RequestParamsJson", "$defs":schema["$defs"]});

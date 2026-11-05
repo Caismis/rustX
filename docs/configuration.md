@@ -162,6 +162,7 @@ protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 8192
 default_profile = "balanced"
+reasoning_profile_order = ["fast", "balanced", "precise"]
 
 [models.thinker.capabilities]
 input_modalities = ["text"]
@@ -280,6 +281,45 @@ string if the provider accepts one.
 - A profile `max_output_tokens` is a positive default no greater than the
   Model's hard maximum.
 - Profiles never inherit: neither from the Model nor from another profile.
+
+#### Optional reasoning order
+
+`reasoning_profile_order` optionally declares all of one Model's Profile
+identities from lower to higher reasoning strength. It is an authored relative
+declaration, not a measured guarantee about quality, speed, price or provider
+support. Names and native parameters have no inferred ranking semantics.
+
+For the three Profiles above, `["fast", "balanced", "precise"]` is complete.
+Omit the field entirely to leave the Model unconfigured; a singleton Model may
+declare its singleton Profile. `[]`, missing identities, duplicates, identities
+belonging only to another Model and orders on a Model without Profiles fail
+native validation. Authorized diagnostics name missing, repeated or unknown
+identities; automatic repair receipts retain only the safe field/category.
+Invalid orders are never sorted, completed or cleared automatically.
+
+Profiles, default and order belong to the same complete Model transaction.
+Workspace replacement does not merge arrays with the User definition. A complete
+Workspace Model omitting the field intentionally has no order; removing that
+override restores inheritance. Invalid writes and stale revisions commit nothing.
+
+In Web Settings, **Reasoning order (low to high)** starts **Not configured**.
+Configure seeds an identity-sorted draft, with no inferred strength. Move controls
+change that draft; Save accepts it. New Profiles are appended to a configured
+draft for review, deletion removes the same identity from both collections, and
+deleting the final Profile omits the order. Clear removes only the order. Reset
+and Cancel restore the form's baseline, including membership and order.
+
+Full catalog views expose optional camel-case `reasoningProfileOrder`; authored
+TOML/Settings documents use `reasoning_profile_order`. Absent fields serialize as
+omitted. Frozen invocations know only their selected Profile and omit the order;
+bounded selection headers also omit this complete metadata. Ordinary Profile
+lists, `profile_position`, pagination and workflow selection retain their lexical
+enumeration, independent of semantic order. Existing revision fences still apply.
+
+The default Profile remains independent. Primary and Summary/Title/Classification/
+BTW policies, parameters, budgets and frozen Attempts are unchanged. No reasoning
+parameter mapping or task-specific automatic selection is implemented; compaction
+and title generation do not yet consume this metadata.
 
 #### Resolution
 
@@ -1174,9 +1214,10 @@ example `subagents.max_concurrent = 0`) is left unchanged and reported
 `unresolved` with that constraint's location. Facts another scope may supply —
 Model definitions, the default selection — are never part of it. An unresolved
 receipt is withdrawn only when the source satisfies this contract, at a later
-boundary or after a committed `configuration/sourceWrite`; a committed write that
-leaves it still invalid replaces the receipt with the current observation. A
-write never creates a receipt for a source that had none.
+boundary or after a committed `configuration/sourceWrite`. Managed writes reject
+source-intrinsically invalid candidates before publication, preserving the source
+and any unresolved receipt. A write never creates a receipt for a source that had
+none.
 
 A semantic failure of Session resolution names the document that authored the
 failing field, decided from the overlay provenance of the composition: every
@@ -1187,10 +1228,13 @@ when both documents define Models — names no file: it belongs to the
 composition.
 
 Manual `repair_config` remains the editor for documents that fail their own source
-contract — syntax, types, Workspace `app_server`, a foreign schema version —
-including TOML-parsable ones; ordinary semantic-unit writes require a document that
-satisfies it, and the source projection marks a document violating it as not
-loaded.
+contract — syntax, types, Workspace `app_server`, a foreign schema version or any
+source-intrinsic semantic constraint — including TOML-parsable ones. Ordinary
+semantic-unit writes require a document that satisfies it, and the source
+projection marks a document violating it as not loaded, exposing whole-document
+repair. A complete valid replacement must match the observed source revision;
+invalid replacements and stale revisions leave the original unchanged. Missing
+Providers or default selections supplied by another scope do not require repair.
 
 ## Durable identity and retention
 

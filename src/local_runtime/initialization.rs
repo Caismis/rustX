@@ -98,6 +98,7 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
             },
             request_params: None,
             default_profile: None,
+            reasoning_profile_order: None,
             profiles: None,
             compat,
         }

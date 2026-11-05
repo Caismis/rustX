@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v69.js';
+import type {ProtocolMessage} from './v70.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -240,7 +240,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 69,
+      "protocol_version": 70,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -258,7 +258,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 69,
+      "protocol_version": 70,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
@@ -6975,5 +6975,95 @@ export const fixtures = [
     "jsonrpc": "2.0",
     "method": "schedule/changed",
     "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "unconfigured-model",
+    "method": "configuration/sourceWrite",
+    "params": {
+      "target": {
+        "kind": "user"
+      },
+      "expected_revision": "source-cut",
+      "mutation": {
+        "kind": "config",
+        "mutation": {
+          "unit": "model",
+          "id": "fixture/model",
+          "authored": {
+            "provider": "fixture",
+            "id": "wire-model",
+            "protocol": "openai_responses",
+            "context_window": "128000",
+            "max_output_tokens": 4096,
+            "capabilities": {
+              "input_modalities": [
+                "text"
+              ],
+              "output_modalities": [
+                "text"
+              ],
+              "json_schema_output": false
+            },
+            "default_profile": "a-high",
+            "profiles": {
+              "a-high": {
+                "request_params": {}
+              },
+              "z-low": {
+                "request_params": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "ordered-model",
+    "method": "configuration/sourceWrite",
+    "params": {
+      "target": {
+        "kind": "user"
+      },
+      "expected_revision": "source-cut",
+      "mutation": {
+        "kind": "config",
+        "mutation": {
+          "unit": "model",
+          "id": "fixture/model",
+          "authored": {
+            "provider": "fixture",
+            "id": "wire-model",
+            "protocol": "openai_responses",
+            "context_window": "128000",
+            "max_output_tokens": 4096,
+            "capabilities": {
+              "input_modalities": [
+                "text"
+              ],
+              "output_modalities": [
+                "text"
+              ],
+              "json_schema_output": false
+            },
+            "default_profile": "a-high",
+            "reasoning_profile_order": [
+              "z-low",
+              "a-high"
+            ],
+            "profiles": {
+              "a-high": {
+                "request_params": {}
+              },
+              "z-low": {
+                "request_params": {}
+              }
+            }
+          }
+        }
+      }
+    }
   }
 ] satisfies ProtocolMessage[];

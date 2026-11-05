@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { CheckpointPage, CheckpointReadCut } from '../../protocol/app-server/v69';
+import type { CheckpointPage, CheckpointReadCut } from '../../protocol/app-server/v70';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
 import { refreshTrace } from '../src/client/trace';
 import { workflowTraceFixture } from './workflow-trace-fixture';

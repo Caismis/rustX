@@ -282,7 +282,9 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Workflow, workspace changes and live MCP preparation projections.
 /// Version 80 adds native Workflow data-node and classifier observation kinds.
 /// Version 81 distinguishes incomplete historical Workflow nodes from proven live activity.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 81;
+/// Version 82 adds optional, Model-owned reasoning Profile order to full catalog metadata.
+/// Selection ordinals and frozen invocation snapshots are unchanged.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 82;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1382,7 +1384,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 81);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 82);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

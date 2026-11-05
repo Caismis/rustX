@@ -10064,6 +10064,10 @@ export interface Model {
    */
   request_params?: RequestParams | null;
   default_profile?: ModelProfileId | null;
+  /**
+   * Optional complete Profile order, from lower to higher declared reasoning strength.
+   */
+  reasoning_profile_order?: ModelProfileId[] | null;
   profiles?: {
     [k: string]: Profile;
   } | null;
@@ -18418,6 +18422,10 @@ export interface CatalogModelView {
    * The profile selected when an invocation does not choose one.
    */
   defaultProfile?: ModelProfileId | null;
+  /**
+   * Optional complete Profile order, lowest declared reasoning strength first.
+   */
+  reasoningProfileOrder?: ModelProfileId[] | null;
   /**
    * The redacted client-facing description of a credential source.
    *

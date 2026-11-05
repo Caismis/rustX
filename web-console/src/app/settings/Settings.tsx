@@ -7,7 +7,7 @@ import { useMcpProbes } from './mcp/useMcpProbes';
 import { McpPage } from './mcp/McpPage';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v69';
+import type { SourceScope } from '../../../../protocol/app-server/v70';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';
@@ -196,8 +196,8 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
       closed={<MalformedNotice config={config} diagnostic={false} />}
       processPolicyImpacts={source.process_policy_impacts} busy={busy} targetValid={targetValid} />}
     {/* The one mutation a malformed `rustx.toml` admits, fenced on its exact
-        current revision. It exists only while the document does not parse. */}
-    {config.state === 'malformed' && current !== 'extensions' && current !== 'mcp' && <UnitForm title={tx('settings:settings.repair-malformed-source')} blank="" revision={config.revision} removable={false}
+        current revision. It exists only while the source contract is invalid. */}
+    {config.state === 'malformed' && current !== 'extensions' && current !== 'mcp' && <UnitForm title={tx('settings:settings.repair-invalid-source')} blank="" revision={config.revision} removable={false}
       mutation={replacement => ({ kind: 'repair_config', document: replacement ?? '' })}>
       {(value, change) => <label>{tx('settings:settings.replacement-toml')}<textarea value={value} onChange={event => change(event.target.value)} /></label>}
     </UnitForm>}
@@ -257,7 +257,7 @@ function MalformedNotice({ config, diagnostic = true }: {
   const tx = useTranslation();
   if (config.state !== 'malformed') return null;
   return <>
-    <p role="status">{tx('settings:settings.structured-editing-is-unavailable-because')}{' '}{config.path} {tx('settings:settings.does-not-parse-repair-the-source-to-edit-it-again')}</p>
+    <p role="status">{tx('settings:settings.structured-editing-is-unavailable-because')}{' '}{config.path} {tx('settings:settings.violates-the-source-contract-repair-it-to-edit-again')}</p>
     {diagnostic && <p role="alert" className={css.error}>{config.diagnostic ?? tx('settings:source.not-loaded')}</p>}
   </>;
 }
