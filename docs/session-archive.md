@@ -3,7 +3,7 @@
 `rustx-session-archive/v11` is a ZIP64/DEFLATE inspection archive produced by
 `src/session_archive.rs`. `SessionArchiveProducer` is a native library owner,
 independent of App Server, Web, TUI and Trace. This is neither a canonical log nor
-an import, recovery or persistence format. SQLite schema 82 stores the common accepted contributions; export projects those
+an import, recovery or persistence format. SQLite schema 84 stores the common accepted contributions; export projects those
 historical records without creating a second persistence authority.
 
 In v2, request snapshots expose common accepted contribution records instead of
@@ -415,3 +415,13 @@ Usage and remote-execution uncertainty at the captured cut. Retry facts retain
 no input body or generated output and authorize neither archive replay nor
 inherited title generation. Title source associations remain local Store
 execution evidence and are never copied by lineage or export.
+
+## Temporary managed tool output
+
+Managed spills and background live-output files are disposable auxiliary text in
+OS temporary namespaces. Archives preserve bounded canonical previews, original
+locators and committed capture status; they omit the full files and local
+namespace ownership metadata. Present and missing spills have the same archive
+boundary. Export/import never requires a spill to exist, reconstructs it from a
+preview, or grants deletion authority over a source namespace. A Complete value
+records capture-time success; it is not a full-output durability guarantee.

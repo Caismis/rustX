@@ -12,7 +12,7 @@ import { localeController } from '../../src/locale/controller';
 import { applyTheme } from '../../src/app/appearance';
 import { geometryFormat } from '../../src/app/components/documents/geometry/format';
 import { Server } from '../fixture';
-import type { SessionFileReference } from '../../../protocol/app-server/v62';
+import type { SessionFileReference } from '../../../protocol/app-server/v69';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';

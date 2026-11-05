@@ -1,5 +1,5 @@
 import type { ArrayEdit } from '../../document/fields';
-import type { WorkflowNote, WorkflowToolChoice } from '../../../../../../protocol/app-server/v62';
+import type { WorkflowNote, WorkflowToolChoice } from '../../../../../../protocol/app-server/v69';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import { Background, BackgroundVariant, MiniMap, ReactFlow, applyNodeChanges, useReactFlow, useViewport, useNodesInitialized, type Connection, type EdgeChange, type NodeChange, type Viewport } from '@xyflow/react';
@@ -46,9 +46,9 @@ interface Addition {
 
 /** One React Flow scene, one native editing document. Local nodes retain only
  * transient pointer geometry/selection, never executable definitions. */
-export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch, selection, onSelect, problems, edit, editable, blockLabel, currentState, organizeEpoch = 0, drafts, onDuplicate, tools }: {
+export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch, selection, onSelect, problems, edit, editable, currentState, organizeEpoch = 0, drafts, onDuplicate, tools }: {
   document: WorkflowDocument; path: BlockPath; viewKey: string; viewEpoch: number; selection: Selection; onSelect: (selection: Selection) => void;
-  problems: Problems; edit: Edit; editable: boolean; blockLabel: string; currentState: () => LayoutOwner; organizeEpoch?: number;
+  problems: Problems; edit: Edit; editable: boolean; currentState: () => LayoutOwner; organizeEpoch?: number;
   drafts: Readonly<Record<string, FieldDraft>>; onDuplicate: Duplicate; tools: readonly WorkflowToolChoice[];
 }) {
   const tx = useTranslation(), flow = useReactFlow<SceneNode, SceneEdge>(), initialized = useNodesInitialized(), container = useRef<HTMLDivElement>(null);
@@ -157,7 +157,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
 
   const openAt = useCallback((client: Point, position: Point, path: BlockPath, extra: Partial<Addition> = {}) => {
     const bounds = container.current!.getBoundingClientRect();
-    setPalette({ at: { x: Math.max(8, Math.min(client.x - bounds.left, bounds.width - 270)), y: Math.max(8, Math.min(client.y - bounds.top, bounds.height - 370)) }, position, path, ...extra }); setMenu(undefined);
+    setPalette({ at: { x: Math.max(8, Math.min(client.x - bounds.left, bounds.width - 308)), y: Math.max(8, Math.min(client.y - bounds.top, bounds.height - 370)) }, position, path, ...extra }); setMenu(undefined);
   }, []);
   const positionBelow = useCallback((path: BlockPath): Point => ({ x: 360, y: Math.max(80,
     ...scene.nodes.filter(node => sameBlockPath(node.data.path, path)).map(node => node.position.y + (node.height ?? 128) + 72)) }), [scene]);
@@ -348,7 +348,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       if (event.nativeEvent.isComposing || event.defaultPrevented || keyboardOwned(event.target) || window.getSelection()?.toString()) return;
       const mod = event.metaKey || event.ctrlKey, key = event.key.toLowerCase();
       const focused = (event.target as Element).closest<HTMLElement>('.react-flow__node');
-      if ((event.key === 'Enter' || event.key === ' ') && focused) { const node = byId.get(focused.dataset.id ?? ''); if (node) { event.preventDefault(); choose(node); } }
+      if ((event.key === 'Enter' || event.key === ' ') && focused && event.target === focused) { const node = byId.get(focused.dataset.id ?? ''); if (node) { event.preventDefault(); choose(node); } }
       else if (event.key === 'Escape') { event.preventDefault(); setPalette(undefined); setMenu(undefined); setSearch(undefined); onSelect(undefined); container.current?.focus(); }
       else if (mod && key === 'd') { event.preventDefault(); if (editable) duplicate(); }
       else if (mod && key === 'f') { event.preventDefault(); setSearch(''); }
@@ -385,7 +385,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         <Tool label={tx('workflows:canvas.organize')} disabled={!editable || organizing} onClick={() => void organize()}><IconOrganize /></Tool>
       </div>
       <Zoom minimap={minimap} toggleMinimap={() => setMinimap(value => !value)} />
-      <p className={css.canvasStatus} aria-live="polite">{message ?? (organizing ? tx('workflows:canvas.organizing') : tx('workflows:canvas.status', { p0: blockLabel, p1: deepNodeCount(document.block) }))}</p>
+      <p className={css.canvasStatus} aria-live="polite">{message ?? (organizing ? tx('workflows:canvas.organizing') : tx('workflows:canvas.status', { p0: deepNodeCount(document.block) }))}</p>
       {palette && <Palette at={palette.at} tools={tools} omit={unavailableKinds(document, palette.path)} insertion={!!palette.insertion} onChoose={add} onClose={() => { setPalette(undefined); container.current?.focus(); }} />}
       {/* As Dify's node menu: change, then copy and duplicate, then delete. */}
       {menu && (() => {

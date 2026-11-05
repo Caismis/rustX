@@ -4,13 +4,19 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ArtifactResources, ARTIFACT_MAX_BYTES } from '../src/client/artifacts';
 import { Artifact, ArtifactContext } from '../src/app/components/Artifact';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
-import type { UploadedFile } from '../../protocol/app-server/v62';
+import type { UploadedFile } from '../../protocol/app-server/v69';
 import { Server, capabilities, TOKEN } from './fixture';
 let server: Server;
 let sequence = 0;
 const create = vi.fn(() => `blob:${++sequence}`), revoke = vi.fn();
 beforeEach(() => { server = new Server(); vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke })); create.mockClear(); revoke.mockClear(); });
 afterEach(() => { cleanup(); server.client.disconnect(); vi.unstubAllGlobals(); });
+it('an unreadable image placeholder has no fake load or preview controls', () => {
+  const ui = render(<Artifact id="pending-image" name="Pending image" image/>);
+  expect(ui.getByText('Pending image')).toBeTruthy();
+  expect(ui.queryByRole('button')).toBeNull();
+  expect(server.requests).toHaveLength(0);
+});
 it('bounds reads and rejects stale response without creating URLs', async () => {
   await server.attached('A'); server.held.add('artifact/read');
   const resources = new ArtifactResources(server.client, 'A');
@@ -37,10 +43,10 @@ it('decode failure does not reload and repeated mount/unmount releases every URL
   const resources = new ArtifactResources(server.client, 'A');
   for (let i = 0; i < 3; i++) {
     const ui = render(<ArtifactContext.Provider value={resources}><Artifact id="artifact_1" name="image" image /></ArtifactContext.Provider>);
-    fireEvent.click(ui.getByRole('button', { name: 'Load attachment' }));
+    fireEvent.click(ui.getByRole('button', { name: /^Load attachment / }));
     await act(async () => { server.socket.success(server.requests.at(-1)!.request, { type: 'artifact_bytes', data: 'aGk=' }); });
     fireEvent.error(ui.getByAltText('image'));
-    expect(ui.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(ui.getByRole('button', { name: /^Retry / })).toBeTruthy();
     ui.unmount();
   }
   resources.dispose();

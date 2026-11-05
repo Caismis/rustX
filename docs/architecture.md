@@ -236,7 +236,7 @@ to another owner. The default estimator caches exact model-visible JSON byte
 lengths and rounds the complete aggregate once. Arbitrary estimators retain their
 complete-input contract; additivity is never assumed.
 
-The current SQLite development schema is 82, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Older schemas are refused without migration.
+The current SQLite development schema is 84, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Older schemas are refused without migration.
 
 Version 78 adds the `WorkflowNodeWaiting` Journal vocabulary: native node identity,
 wait reason and an optional reserved Auxiliary Call identity. A confirmed append
@@ -1853,10 +1853,10 @@ tools/locator.rs           runtime-owned read locator authority for advertised
                            authority transfer
 tools/managed_output.rs    ManagedToolOutput: the conversation-owned managed
                            tool-output store: lazy foreground result spills
-                           (`results/result_N.txt`, monotonic sequence,
+                           (`r-<16 hex>.txt`, random short names,
                            `create_new`) and the dispatch-allocated
                            background live-output channel
-                           (`tasks/exec_N.output`); owns model-mutation
+                           (`e-<16 hex>.output`); owns model-mutation
                            rejection for its runtime-owned namespace
 tools/artifacts.rs         ArtifactStore: conversation-owned opaque monotonic
                            artifact ids with streaming spooling (genuine
@@ -2738,8 +2738,8 @@ or reset by a configuration change. The runtime owns the canonical
 monotonic `artifact_N` ids, streaming spooling of genuine semantic
 artifacts), and the `ManagedToolOutput` store (auxiliary runtime-owned
 textual output storage addressed by absolute path, never a semantic
-artifact: `tool-output/results/result_N.txt` lazy spill files of oversized
-foreground textual tool output, and `tool-output/tasks/exec_N.output`
+artifact: `<temp>/rx-<16 hex>/r-<16 hex>.txt` lazy spill files of oversized
+foreground textual tool output, and `<temp>/rx-<16 hex>/e-<16 hex>.output`
 live-output files allocated at the background dispatch commit point and
 reused by the terminal settlement message). The
 artifact root and the workspace root must be disjoint filesystem regions:
@@ -3061,9 +3061,9 @@ the timeout/cancellation contract. The child runs with an explicit
 before multiplexing (every advertised output path holds valid text for
 Read/Grep), bounded head/tail previews per stream, and mode-dependent
 output storage in the conversation's managed tool-output store: foreground
-output spills lazily into `results/result_N.txt` only once the preview
+output spills lazily into `r-<16 hex>.txt` only once the preview
 bound is crossed, while a background execution streams into its
-dispatch-allocated live-output file `tasks/exec_N.output` from the first
+dispatch-allocated live-output file `e-<16 hex>.output` from the first
 byte on (the absolute path is runtime-owned typed continuation metadata —
 `ToolExecutionResult::managed_output` — which the canonical model-facing
 projection presents exactly once; the result's `artifacts` stay empty — text
@@ -3107,7 +3107,7 @@ The limits have deliberately different meanings:
 In foreground mode, a complete deterministic representation at or below the
 shared preview threshold remains a direct result and creates no result spill.
 Crossing the threshold lazily allocates exactly one
-`results/result_N.txt`, streams the complete representation there, and
+`r-<16 hex>.txt`, streams the complete representation there, and
 publishes a bounded deterministic preview plus typed `Complete` continuation.
 An allocation failure publishes `Unavailable`; a write/read failure retains
 the locator as `Partial`. Result size alone never changes semantic success to
@@ -3116,7 +3116,7 @@ MCP content blocks are budgeted collectively, so the canonical preview is
 always valid UTF-8 rather than malformed truncated JSON.
 
 In background mode, `prepare_dispatch` allocates exactly one
-`tasks/exec_N.output` before the accepted result advertises it. Bash streams
+`e-<16 hex>.output` before the accepted result advertises it. Bash streams
 into it while running; MCP writes its complete final logical
 representation to it at result normalization/settlement. The accepted and
 terminal locators are therefore identical, no secondary `results/` spill is
@@ -4895,7 +4895,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v62
+       App Server protocol v69
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4911,15 +4911,17 @@ JSONL and WebSocket in #36 bind App Server, including its standalone process ent
 point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
-The current internal envelope is Runtime Client v79. It removes speculative
-cached-Connecting source state; App Server v62 records first-submission intent
+The current internal envelope is Runtime Client v81, distinguishing incomplete
+historical Workflow nodes from proven current activity. It retains Workflow
+data-node observation kinds and the removal of speculative cached-Connecting
+source state; App Server v69 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v62, the only external product control protocol, and
+console speak App Server v69, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -7452,7 +7454,7 @@ See [Model contracts and examples](workflow-programs.md#direct-model-nodes-issue
 
 ## Scheduler product projection
 
-App Server v62 provides a bounded, read-only task catalog over the existing
+App Server v69 provides a bounded, read-only task catalog over the existing
 Session catalog and exact-node schedule readers. Keyset traversal, instruction
 search and unavailable-source reporting stay native; the browser does not walk
 Session trees or load runtimes to discover tasks. A coalesced native watch hint
@@ -7474,3 +7476,40 @@ counts. Chat owns Tool disclosure by native occurrence across reparenting;
 Workflow hydration preserves same-mode manual disclosure. Task virtualization
 uses native task keys for measurements. File-preview version validation keeps
 the stable code-rendering lifecycle and focus.
+
+## Temporary output storage (Issue #520)
+
+`ManagedToolOutput` owns real temporary files and the unchanged Native Write/Edit
+mutation guard. Its storage module records minimal trusted namespace bindings in
+the Conversation private allocation. Filesystem locators use independent 64-bit
+random names, exclusive creation and bounded retries; Session, Conversation and
+ToolExecution IDs retain their semantic meaning. Namespace metadata is published
+once per allocation namespace, never once per output fragment or tool result.
+
+Runtime composition binds local resources and lifecycle access. Session ownership
+includes those bindings in deletion revisions; committed cleanup validates each
+namespace and removes its flat contents before deleting the private allocation.
+Descriptor-relative operations reject symlink redirection. Detached sinks retain
+the same Conversation exclusion pin as durable stores. The OS temporary parent
+is never added to read authorization or the Native mutation guard.
+
+Canonical History, Event Journal, Trace and clients retain the original locator
+and capture-time Complete/Partial facts. They neither own storage nor repair a
+missing file. Forks/clones copy references without acquiring cleanup authority;
+child Conversations allocate independently. Archives omit full auxiliary output.
+A later OS cleanup can make output unavailable without breaking Session recovery,
+history browsing, or continued conversation. Complete oversized output is not
+necessarily reconstructible. See [the full contract](issue-520/README.md).
+
+Temporary output deletion durably retires namespaces into a product-owned private
+arena on the source filesystem before unlinking content. The moved object is
+revalidated, and final removal uses the arena descriptor rather than the public
+locator. A durable confirmed slot plus the arena's retained marker permits
+restart completion after the slot marker was unlinked. Shared arena bindings and
+empty scaffolding remain outside the Session cascade; they contain no spill index
+and require no temp-root scan. See [the lifecycle contract](issue-520/README.md).
+
+Unconfirmed retirement validation and no-replace restoration are shared by live
+cleanup and restart. Failed validation of any captured directory entry restores
+its public location when free; a later public occupant preserves both entries
+and pending authority. No deletion or successful cleanup follows failed proof.

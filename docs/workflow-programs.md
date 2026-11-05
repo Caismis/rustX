@@ -26,14 +26,15 @@ block contains an `input` JSON Schema (omitted, it is the empty closed object),
 `nodes`, and `edges`. As in Dify, there is no declared output schema: the
 workflow's result is what its Return nodes return (see below). Exactly one node in each block has `type: start`;
 its outgoing edges select the initial work. The node vocabulary is Start, Agent,
-Model, Tool, Branch, Review, Iteration, Loop, Exit Loop (`loop_end`), Variable
-Assigner (`assigner`) and Return. Iteration and Loop own a body, a block with no
+Model, Tool, Template, List Operator, Question Classifier, Variable Aggregator,
+Branch, Review, Iteration, Loop, Exit Loop (`loop_end`), Variable Assigner
+(`assigner`) and Return. Code Execution lowers to builtin Bash. Iteration and Loop own a body, a block with no
 input of its own. There is no explicit Parallel node, scalar `entry`
 field, callable subworkflow, conversation or independent job.
 
 Parallelism is expressed by multiple edges from the same output port, following
 Dify's graph convention. Ordinary edges omit `port`; Branch uses stable case IDs
-and `false` for ELSE. Each port may have
+and `false` for ELSE; Question Classifier uses its class IDs. Each port may have
 multiple distinct targets. Identical `(from, port, to)` connections are rejected.
 
 ## Direct Model nodes (Issue #496)
@@ -471,6 +472,237 @@ are presentation only. Editor titles/author notes/layout/order are separate file
 enter Tool contracts, trusted Model/Agent instructions or execution state. See
 [the complete file and authoring analysis contract](workflow-authoring.md#complete-native-file-document).
 
+## Data processing nodes
+
+These nodes follow Dify's explicit inputs and outputs. Template, List Operator
+and Variable Aggregator execute in the native runtime without model calls.
+Question Classifier lowers to one tool-free Model call under the invoking
+Attempt's frozen model policy. All four participate in ordinary compilation,
+candidate analysis, resource bounds and run observations; the browser only
+authors their configuration.
+
+### Template (`template`)
+
+Named `variables` bind ordinary typed value expressions. `template` is Jinja
+syntax rendered by MiniJinja, with conditionals, loops and standard filters:
+
+```yaml
+format_answer:
+  type: template
+  variables:
+    answer: {type: reference, path: [summarize, text]}
+  template: 'Answer: {{ answer | trim }}'
+```
+
+The result is `{output: <string>}`. Up to 32 inputs have unique ASCII identifier
+names. As in Dify's Jinja2 sandbox, unbound names and missing object keys print
+empty; `default` and `is defined` can handle them. Invalid syntax, operations
+on an undefined value and unresolved native reference bindings still fail.
+Text is not HTML-escaped. Python-style string/dictionary methods use
+MiniJinja's maintained `pycompat` extension, and `range` allows at most 100,000
+entries. There is no file loader or access to Python/host objects. Template
+source, resolved input context and rendered text each have a 64 KiB budget.
+Rendering also has a 50,000-operation fuel budget and recursion limit 32.
+The final output object must fit the ordinary 64 KiB node-value limit.
+
+Admission parses Jinja syntax without evaluating or constant-folding source.
+Compilation and rendering run in the native `workflow-renderer` helper beside
+`rustx` (built and installed with the other binaries by `cargo build --bins`
+or `cargo install --path .`). Its private input files each fit 64 KiB and
+remain owned until the existing process supervisor drains and reaps the
+worker. The worker has a 128 MiB live requested-heap limit, a one-second CPU
+limit and a two-second wall deadline; Linux additionally caps its address
+space at 512 MiB. Native filters, string/list expansion and captured blocks
+therefore cannot bypass the server's resource boundary. Cancellation waits
+for supervised settlement. At most two renderer workers run per server,
+including workers whose result waiters have gone away. A resource-limit
+failure fails the Template node.
+
+The visual editor starts with an unbound `arg1` and `{{ arg1 }}`. Inputs select
+native incoming variables of any JSON type. Typing `/` or `{` in the numbered
+Jinja editor selects an upstream variable, reuses an existing binding or adds
+one, and inserts `{{ name }}`. Generated interpolation tokens are renamed
+with their binding, following Dify's direct-token replacement; arbitrary
+expressions are edited in the source. Copy, vertical resize and expansion
+preserve the editor and draft. The fixed `output:string` description is folded
+by default. No AI authoring controls are included.
+
+### List Operator (`list`)
+
+`input` must have an array schema with declared items. Each operation is
+optional, and execution follows Dify's order: **filter → serial extraction →
+stable sort → limit**. The panel arranges Filter, Extract, Limit and Sort as in
+Dify; source type determines the operators and comparison control.
+
+```yaml
+rank:
+  type: list
+  input: {type: reference, path: [args, records]}
+  filter:
+    path: [score]
+    operator: greater_equal
+    value: {type: literal, value: 0.5}
+  extract: {type: reference, path: [args, serial]}
+  sort: {path: [score], order: desc}
+  limit: 10
+```
+
+A `path` is a list of literal required JSON object fields; `[]` selects a
+primitive item itself. Strings support equality, contains/not-contains,
+starts/ends-with, empty/not-empty and in/not-in. Numeric inputs support the
+six comparisons, and booleans support equality/inequality. Comparison values
+and serials are native typed values; the panel supports variable tokens.
+Rendered numeric text is parsed for numeric comparisons. Integers retain the
+native exact-order comparison rather than being rounded to binary64.
+
+Serials are positive 1-based integers, applied to the filtered list before
+sorting; an out-of-range serial fails. An originally empty input returns an
+empty list directly. Limits are 1–20, initially 10, with a slider and numeric
+input. Stable ascending/descending sorting keeps source order on ties.
+
+Outputs are `result` (the resulting typed array), `first_record` and
+`last_record`. Empty lists explicitly produce null for both endpoint records;
+their schemas are nullable. The complete output, including first/last copies,
+must fit 64 KiB. JSON object arrays retain rustX's required-field selectors;
+Dify-specific File/transfer metadata is not represented as fabricated JSON
+file controls.
+
+### Question Classifier (`classifier`)
+
+Select a string or numeric input variable. Each class has a stable `id`, a
+human-readable `label`, and `description` parts (text literals or variable
+references). The optional `instruction` is the same typed parts array. Renaming
+or reordering labels keeps the exit IDs and connections intact. Native scope
+analysis checks references in the input, every topic and the instructions.
+
+```yaml
+classify:
+  type: classifier
+  input: {type: reference, path: [args, query]}
+  instruction:
+    - {type: literal, value: "Choose the closest topic."}
+  classes:
+    - id: support
+      label: Support
+      description:
+        - {type: literal, value: "Support requests concerning "}
+        - {type: reference, path: [args, product]}
+    - id: other
+      label: Other
+      description:
+        - {type: literal, value: "Other questions"}
+```
+
+The node uses one native Auxiliary model call and admits only the validated
+selected exit. Its result has `class_name` (the rendered topic), `class_label`
+(the authored display label), `usage`, and the routing `class_id`. The panel
+shows the same three user-facing outputs as Dify. Unknown model choices fail;
+they do not select the first class. Vision is disabled because native Workflow
+classification currently accepts text/numeric variables, not image inputs.
+Standalone Workflows have no Dify Chatflow memory setting.
+
+### Variable Aggregator (`aggregate`)
+
+The initial node has `grouped: false`, an empty variable list and no selected
+output type. Selecting the first variable infers the type; subsequent choices
+must match it. Removing every source clears the type. Duplicate selectors are
+not added. The ungrouped result is `{output: <first available value>}`.
+
+```yaml
+merge:
+  type: aggregate
+  grouped: true
+  groups:
+    - name: answer
+      output_type: string
+      variables: [[support_answer, output], [other_answer, output]]
+```
+
+The grouped result is `{answer: {output: <selected value>}}`, with selectors
+such as `[merge, answer, output]`. Groups and sources each have a 1–32 active
+limit. The panel provides group naming, automatic type badges, same-type
+source selection, empty-state guidance and an output disclosure. Disabling
+groups uses the first group's sources and retains the other configurations
+for reenabling, as Dify does. Inactive sources do not create execution reads,
+type checks or activation requirements.
+
+Enabling/disabling grouping and renaming a group rewrite structured downstream
+references. Removing a referenced group or disabling additional referenced
+groups requires confirmation before clearing those references. Undo restores
+configuration and references together. Group configuration is retained when
+disabled, while its removed output references are cleared after confirmation.
+
+Execution scans each active group's selectors in authored order and selects
+the first available source, including when several parallel producers have
+completed. Native analysis exposes possible ancestors for these selectors.
+The compiler still requires matching types and proves at least one source on
+every activation, preserving rustX's definite-reference contract; ordinary
+nodes do not gain access to optional branch producers. The old flat named
+group output format is removed; App Server v69 requires the grouping flag.
+
+### Code Execution and Variable Assigner
+
+The **Code Execution** chooser creates a `code` node with Python3 and
+JavaScript language choices, named variable selectors and typed outputs. The
+initial configuration follows Dify: Python3, two unbound inputs `arg1`/`arg2`, a
+`main` function returning their concatenation, and one String output `result`.
+Switching language restores the corresponding default code, inputs and output
+in one undoable edit. Referenced outputs removed by that reset are cleared.
+
+```yaml
+process:
+  type: code
+  code_language: python3
+  variables:
+    arg1: {type: reference, path: [args, first]}
+    arg2: {type: reference, path: [args, second]}
+  code: |
+    def main(arg1: str, arg2: str):
+        return {"result": arg1 + arg2}
+  outputs:
+    result: string
+```
+
+For JavaScript use `code_language: javascript` with
+`function main({arg1, arg2}) { return {result: arg1 + arg2}; }`.
+Python receives keyword arguments; JavaScript receives the inputs object and
+may return a Promise. Inputs retain their JSON types, including embedded NUL
+characters in strings. Python integers retain their native precision;
+JavaScript uses its ordinary Number semantics. Return an object from `main`;
+the runner serializes it automatically. Normal `print`, `console.log` and
+stdout writes are recorded as native stderr logs and do not pollute the result.
+All declared outputs are required and undeclared extra fields are rejected.
+Each Code invocation receives a separate complete stdout capture bounded to
+64 KiB. The runtime parses its original bytes only after EOF and native
+settlement, independently of Bash's 16 KiB model-facing previews and combined
+stdout/stderr spill. Overflow is an explicit output error, never a truncated
+JSON return. Valid large returns therefore do not trigger retries merely
+because the presentation preview is shorter than the result.
+
+The node lowers to one ordinary admitted builtin Bash invocation in the
+calling Session's workspace. `python3` or `node` must be available in that
+Bash tool's approved environment, including any configured Skill environment
+overlay. It does not install interpreters, load arbitrary shell startup files
+or inherit the launching process's PATH. Workspace Python imports and Node
+require calls use the calling workspace. Source and typed inputs arrive as
+quoted JSON stdin data, never shell interpolation or command-line arguments.
+Native approval, physical settlement, deadline, cancellation and Scheduled
+effects retain their existing owners. A failed process or invalid return
+follows `retry` and `on_error` (`stop`, `default_value` or `fail_branch`). Every
+retry is a distinct native invocation and may repeat workspace side effects.
+
+The editor offers Dify's parameter synchronization, copy/expand and typed
+output controls. Synchronization uses real language syntax trees, retaining
+the function body and comments, with Python annotations derived from native
+variable analysis. Stale analysis cannot replace a newer document or draft.
+There is no AI code generation, sandbox service or selectable working
+directory. Ordinary Bash Tools retain their existing fixed result contract.
+The old Bash-language Code definition is removed; code_language is required.
+
+**Variable Assigner** remains the native `assigner` node described under Loop
+below. It is offered inside a Loop body and updates that Loop's declared
+variables with the operations supported by their types.
+
 ## Values and predicates
 
 Values are a closed tagged AST:
@@ -488,8 +720,9 @@ like a Model message's `content`, is a list of fixed string literals and
 references, rendered in order when the AgentRun starts: a string is inserted
 as itself, any other value as JSON text. The task is the only way workflow
 values reach an Agent. A `template` value renders its parts the same way into
-one string; the visual editor writes a Tool's text parameters as templates. There is no interpolation, truthiness, callback, Transform node,
-or embedded programming language. Unknown fields/tags and duplicate
+one string; the visual editor writes a Tool's text parameters as templates.
+This value expression does not interpret Jinja or interpolate string literals;
+Jinja belongs to the explicit Template node above. Unknown fields/tags and duplicate
 construction field keys are rejected. A failing construction commits no
 partial local value.
 
@@ -522,16 +755,20 @@ cases:
 Connect this node with `port: 'true'`, `port: needs_revision`, and
 `port: 'false'`. The obsolete single `condition` field is rejected.
 
-`boolean` requires a boolean. `equal` and `not_equal` require matching
-string, boolean, or null types and compare their exact JSON values.
-`contains`, `not_contains`, `starts_with`, and `ends_with` compare two strings;
-their right operand must be nonempty when written as a literal. `empty` and
-`not_empty` test one string without a right operand.
+`boolean` requires a boolean, with no implicit truthiness. `equal` and
+`not_equal` compare matching string, boolean or null operands, or two numeric
+operands. `greater`, `greater_equal`, `less` and `less_equal` require numbers;
+integer and number operands interoperate without rounding integers through f64.
+`contains` and `not_contains` accept two strings or an array and a matching item.
+`starts_with` and `ends_with` compare strings. String search operands written as
+literals must be nonempty. `empty` and `not_empty` take one value: as Dify's
+explicit empty operator, null, false, zero, empty strings, arrays and objects are
+empty; whitespace and nonempty containers are not. These operators do not
+introduce truthiness into the boolean predicate.
 `not` takes one predicate; `and` and `or` take nonempty predicate lists and
 short-circuit in definition order. All operands are statically checked,
-including short-circuited ones. Numeric predicates, ordering comparisons,
-object/array equality, and all implicit coercions are unsupported. Integer
-and number data can still be bound, constructed and returned.
+including short-circuited ones. Object/array equality and implicit string/number
+coercions are unsupported.
 
 ## Conservative schema proof
 

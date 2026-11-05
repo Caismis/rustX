@@ -778,6 +778,17 @@ pub enum RuntimeEvent {
     WorkflowNodeStarted {
         instance: crate::runtime::workflow::WorkflowNodeInstance,
     },
+    /// Original input scope of one admitted node. Large bodies are explicitly omitted.
+    WorkflowNodeInputRecorded {
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+        kind: crate::runtime::workflow::read_model::WorkflowNodeKind,
+        value: Option<String>,
+    },
+    /// The actual node completion, never a reconstruction from the program.
+    WorkflowNodeOutputRecorded {
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+        value: Option<String>,
+    },
     /// A node entered a native wait; this audit fact releases its read-model cut.
     /// A reserved Auxiliary identity does not claim provider dispatch or settlement.
     WorkflowNodeWaiting {

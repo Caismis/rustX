@@ -41,7 +41,7 @@
 //!
 //! Every accepted background execution owns a stable read-only live-output
 //! locator in the conversation's managed tool-output store
-//! (`tasks/exec_N.output`). This is an asynchronous execution observation
+//! (`e-<16 hex>.output`). This is an asynchronous execution observation
 //! channel, NOT context-overflow storage: the file is allocated by
 //! [`ConversationBackgroundRegistry::prepare_dispatch`], strictly before
 //! the ownership commit, so the accepted result can advertise the absolute
@@ -54,7 +54,7 @@
 //! after their logical result is known, their Tool Plane normalization writes
 //! the complete deterministic representation to this same sink before the
 //! executor future returns. Terminal settlement then reuses the exact path;
-//! no `results/result_N.txt` is allocated for an accepted background result,
+//! no `r-<16 hex>.txt` is allocated for an accepted background result,
 //! regardless of origin or result size. The locator is ordinary textual
 //! metadata in both messages, never a `File` modality, and the terminal
 //! canonical message stays bounded while structurally retaining the locator
@@ -2038,6 +2038,9 @@ impl ConversationBackgroundRegistry {
     /// owner's settlement — becomes observable only once that callback has
     /// returned and no conversation callback authority remains.
     fn settle_terminal(&self, execution_id: &ToolExecutionId, result: &ToolExecutionResult) {
+        self.resources
+            .tool_output
+            .settle_background_output(execution_id);
         self.finish(execution_id, result);
         let Some(snapshot) = self.retry_terminal_publication(execution_id) else {
             return;
@@ -2512,6 +2515,7 @@ impl ConversationBackgroundRegistry {
                 execution_id: execution_id.clone(),
             });
             let context = ToolExecutionContext {
+                stdout_capture: None,
                 workspace_changes: None,
                 model_invocation: None,
                 goal: None,
@@ -4983,7 +4987,13 @@ mod tests {
         assert_eq!(advertised, output_path.to_str().expect("utf8 path"));
         assert!(std::path::Path::new(advertised).is_absolute());
         assert!(
-            advertised.ends_with(&format!("tasks/{execution_id}.output")),
+            advertised.ends_with(".output")
+                && std::path::Path::new(&advertised)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("e-"),
             "the live-output locator shape: {advertised}"
         );
         assert!(
@@ -5024,14 +5034,18 @@ mod tests {
             matches!(error, super::BackgroundDispatchError::Output { .. }),
             "typed output-allocation refusal: {error}"
         );
-        let output_path = fixture
-            .registry
-            .resources()
-            .tool_output
-            .background_output_path(&ToolExecutionId::new(
-                "exec_01900000-0000-7000-8000-000000000001",
-            ));
-        assert!(!output_path.exists(), "no orphan output file");
+        assert_eq!(
+            std::fs::read_dir(fixture.registry.resources().tool_output.root().unwrap())
+                .unwrap()
+                .filter(|e| e
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("e-"))
+                .count(),
+            0
+        );
         assert!(
             fixture.registry.all_snapshots().is_empty(),
             "no execution record exists"
@@ -5162,6 +5176,7 @@ mod tests {
             .start(
                 read_invocation,
                 ToolExecutionContext {
+                    stdout_capture: None,
                     workspace_changes: None,
                     model_invocation: None,
                     goal: None,
@@ -5212,6 +5227,7 @@ mod tests {
             .start(
                 grep_invocation,
                 ToolExecutionContext {
+                    stdout_capture: None,
                     workspace_changes: None,
                     model_invocation: None,
                     goal: None,
@@ -5241,7 +5257,14 @@ mod tests {
         };
         assert_eq!(
             grep_text,
-            format!("{execution_id}.output:1: line-A"),
+            format!(
+                "{}:1: line-A",
+                std::path::Path::new(&output_path)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+            ),
             "Grep finds the committed prefix in the live file while the execution runs"
         );
 
@@ -5274,9 +5297,11 @@ mod tests {
         );
         // No foreground-style result spill was created for the same payload.
         assert!(
-            std::fs::read_dir(tool_output.root().join("results"))
+            std::fs::read_dir(tool_output.root().unwrap())
                 .expect("results dir")
-                .next()
+                .find(|entry| entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
                 .is_none(),
             "background output never becomes a second result spill"
         );
@@ -5364,17 +5389,12 @@ mod tests {
             "hello\n"
         );
         assert!(
-            std::fs::read_dir(
-                fixture
-                    .registry
-                    .resources()
-                    .tool_output
-                    .root()
-                    .join("results")
-            )
-            .expect("results dir")
-            .next()
-            .is_none(),
+            std::fs::read_dir(fixture.registry.resources().tool_output.root().unwrap())
+                .expect("results dir")
+                .find(|e| e
+                    .as_ref()
+                    .is_ok_and(|e| e.file_name().to_string_lossy().starts_with("r-")))
+                .is_none(),
             "no result spill exists for tiny background output"
         );
     }
@@ -5594,17 +5614,12 @@ mod tests {
         );
         assert!(!text.contains("Complete output:"), "{text}");
         assert!(
-            std::fs::read_dir(
-                fixture
-                    .registry
-                    .resources()
-                    .tool_output
-                    .root()
-                    .join("results")
-            )
-            .expect("results dir")
-            .next()
-            .is_none(),
+            std::fs::read_dir(fixture.registry.resources().tool_output.root().unwrap())
+                .expect("results dir")
+                .find(|e| e
+                    .as_ref()
+                    .is_ok_and(|e| e.file_name().to_string_lossy().starts_with("r-")))
+                .is_none(),
             "no second result spill exists"
         );
     }
@@ -5698,17 +5713,12 @@ mod tests {
             "the terminal inbound repeats the exact locator: {text}"
         );
         assert!(
-            std::fs::read_dir(
-                fixture
-                    .registry
-                    .resources()
-                    .tool_output
-                    .root()
-                    .join("results")
-            )
-            .expect("results dir")
-            .next()
-            .is_none(),
+            std::fs::read_dir(fixture.registry.resources().tool_output.root().unwrap())
+                .expect("results dir")
+                .find(|e| e
+                    .as_ref()
+                    .is_ok_and(|e| e.file_name().to_string_lossy().starts_with("r-")))
+                .is_none(),
             "no second result spill exists"
         );
     }
@@ -5800,17 +5810,12 @@ mod tests {
             "the terminal publication repeats the same locator: {text}"
         );
         assert!(
-            std::fs::read_dir(
-                fixture
-                    .registry
-                    .resources()
-                    .tool_output
-                    .root()
-                    .join("results")
-            )
-            .expect("results dir")
-            .next()
-            .is_none(),
+            std::fs::read_dir(fixture.registry.resources().tool_output.root().unwrap())
+                .expect("results dir")
+                .find(|e| e
+                    .as_ref()
+                    .is_ok_and(|e| e.file_name().to_string_lossy().starts_with("r-")))
+                .is_none(),
             "no duplicate result spill exists"
         );
     }
@@ -5823,7 +5828,7 @@ mod tests {
     /// the canonical terminal message.
     #[test]
     fn the_terminal_projection_retains_the_locator_under_bounding() {
-        let path = "/owned/conversation/tool-output/tasks/exec_01900000-0000-7000-8000-000000000009.output";
+        let path = "/tmp/rx-0000000000000001/e-0000000000000009.output";
         // \u0001 serializes as \u0001 in JSON (6 chars per byte): an
         // escape-expensive body that crosses the projection bound many
         // times over.
@@ -5985,7 +5990,7 @@ mod tests {
     #[test]
     fn the_continuation_cannot_exceed_the_projection_bound() {
         let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
-        let path = "/owned/conversation/tool-output/tasks/exec_01900000-0000-7000-8000-000000000007.output";
+        let path = "/tmp/rx-0000000000000001/e-0000000000000007.output";
         // A byte-expensive diagnostic: every 'é' costs two bytes, and the
         // payload is many times the projection bound.
         let enormous = "é".repeat(bound * 4);

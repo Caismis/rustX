@@ -271,7 +271,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 82);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 84);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -336,7 +336,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 82);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 84);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -514,7 +514,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
     use crate::runtime::identity::AuxiliaryCallId;
     use crate::runtime::workflow::read_model::WorkflowWait;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 82);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 84);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-wait.sqlite");
@@ -565,6 +565,81 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
         .map(|entry| entry.unwrap().file_name())
         .collect::<Vec<_>>();
     assert_eq!(files, [std::ffi::OsString::from("workflow-wait.sqlite")]);
+}
+
+#[test]
+fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
+    use crate::runtime::workflow::read_model::WorkflowNodeKind;
+
+    assert_eq!(SQLITE_SCHEMA_VERSION, 84);
+    assert_eq!(EVENT_SCHEMA_VERSION, 1);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workflow-node-io.sqlite");
+    let conversation = ConversationId::generate();
+    let mut instance = crate::runtime::workflow::test_instance("node-format", "render");
+    instance.block.run.conversation_id = conversation.clone();
+    let committed = {
+        let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+        [
+            RuntimeEvent::WorkflowNodeInputRecorded {
+                instance: instance.clone(),
+                kind: WorkflowNodeKind::Template,
+                value: Some(r#"{"args":{"name":"world"},"variables":{}}"#.into()),
+            },
+            RuntimeEvent::WorkflowNodeOutputRecorded {
+                instance,
+                value: Some(r#"{"value":"Hello world"}"#.into()),
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, event)| {
+            store
+                .append_event(envelope(
+                    &conversation,
+                    &format!("workflow-node-io-{index}"),
+                    None,
+                    event,
+                ))
+                .unwrap()
+        })
+        .collect::<Vec<_>>()
+    };
+    {
+        let current = SqliteConversationStore::open_existing(conversation.clone(), &path).unwrap();
+        assert_eq!(current.read_events(None, 2).unwrap().events, committed);
+    }
+    {
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "UPDATE rustx_store SET schema_version=83 WHERE id=1;
+             DROP INDEX events_workflow_node_run_kind_idx;
+             DROP INDEX events_workflow_node_instance_kind_idx;",
+            )
+            .unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    for create_if_missing in [false, true] {
+        let result = if create_if_missing {
+            SqliteConversationStore::open(conversation.clone(), &path)
+        } else {
+            SqliteConversationStore::open_existing(conversation.clone(), &path)
+        };
+        assert!(matches!(
+            result,
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 83,
+                expected: SQLITE_SCHEMA_VERSION,
+            })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+    let files = std::fs::read_dir(directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(files, [std::ffi::OsString::from("workflow-node-io.sqlite")]);
 }
 
 /// Pre-integration stores can hold retired workspace facts or lack the

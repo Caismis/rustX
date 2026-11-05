@@ -1,0 +1,210 @@
+.panel {
+  min-width: 0;
+}
+.panel > section {
+  padding: 16px 0;
+  margin: 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l3);
+}
+.panel > section:first-child {
+  padding-top: 0;
+}
+.panel h3 {
+  font-size: 13px;
+  font-weight: 600;
+}
+.input > div > button {
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 10px;
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+.input[data-empty] > div > button {
+  color: var(--dsw-alias-label-tertiary);
+}
+.input[data-empty] > div > button::before {
+  content: '{x}';
+  font-family: var(--ds-font-family-code);
+  margin-right: 6px;
+}
+.condition {
+  display: flex;
+  gap: 4px;
+  align-items: start;
+  min-width: 0;
+}
+.condition > select {
+  flex: 0 1 112px;
+  width: 112px;
+  min-width: 0;
+  height: 32px;
+  padding: 4px 8px;
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+  border: 0;
+  border-radius: 8px;
+}
+.condition > div {
+  flex: 1;
+  min-width: 0;
+}
+.scalar > div {
+  min-height: 32px;
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+  border-radius: 8px;
+  border-color: transparent;
+}
+.scalar [contenteditable='true'] {
+  min-height: 22px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 22px;
+}
+.scalar [contenteditable='false'] {
+  vertical-align: top;
+}
+.options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.options button {
+  padding: 8px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.options button[aria-checked='true'] {
+  border-color: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+.slider {
+  width: 100%;
+  accent-color: var(--dsw-alias-state-business-primary);
+}
+.variables {
+  display: grid;
+  gap: 8px;
+}
+.source {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  align-items: center;
+}
+.source > div {
+  min-width: 0;
+  flex: 1;
+}
+.source > button {
+  flex: none;
+}
+.group + button {
+  margin-top: 8px;
+}
+.group + .group {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--dsw-alias-border-l3);
+}
+.group h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+.group h3 input {
+  min-height: 26px;
+  height: 26px;
+  padding: 2px 4px;
+  border-color: transparent;
+  background: transparent;
+  font-weight: 600;
+}
+.badge {
+  flex: none;
+  padding: 1px 4px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  font-weight: 400;
+}
+.empty {
+  padding: 12px;
+  margin: 0;
+  text-align: center;
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+  border-radius: 8px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+.help {
+  margin: 8px 0 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.inputRow {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+.inputRow > div {
+  flex: 1;
+  min-width: 0;
+}
+.limit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 68px;
+  gap: 12px;
+  align-items: center;
+}
+.limit > div {
+  margin: 0;
+  min-width: 0;
+}
+.limit > div > label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.limit input:not([type='range']) {
+  height: 32px;
+  min-height: 32px;
+  width: 100%;
+  padding: 4px 8px;
+}
+
+/* Inline pickers use the surrounding row's spacing, including variable tokens. */
+.input > div,
+.scalar [contenteditable='false'] > div {
+  margin-bottom: 0;
+}
+.group h3 > div {
+  margin-bottom: 0;
+  flex: none;
+}
+.group h3 > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.group h3 > span:first-child {
+  margin-right: auto;
+}
+.group h3 input {
+  width: 100%;
+  min-width: 0;
+}

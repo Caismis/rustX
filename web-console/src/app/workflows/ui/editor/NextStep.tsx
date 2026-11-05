@@ -4,13 +4,13 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
-import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v62';
+import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v69';
 import { IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import { addNode, connect, disconnect, freshNodeId } from '../../document/commands';
 import { nodePresentation, setNodePresentation } from '../../document/geometry';
 import { blockAt, edgesOf, nodeAt, startOf, sameBlockPath, unavailableKinds, type BlockPath, type NodeKind, type WorkflowDocument } from '../../document/model';
 import { edgePort, portsOf, type ControlPort, type BuiltinPort } from '../../document/ports';
-import { IconBlock, IconEntry, IconPlus, KindIcon } from '../icons';
+import { IconBlock, IconEntry, IconPlus, KindIcon, nodeIconKind } from '../icons';
 import { NODE_WIDTH, projectScene } from './scene';
 import { viewId, type Selection } from './selection';
 import { chosenNode, NodeChooser, type Choice } from './NodeChooser';
@@ -87,7 +87,8 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
   const targetsFor = (port: Port) => edgesOf(owner).filter(edge => edge.from === sourceId && edgePort(edge) === port).map(edge => edge.to);
   // An Agent route or a Human Input action is named by its own ID.
   const portLabel = (port: Port) => sourceNode?.type === 'branch' ? branchPortLabel(sourceNode, port)
-    : sourceNode?.type === 'agent' && sourceNode.routes?.some(route => route.id === port) ? port
+    : sourceNode?.type === 'classifier' ? sourceNode.classes.find(item => item.id === port)?.label || port
+      : sourceNode?.type === 'agent' && sourceNode.routes?.some(route => route.id === port) ? port
       : sourceNode?.type === 'review' && sourceNode.actions.some(action => action.id === port) ? port : tx(`workflows:port.${port as BuiltinPort}`);
   function nodeTitle(id: string) {
     return nodePresentation(document, block, id)?.title || id;
@@ -137,7 +138,7 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
     <p className={css.nextHint}>{tx('workflows:next-step.hint')}</p>
     <div className={clsx(css.nextFlow, sourceNode?.type === 'branch' && css.branchNextFlow)}>
       <span className={clsx(css.nextSource, sourceNode?.type === 'start' ? css.startIcon : css[`kind_${sourceNode!.type}`])}>
-        {sourceNode?.type === 'start' ? <IconEntry size={18} /> : <KindIcon kind={sourceNode!.type} size={18} />}
+        {sourceNode?.type === 'start' ? <IconEntry size={18} /> : <KindIcon kind={nodeIconKind(sourceNode!)} size={18} />}
       </span>
       <NextLine anchors={anchors} />
       <div ref={portList} className={css.nextPorts}>
@@ -147,7 +148,7 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
             {ports.length > 1 && <span className={css.nextPortLabel} data-port-label>{portLabel(port)}</span>}
             {targets.map(target => { const targetNode = nodeAt(owner, target); return <div key={target} className={css.nextConnected}>
               <button type="button" className={css.nextTarget} title={nodeTitle(target)} onClick={() => onSelect({ kind: 'node', id: target, path: block })}>
-                <span className={clsx(css.nextTargetIcon, targetNode && css[`kind_${targetNode.type}`])}>{targetNode ? <KindIcon kind={targetNode.type} size={15} /> : <IconBlock size={15} />}</span>
+                <span className={clsx(css.nextTargetIcon, targetNode && css[`kind_${targetNode.type}`])}>{targetNode ? <KindIcon kind={nodeIconKind(targetNode)} size={15} /> : <IconBlock size={15} />}</span>
                 <span>{nodeTitle(target)}</span>
               </button>
               <button type="button" className={css.nextRemove} aria-label={tx('workflows:next-step.disconnect', { p0: nodeTitle(target) })} title={tx('workflows:next-step.disconnect', { p0: nodeTitle(target) })} onClick={() => remove(port, target)}><IconCloseOutline16 /></button>

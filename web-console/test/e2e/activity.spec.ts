@@ -51,7 +51,7 @@ test('image row previews managed bytes and Bash description expands to authorita
   const image = page.locator('[data-tool-call-id="read-image"]');
   await expect(image).toHaveAttribute('data-tool-renderer', 'image');
   await image.getByRole('button', { expanded: false }).click();
-  await image.getByRole('button', { name: 'Load attachment' }).click();
+  await image.getByRole('button', { name: /^Load attachment / }).click();
   await expect(image.getByRole('img', { name: 'artifact_1', exact: true })).toBeVisible();
   await expect.poll(() => image.getByRole('img', { name: 'artifact_1', exact: true }).evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth === 1)).toBe(true);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);

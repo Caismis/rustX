@@ -24,9 +24,16 @@ facts and keep unsaved drafts.
             └── conversations/
                 └── conv_<uuid-v7>/
                     ├── conversation.sqlite
-                    └── tool-output/
-                        ├── results/result_<uuid-v7>.txt
-                        └── tasks/exec_<uuid-v7>.output
+                    ├── output-namespaces.json
+                    └── output-namespaces.lock
+
+<std::env::temp_dir()>/
+├── .rx-retired-<16 hex>/            shared private retirement arena (0700)
+│   └── .owner                      product ownership proof, retained
+└── rx-<16 hex>/                     private Conversation namespace (0700)
+    ├── .owner                      ownership validation (0600)
+    ├── r-<16 hex>.txt               lazy foreground spill (0600)
+    └── e-<16 hex>.output            pre-acceptance background output (0600)
 
 <workspace>/
 ├── rustx.toml
@@ -1201,15 +1208,31 @@ Forking allocates a new Conversation without changing the source lineage identit
 Every Conversation has its own SQLite database, including multiple lineages within
 one Session. There is no global or per-Session Conversation database.
 
-Oversized foreground results preserve their bounded canonical ToolResult in
-history and spill auxiliary continuation text to `results/result_<uuid-v7>.txt`.
-Provider ToolCall IDs do not choose filenames and restart does not scan a numeric
-watermark. Background acceptance and terminal/live output use the same
-`tasks/exec_<uuid-v7>.output` locator. Stable model-readable output is Conversation
-owned, outside OS temporary directories. Session/Conversation deletion owns its
-cleanup; no unrelated TTL can invalidate a historical locator. Uncommitted child
-rollback cleans its staged database and managed outputs while retaining its burned
-identity reservation.
+Oversized foreground results preserve bounded canonical ToolResults and stream
+auxiliary text to `<temp>/rx-<16 hex>/r-<16 hex>.txt`. Background acceptance,
+live reads and terminal results share `<temp>/rx-<16 hex>/e-<16 hex>.output`.
+These are real absolute files, allocated exclusively with bounded collision
+retries. Semantic IDs remain full UUIDv7 values and never determine published output filenames.
+There is no output-storage TOML option or persistent fallback.
+
+A temporary root inside the workspace is rejected with a configuration error;
+managed output namespaces must be disjoint from the workspace.
+
+Conversation-local `output-namespaces.json` binds each namespace to its owner,
+filesystem identity and ownership token. A fresh allocator lazily creates a new namespace on first output;
+old bindings retain original locators for reads and Session deletion. A missing
+namespace is never recreated. Published output survives normal exit and runtime
+drop, but the OS may remove it at any time. History remains valid; complete
+oversized output is neither durable nor guaranteed reconstructible. Session
+deletion removes only confirmed owned namespaces under Conversation exclusion.
+It first durably moves each namespace into a private retirement slot on the same
+filesystem, then removes it relative to the validated arena descriptor. The
+arena marker survives Session cleanup so process death after unlinking a slot's
+marker is recoverable. `<ProductRoot>/output-retirement/` retains directly
+addressed arena bindings and a publication lock, without an output index or
+scanning. Empty arenas remain shared product infrastructure outside the cascade.
+Forks/clones inherit source references without deletion authority. Archives omit
+auxiliary output. See [the complete storage contract](issue-520/README.md).
 
 ## Clients and format replacement
 

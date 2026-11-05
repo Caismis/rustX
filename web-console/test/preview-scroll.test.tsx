@@ -84,8 +84,10 @@ it.each(['following', 'detached', 'navigated'] as const)('actual preview geometr
     act(action);
     // Preview controls never write transcript scroll position themselves.
     expect(f.top()).toBe(before); expect(f.writes()).toBe(writes);
-    act(() => f.reflow(37)); expect(f.top()).toBe(before);
-    f.flush(); expect(f.top()).toBe(mode === 'following' ? f.floor() : before + 37);
+    act(() => f.reflow(37));
+    expect(f.top()).toBe(mode === 'following' ? f.floor() : before + 37);
+    const corrected = f.writes();
+    f.flush(); expect(f.writes()).toBe(corrected);
     const held = f.top(); act(() => f.stream(23)); f.flush();
     expect(f.top()).toBe(mode === 'following' ? f.floor() : held);
     expect(f.ui.queryByRole('button', { name: 'Return to latest' }) !== null).toBe(mode !== 'following');
@@ -123,11 +125,11 @@ it.each(['following', 'detached', 'navigated'] as const)('actual preview geometr
   expect(f.observers).toHaveLength(6); f.observers.forEach(observer => expect(observer.disconnect).toHaveBeenCalledOnce());
 });
 
-it('a user scroll between preview reflow and the owned correction frame wins and remains detached during streaming', async () => {
+it('a user scroll after pre-paint preview correction wins and remains detached during streaming', async () => {
   const f = await fixture('following');
   act(() => f.open('A'));
   act(() => f.reflow(80));
-  const writes = f.writes(); expect(f.frames.size).toBeGreaterThan(0);
+  const writes = f.writes(); expect(f.frames.size).toBe(0);
   f.scroll(240); f.flush();
   expect(f.top()).toBe(240); expect(f.writes()).toBe(writes);
   act(() => { fireEvent.click(f.ui.getByRole('button', { name: 'Fullscreen preview' })); f.stream(800); }); f.flush();

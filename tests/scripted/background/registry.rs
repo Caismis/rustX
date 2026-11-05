@@ -424,10 +424,7 @@ async fn ownership_commit_wins_over_later_attempt_cancellation() {
     // live-output locator, allocated at dispatch time.
     let output_path = accepted["output_path"].as_str().expect("output_path");
     assert!(std::path::Path::new(output_path).is_absolute());
-    assert!(
-        output_path.ends_with(&format!("tasks/{execution_id}.output")),
-        "{output_path}"
-    );
+    assert!(output_path.ends_with(".output"), "{output_path}");
     assert!(std::path::Path::new(output_path).exists());
     let note = accepted["note"].as_str().expect("note");
     assert!(

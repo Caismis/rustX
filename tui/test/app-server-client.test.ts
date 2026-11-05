@@ -1,4 +1,4 @@
-import { METHOD_POLICY, requestEffect } from "../../protocol/app-server/method-policy.ts";
+import { METHOD_POLICY, requestEffect, requestLane } from "../../protocol/app-server/method-policy.ts";
 import { jobReceipt, domainReceipt } from './support/fixtures.ts';
 import { checkpoint } from "./support/fixtures.ts";
 import { fixtures as uploadFixtures } from "../../protocol/app-server/fixtures.ts";
@@ -109,8 +109,8 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 62);
-    assert.equal(params.protocol_version, 62);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 69);
+    assert.equal(params.protocol_version, 69);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
     assert.equal(transport.log.count("initialize"), 1);
@@ -138,7 +138,7 @@ describe("initialization", () => {
     assert.ok(transport.closed, "failed initialization releases its physical transport");
   });
 
-  it("refuses a v56 server before using the v62 protocol contract", async () => {
+  it("refuses a v56 server before using the v69 protocol contract", async () => {
     const transport = new FakeTransport();
     const pending = AppServerClient.initialize({ transport });
     const [request] = await transport.log.awaitMethod("initialize");
@@ -147,7 +147,7 @@ describe("initialization", () => {
       protocol_version: 56,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 56, this client speaks 62/);
+    await assert.rejects(pending, /negotiated protocol 56, this client speaks 69/);
     assert.equal(transport.log.count("initialize"), 1);
     assert.ok(transport.closed, "invalid initialization does not retain a listener slot");
   });
@@ -694,6 +694,66 @@ const futurePolicy: Record<MethodName | "future/mutation", (typeof METHOD_POLICY
 void futurePolicy;
 
 describe("bounded request ownership", () => {
+  for (const method of ['workflow/scheduled/getRecovery', 'workflow/scheduled/cancel', 'workflow/scheduled/reconcile'] as const) {
+    it(`${method} uses all six native ordinary slots while Stop remains available`, async t => {
+      const { client, transport } = await initialized(); t.after(() => client.close());
+      const scheduled = (index: number) => {
+        const params = { session_id: target().session_id, node_id: sessionView().active_node, start_id: `swf_${index.toString(16).padStart(64, '0')}` };
+        return method === 'workflow/scheduled/cancel'
+          ? client.call(method, params, 'scheduled_workflow_recovery')
+          : client.call(method, { ...params, after_effect_ordinal: '0', limit: 16 }, 'scheduled_workflow_recovery');
+      };
+      const reads = Array.from({ length: 6 }, (_, index) => scheduled(index));
+      const settled = Promise.allSettled(reads);
+      await tick(); // Drain the transport's serialized writes before counting.
+      assert.equal(transport.log.count(method), 6);
+      await assert.rejects(scheduled(6), /rpc capacity/);
+      const control = client.call('turn/cancel', { target: target() }, 'cancellation_accepted');
+      const [cancel] = await transport.log.awaitMethod('turn/cancel');
+      transport.respond(cancel!.id, { type: 'cancellation_accepted', attempt_id: 'attempt-current' }); await control;
+      await assert.rejects(scheduled(6), /rpc capacity/, 'Stop releases only its own lane');
+      const [first] = await transport.log.awaitMethod(method);
+      transport.respond(first!.id, { type: 'scheduled_workflow_recovery', recovery: null }); await reads[0];
+      const next = scheduled(6); const nextSettled = Promise.allSettled([next]);
+      await transport.log.awaitMethod(method, 7);
+      assert.equal(transport.log.count(method), 7);
+      transport.fail('input_eof'); await nextSettled;
+      assert.equal((await settled).filter(result => result.status === 'fulfilled').length, 1);
+    });
+  }
+  for (const method of ['conversation/changes', 'conversation/changeDiff'] as const) {
+    it(`${method} shares native ordinary capacity with projections without borrowing observation slots`, async t => {
+      const { client, transport } = await initialized(); t.after(() => client.close());
+      const reads = Array.from({ length: 6 }, (_, index) => {
+        const params = { target: target(), attempt_id: `historical-attempt-${index}` };
+        return method === 'conversation/changes'
+          ? client.call(method, params, 'workspace_changes')
+          : client.call(method, { ...params, index: 0 }, 'workspace_change_diff');
+      });
+      const settled = Promise.allSettled(reads);
+      const requests = await transport.log.awaitMethod(method, 6);
+      await assert.rejects(client.call('session/projections', { target: target(), after: '0', limit: 16 }, 'projections'), /rpc capacity/);
+      assert.equal(transport.log.count('session/projections'), 0, 'ordinary overflow never sends');
+      const observation = client.call('agent/observe', { target: target(), agent_id: 'child', after: null }, 'agent_observe');
+      const observationSettled = Promise.allSettled([observation]);
+      const control = client.call('turn/cancel', { target: target() }, 'cancellation_accepted');
+      const [cancel] = await transport.log.awaitMethod('turn/cancel');
+      transport.respond(cancel!.id, { type: 'cancellation_accepted', attempt_id: 'attempt-current' }); await control;
+      await transport.log.awaitMethod('agent/observe');
+      transport.respond(requests[0]!.id, method === 'conversation/changes'
+        ? { type: 'workspace_changes', summary: null }
+        : { type: 'workspace_change_diff', comparison: null });
+      await reads[0];
+      const projections = client.call('session/projections', { target: target(), after: '0', limit: 16 }, 'projections');
+      const [read] = await transport.log.awaitMethod('session/projections');
+      transport.respond(read!.id, { type: 'projections', page: { records: [], next_activation: null } });
+      assert.deepEqual((await projections).page.records, []);
+      assert.equal(transport.log.count(method), 6, 'distinct historical attempts are neither coalesced nor replayed');
+      transport.fail('input_eof');
+      assert.equal((await settled).filter(result => result.status === 'fulfilled').length, 1);
+      await observationSettled;
+    });
+  }
   it("T20 metadata stays available with eight observations and six ordinary waits without borrowing control", async t => {
     const {client,transport}=await initialized();t.after(()=>client.close());
     const observations=Array.from({length:8},(_,i)=>client.call('agent/observe',{target:target(),agent_id:`child-${i}`,after:null},'agent_observe'));
@@ -983,7 +1043,7 @@ it('T13 a lost native read-only MCP probe preserves connection-failure classific
 });
 
 it("derives parameter-sensitive Goal reads and lanes from the one shared method policy", () => {
-  const goal = (action: "show" | "mutate") => ({ method: "goal/control", params: { target: target(), control: { action } } }) as unknown as import("../../protocol/app-server/v62.ts").Request1;
+  const goal = (action: "show" | "mutate") => ({ method: "goal/control", params: { target: target(), control: { action } } }) as unknown as import("../../protocol/app-server/v69.ts").Request1;
   assert.equal(requestEffect(goal("show")), "read");
   assert.equal(requestEffect(goal("mutate")), "side_effecting");
   for (const [method, policy] of Object.entries(METHOD_POLICY)) {
@@ -999,4 +1059,30 @@ it("derives parameter-sensitive Goal reads and lanes from the one shared method 
   assert.equal(METHOD_POLICY["session/settings"].lane, "metadata");
   assert.equal(METHOD_POLICY["session/settingsValueRead"].lane, undefined);
   assert.equal(METHOD_POLICY["session/submissionIntent"].lane, "control");
+});
+
+it('the shared method policy has exactly the native admission special lanes', () => {
+  // Complete special-case set from src/app_server/admission.rs::for_method.
+  // Every other generated method must share the native ordinary/rpc lane.
+  const nativeSpecialLanes = {
+    'session/attach': 'attachment',
+    'agent/observe': 'observation',
+    'session/read': 'metadata',
+    'session/settings': 'metadata',
+    'session/create': 'metadata',
+    'auxiliary/cancel': 'control',
+    'agent/observeCancel': 'control',
+    'delivery/cancel': 'control',
+    'turn/cancel': 'control',
+    'agent/interrupt': 'control',
+    'job/cancel': 'control',
+    'session/detach': 'control',
+    'mcp/draftCancel': 'control',
+    'session/submissionIntent': 'control',
+    'session/retryInitialization': 'control',
+    'interaction/cancel': 'control',
+  } satisfies Partial<Record<MethodName, ReturnType<typeof requestLane>>>;
+  const methods = Object.keys(METHOD_POLICY) as MethodName[];
+  assert.deepEqual(Object.fromEntries(methods.filter(method => requestLane(method) !== 'rpc')
+    .map(method => [method, requestLane(method)])), nativeSpecialLanes);
 });

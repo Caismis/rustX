@@ -476,6 +476,8 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::WorkflowLoopExited { .. }
         | RuntimeEvent::WorkflowBlockSettled { .. }
         | RuntimeEvent::WorkflowNodeStarted { .. }
+        | RuntimeEvent::WorkflowNodeInputRecorded { .. }
+        | RuntimeEvent::WorkflowNodeOutputRecorded { .. }
         | RuntimeEvent::WorkflowNodeWaiting { .. }
         | RuntimeEvent::WorkflowNodeSettled { .. }
         | RuntimeEvent::WorkflowAgentAdmitted { .. }
@@ -526,7 +528,7 @@ mod tests {
     fn archive_managed_output_preserves_state_and_exact_locators() {
         use crate::tools::types::ManagedOutputContinuation as Continuation;
         let locator =
-            std::path::PathBuf::from("/home/user/project/.rustx/tool-output/tasks/exec_42.output");
+            std::path::PathBuf::from("/tmp/rx-0000000000000001/e-0000000000000042.output");
         for (continuation, expected) in [
             (
                 Continuation::Complete {

@@ -2352,7 +2352,7 @@ fn identity_bounds_make_canonical_trace_details_explicitly_partial() {
 fn managed_storage_failure_diagnostics_preserve_native_execution_facts() {
     use crate::tools::managed_output::ManagedToolOutput;
     use crate::tools::output::{ForegroundOutputCapture, continuation_for_capture};
-    let private_path = "/private/rustx-managed-output/example/tasks/result.output";
+    let private_path = "temporary-output-allocation";
     for available in [false, true] {
         let store = store("conv_ac56fc5d-a6f5-7885-8745-ac1fad19bb38");
         let directory = tempfile::tempdir().unwrap();
@@ -2364,17 +2364,7 @@ fn managed_storage_failure_diagnostics_preserve_native_execution_facts() {
         if available {
             output.fail_writes_after(0);
         } else {
-            // A real allocation error includes the private results directory.
-            let results = output.root().join("results");
-            std::fs::remove_dir(&results).unwrap();
-            std::fs::write(&results, "not a directory").unwrap();
-            assert!(
-                output
-                    .open_spill()
-                    .unwrap_err()
-                    .to_string()
-                    .contains(private_path)
-            );
+            output.set_force_open_failures(true);
         }
         let mut capture = ForegroundOutputCapture::with_limit(1);
         let diagnostic = capture.push("retained output", &output).unwrap_err();
@@ -2423,11 +2413,11 @@ fn managed_storage_failure_diagnostics_preserve_native_execution_facts() {
         if available {
             assert!(diagnostic.contains("test-forced output write failure"));
         } else {
-            assert!(diagnostic.contains(private_path));
+            assert!(diagnostic.contains("test-forced output open failure"));
             assert!(
                 serde_json::to_string(&detail)
                     .unwrap()
-                    .contains(private_path)
+                    .contains("test-forced output open failure")
             );
         }
     }
@@ -4900,3 +4890,121 @@ fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() 
 mod frozen_tests;
 mod header_tests;
 mod inspection_tests;
+
+#[test]
+#[allow(clippy::too_many_lines)] // One immutable-cut and original-body read proof.
+fn workflow_node_frontiers_refresh_at_the_original_tool_step_without_reading_bodies() {
+    use base64::Engine;
+    let store = store("conv_a7f34b28-5c91-7e06-8d42-3fb8c0e17d54");
+    start(&store);
+    let frozen = request(&store, 0);
+    let mut call = bash_call("workflow-call");
+    call.tool_id = ToolId::new("tool-workflow-test_flow");
+    call.name = "test_flow".into();
+    propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 2);
+    completion(&store, &frozen, None, None, 2);
+    append(
+        &store,
+        E::ToolExecutionStarted {
+            tool_call_id: ToolCallId::new("workflow-call"),
+            tool_id: ToolId::new("tool-workflow-test_flow"),
+        },
+        2,
+    );
+    let mut instance = crate::runtime::workflow::test_instance("test_flow", "transform");
+    instance.block.run.conversation_id = store.conversation_id().clone();
+    instance.block.run.origin = AttemptId::new("attempt-a").into();
+    append(
+        &store,
+        E::WorkflowStarted {
+            tool_call_id: Some(ToolCallId::new("workflow-call")),
+            workflow_id: crate::runtime::workflow::WorkflowId::parse("test_flow").unwrap(),
+            run_id: instance.block.run.clone(),
+        },
+        3,
+    );
+    let cut = store.observation_read_cut().unwrap();
+    let initial = TraceProjection::at_cut(&store, &cut).unwrap();
+    let root = initial
+        .page(None, 32)
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|record| record.kind == TraceKind::Workflow)
+        .unwrap();
+    let call = initial
+        .page(None, 32)
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|record| record.kind == TraceKind::Tool)
+        .unwrap();
+    assert_eq!(root.location, call.location);
+    assert_eq!(root.collections[0].total, 0);
+    append(
+        &store,
+        E::WorkflowNodeStarted {
+            instance: instance.clone(),
+        },
+        4,
+    );
+    let input = r#"{"args":{"integer":18446744073709551615},"variables":{}}"#;
+    append(
+        &store,
+        E::WorkflowNodeInputRecorded {
+            instance,
+            kind: crate::runtime::workflow::read_model::WorkflowNodeKind::Template,
+            value: Some(input.into()),
+        },
+        5,
+    );
+    let current = store.observation_read_cut().unwrap();
+    let refreshed = TraceProjection::at_cut(&store, &current)
+        .unwrap()
+        .refresh(std::slice::from_ref(&root.position), None)
+        .unwrap();
+    assert_eq!(refreshed[0].location, call.location);
+    assert_eq!(refreshed[0].collections[0].total, 1);
+    let nodes = store
+        .observation_workflow_nodes(&current, root.position.sequence().unwrap(), 0, 32)
+        .unwrap();
+    let Some(TraceFieldSource::Value { domain, path, .. }) = &nodes.nodes[0].input else {
+        panic!("original input selector")
+    };
+    let cut = TraceProjection::at_cut(&store, &current)
+        .unwrap()
+        .history_cut()
+        .unwrap();
+    let body = crate::runtime_client::journal_observation::value_read(
+        &store, &cut, domain, 0, path, 0, 65_536,
+    )
+    .unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(body.bytes_base64)
+        .unwrap();
+    assert_eq!(serde_json::from_slice::<String>(&bytes).unwrap(), input);
+    assert!(
+        crate::runtime_client::journal_observation::value_read(
+            &store,
+            &cut,
+            domain,
+            0,
+            &["event".into(), "instance".into()],
+            0,
+            65_536
+        )
+        .is_err()
+    );
+    assert_eq!(
+        initial
+            .record(
+                &initial
+                    .inspection_anchor(root.position.sequence().unwrap())
+                    .unwrap()
+            )
+            .unwrap()
+            .collections[0]
+            .total,
+        0
+    );
+}

@@ -1,12 +1,109 @@
 import { useSyncExternalStore } from 'react';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { CheckpointReadCut, Request, RoutedInteraction, RuntimeClientInteractionHeader } from '../../protocol/app-server/v62';
+import type { CheckpointReadCut, InteractionKind, Request, RoutedInteraction, RuntimeClientInteractionHeader } from '../../protocol/app-server/v69';
 import { Interactions } from '../src/app/agent/Interactions';
 import { Server, checkpoint, interaction } from './fixture';
 
 let server:Server|undefined;
 afterEach(()=>{cleanup();server?.client.disconnect();});
+
+it.each([false, true])('approval exposes Deny and Allow once without an extra cancellation action (bounded: %s)', async bounded => {
+  const current = server = new Server(), original = interaction('approval');
+  const header = bounded ? { ...original, body: null, body_complete: false, approval: { tool_id: 'tool-bash', tool_name: 'bash', reason: 'Developer approval required', mode: 'foreground' as const, deferred_fields: [['arguments']] } } : original;
+  current.snapshots.get('A')!.pending_interactions = [header];
+  if (bounded) current.held.add('conversation/checkpointValueRead');
+  await current.attached('A');
+  function Pending() { const state = useSyncExternalStore(current.client.subscribe, current.client.getSnapshot); return <Interactions client={current.client} state={state} view={state.views.A}/>; }
+  render(<Pending/>);
+  expect(screen.queryByRole('button', { name: 'Cancel interaction' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Allow once' })).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Deny' })));
+  const request = await current.waitFor('interaction/respond', 1);
+  expect(request.params).toMatchObject({ interaction: header.interaction, response: { type: 'approval', decision: { type: 'deny' } } });
+  expect(current.requests.some(row => row.request.method === 'interaction/cancel')).toBe(false);
+});
+
+const approvalTools: Pick<Extract<InteractionKind, { type: 'approval' }>, 'tool_id' | 'tool_name' | 'origin'>[] = [
+  { tool_id: 'tool-bash', tool_name: 'shell', origin: 'builtin' },
+  { tool_id: 'mcp-cleanup', tool_name: 'bash', origin: { mcp: { server_id: 'cleanup-server' } } },
+  { tool_id: 'managed-cleanup', tool_name: 'cleanup', origin: { managed_python: { package: 'cleanup' } } },
+];
+for (const bounded of [false, true]) it.each(approvalTools)('approval renders the exact $tool_id arguments before consent (bounded: '+bounded+')', async tool => {
+  const current = server = new Server(), original = interaction('approval');
+  if (!original.body || original.body.kind.type !== 'approval') throw new Error('Expected approval fixture.');
+  const args = { command: 'delete', target: '/workspace/待删除', recursive: true };
+  const kind = { ...original.body.kind, ...tool, arguments: args };
+  const header: RuntimeClientInteractionHeader = bounded
+    ? { ...original, body: null, body_complete: false, approval: { tool_id: tool.tool_id, tool_name: tool.tool_name, reason: kind.reason, mode: kind.mode, deferred_fields: [['arguments']] } }
+    : { ...original, body: { ...original.body, kind } };
+  current.snapshots.get('A')!.pending_interactions = [header];
+  const bytes = new TextEncoder().encode(JSON.stringify(args));
+  // Split within a multibyte target character to exercise the deferred decoder.
+  const split = bytes.findIndex(byte => byte > 127) + 1;
+  current.handlers.set('conversation/checkpointValueRead', request => {
+    if (request.method !== 'conversation/checkpointValueRead') throw new Error('Expected arguments read.');
+    expect(request.params.path).toEqual(['request', 'kind', 'arguments']);
+    const offset = request.params.offset, end = offset === 0 ? split : bytes.length;
+    return { type: 'checkpoint_value_chunk', chunk: { cut: request.params.cut, domain: 'pending_interactions', item_offset: 0, path: request.params.path,
+      offset, readable_end: bytes.length, bytes_base64: btoa(String.fromCharCode(...bytes.slice(offset, end))), next_offset: end < bytes.length ? end : null, representation: 'canonical_json_v1' } };
+  });
+  await current.attached('A');
+  function Pending() { const state = useSyncExternalStore(current.client.subscribe, current.client.getSnapshot); return <Interactions client={current.client} state={state} view={state.views.A}/>; }
+  render(<Pending/>);
+  const details = screen.getByRole('group', { name: 'Approval details' });
+  await waitFor(() => expect(details.querySelector('pre')).toBeTruthy());
+  const text = details.querySelector('pre')!.textContent;
+  if (tool.tool_id === 'tool-bash') expect(text).toBe(args.command);
+  else expect(JSON.parse(text!)).toEqual(args);
+  expect(current.requests.some(row => row.request.method === 'interaction/respond')).toBe(false);
+  if (bounded) expect(current.requests.filter(row => row.request.method === 'conversation/checkpointValueRead')).toHaveLength(2);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Allow once' })));
+  const request = await current.waitFor('interaction/respond', 1);
+  expect(request.params).toMatchObject({ interaction: header.interaction, response: { type: 'approval', decision: { type: 'allow' } } });
+});
+
+it('a deferred approval with no canonical tool identity preserves all arguments', async () => {
+  const current = server = new Server(), original = interaction('approval');
+  current.snapshots.get('A')!.pending_interactions = [{ ...original, body: null, body_complete: false,
+    approval: { tool_name: 'bash', reason: 'Developer approval required', mode: 'foreground', deferred_fields: [['arguments']] } }];
+  const args = { command: 'delete', target: '/workspace/data', recursive: true }, text = JSON.stringify(args);
+  current.handlers.set('conversation/checkpointValueRead', request => {
+    if (request.method !== 'conversation/checkpointValueRead') throw new Error('Expected arguments read.');
+    return { type: 'checkpoint_value_chunk', chunk: { cut: request.params.cut, domain: 'pending_interactions', item_offset: 0, path: request.params.path, offset: 0,
+      readable_end: text.length, bytes_base64: btoa(text), next_offset: null, representation: 'canonical_json_v1' } };
+  });
+  await current.attached('A');
+  function Pending() { const state = useSyncExternalStore(current.client.subscribe, current.client.getSnapshot); return <Interactions client={current.client} state={state} view={state.views.A}/>; }
+  render(<Pending/>);
+  await waitFor(() => expect(screen.getByRole('group', { name: 'Approval details' }).querySelector('pre')).toBeTruthy());
+  expect(JSON.parse(screen.getByRole('group', { name: 'Approval details' }).querySelector('pre')!.textContent!)).toEqual(args);
+});
+
+it('keeps the current approval command visible when the pending collection refreshes', async () => {
+  const current = server = new Server();
+  const header: RuntimeClientInteractionHeader = { ...interaction('approval'), body: null, body_complete: false,
+    approval: { tool_id: 'tool-bash', tool_name: 'bash', reason: 'Developer approval required', mode: 'foreground', deferred_fields: [['arguments']] } };
+  current.snapshots.get('A')!.pending_interactions = [header];
+  current.handlers.set('session/checkpoint', () => ({ type: 'checkpoint', checkpoint: { ...checkpoint(current.snapshots.get('A')!), read_cut: { ...checkpoint(current.snapshots.get('A')!).read_cut, domain_revisions: { pending_interactions: '1' } } } }));
+  current.handlers.set('conversation/checkpointValueRead', request => {
+    if (request.method !== 'conversation/checkpointValueRead') throw Error('Expected arguments read');
+    const text = JSON.stringify({ command: 'printf rustX' });
+    return { type: 'checkpoint_value_chunk', chunk: { cut: request.params.cut, domain: 'pending_interactions', item_offset: 0, path: request.params.path, offset: 0, readable_end: text.length, bytes_base64: btoa(text), next_offset: null, representation: 'canonical_json_v1' } };
+  });
+  await current.attached('A');
+  function Pending() { const state = useSyncExternalStore(current.client.subscribe, current.client.getSnapshot); return <Interactions client={current.client} state={state} view={state.views.A}/>; }
+  render(<Pending/>);
+  const command = await screen.findByText('printf rustX');
+  current.held.add('conversation/checkpointValueRead');
+  const next = checkpoint(current.snapshots.get('A')!, '1'); next.read_cut.domain_revisions.pending_interactions = '2';
+  await act(async () => current.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: current.target('A'), cursor: '1', event: { type: 'checkpoint_advanced', transition: 'pending-refresh', checkpoint: next } } }));
+  const request = await current.waitFor('conversation/checkpointValueRead', 2);
+  expect(screen.getByText('printf rustX')).toBe(command);
+  expect(screen.queryByText(/Loading/)).toBeNull();
+  await act(async () => current.reply(request));
+  expect(screen.getByText('printf rustX')).toBe(command);
+});
 
 async function pendingFixture(){
   const current=server=new Server();
@@ -48,6 +145,23 @@ async function pendingFixture(){
   };
   return {current,publish};
 }
+
+it('pending details have no generic cancel/kind controls and recover through a scoped read retry', async () => {
+  const { current } = await pendingFixture();
+  expect(screen.getByRole('status').textContent).toBe('Loading…');
+  expect(screen.queryByRole('button', { name: 'Cancel interaction' })).toBeNull();
+  const page = await current.waitFor('conversation/checkpointPage', 1);
+  await act(async () => current.socket.deliver({ jsonrpc: '2.0', id: page.id, error: { code: -32000, message: 'Details temporarily unavailable' } }));
+  expect(screen.getByRole('alert').textContent).toContain('Details temporarily unavailable');
+  expect(screen.queryByRole('status')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading details' }));
+  const retry = await current.waitFor('conversation/checkpointPage', 2);
+  await act(async () => current.reply(retry));
+  const value = await current.waitFor('conversation/checkpointValueRead', 1);
+  await act(async () => current.reply(value));
+  expect(await screen.findByRole('region', { name: 'Questionnaire' })).toBeTruthy();
+  expect(current.requests.some(row => row.request.method === 'interaction/cancel')).toBe(false);
+});
 
 it('an unrelated checkpoint preserves the selected pending read and its original Page/Value cut',async()=>{
   const {current,publish}=await pendingFixture();

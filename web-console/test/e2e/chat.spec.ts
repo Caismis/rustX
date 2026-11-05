@@ -24,7 +24,7 @@ async function loadOriginalHistory(page: Page) {
   await expect(earlier).toHaveCount(0);
 }
 
-test('native history, rich settlement, real image decode/lightbox, reconnect and native upload receipts', async ({ page }) => {
+test('native history, rich settlement, real image previews, reconnect and native upload receipts', async ({ page }) => {
   const fixture = await startDogfood('web_chat_history');
   const wire = await wireProbe(page);
   const reconnectChat = async () => {
@@ -32,9 +32,9 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
     const target = await wire.attachedTarget(id);
     await expect.poll(() => wire.responses.some(row => row.method === 'session/subscribe' && sameTarget(row.result?.target, target))).toBe(true);
-    // The first older read starts after the new attachment's readable view
-    // commits. The wire ACK alone can still precede that React commit.
-    await expect.poll(() => wire.requests.some(row => row.method === 'session/transcript' && sameTarget(row.params?.target, target) && row.params?.at?.type === 'older')).toBe(true);
+    // Released history survives this attachment. Wait for the executable UI
+    // instead of requiring an unnecessary older-history read after the ACK.
+    await expect(page.getByLabel('Message', { exact: true })).toBeEditable();
   };
   let id: string;
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -149,8 +149,8 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await fixture.gate('settle-chat');
     await expect(page.getByRole('heading', { name: 'Rich reply' })).toHaveCount(1);
-    // Reconstruct a bounded latest window while the same native attempt is
-    // held mid-stream, then page its history without changing live ownership.
+    // Reconnect while the same native attempt is held mid-stream, retaining
+    // its loaded history without changing live ownership.
     await reconnectChat();
     await loadOriginalHistory(page);
     await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
@@ -254,10 +254,15 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
       await expect(image).toBeVisible();
       await expect.poll(() => image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0 && node.naturalHeight > 0)).toBe(true);
       await image.click();
-      const original = page.getByRole('dialog').locator('img');
+      // Both the thumbnail and filename open the retained preview workspace.
+      const preview = page.getByRole('complementary', { name: 'Previews', exact: true });
+      const original = preview.getByRole('img', { name: 'artifact_1', exact: true });
       await expect(original).toBeVisible();
       await expect.poll(() => original.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
-      await page.keyboard.press('Escape');
+      expect(await urlCount()).toBe(2);
+      await preview.getByRole('button', { name: 'Close preview artifact_1', exact: true }).click();
+      await expect(preview).toHaveCount(0);
+      await expect.poll(urlCount).toBe(1);
     };
     await decode();
     expect(await urlCount()).toBe(1);

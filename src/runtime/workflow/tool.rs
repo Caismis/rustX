@@ -41,6 +41,80 @@ pub struct WorkflowToolChoice {
     pub result: WorkflowToolResult,
 }
 
+#[derive(Debug, Clone)]
+pub enum WorkflowToolArguments {
+    Value(super::WorkflowValue),
+    Code {
+        language: super::WorkflowCodeLanguage,
+        variables: super::BTreeMap<String, super::WorkflowValue>,
+        code: String,
+    },
+}
+
+impl WorkflowToolArguments {
+    pub(super) fn evaluate(
+        &self,
+        input: &Value,
+        values: &imbl::OrdMap<String, Value>,
+    ) -> Result<Value, WorkflowRunError> {
+        let evaluate = |value: &super::WorkflowValue| super::evaluate_value(value, input, values);
+        match self {
+            Self::Value(value) => evaluate(value),
+            Self::Code {
+                language,
+                variables,
+                code,
+            } => super::code::arguments(*language, variables, code, evaluate),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum WorkflowToolProjection {
+    Native(WorkflowToolResult),
+    Code { schema: Value },
+}
+
+impl WorkflowToolProjection {
+    pub(super) fn schema(&self) -> Value {
+        match self {
+            Self::Native(result) => result.schema(),
+            Self::Code { schema } => schema.clone(),
+        }
+    }
+
+    pub(super) fn project(
+        &self,
+        result: &ToolExecutionResult,
+        node: &WorkflowNodeInstance,
+        stdout: Option<&crate::tools::output::BoundedStdoutCapture>,
+    ) -> Result<Value, WorkflowRunError> {
+        match self {
+            Self::Native(projection) => projection.project(result, node),
+            Self::Code { schema } => {
+                if result.status != ToolExecutionStatus::Success {
+                    return Err(WorkflowRunError::ToolFailed {
+                        node: node.to_string(),
+                        status: bounded_status(&result.status),
+                    });
+                }
+                let bytes = stdout
+                    .ok_or_else(|| {
+                        WorkflowRunError::InvalidValue("Code has no result channel".into())
+                    })?
+                    .take_complete()
+                    .map_err(|error| WorkflowRunError::InvalidValue(error.into()))?;
+                let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
+                    WorkflowRunError::InvalidValue("Code stdout must be one JSON object".into())
+                })?;
+                expressions::bounded_value_bytes(&value)?;
+                execution::validate_commit(schema, &value)?;
+                Ok(value)
+            }
+        }
+    }
+}
+
 /// The builtin Tools a Workflow Tool node can select at all, in the native
 /// order. Authoring presents these as choices; admission against the
 /// adopted generation remains the only authority.
@@ -83,6 +157,7 @@ impl WorkflowRuntime {
         node: &WorkflowNodeInstance,
         selector: &ExactToolSelector,
         arguments: Value,
+        stdout: Option<crate::tools::output::BoundedStdoutCapture>,
         retry: u32,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<(ToolExecutionResult, bool), WorkflowRunError> {
@@ -205,7 +280,7 @@ impl WorkflowRuntime {
                     }
                 });
                 let progress = NativeProgress(std::sync::Mutex::new(Vec::new()));
-                let native_context = ToolExecutionContext::new(
+                let mut native_context = ToolExecutionContext::new(
                     &run.run_id.conversation_id,
                     None,
                     cancellation.clone(),
@@ -215,6 +290,7 @@ impl WorkflowRuntime {
                     services.runtime.tool_output(),
                     context.resources().capability().effective_environment(),
                 );
+                native_context.stdout_capture = stdout;
                 let requester = services
                     .lifecycle
                     .native_interaction_coordinator()

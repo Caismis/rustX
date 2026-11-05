@@ -388,6 +388,32 @@ Workflow run ID, and the existing exact Attempt/request/Tool/interaction identit
 are the only correlations. Durable terminal facts win; absent native evidence
 stays incomplete. No in-flight duration is synthesized.
 
+Workflow node visit headers use the separate `WorkflowNodeTraceState` contract.
+A durable `WorkflowNodeStarted` or `WorkflowNodeWaiting` without a recorded node
+terminal is `incomplete`, including after store reopen; a historic wait does not
+prove a surviving process. Recorded node terminals always win. The live host may
+refine only incomplete visits at its exact current published checkpoint, using
+the complete run origin, conversation, invocation, block definition/iteration,
+node and visit identity from the resident native Workflow owner. Finished native
+runs or instances do not establish a missing durable outcome. The query uses
+the complete immutable source captured by that publication; count and byte
+limits on display headers never establish the absence of an active visit. Older selected
+cuts and inactive durable hosts receive no live overlay, even when a retained
+projection contains an earlier running or waiting label. Lifecycle labels never
+invent an end time or duration, and the UI renders incomplete visits as inactive.
+
+Expanded Workflow visits are published as one complete, validated page collection
+per read cut. A refresh retains the previous complete collection with its original
+field reader and cut until all replacement pages pass validation. Intermediate
+page prefixes cannot remove a selected visit or migrate its Inspector to a sibling.
+Selection retains the full native visit identity across reader replacement in the
+same cache epoch, including cold Load Earlier reads. Until the new reader admits
+that visit, the Inspector remains busy without exposing retired content or
+falling back to the run or another visit. Explicit close or collapse clears it.
+A failed replacement retains that visit's Inspector with the native read error
+and a retry action. Retrying preserves the visit and facet, revalidates the full
+collection, and keeps the same reader/cut ownership fences.
+
 The browser has a separate Trace cache (512 history entries / 4 MiB estimated
 encoded UTF-16 size), independent from transcript and live cursors. Its flat list
 represents one contiguous server-proven interval. An overlapping newest tail

@@ -3,7 +3,8 @@ import {canonicalLocatorKey} from '../../../../protocol/app-server/content-ident
 import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v62';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v69';
+import type { WorkflowNodes, WorkflowTraceNode } from './workflow';
 
 /** The Harness detail tab identities. Labels follow the locale; ids never do. */
 export type TrajectoryFacet = 'overview' | 'rendered' | 'raw' | 'source' | 'input' | 'output' | 'schema' | 'timing' | 'options' | 'usage' | 'system-prompt' | 'tools' | 'diff';
@@ -13,6 +14,7 @@ export interface TrajectorySelection {
   facet: TrajectoryFacet;
   cell_type?: 'SystemPromptCell' | 'ContextRow';
   context_message_id?: string;
+  workflow_node?: Pick<WorkflowTraceNode, 'id' | 'instance'>;
 }
 interface Origin extends TrajectorySelection {
   record: TraceRecord;
@@ -38,6 +40,7 @@ export type StructuralDisplayItem =
 /** Only this closed union owns inspectable native records. */
 export type InspectableDisplayItem =
   | (Origin & { type: 'RecordRow' })
+  | (Origin & { type: 'WorkflowNode'; parent_record_id: string; workflowNode: WorkflowTraceNode; workflowSource: WorkflowNodes })
   | (Origin & { type: 'SystemPromptCell' })
   | (Origin & { type: 'ContextRow'; context: TraceContextPresentation })
   | (Origin & { type: 'RequestBoundary' });
@@ -146,7 +149,7 @@ export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]
     // Harness shows Agent interactions as Tool calls and delivered Context.
     // Native activation and interaction lifecycle audits remain in Trace, not
     // as duplicate rows, spans or empty Turns when their Tool is on another page.
-    if (record.kind === 'interaction' || record.kind === 'subagent') continue;
+    if (record.kind === 'interaction' || record.kind === 'subagent' || record.kind === 'workflow' && record.originating_tool_call_id != null) continue;
     const attempt = traceAttemptKey(record.location), step = traceStepKey(record.location);
     if (attempt == null) {
       sections.push({ kind: 'outside', record, cells: cellsOf(tx, record) });
@@ -203,7 +206,7 @@ export function trajectoryItems(tx: Translate, projection: TrajectoryProjection,
 
 /** Never correlate incomplete scope, or ambiguous proposals. Session/Conversation
  * isolation is supplied by the native Trace cache, not reconstructed from IDs. */
-function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v62').RuntimeClientToolOccurrence|null}):string|undefined {
+function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v69').RuntimeClientToolOccurrence|null}):string|undefined {
  const owner=traceAttemptKey(record.location),step=traceStepKey(record.location);
  if(owner==null||step==null||!call.occurrence)return;
  return displayKey(owner,step,traceOccurrenceKey(call.occurrence));
@@ -278,16 +281,28 @@ export function displayUniverse(base: readonly TrajectoryDisplayItem[], current:
   return [...new Map([...base, ...current].map(item => [item.display_key, item])).values()];
 }
 
-/** Same semantic facet first, then same native owner, never a numeric position. */
+function workflowNodeIdentity(node: Pick<WorkflowTraceNode, 'id' | 'instance'>): string {
+  const { block, node: name, visit } = node.instance, { run, definition } = block;
+  return JSON.stringify([node.id, run.conversation_id, run.origin.type,
+    run.origin.type === 'tool' ? run.origin.attempt_id : run.origin.start_id, run.invocation,
+    definition.workflow_id, definition.blocks, block.invocations, name, visit]);
+}
+
+/** Workflow visits resolve exactly; other cells may follow semantic regrouping. */
 export function preferredItem(items: readonly TrajectoryDisplayItem[], owner: string, selection?: TrajectorySelection): InspectableDisplayItem | undefined {
   const candidates = items.filter((item): item is InspectableDisplayItem => isInspectable(item) && item.owner_record_id === owner);
-  return candidates.find(item => item.display_key === selection?.display_key)
+  const exact = candidates.find(item => item.display_key === selection?.display_key);
+  // Reader renewal can temporarily hide all visits. Sharing an owner with
+  // another visit or the Scheduled run never authorizes a selection migration.
+  if (selection?.workflow_node) return exact?.type === 'WorkflowNode'
+    && workflowNodeIdentity(exact.workflowNode) === workflowNodeIdentity(selection.workflow_node) ? exact : undefined;
+  return exact
     ?? candidates.find(item => item.facet === selection?.facet && item.context_message_id === selection?.context_message_id)
     ?? candidates.find(item => item.type === 'RequestBoundary' || item.type === 'RecordRow')
     ?? candidates[0];
 }
 export function selectionOf(item: InspectableDisplayItem): TrajectorySelection {
-  return { display_key: item.display_key, owner_record_id: item.owner_record_id, facet: item.facet, ...(item.type === 'SystemPromptCell' || item.type === 'ContextRow' ? { cell_type: item.type } : {}), ...(item.context_message_id ? { context_message_id: item.context_message_id } : {}) };
+  return { display_key: item.display_key, owner_record_id: item.owner_record_id, facet: item.facet, ...(item.type === 'SystemPromptCell' || item.type === 'ContextRow' ? { cell_type: item.type } : {}), ...(item.context_message_id ? { context_message_id: item.context_message_id } : {}), ...(item.type === 'WorkflowNode' ? { workflow_node: { id: item.workflowNode.id, instance: item.workflowNode.instance } } : {}) };
 }
 
 /** A measurable ledger seat. Turn and Step structure is metadata on content
@@ -308,6 +323,8 @@ export interface TrajectoryLedgerRow {
   summary?: string;
   /** The Assistant record whose folded Tool calls a summary row expands. */
   callsOwner?: string;
+  /** End the workflow's visual branch on its last loaded node, including virtual rows. */
+  workflowLast?: boolean;
 }
 
 export function ledgerRows(tx: Translate, projection: TrajectoryProjection, items: readonly TrajectoryDisplayItem[], folded: ReadonlySet<string>, searching: boolean): TrajectoryLedgerRow[] {

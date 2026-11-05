@@ -1,6 +1,6 @@
-import { jobReceipt, compactReceipt } from './fixture';
+import { jobReceipt, compactReceipt, readingWindow } from './fixture';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult, Request1 } from '../../protocol/app-server/v62';
+import type { MethodResult, Request1 } from '../../protocol/app-server/v69';
 import { OutcomeUncertain, RequestNotDispatched } from '../src/client/errors';
 import { Server, snapshot } from './fixture';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
@@ -156,6 +156,68 @@ it('T20 six ordinary waits leave both finite control slots independent',async()=
  await expect(s.client.request(operation(s,'turn/cancel'),'cancellation_accepted')).rejects.toThrow('control capacity');
  for(const {request}of s.requests.filter(row=>s.held.has(row.request.method)))s.socket.success(request,result(request.method as DomainMethod));
  const extra=await s.waitFor('agent/wait',7);s.socket.success(extra,result('agent/wait'));await Promise.all([...work,...controls,queued]);expect(s.client.getSnapshot().connection).toBe('connected');
+});
+it.each(['conversation/changes', 'conversation/changeDiff'] as const)('%s shares native ordinary capacity with cold compaction history reads', async method => {
+  const s = await connected();
+  for (const held of [method, 'session/projections', 'session/transcript'] as const) s.held.add(held);
+  s.handlers.set('session/transcript', () => ({ type: 'transcript_window', window: readingWindow({ entries: [] }) }));
+  const target = s.client.target('A');
+  const changes = Array.from({ length: 6 }, (_, index) => {
+    const params = { target, attempt_id: `historical-attempt-${index}` };
+    return method === 'conversation/changes'
+      ? s.client.request({ method, params }, 'workspace_changes')
+      : s.client.request({ method, params: { ...params, index: 0 } }, 'workspace_change_diff');
+  });
+  const settledChanges = Promise.all(changes); void settledChanges.catch(() => {});
+  await s.waitFor(method, 6);
+  const projections = s.client.projections('A'); void projections.catch(() => {});
+  const transcript = s.client.request({ method: 'session/transcript', params: { target, at: { type: 'latest' }, limit: 32 } }, 'transcript_window');
+  void transcript.catch(() => {});
+  expect(s.requests.filter(row => row.request.method === 'session/projections')).toHaveLength(0);
+  expect(s.requests.filter(row => row.request.method === 'session/transcript')).toHaveLength(0);
+  await expect(s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings')).resolves.toMatchObject({ type: 'settings' });
+  await expect(s.client.request(operation(s, 'turn/cancel'), 'cancellation_accepted')).resolves.toEqual(result('turn/cancel'));
+  expect(s.requests.filter(row => row.request.method === 'session/projections')).toHaveLength(0);
+
+  // Each completed ordinary read releases exactly one slot. Neither metadata
+  // nor controls release these slots, and no historical attempt is coalesced.
+  const historical = s.requests.filter(row => row.request.method === method);
+  s.reply(historical[0].request);
+  const projectionRead = await s.waitFor('session/projections', 1);
+  expect(s.requests.filter(row => row.request.method === 'session/transcript')).toHaveLength(0);
+  s.reply(historical[1].request);
+  const transcriptRead = await s.waitFor('session/transcript', 1);
+  for (const { request } of historical.slice(2)) s.reply(request);
+  s.reply(projectionRead); s.reply(transcriptRead);
+  await settledChanges;
+  await expect(projections).resolves.toEqual({ records: [], next_activation: null });
+  await expect(transcript).resolves.toMatchObject({ type: 'transcript_window', window: { page: { entries: [] } } });
+  expect(s.requests.filter(row => row.request.method === method)).toHaveLength(6);
+  expect(s.client.getSnapshot().uncertain).toEqual([]);
+  expect(s.client.getSnapshot().connection).toBe('connected');
+});
+it.each(['workflow/scheduled/getRecovery', 'workflow/scheduled/cancel', 'workflow/scheduled/reconcile'] as const)('%s queues at native ordinary capacity while Stop remains available', async method => {
+  const s = await connected(); s.held.add(method);
+  s.handlers.set(method, () => ({ type: 'scheduled_workflow_recovery', recovery: null }));
+  const scheduled = (index: number): Request1 => {
+    const params = { session_id: 'A', node_id: 'node-A', start_id: `swf_${index.toString(16).padStart(64, '0')}` };
+    return method === 'workflow/scheduled/cancel' ? { method, params }
+      : { method, params: { ...params, after_effect_ordinal: '0', limit: 16 } };
+  };
+  const work = Array.from({ length: 6 }, (_, index) => s.client.request(scheduled(index), 'scheduled_workflow_recovery'));
+  const settled = Promise.all(work); void settled.catch(() => {});
+  expect(s.requests.filter(row => row.request.method === method)).toHaveLength(6);
+  const queued = s.client.request(scheduled(6), 'scheduled_workflow_recovery'); void queued.catch(() => {});
+  expect(s.requests.filter(row => row.request.method === method)).toHaveLength(6);
+  await expect(s.client.request(operation(s, 'turn/cancel'), 'cancellation_accepted')).resolves.toEqual(result('turn/cancel'));
+  expect(s.requests.filter(row => row.request.method === method)).toHaveLength(6);
+  const first = await s.waitFor(method, 1); s.reply(first);
+  await s.waitFor(method, 7);
+  for (const { request } of s.requests.filter(row => row.request.method === method).slice(1)) s.reply(request);
+  await settled; await queued;
+  expect(s.requests.filter(row => row.request.method === method)).toHaveLength(7);
+  expect(s.client.getSnapshot().uncertain).toEqual([]);
+  expect(s.client.getSnapshot().connection).toBe('connected');
 });
 it('two metadata requests bypass full ordinary capacity and release only their own response slots', async () => {
   const s = await connected();

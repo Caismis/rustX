@@ -52,6 +52,38 @@
       ],
       "type": "object"
     },
+    "WorkflowAggregateGroup": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "output_type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowVarType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "variables": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "variables"
+      ],
+      "type": "object"
+    },
     "WorkflowAssignment": {
       "additionalProperties": false,
       "description": "One write of a Variable Assigner.",
@@ -146,6 +178,37 @@
         "condition"
       ],
       "type": "object"
+    },
+    "WorkflowClassifierClass": {
+      "additionalProperties": false,
+      "description": "A classifier's stable exit, display label and variable-aware topic.",
+      "properties": {
+        "description": {
+          "items": {
+            "$ref": "#/$defs/WorkflowValue"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "description"
+      ],
+      "type": "object"
+    },
+    "WorkflowCodeLanguage": {
+      "enum": [
+        "python3",
+        "javascript"
+      ],
+      "type": "string"
     },
     "WorkflowDimensions": {
       "additionalProperties": false,
@@ -298,6 +361,68 @@
           "type": "string"
         }
       ]
+    },
+    "WorkflowListFilter": {
+      "additionalProperties": false,
+      "properties": {
+        "operator": {
+          "$ref": "#/$defs/WorkflowListOperator"
+        },
+        "path": {
+          "description": "Empty selects a primitive item; otherwise literal object field names.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "value": {
+          "$ref": "#/$defs/WorkflowValue"
+        }
+      },
+      "required": [
+        "path",
+        "operator",
+        "value"
+      ],
+      "type": "object"
+    },
+    "WorkflowListOperator": {
+      "enum": [
+        "equal",
+        "not_equal",
+        "contains",
+        "not_contains",
+        "starts_with",
+        "ends_with",
+        "greater",
+        "greater_equal",
+        "less",
+        "less_equal",
+        "empty",
+        "not_empty",
+        "in",
+        "not_in"
+      ],
+      "type": "string"
+    },
+    "WorkflowListSort": {
+      "additionalProperties": false,
+      "properties": {
+        "order": {
+          "$ref": "#/$defs/WorkflowSortOrder"
+        },
+        "path": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "path",
+        "order"
+      ],
+      "type": "object"
     },
     "WorkflowLoopVariable": {
       "additionalProperties": false,
@@ -523,6 +648,202 @@
           },
           "required": [
             "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Jinja-style text transformation with explicit lexical inputs.",
+          "properties": {
+            "template": {
+              "type": "string"
+            },
+            "type": {
+              "const": "template",
+              "type": "string"
+            },
+            "variables": {
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "variables",
+            "template"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Pure filter, stable sort and selection over an array.",
+          "properties": {
+            "extract": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowValue"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "filter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowListFilter"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "input": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "limit": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "sort": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowListSort"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One tool-free classification Call with an exit per class.",
+          "properties": {
+            "classes": {
+              "items": {
+                "$ref": "#/$defs/WorkflowClassifierClass"
+              },
+              "type": "array"
+            },
+            "input": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "instruction": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "array"
+            },
+            "model": {
+              "$ref": "#/$defs/WorkflowModelPolicy",
+              "default": {
+                "mode": "session"
+              }
+            },
+            "type": {
+              "const": "classifier",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input",
+            "classes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A Python/JavaScript main function executed through workspace Bash.",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "code_language": {
+              "$ref": "#/$defs/WorkflowCodeLanguage"
+            },
+            "on_error": {
+              "$ref": "#/$defs/WorkflowValueErrorStrategy",
+              "default": {
+                "type": "stop"
+              }
+            },
+            "outputs": {
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowVarType"
+              },
+              "type": "object"
+            },
+            "retry": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowRetry"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "code",
+              "type": "string"
+            },
+            "variables": {
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "code_language",
+            "variables",
+            "code",
+            "outputs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Select the first available source per output, optionally grouped.",
+          "properties": {
+            "grouped": {
+              "type": "boolean"
+            },
+            "groups": {
+              "items": {
+                "$ref": "#/$defs/WorkflowAggregateGroup"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "aggregate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grouped",
+            "groups"
           ],
           "type": "object"
         },
@@ -1104,7 +1425,91 @@
         },
         {
           "additionalProperties": false,
-          "description": "String containment, without coercion.",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "greater",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "greater_equal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "less",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "less_equal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "String or typed-array containment, without coercion.",
           "properties": {
             "left": {
               "$ref": "#/$defs/WorkflowValue"
@@ -1189,7 +1594,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Whether a string is empty.",
+          "description": "Explicit emptiness of a JSON value, as Dify tests it.",
           "properties": {
             "type": {
               "const": "empty",
@@ -1376,6 +1781,13 @@
           "type": "object"
         }
       ]
+    },
+    "WorkflowSortOrder": {
+      "enum": [
+        "asc",
+        "desc"
+      ],
+      "type": "string"
     },
     "WorkflowToolResult": {
       "description": "What a Tool node commits, fixed by the Tool: its declared structured\nresult, or its text. Never provider text heuristics or a part index.",

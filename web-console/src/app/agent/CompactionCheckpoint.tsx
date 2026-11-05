@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { RuntimeClientProjectionHeadView, TraceText } from '../../../../protocol/app-server/v62';
+import type { RuntimeClientProjectionHeadView, TraceText } from '../../../../protocol/app-server/v69';
 import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 import { CompactionMessage } from '../../presentation/agent/Message';
@@ -43,10 +43,9 @@ function SummaryContent({ head, client, sessionId, readable, onLoaded }: { head:
     return () => { mounted = false; };
   }, [head.checkpoint_id, head.activation_id, client, sessionId, preview.truncated, retry, admission]);
   const summary: { text: string; truncated: boolean; error?: string } | undefined = preview.truncated ? state : preview;
-  return <>
+  return <div aria-busy={preview.truncated && !summary}>
     <MarkdownText text={summary?.text ?? preview.text}/>
-    {preview.truncated && !summary && <p role="status">{tx('trajectory:details.loading')}</p>}
     {summary?.error ? <p role="alert">{summary.error} <button type="button" onClick={() => setRetry(value => value + 1)}>{tx('agent:context.retry-summary')}</button></p>
       : summary?.truncated && <p>{tx('agent:context.summary-truncated')}</p>}
-  </>;
+  </div>;
 }

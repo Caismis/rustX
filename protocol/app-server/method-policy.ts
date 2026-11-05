@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v62.ts';
+import type { Request1 } from './v69.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -40,8 +40,10 @@ interface MethodPolicy {
 }
 
 export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.freeze({
-  'conversation/changes': { effect: 'read', lane: 'observation' },
-  'conversation/changeDiff': { effect: 'read', lane: 'observation' },
+  // Native admission gives only agent/observe the separate observation lane.
+  // These historical reads share ordinary capacity with transcript/projections.
+  'conversation/changes': { effect: 'read' },
+  'conversation/changeDiff': { effect: 'read' },
   'auxiliary/classify': { effect: 'side_effecting' },
   'auxiliary/btw': { effect: 'side_effecting' },
   'auxiliary/status': { effect: 'read' },
@@ -105,9 +107,9 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/selectModel': { effect: 'side_effecting' },
   'resources/read': { effect: 'read' },
   'context/compact': { effect: 'side_effecting', unbounded: true },
-  'workflow/scheduled/getRecovery': { effect: 'read', lane:'control' },
-  'workflow/scheduled/cancel': { effect: 'side_effecting', lane:'control' },
-  'workflow/scheduled/reconcile': { effect: 'side_effecting', lane:'control' },
+  'workflow/scheduled/getRecovery': { effect: 'read' },
+  'workflow/scheduled/cancel': { effect: 'side_effecting' },
+  'workflow/scheduled/reconcile': { effect: 'side_effecting' },
   'schedule/list': { effect: 'read' },
   'schedule/catalog': { effect: 'read' },
   'schedule/get': { effect: 'read' },

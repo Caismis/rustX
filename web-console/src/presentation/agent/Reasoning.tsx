@@ -1,6 +1,6 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Derived from pinned Harness; see PROVENANCE.md. */
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { DisclosureRow } from '../primitives/DisclosureRow';
 import { IconThinkOutline14 } from '../primitives/icons';
 import { MarkdownText } from '../markdown/MarkdownText';
@@ -24,7 +24,7 @@ function previewLine(text: string, running: boolean): string {
   paragraphStart = nextParagraph.index + nextParagraph[0].length;
  }
 }
-export function Reasoning({ text, running = false, hidden = false, preview = true }: { text: string; running?: boolean; hidden?: boolean; preview?: boolean }) {
+export const Reasoning = memo(function Reasoning({ text, running = false, hidden = false, preview = true }: { text: string; running?: boolean; hidden?: boolean; preview?: boolean }) {
   const tx = useTranslation();
  const [expanded, setExpanded] = useState(false);
  const summary = previewLine(text, running).replaceAll('**', '');
@@ -34,4 +34,4 @@ export function Reasoning({ text, running = false, hidden = false, preview = tru
  icon={<IconThinkOutline14 size={14}/>} title={tx('agent:turn-tail.reasoning')} open={expanded} expandable expandOnRowClick onToggle={() => setExpanded(v => !v)}
  collapsedContent={showPreview ? <><span className={css.separator} data-shimmer-decoration aria-hidden/><span className={css.summary} data-streaming={running || undefined}><span className={css.summaryText}><TextShimmer>{summary}</TextShimmer></span></span></> : undefined}>
  <div className={css.thinkBody}><MarkdownText variant="compact" text={text} streaming={running}/></div></DisclosureRow></div>;
-}
+});

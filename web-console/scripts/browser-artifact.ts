@@ -28,7 +28,7 @@ export const INSTALLED_MANIFEST = 'target/browser-prepared.json';
 /** The exact Cargo invocation whose outputs are packaged. */
 export const CARGO_BUILD = ['build', '--bins', '--example', 'document_artifact_fixture', '--locked'];
 /** Executables of that build that the fixtures, Product Host and App Server exec. */
-export const EXECUTABLES = ['target/debug/rustx', 'target/debug/bash-supervisor', 'target/debug/interactive-supervisor', 'target/debug/examples/document_artifact_fixture'];
+export const EXECUTABLES = ['target/debug/rustx', 'target/debug/bash-supervisor', 'target/debug/interactive-supervisor', 'target/debug/workflow-renderer', 'target/debug/examples/document_artifact_fixture'];
 const BUNDLE = 'web-console/dist';
 
 export interface Identity {

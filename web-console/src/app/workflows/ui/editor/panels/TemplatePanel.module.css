@@ -1,0 +1,3 @@
+.tools { align-items: center; }
+.jinja { display: inline-flex; align-items: center; gap: 2px; margin-right: 4px; padding-right: 8px; border-right: 1px solid var(--dsw-alias-border-l3); color: var(--dsw-alias-label-tertiary); font-size: 12px; font-weight: 400; text-decoration: none; }
+.jinja:hover { color: var(--dsw-alias-label-primary); text-decoration: underline; }

@@ -768,13 +768,15 @@ fn equality_candidate(
 }
 
 #[test]
-fn branch_variable_choices_ignore_the_old_counterpart_but_keep_scalar_necessities() {
+fn branch_variable_choices_ignore_old_counterparts_to_choose_type_appropriate_operators() {
     for (kind, expected) in [
         ("string", Unknown),
         ("boolean", Unknown),
         ("null", Unknown),
-        ("number", Incompatible),
-        ("integer", Incompatible),
+        ("number", Unknown),
+        ("integer", Unknown),
+        ("array", Unknown),
+        ("object", Unknown),
     ] {
         let (candidate, mut query) = equality_candidate(
             &json!({"type":kind}),
@@ -803,10 +805,38 @@ fn branch_variable_choices_ignore_the_old_counterpart_but_keep_scalar_necessitie
 }
 
 #[test]
+fn numeric_condition_operands_filter_reference_choices_by_type() {
+    for operator in ["greater", "greater_equal", "less", "less_equal"] {
+        for loop_until in [false, true] {
+            for kind in ["integer", "number", "string", "boolean"] {
+                let (candidate, query) = equality_candidate(
+                    &json!({"type":kind}),
+                    json!({"type":"literal","value":0}),
+                    operator,
+                    loop_until,
+                    true,
+                );
+                for choice in selected_and_catalog(&analyze(&candidate, Some(&query)).unwrap()) {
+                    assert_eq!(
+                        choice.compatibility,
+                        if matches!(kind, "integer" | "number") {
+                            Compatible
+                        } else {
+                            Incompatible
+                        },
+                        "{operator} {kind}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn equality_preserves_supported_types_and_known_illegal_types_with_unknown_counterparts() {
     let samples = [
-        (json!({"type":"integer"}), json!(1), false),
-        (json!({"type":"number"}), json!(1.5), false),
+        (json!({"type":"integer"}), json!(1), true),
+        (json!({"type":"number"}), json!(1.5), true),
         (
             json!({"type":"string","enum":["a","b"]}),
             json!("different"),
@@ -858,9 +888,10 @@ fn equality_preserves_supported_types_and_known_illegal_types_with_unknown_count
                         assert_eq!(compiled.is_ok(), *supported && known_other);
                         if !supported && known_other {
                             assert!(
-                                compiled.unwrap_err().to_string().contains(
-                                    "equality requires matching boolean/string/null types"
-                                )
+                                compiled
+                                    .unwrap_err()
+                                    .to_string()
+                                    .contains("equality requires matching scalar types")
                             );
                         }
                     }
@@ -882,7 +913,7 @@ fn equality_retains_invalid_counterpart_facts_and_does_not_invent_unknown_operan
                 ] {
                     let (candidate, query) = equality_candidate(
                         &json!({"type":"string"}),
-                        other,
+                        other.clone(),
                         operator,
                         loop_until,
                         right,
@@ -899,14 +930,25 @@ fn equality_retains_invalid_counterpart_facts_and_does_not_invent_unknown_operan
                             selected_and_catalog(&report)
                         };
                         for choice in choices {
-                            assert_eq!(choice.compatibility, Incompatible);
-                            assert!(
-                                choice
-                                    .diagnostic
-                                    .as_ref()
-                                    .unwrap()
-                                    .contains("native type constraints")
+                            let numeric_unknown = unknown_selected
+                                && other.get("value").is_some_and(Value::is_number);
+                            assert_eq!(
+                                choice.compatibility,
+                                if numeric_unknown {
+                                    Unknown
+                                } else {
+                                    Incompatible
+                                }
                             );
+                            if !numeric_unknown {
+                                assert!(
+                                    choice
+                                        .diagnostic
+                                        .as_ref()
+                                        .unwrap()
+                                        .contains("native type constraints")
+                                );
+                            }
                         }
                     }
                 }
@@ -1009,6 +1051,120 @@ fn array_choices_share_native_common_element_proofs_for_every_receiver() {
             }
         }
     }
+}
+
+#[test]
+fn nullable_list_consumers_and_compilation_share_the_same_contract() {
+    let candidate = definition(json!({"input":object(json!({
+        "items":{"type":"array","items":{"type":"string"}},
+        "text":{"type":"string"},"nothing":{"type":"null"},
+        "number":{"type":"number"},"flag":{"type":"boolean"}
+    }), &["items","text","nothing","number","flag"]),
+        "nodes":{
+            "start":{"type":"start"},
+            "select":{"type":"list","input":reference(&["args","items"])},
+            "receive":{"type":"list","input":{"type":"array","items":[reference(&["select","first_record"]),reference(&["select","last_record"])]}},
+            "choose":{"type":"branch","cases":[{"id":"yes","condition":{"type":"contains","left":reference(&["receive","result"]),"right":reference(&["select","first_record"])}}]},
+            "done":{"type":"return","outputs":[{"variable":"records","value_selector":["receive","result"]}]}
+        },
+        "edges":[{"from":"start","to":"select"},{"from":"select","to":"receive"},{"from":"receive","to":"choose"},{"from":"choose","to":"done","port":"yes"},{"from":"choose","to":"done","port":"false"}]
+    }));
+    for (path, compatible) in [
+        (["select", "first_record"], true),
+        (["select", "last_record"], true),
+        (["args", "text"], true),
+        (["args", "nothing"], true),
+        (["args", "number"], false),
+        (["args", "flag"], false),
+    ] {
+        let mut query = query(
+            "choose",
+            WorkflowConsumerField::Condition {
+                case_id: "yes".into(),
+            },
+            &path,
+        );
+        query.consumer.path = vec![WorkflowExpressionStep::Right];
+        let report = analyze(&candidate, Some(&query)).unwrap();
+        assert!(!report.incomplete && !report.truncated);
+        for choice in selected_and_catalog(&report) {
+            assert_eq!(choice.availability, Available, "{path:?}");
+            assert_eq!(
+                choice.compatibility,
+                if compatible { Compatible } else { Incompatible },
+                "{path:?}"
+            );
+        }
+        let mut changed = candidate.clone();
+        let WorkflowNodeDefinition::Branch { cases } =
+            changed.block.nodes.get_mut("choose").unwrap()
+        else {
+            unreachable!()
+        };
+        let WorkflowPredicate::Contains { right, .. } = &mut cases[0].condition else {
+            unreachable!()
+        };
+        *right = serde_json::from_value(reference(&path)).unwrap();
+        let compiled = super::super::WorkflowProgram::compile(
+            super::super::WorkflowId::parse("nullable-array").unwrap(),
+            changed,
+        );
+        assert_eq!(compiled.is_ok(), compatible, "{path:?}: {compiled:?}");
+    }
+}
+
+#[test]
+fn nullable_schema_proofs_preserve_constraints_and_authoring_budgets() {
+    let nullable = |schema| json!({"anyOf":[schema,{"type":"null"}]});
+    let string = json!({"type":"string"});
+    let narrow = nullable(json!({"type":"string","maxLength":3}));
+    let wide = nullable(string.clone());
+    let declarations = SchemaMap::default();
+    for (actual, expected, compatible) in [
+        (wide.clone(), wide.clone(), true),
+        (narrow.clone(), wide.clone(), true),
+        (wide.clone(), narrow, false),
+        (string.clone(), wide.clone(), true),
+        (json!({"type":"null"}), wide.clone(), true),
+        (wide.clone(), string, false),
+        (nullable(json!({"type":"boolean"})), wide.clone(), false),
+        (
+            nullable(json!({"type":"integer"})),
+            nullable(json!({"type":"number"})),
+            true,
+        ),
+        (
+            object(json!({"value":wide.clone()}), &["value"]),
+            object(json!({"value":wide.clone()}), &["value"]),
+            true,
+        ),
+        (
+            json!({"type":"array","items":wide.clone()}),
+            json!({"type":"array","items":{"type":"string"}}),
+            false,
+        ),
+    ] {
+        assert_eq!(
+            super::super::schemas_compatible(&actual, &expected),
+            compatible,
+            "{actual} -> {expected}"
+        );
+        let mut inference = SchemaInference::new(&declarations, "receive", SchemaBudget::default());
+        assert_eq!(
+            inference.compatible(&actual, &expected).unwrap(),
+            compatible,
+            "bounded: {actual} -> {expected}"
+        );
+    }
+    let mut inference = SchemaInference::new(
+        &declarations,
+        "receive",
+        SchemaBudget::limited(1024 * 1024, 1024 * 1024, 1),
+    );
+    assert!(matches!(
+        inference.compatible(&wide, &wide),
+        Err(InferenceError::Budget)
+    ));
 }
 
 #[test]
@@ -1612,6 +1768,109 @@ fn scoped_clipboard_groups_preserve_native_workflow_validity() {
                 definition,
             )
             .unwrap_or_else(|error| panic!("{}/{side}: {error}", case["kind"]));
+        }
+    }
+}
+
+#[test]
+fn list_serial_choices_match_compiler_numeric_and_text_contracts() {
+    for kind in ["string", "number", "integer", "boolean", "object", "array"] {
+        let schema = match kind {
+            "object" => object(json!({}), &[]),
+            "array" => json!({"type":"array","items":{"type":"string"}}),
+            _ => json!({"type":kind}),
+        };
+        let candidate = definition(json!({
+            "input":object(json!({
+                "items":{"type":"array","items":{"type":"number"}},
+                "serial":schema
+            }), &["items", "serial"]),
+            "nodes":{
+                "start":{"type":"start"},
+                "select":{"type":"list","input":reference(&["args","items"]),
+                    "extract":reference(&["args","serial"])},
+                "done":{"type":"return","outputs":[{"variable":"items","value_selector":["select","result"]}]}
+            },
+            "edges":[{"from":"start","to":"select"},{"from":"select","to":"done"}]
+        }));
+        let compatible = matches!(kind, "string" | "number" | "integer");
+        let analysis = analyze(
+            &candidate,
+            Some(&query(
+                "select",
+                WorkflowConsumerField::ListExtract,
+                &["args", "serial"],
+            )),
+        )
+        .unwrap();
+        for choice in selected_and_catalog(&analysis) {
+            assert_eq!(choice.availability, Available, "serial: {kind}");
+            assert_eq!(
+                choice.compatibility,
+                if compatible { Compatible } else { Incompatible },
+                "serial: {kind}"
+            );
+        }
+        assert_eq!(
+            super::super::WorkflowProgram::compile(
+                super::super::WorkflowId::parse("list_serial").unwrap(),
+                candidate,
+            )
+            .is_ok(),
+            compatible,
+            "compiler serial: {kind}"
+        );
+    }
+}
+
+#[test]
+fn list_filter_choices_match_compiler_numeric_text_coercion() {
+    for target in ["number", "integer", "string", "boolean"] {
+        for kind in ["string", "number", "integer", "boolean"] {
+            let candidate = definition(json!({
+                "input":object(json!({
+                    "items":{"type":"array","items":object(json!({"score":{"type":target}}), &["score"])},
+                    "threshold":{"type":kind}
+                }), &["items", "threshold"]),
+                "nodes":{
+                    "start":{"type":"start"},
+                    "select":{"type":"list","input":reference(&["args","items"]),
+                        "filter":{"path":["score"],"operator":"equal","value":reference(&["args","threshold"])}},
+                    "done":{"type":"return","outputs":[{"variable":"items","value_selector":["select","result"]}]}
+                },
+                "edges":[{"from":"start","to":"select"},{"from":"select","to":"done"}]
+            }));
+            let compatible = if matches!(target, "number" | "integer") {
+                matches!(kind, "string" | "number" | "integer")
+            } else {
+                target == kind
+            };
+            let analysis = analyze(
+                &candidate,
+                Some(&query(
+                    "select",
+                    WorkflowConsumerField::ListFilterValue,
+                    &["args", "threshold"],
+                )),
+            )
+            .unwrap();
+            for choice in selected_and_catalog(&analysis) {
+                assert_eq!(choice.availability, Available, "filter: {target}/{kind}");
+                assert_eq!(
+                    choice.compatibility,
+                    if compatible { Compatible } else { Incompatible },
+                    "filter: {target}/{kind}"
+                );
+            }
+            assert_eq!(
+                super::super::WorkflowProgram::compile(
+                    super::super::WorkflowId::parse("list_filter").unwrap(),
+                    candidate,
+                )
+                .is_ok(),
+                compatible,
+                "compiler filter: {target}/{kind}"
+            );
         }
     }
 }

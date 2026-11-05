@@ -63,13 +63,13 @@ export class Launcher {
       catch { throw new Error(`Native binary unavailable: ${args.binary}. Run cargo build --bins, or pass --binary /absolute/path/rustx.`); }
       // Match Rust's current_exe(): helpers belong beside the resolved executable.
       const binaryDirectory = dirname(realpathSync(args.binary));
-      for (const name of ['bash-supervisor', 'interactive-supervisor']) {
+      for (const name of ['bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
         const helper = join(binaryDirectory, name);
         try {
           accessSync(helper, constants.X_OK);
           if (!statSync(helper).isFile()) throw new Error('not a file');
         } catch {
-          throw new Error(`Native helper unavailable: ${helper}. Run cargo build --bins and keep rustx, bash-supervisor, and interactive-supervisor together.`);
+          throw new Error(`Native helper unavailable: ${helper}. Run cargo build --bins and keep rustx and its native helper binaries together.`);
         }
       }
       if (args.mode === 'tui') {

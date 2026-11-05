@@ -1,14 +1,14 @@
 import { encodeField, type ArrayEdit, type FieldAddress } from '../../document/fields';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import clsx from 'clsx';
-import type { WorkflowVocabulary } from '../../../../../../protocol/app-server/v62';
+import type { WorkflowVocabulary } from '../../../../../../protocol/app-server/v69';
 import { useTranslation } from '../../../../locale/react';
 import { IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import { nodePresentation } from '../../document/geometry';
 import { nodeField } from '../../document/fields';
 import { blockAt, nodeAt, startOf, type BlockPath, type WorkflowDocument } from '../../document/model';
 import type { WorkflowScopePort } from '../../port';
-import { IconBlock, IconEntry, KindIcon } from '../icons';
+import { IconBlock, IconEntry, KindIcon, nodeIconKind } from '../icons';
 import type { Selection } from './selection';
 import { BlockForm } from './forms/BlockForm';
 import { NodePanel } from './panels/NodePanel';
@@ -59,7 +59,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
   if (selection.kind === 'node' && node && owner) {
     const id = selection.id, metadata = nodePresentation(document, path, id);
     head = <div className={css.inspectTitle}>
-      <span className={clsx(css.nodeIcon, css[`kind_${node.type}`])}><KindIcon kind={node.type} size={17} /></span>
+      <span className={clsx(css.nodeIcon, css[`kind_${node.type}`])}><KindIcon kind={nodeIconKind(node)} size={17} /></span>
       <span className={css.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} placeholder={tx('workflows:panel.title-placeholder')} value={metadata?.title || id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} /></span>
     </div>;
     description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />;
@@ -81,7 +81,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
       : <BlockForm document={document} block={path} edit={edit} onSelect={onSelect} tools={vocabulary?.builtin_tools ?? []} start={selection.kind === 'start'} />);
   }
   return <aside ref={root} className={css.inspector} style={{ '--inspector-width': `${width}px` } as CSSProperties} aria-label={tx('workflows:inspector.label')} onWheel={event => event.stopPropagation()}
-    onKeyDown={event => { if (event.key === 'Escape' && !event.isDefaultPrevented() && !(event.target as Element).closest('textarea, input, select, [role="dialog"], [role="listbox"]')) { event.stopPropagation(); onSelect(undefined); } }}>
+    onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing && !event.isDefaultPrevented() && !(event.target as Element).closest('textarea, input, select, [contenteditable="true"], [role="dialog"], [role="listbox"]')) { event.stopPropagation(); onSelect(undefined); } }}>
     <div className={css.inspectorResize} role="separator" aria-label={tx('workflows:panel.resize')} aria-orientation="vertical" aria-valuemin={320} aria-valuemax={640} aria-valuenow={width} tabIndex={0}
       onPointerDown={event => { event.preventDefault(); resize.current = { x: event.clientX, width }; setResizing(true); }}
       onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); changeWidth(width + (event.key === 'ArrowLeft' ? 20 : -20)); } }} />
@@ -91,7 +91,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
       {description && <div className={css.inspectDescription} key={selection.kind === 'node' ? `node:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>{description}</div>}
     </header>
     {(selection.kind === 'start' || selection.kind === 'node' && node?.type !== 'branch') && <div className={css.inspectTabs}><span>{tx('workflows:branch.settings')}</span></div>}
-    <div className={clsx(css.inspectBody, 'nowheel')} key={selection.kind === 'node' || selection.kind === 'note' ? `${selection.kind}:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>
+    <div data-workflow-inspector-body className={clsx(css.inspectBody, 'nowheel')} key={selection.kind === 'node' || selection.kind === 'note' ? `${selection.kind}:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>
       {rejection && <p role="alert" className={css.hintError}>{rejection}</p>}{body}
     </div>
   </aside>;

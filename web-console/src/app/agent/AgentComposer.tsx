@@ -10,7 +10,7 @@ import { useTranslation } from '../../locale/react';
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
 import { useCallback, useEffect, useLayoutEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { AttachmentIntake, transferInputs, pasteText, type IntakeInput, type IntakeFile, type UploadPort } from '../../client/uploads';
-import type { AttachmentTarget, UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v62';
+import type { AttachmentTarget, UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v69';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
 import { ModelPicker, type ModelPickerState } from '../composer/ModelPicker';
@@ -122,6 +122,9 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
     draftKind: parsed.type === 'text' ? 'message' as const : selectedCommand ? 'command' as const : 'unsupported-command' as const,
     blocked: disabled || submitDisabled, acknowledging: busy || owner.blocked(editor), uploadsPending: pending, cancellationAvailable, separateStop };
   const primary = composerSubmissionPolicy(facts);
+  // A retained uncertain/unsent draft is blocked, but no longer sending.
+  const sending = primary.kind === 'message' && (busy || owner.blocked(editor))
+    && (!editor?.submission || editor.submission.outcome === 'pending');
   useEffect(() => { stopSequence.reset(); }, [stopSequence, binding, cancellationScope?.authority, cancellationScope?.identity, active, cancellationAvailable, menu]);
   useEffect(() => {
     // Window blur only resets; keyboard recognition stays on the focused editor.
@@ -173,7 +176,8 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   return <div ref={root} className={css.root} data-file-drop-owner="">
     {notice && <Toast key={notice.sequence} text={notice.text} holdMs={6000} icon={<IconWarningOutline16/>} anchor={root.current} onDone={() => setError('')}/>}
     {!restoreSupported && <p role="alert">{tx('agent:agent-composer.cannot-restore-this-ordered-native-input-in-the-flat-web-editor')}</p>}
-    <div className={css.card} data-composer-card data-editor-incarnation={editor?.incarnation} data-editor-revision={editor?.revision} data-submission-outcome={editor?.submission?.outcome} aria-busy={busy}>
+    <div className={css.card} data-composer-card data-editor-incarnation={editor?.incarnation} data-editor-revision={editor?.revision} data-submission-outcome={editor?.submission?.outcome} aria-busy={busy}
+      onClick={event => { if (event.target === event.currentTarget) input.current?.focus({ preventScroll: true }); }}>
       {modelMenu && <ModelPicker state={modelPicker!} close={() => { modelInvocation.current = undefined; setModelRequested(false); trigger.dismiss(); trigger.restore(); }} chosen={() => { if (modelRevision) owner.consumeRevision(modelRevision.incarnation, modelRevision.revision); setModelRequested(false); trigger.dismiss(); modelInvocation.current = undefined; trigger.restore(); }}/>}
       {menu && <CommandMenu rows={rows} active={highlight} select={selectMenu} highlight={trigger.highlight}
         fileDescription={uploadPolicy ? undefined : tx('agent:upload.policy')} />}
@@ -235,11 +239,15 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
             disabled={!cancellationAvailable} onMouseDown={event => event.preventDefault()} onClick={onCancel}>
             <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
           </button>}
-          <button type="button" className={css.primary} data-composer-primary={primary.kind} aria-label={tx(primary.label)} title={tx(primary.title)}
+          <button type="button" className={css.primary} data-composer-primary={primary.kind} aria-label={tx(sending ? 'agent:submission.sending' : primary.label)} title={tx(sending ? 'agent:submission.sending' : primary.title)}
+            aria-busy={sending || undefined} data-sending={sending || undefined}
             disabled={primary.disabled} onMouseDown={event => event.preventDefault()} onClick={() => { if (primary.kind === 'stop') onCancel(); else void submit(); }}>
             {primary.kind === 'stop'
               ? <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
-              : <span aria-hidden="true"><IconSendOutline14 /></span>}
+              : sending ? <svg className={css.sendingSpinner} viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.35" strokeWidth="2"/>
+                <path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg> : <span aria-hidden="true"><IconSendOutline14 /></span>}
           </button>
         </div>
       </div>

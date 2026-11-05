@@ -283,7 +283,7 @@ meaningful domain/boundary/dependency topology:
 | `subagent` | the child-process boundary | named definition admission/resolution, frozen-policy handshake through a real launched child, end-to-end parent/child composition under a real App Server parent, the running child's internal read-only inspection socket |
 | `tools` | OS/tooling boundary | Bash supervision, Read/Write/Edit/Grep/Glob, Skills, MCP config/runtime, uv backend, managed `FastMCP` materialization |
 | `cfg3_catalog` | real configuration source files | CFG3 source resolution, shadowing and replacement, native writers' commit races and stale-write refusal, frozen model/provider invocation identity |
-| `cfg3_managed_output` | managed Tool output storage | execution-identity locators, collision refusal without overwrite, spill reconstruction |
+| `cfg3_managed_output` | durable identity domains | typed Session/Node/Conversation/execution identity validation and serialization; output locators are independent of execution IDs |
 | `contracts` | none (pure) | serialization fixture round-trips, committed configuration examples |
 
 The stdio MCP canonical-executor test holds the fixture's `mutate` response
@@ -687,7 +687,7 @@ Mandatory prerequisites fail closed; only explicitly opt-in tooling may
 skip:
 
 - **Real executables.** Tests that exec `bash-supervisor`,
-  `interactive-supervisor` or `rustx` need `cargo build --bins` first;
+  `interactive-supervisor`, `workflow-renderer` or `rustx` need `cargo build --bins` first;
   integration targets receive `CARGO_BIN_EXE_*` from Cargo. A missing
   executable fails the spawn.
 - **A verified case-insensitive filesystem on macOS.** The `process` target's

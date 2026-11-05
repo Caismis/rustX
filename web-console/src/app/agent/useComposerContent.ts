@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { TodoTask, RuntimeClientSnapshot } from '../../../../protocol/app-server/v62';
+import type { TodoTask, RuntimeClientSnapshot } from '../../../../protocol/app-server/v69';
 import { parseObservedValue } from '../../../../protocol/app-server/domain-observation';
 import type { AppServerClient } from '../../client/app-server';
 import type { SessionView } from '../../client/contracts';
@@ -23,7 +23,7 @@ export function useComposerContent(client: AppServerClient, view: SessionView | 
   const goalIdentity = JSON.stringify([scope, goal?.reference, goal?.objective_deferred, goal?.blocked_reason_deferred]);
   const latest = useRef({ todoIdentity, goalIdentity }); latest.current = { todoIdentity, goalIdentity };
   const [todos, setTodos] = useState<{ owner: AppServerClient; identity: string; scope: string; value?: TodoTask[]; error?: string }>();
-  const [loadedGoal, setGoal] = useState<{ owner: AppServerClient; identity: string; value?: NonNullable<RuntimeClientSnapshot['goal']>; error?: string }>();
+  const [loadedGoal, setGoal] = useState<{ owner: AppServerClient; identity: string; scope: string; value?: NonNullable<RuntimeClientSnapshot['goal']>; error?: string }>();
   useEffect(() => {
     const target = view?.target, cut = view?.checkpoint?.read_cut, admission = view?.attachmentObservation;
     if (!view || !target || !cut || !frontier || !view.snapshot?.todos) return;
@@ -47,7 +47,12 @@ export function useComposerContent(client: AppServerClient, view: SessionView | 
   }, [client, todoIdentity, todo]);
   useEffect(() => {
     const target = view?.target, cut = view?.checkpoint?.read_cut, admission = view?.attachmentObservation;
-    if (!view || !target || !cut || !goal || !goal.objective_deferred && !goal.blocked_reason_deferred) return;
+    if (!goal) { setGoal(undefined); return; }
+    if (!view || !target || !cut) return;
+    if (!goal.objective_deferred && !goal.blocked_reason_deferred) {
+      setGoal({ owner: client, identity: goalIdentity, scope, value: { current: goal } });
+      return;
+    }
     let mounted = true;
     const current = () => mounted && latest.current.goalIdentity === goalIdentity && client.isAttachmentObservationCurrent(view.id, admission);
     const reader = readerFor(client, target);
@@ -60,8 +65,10 @@ export function useComposerContent(client: AppServerClient, view: SessionView | 
         if (typeof reason !== 'string' && reason !== null) throw Error('Original Goal reason is unavailable.');
         original.blocked_reason = reason; original.blocked_reason_deferred = false;
       }
-      if (current()) setGoal({ owner: client, identity: goalIdentity, value: { current: original } });
-    })().catch(error => { if (current()) setGoal({ owner: client, identity: goalIdentity, error: String(error).slice(0, 512) }); });
+      if (current()) setGoal({ owner: client, identity: goalIdentity, scope, value: { current: original } });
+    })().catch(error => { if (current()) setGoal(previous => ({ owner: client, identity: goalIdentity, scope,
+      value: previous?.owner === client && previous.scope === scope && previous.value?.current?.reference.id === goal.reference.id ? previous.value : undefined,
+      error: String(error).slice(0, 512) })); });
     return () => { mounted = false; };
   }, [client, goalIdentity]);
   // A same-owner Todo revision keeps its last complete list while refreshing;
@@ -69,12 +76,18 @@ export function useComposerContent(client: AppServerClient, view: SessionView | 
   const retainedTodos = todo && todos?.owner === client && todos.scope === scope ? todos.value : undefined;
   const currentTodos = todos?.owner === client && todos.identity === todoIdentity ? todos : undefined;
   const currentGoal = loadedGoal?.owner === client && loadedGoal.identity === goalIdentity ? loadedGoal : undefined;
+  // Retain the whole Goal, including its matching CAS reference: never attach
+  // a newer mutation token to objective text the user has not seen yet.
+  const displayedGoal = goal && goal.phase !== 'complete' && (goal.objective_deferred || goal.blocked_reason_deferred)
+    && loadedGoal?.owner === client && loadedGoal.scope === scope && loadedGoal.value?.current?.reference.id === goal.reference.id ? loadedGoal.value : undefined;
   return {
-    snapshot: view?.snapshot && (retainedTodos || currentGoal?.value) ? { ...view.snapshot,
+    snapshot: view?.snapshot && (retainedTodos || displayedGoal) ? { ...view.snapshot,
       ...(retainedTodos && view.snapshot.todos ? { todos: { ...view.snapshot.todos, tasks: retainedTodos } } : {}),
-      ...(currentGoal?.value ? { goal: currentGoal.value } : {}),
+      ...(displayedGoal ? { goal: displayedGoal } : {}),
     } : view?.snapshot,
-    todoLoaded: currentTodos?.value !== undefined && !currentTodos.error,
+    // Like Harness's whole-value projection, keep a complete displayed list
+    // ready during refresh; only an initial deferred read needs Loading.
+    todoLoaded: retainedTodos !== undefined || currentTodos?.value !== undefined && !currentTodos.error,
     error: currentTodos?.error ?? currentGoal?.error,
   };
 }

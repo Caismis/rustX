@@ -33,8 +33,8 @@ interface ViewportProps {
    * unobserved/follow mode, where the rail may use current native state. */
   onActiveTurn?: (key: string | null | undefined) => void;
 }
-/** One frame owns every automatic Chat correction. Native user scrolling
- * changes intent synchronously, including while a layout frame is pending. */
+/** One coordinator owns every automatic Chat correction before paint. Native
+ * scrolling changes intent synchronously, including while a frame is pending. */
 export class ChatViewport extends Component<ViewportProps, { detached: boolean; chromeHost?: HTMLElement }> {
   state: { detached: boolean; chromeHost?: HTMLElement } = { detached: false };
   private scroller = () => this.viewport.current?.closest<HTMLElement>('[data-conversation-scroll]') ?? this.viewport.current;
@@ -72,7 +72,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   }
   private markLayoutDirty = () => {
     if (!this.mounted || this.frame !== undefined) return;
-    this.frame = requestAnimationFrame(this.commitLayout);
+    this.frame = requestAnimationFrame(() => { this.frame = undefined; this.commitLayout(); });
   };
   private onComposerBeforeInput = (event: Event) => {
     if ((event.target as Element).closest('[data-composer-seat]')) this.onScroll();
@@ -87,6 +87,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     this.markLayoutDirty();
   };
   private commitLayout = () => {
+    if (this.frame !== undefined) cancelAnimationFrame(this.frame);
     this.frame = undefined;
     const el = this.scroller();
     if (!this.mounted || !el || el.closest('[hidden]')) return;
@@ -235,7 +236,9 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     if (scroller !== this.viewport.current) this.setState({ chromeHost: scroller.parentElement! });
     this.markLayoutDirty();
     if (typeof ResizeObserver !== 'undefined') {
-      this.observer = new ResizeObserver(this.markLayoutDirty);
+      // Resize delivery is already after layout and before paint. Queuing a
+      // frame here would first paint a newly selected chat at the old offset.
+      this.observer = new ResizeObserver(this.commitLayout);
       this.observer.observe(this.content.current!);
       this.observer.observe(scroller);
       const composer = scroller.querySelector('[data-composer-seat]');

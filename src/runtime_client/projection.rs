@@ -437,6 +437,7 @@ struct ForegroundResultContent {
 #[derive(Clone)]
 pub(crate) struct CheckpointSeed {
     snapshot: RuntimeClientSnapshot,
+    workflow_source: Option<crate::observation::workflow_source::WorkflowReadSource>,
     capability_head: crate::observation::capability_source::PreparedCapabilityHead,
     trace_head: super::checkpoint::PreparedTraceHead,
     cursor: RuntimeClientCursor,
