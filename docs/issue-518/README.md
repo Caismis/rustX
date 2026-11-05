@@ -146,10 +146,12 @@ Server protocol/connection layer.
   `agent.agents_md.files` entry, for one — is watched through its directory
   and routes to every Workspace whose capture read it; the set is the
   capture's own source manifest. A capture records every file it read or tried to read
-  through the bounded reader, so a failed one still names the file it failed
+  through the bounded reader, and every path it authorized before validating it, so a failed one still names the file it failed
   at while diagnostics keep naming the authored file at fault. Each input is
   observed as every directory entry opening it traverses — components, each
-  link and its resolution, up to the first missing entry — through each
+  link and its resolution, up to the first missing or non-directory entry,
+  walked from the filesystem root for an input outside its Workspace and
+  again for an absolute link target — through each
   entry's canonical directory; one physical directory takes one watch; the
   watch set settles before any capture; and every input the watch has not yet
   seen, all of them on its first pass, is captured again once watched. Session uploads under
@@ -201,6 +203,7 @@ Versions: App Server 63, Runtime Client 80, SQLite 83.
 | A selected instruction file outside the fixed sources is watched through its directory and its edit, the only notification, reaches the resident runtime; a sibling no capture read routes nowhere | `source_watch::tests::a_captured_input_file_is_watched_and_routed_to_its_readers`, `automatic_commit::an_edited_selected_instruction_file_reaches_the_resident_runtime` |
 | A captured input stays observable through a failed first capture, a pre-filled directory replacement, removal and re-creation of its directories, a symbolic link to its content, and an edit between the capture that found it and its watch | `automatic_commit::a_newly_selected_file_that_fails_its_first_capture_recovers_from_its_own_edit`, `automatic_commit::a_replaced_input_directory_recaptures_its_readers`, `automatic_commit::an_edit_before_a_new_input_is_watched_is_captured_once_it_is`, `source_watch::tests::a_captured_input_directory_lifecycle_stays_observed`, `source_watch::tests::the_watch_set_settles_on_directories_created_while_registering`, `source_watch::tests::a_linked_input_is_observed_through_its_target` |
 | A Named Agent's newly selected file that fails its first capture recovers from its own edit; an intermediate link re-pointed or a target restored is observed; a directory reached through a link keeps its one platform watch when the link stops being an input; an edit before the watch starts is captured by its first pass | `automatic_commit::a_named_agent_file_that_fails_its_first_capture_recovers_from_its_own_edit`, `automatic_commit::an_edit_before_the_watch_starts_is_captured_by_its_first_pass`, `source_watch::tests::a_link_chain_is_observed_link_by_link`, `source_watch::tests::a_directory_reached_through_a_link_keeps_its_one_watch` (real platform watcher) |
+| An absolute link's final target and every link an absolute directory link passes through are observed; an input outside its Workspace observes a link among its parents; a selected file whose authorization fails before it is read (its directory is a regular file) recovers from repairing only the directory | `automatic_commit::an_edited_absolute_link_target_reaches_the_resident_runtime`, `automatic_commit::a_repointed_intermediate_link_reaches_the_resident_runtime`, `automatic_commit::a_repointed_parent_link_of_an_external_user_input_reaches_the_resident_runtime`, `automatic_commit::a_selected_file_beneath_a_non_directory_recovers_when_the_directory_is_repaired`, `source_watch::tests::an_absolute_link_is_observed_through_its_target`, `source_watch::tests::an_absolute_link_through_an_intermediate_link_observes_that_link`, `source_watch::tests::an_external_input_observes_a_link_among_its_parents` |
 | A single changed Tool whose name the native byte bound omitted shows the count title, never an empty name | `web-console/test/configuration-change-row.test.tsx` |
 | A platform rescan without a path recaptures a Workspace whose notifications were lost; a repeated rescan records nothing | `automatic_commit::a_rescan_recaptures_sources_whose_notifications_were_lost` |
 | A parameter change of a model only a direct Workflow Model node names is one Model fact; an unselected model records nothing | `automatic_commit::a_workflow_model_node_is_a_model_that_runs` |

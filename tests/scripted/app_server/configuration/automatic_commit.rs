@@ -2611,6 +2611,278 @@ async fn a_newly_selected_file_that_fails_its_first_capture_recovers_from_its_ow
     .await;
 }
 
+/// A selected instruction file that is an absolute link is observed through
+/// its final target: editing only the target, through its own notification,
+/// reaches the resident runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_edited_absolute_link_target_reaches_the_resident_runtime() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let workspace = std::fs::canonicalize(&fixture.workspaces[0]).unwrap();
+        let target = workspace.join("policies/main.md");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(workspace.join("docs")).unwrap();
+        std::fs::write(&target, "Policy version A").unwrap();
+        std::os::unix::fs::symlink(&target, workspace.join("docs/policy.md")).unwrap();
+        select_instruction_file(&fixture, "docs/policy.md");
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        assert!(project_text(&runtime).contains("Policy version A"));
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        injected_only(&fixture);
+        let captured = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_captured
+            .clone();
+        captured.arm();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let observe = async {
+            watch_settled(&fixture).await;
+            std::fs::write(&target, "Policy version B").unwrap();
+            while !fixture.manager.notify_source_watch(modified(&target)) {
+                tokio::task::yield_now().await;
+            }
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                project_text(&runtime).contains("Policy version B"),
+                "the target edit was not routed: {}",
+                project_text(&runtime)
+            );
+            captured.release();
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
+        watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// Re-point `link` to `to`, notify only the link itself, and require the
+/// resident runtime of the first Session, already loaded with "version 1",
+/// to reach "version 2".
+async fn a_repointed_link_reaches_the_resident_runtime(
+    fixture: &Fixture,
+    link: &std::path::Path,
+    to: &std::path::Path,
+) {
+    let id = fixture.sessions[0].id.clone();
+    let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+    assert!(project_text(&runtime).contains("version 1"));
+    while !fixture.manager.applications.lock().worker_idle() {
+        tokio::task::yield_now().await;
+    }
+    injected_only(fixture);
+    let captured = fixture
+        .manager
+        .registry
+        .0
+        .lock()
+        .unwrap()
+        .source_watch_captured
+        .clone();
+    captured.arm();
+    let stop = tokio_util::sync::CancellationToken::new();
+    let observe = async {
+        watch_settled(fixture).await;
+        let staged = link.with_extension("next");
+        std::os::unix::fs::symlink(to, &staged).unwrap();
+        std::fs::rename(&staged, link).unwrap();
+        while !fixture.manager.notify_source_watch(modified(link)) {
+            tokio::task::yield_now().await;
+        }
+        captured.entered().await;
+        applied(fixture, 0).await;
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            project_text(&runtime).contains("version 2"),
+            "the re-pointed link was not routed: {}",
+            project_text(&runtime)
+        );
+        captured.release();
+        stop.cancel();
+    };
+    let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
+    watched.unwrap();
+}
+
+/// Two versioned policy directories, each holding `policy.md`.
+fn versioned_policies(directory: &std::path::Path) {
+    for version in ["1", "2"] {
+        let path = directory.join(format!("v{version}"));
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("policy.md"), format!("Policy version {version}")).unwrap();
+    }
+}
+
+/// An absolute directory link that passes through another link keeps that
+/// link observed: re-pointing only it reaches the resident runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_repointed_intermediate_link_reaches_the_resident_runtime() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let workspace = std::fs::canonicalize(&fixture.workspaces[0]).unwrap();
+        versioned_policies(&workspace);
+        std::fs::create_dir_all(workspace.join("links")).unwrap();
+        std::os::unix::fs::symlink("../v1", workspace.join("links/current")).unwrap();
+        std::os::unix::fs::symlink(workspace.join("links/current"), workspace.join("docs"))
+            .unwrap();
+        select_instruction_file(&fixture, "docs/policy.md");
+        fixture
+            .manager
+            .load(&fixture.sessions[0].id, None)
+            .await
+            .unwrap();
+        a_repointed_link_reaches_the_resident_runtime(
+            &fixture,
+            &workspace.join("links/current"),
+            std::path::Path::new("../v2"),
+        )
+        .await;
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// A User instruction file outside every Workspace keeps a link among its
+/// parents observed: re-pointing only that link reaches the resident runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_repointed_parent_link_of_an_external_user_input_reaches_the_resident_runtime() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let shared = std::fs::canonicalize(fixture.workspaces[0].parent().unwrap())
+            .unwrap()
+            .join("shared");
+        versioned_policies(&shared);
+        std::os::unix::fs::symlink("v1", shared.join("current")).unwrap();
+        let config = fixture.manager.configuration.sources.config_path.clone();
+        let mut document = std::fs::read_to_string(&config).unwrap();
+        std::fmt::Write::write_fmt(
+            &mut document,
+            format_args!(
+                "\n[agent.agents_md]\nfiles = [{:?}]\n",
+                shared.join("current/policy.md")
+            ),
+        )
+        .unwrap();
+        std::fs::write(&config, document).unwrap();
+        fixture
+            .manager
+            .load(&fixture.sessions[0].id, None)
+            .await
+            .unwrap();
+        a_repointed_link_reaches_the_resident_runtime(
+            &fixture,
+            &shared.join("current"),
+            std::path::Path::new("v2"),
+        )
+        .await;
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// A newly selected instruction file whose authorization fails before it
+/// is read (its directory is a regular file) stays an input: repairing only
+/// the directory, through the directory's own notification, recovers the
+/// same resident runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_selected_file_beneath_a_non_directory_recovers_when_the_directory_is_repaired() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        while !fixture.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        injected_only(&fixture);
+        let captured = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_captured
+            .clone();
+        captured.arm();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let observe = async {
+            watch_settled(&fixture).await;
+            let docs = fixture.workspaces[0].join("docs");
+            let policy = docs.join("policy.md");
+            std::fs::write(&docs, "not a directory").unwrap();
+            select_instruction_file(&fixture, "docs/policy.md");
+            let config = modified(&fixture.workspaces[0].join("rustx.toml"));
+            while !fixture.manager.notify_source_watch(config.clone()) {
+                tokio::task::yield_now().await;
+            }
+            captured.entered().await;
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            assert!(context_failed(&fixture), "the capture did not fail");
+            assert!(
+                fixture
+                    .manager
+                    .applications
+                    .lock()
+                    .source_inputs()
+                    .iter()
+                    .any(|(_, file)| file == &policy),
+                "the unauthorized input is not observed"
+            );
+            // Let the failed capture's handling finish entirely, including
+            // the pass that watches its input, before repairing anything.
+            let passes = *settled_passes(&fixture).borrow();
+            captured.release();
+            captured.parked(0).await;
+            settled_passes(&fixture)
+                .wait_for(|settled| *settled > passes)
+                .await
+                .unwrap();
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            assert!(!project_text(&runtime).contains("Policy repaired"));
+            captured.arm();
+            std::fs::remove_file(&docs).unwrap();
+            std::fs::create_dir(&docs).unwrap();
+            std::fs::write(&policy, "Policy repaired").unwrap();
+            assert!(fixture.manager.notify_source_watch(modified(&docs)));
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                project_text(&runtime).contains("Policy repaired"),
+                "not recovered: {}",
+                project_text(&runtime)
+            );
+            captured.release();
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
+        watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
 /// An input the watcher learns of only from a capture is captured again
 /// once it is watched: an edit after that capture read it, before its watch
 /// existed, still reaches the resident runtime.

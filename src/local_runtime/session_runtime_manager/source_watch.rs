@@ -14,7 +14,7 @@
 //! | User resources and guidance | `~/rustx/.agents` for `mcp.toml` and its guidance files, and its `agents`, `skills`, `tools` and `workflows`, recursively (the parent until it exists) |
 //! | Workspace document and root guidance | each known Workspace root, non-recursively, for `rustx.toml`, the guidance files and `*.md` |
 //! | Workspace resources | each known Workspace's `.agents`, as for the User |
-//! | Captured inputs | each other file a known Workspace's retained capture read or tried to read (a selected instruction file, for one, valid or not), as every directory entry opening it traverses — each component, each link and what it resolves to, up to the first missing entry — through each entry's canonical directory, non-recursively |
+//! | Captured inputs | each other file a known Workspace's retained capture read or tried to read (a selected instruction file, for one, valid or not), as every directory entry opening it traverses — each component beneath the Workspace (or from the filesystem root, for a file outside it, and again for an absolute link target), each link and what it resolves to, up to the first missing or non-directory entry — through each entry's canonical directory, non-recursively |
 //!
 //! The guidance files are exactly the loader's (`AGENTS.override.md`,
 //! `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`). A notification for a
@@ -295,29 +295,29 @@ fn notified(
 
 /// Every directory entry a loader opening `file` traverses, each spelled
 /// under its canonical directory: each component beneath `base` (the
-/// Workspace that reads it, or the file's own directory), each link on the
+/// Workspace that reads it, or else the filesystem root), each link on the
 /// way and what it resolves to, up to and including the first entry that
-/// does not exist. Watching each entry's directory reports any of them
-/// replaced, re-pointed, removed or created; a link and its target are
-/// separate entries, so neither hides the other.
+/// does not exist or is not a directory. Watching each entry's directory
+/// reports any of them replaced, re-pointed, removed or created; a link and
+/// its target are separate entries, so neither hides the other.
 fn resolution(base: &Path, file: &Path) -> Vec<PathBuf> {
     use std::collections::VecDeque;
     use std::path::Component;
-    let (base, rest) = match file.strip_prefix(base) {
-        Ok(rest) => (base, rest),
-        Err(_) => match file.parent().zip(file.file_name()) {
-            Some((parent, name)) => (parent, Path::new(name)),
-            None => return Vec::new(),
-        },
+    let names = |path: &Path| -> VecDeque<std::ffi::OsString> {
+        path.components()
+            .filter_map(|component| match component {
+                Component::Prefix(_) | Component::RootDir => None,
+                component => Some(component.as_os_str().to_owned()),
+            })
+            .collect()
     };
-    let Ok(mut directory) = std::fs::canonicalize(base) else {
+    let (start, mut pending) = match file.strip_prefix(base) {
+        Ok(rest) => (base.to_path_buf(), names(rest)),
+        Err(_) => (root(file), names(file)),
+    };
+    let Ok(mut directory) = std::fs::canonicalize(&start) else {
         return vec![file.to_path_buf()];
     };
-    let mut pending: VecDeque<_> = rest
-        .components()
-        .map(Component::as_os_str)
-        .map(ToOwned::to_owned)
-        .collect();
     let mut entries = Vec::new();
     let mut links = 0;
     while let Some(name) = pending.pop_front() {
@@ -338,35 +338,33 @@ fn resolution(base: &Path, file: &Path) -> Vec<PathBuf> {
             let Some(target) = std::fs::read_link(&entry).ok().filter(|_| links <= 40) else {
                 break;
             };
-            let mut spliced: VecDeque<_> = if target.is_absolute() {
-                // Resolved from its nearest existing ancestor, which is
-                // canonical once it exists.
-                let Some((existing, canonical)) = target
-                    .ancestors()
-                    .find_map(|ancestor| Some((ancestor, std::fs::canonicalize(ancestor).ok()?)))
-                else {
+            // An absolute target is walked again from its root, so every
+            // link it passes through is an entry of its own.
+            if target.is_absolute() {
+                let Ok(canonical) = std::fs::canonicalize(root(&target)) else {
                     break;
                 };
                 directory = canonical;
-                target
-                    .strip_prefix(existing)
-                    .unwrap_or(Path::new(""))
-                    .components()
-                    .map(|component| component.as_os_str().to_owned())
-                    .collect()
-            } else {
-                target
-                    .components()
-                    .map(|component| component.as_os_str().to_owned())
-                    .collect()
-            };
+            }
+            let mut spliced = names(&target);
             spliced.extend(pending);
             pending = spliced;
         } else if metadata.is_dir() {
             directory = entry;
+        } else if !pending.is_empty() {
+            // Opening a path beneath a non-directory fails here.
+            break;
         }
     }
     entries
+}
+
+/// The root `path` is absolute against: its prefix and root directory.
+fn root(path: &Path) -> PathBuf {
+    use std::path::Component;
+    path.components()
+        .take_while(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+        .collect()
 }
 
 /// Each reader's input files as the [`resolution`] entries a loader opening
@@ -1397,6 +1395,105 @@ mod tests {
         assert!(desired(&sources()).contains_key(&workspace.join("policies")));
         assert_eq!(routed("policies/a.md"), reader);
         assert!(routed("policies/b.md").is_empty());
+    }
+
+    /// An absolute link is walked again from the filesystem root: its final
+    /// target is an entry, so editing only the target routes to the reader.
+    #[test]
+    fn an_absolute_link_is_observed_through_its_target() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = std::fs::canonicalize(root.path()).unwrap().join("w");
+        std::fs::create_dir_all(workspace.join("docs")).unwrap();
+        std::fs::create_dir_all(workspace.join("policies")).unwrap();
+        std::fs::write(workspace.join("policies/main.md"), "policy").unwrap();
+        std::os::unix::fs::symlink(
+            workspace.join("policies/main.md"),
+            workspace.join("docs/policy.md"),
+        )
+        .unwrap();
+        let sources = KnownSources {
+            user: roots(&root.path().join("home")),
+            workspaces: vec![workspace.clone()],
+            inputs: resolved(vec![(workspace.clone(), workspace.join("docs/policy.md"))]),
+        };
+        assert!(desired(&sources).contains_key(&workspace.join("policies")));
+        assert_eq!(
+            notified(
+                &workspace.join("policies/main.md"),
+                &sources,
+                &|_, _| false,
+                &mut BTreeMap::new()
+            ),
+            [SourceTarget::Workspace {
+                directory: workspace.clone()
+            }]
+        );
+    }
+
+    /// An absolute directory link that passes through another link keeps
+    /// that intermediate link an entry: re-pointing only it routes to the
+    /// reader.
+    #[test]
+    fn an_absolute_link_through_an_intermediate_link_observes_that_link() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = std::fs::canonicalize(root.path()).unwrap().join("w");
+        for directory in ["links", "v1", "v2"] {
+            std::fs::create_dir_all(workspace.join(directory)).unwrap();
+        }
+        std::fs::write(workspace.join("v1/policy.md"), "1").unwrap();
+        std::fs::write(workspace.join("v2/policy.md"), "2").unwrap();
+        std::os::unix::fs::symlink("../v1", workspace.join("links/current")).unwrap();
+        std::os::unix::fs::symlink(workspace.join("links/current"), workspace.join("docs"))
+            .unwrap();
+        let sources = KnownSources {
+            user: roots(&root.path().join("home")),
+            workspaces: vec![workspace.clone()],
+            inputs: resolved(vec![(workspace.clone(), workspace.join("docs/policy.md"))]),
+        };
+        assert!(desired(&sources).contains_key(&workspace.join("links")));
+        assert_eq!(
+            notified(
+                &workspace.join("links/current"),
+                &sources,
+                &|_, _| false,
+                &mut BTreeMap::new()
+            ),
+            [SourceTarget::Workspace {
+                directory: workspace.clone()
+            }]
+        );
+    }
+
+    /// An input outside its reader's Workspace is walked from the
+    /// filesystem root, so a link among its parents is an entry: re-pointing
+    /// only that link routes to the reader.
+    #[test]
+    fn an_external_input_observes_a_link_among_its_parents() {
+        let root = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(root.path()).unwrap();
+        let workspace = base.join("w");
+        let shared = base.join("shared");
+        std::fs::create_dir_all(&workspace).unwrap();
+        for directory in ["v1", "v2"] {
+            std::fs::create_dir_all(shared.join(directory)).unwrap();
+            std::fs::write(shared.join(directory).join("policy.md"), directory).unwrap();
+        }
+        std::os::unix::fs::symlink("v1", shared.join("current")).unwrap();
+        let sources = KnownSources {
+            user: roots(&base.join("home")),
+            workspaces: vec![workspace.clone()],
+            inputs: resolved(vec![(workspace.clone(), shared.join("current/policy.md"))]),
+        };
+        let watches = desired(&sources);
+        assert!(watches.contains_key(&shared), "{watches:?}");
+        assert!(watches.contains_key(&shared.join("v1")), "{watches:?}");
+        let reader = [SourceTarget::Workspace {
+            directory: workspace.clone(),
+        }];
+        let routed = |path: PathBuf| notified(&path, &sources, &|_, _| false, &mut BTreeMap::new());
+        assert_eq!(routed(shared.join("current")), reader);
+        assert_eq!(routed(shared.join("v1/policy.md")), reader);
+        assert!(routed(shared.join("v2/policy.md")).is_empty());
     }
 
     /// A directory reached through a link takes one watch, under its

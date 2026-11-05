@@ -19,8 +19,9 @@ thread_local! {
 }
 
 /// Run `read`, returning with its result every file it opened through
-/// [`read_bounded`] on this thread, whether or not the read succeeded: the
-/// exact inputs of a synchronous capture, including the one it failed at.
+/// [`read_bounded`] or authorized through [`record_read`] on this thread,
+/// whether or not the read succeeded: the exact inputs of a synchronous
+/// capture, including the one it failed at.
 pub(crate) fn recording_reads<T>(
     read: impl FnOnce() -> T,
 ) -> (T, std::collections::BTreeSet<std::path::PathBuf>) {
@@ -41,12 +42,18 @@ pub(crate) fn recording_reads<T>(
     (result, recorded)
 }
 
-pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
+/// Record `path` as an input of the enclosing [`recording_reads`], before
+/// anything that may reject it is checked.
+pub(crate) fn record_read(path: &Path) {
     READS.with(|reads| {
         if let Some(reads) = reads.borrow_mut().as_mut() {
             reads.insert(path.to_path_buf());
         }
     });
+}
+
+pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
+    record_read(path);
     if !std::fs::metadata(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?
         .is_file()
