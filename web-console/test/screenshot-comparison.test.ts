@@ -129,15 +129,41 @@ it('A: an exact baseline passes with and without a noise policy', () => {
   }
 });
 
-it('the full-width workflow editor requires an exact match after retiring the old canvas allowance', () => {
+it('the full-width workflow editor does not inherit the retired Start-icon allowance', () => {
   const name = 'workflow-editor-linux.png', expected = reference(name);
-  expect(noisePolicy.find(row => row.reference === name)).toBeUndefined();
   expect(compare(copy(expected), name, expected, noisePolicy).ok).toBe(true);
   // The former Start-icon site moved with the wider canvas. Its old coordinate
   // and adjacent pixels have no inherited tolerance, even for a one-level delta.
   for (const [x, y] of [[786, 121], [785, 121], [787, 121], [786, 120], [786, 122], [0, 0]]) {
     const observed = copy(expected); nudge(observed, x, y, 1);
     const result = compare(observed, name, expected, noisePolicy);
+    expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
+  }
+});
+
+it('Workflow curve coverage admits only its 547 measured sites within each observed channel bound', () => {
+  const name = 'workflow-editor-linux.png', expected = reference(name);
+  const entry = noisePolicy.find(row => row.reference === name)!;
+  const measured = entry.pixels as MeasuredNoisePixel[];
+  expect(measured).toHaveLength(547);
+  expect(entry.regions.flatMap(cells)).toEqual(measured.map(([x, y]) => [x, y]));
+  for (const [i, region] of entry.regions.entries()) {
+    expect(region).toMatchObject({ width: 1, height: 1, maxChangedPixels: 1 });
+    const [, , before, after] = measured[i];
+    expect(region.maxChannelDelta).toBe(Math.max(...before.map((channel, j) => Math.abs(after[j] - channel))));
+  }
+  expect(Math.max(...entry.regions.map(region => region.maxChannelDelta))).toBe(26);
+  const observed = copy(expected);
+  for (const [x, y, , after] of measured) paint(observed, x, y, after);
+  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, 'workflow-library-workspace-linux.png', expected, noisePolicy).ok).toBe(false);
+  for (const region of [entry.regions.find(region => region.maxChannelDelta === 1)!, entry.regions.find(region => region.maxChannelDelta === 26)!]) {
+    const excessive = copy(expected); nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
+    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  }
+  for (const [x, y] of [[880, 315], [900, 316], [754, 324], [880, 326], [755, 403], [0, 0]]) {
+    const adjacent = copy(observed); nudge(adjacent, x, y, 1);
+    const result = compare(adjacent, name, expected, noisePolicy);
     expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
   }
 });

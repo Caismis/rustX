@@ -487,7 +487,7 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await picker.locator(`[data-node-id="${target}"]`).click();
   };
   const readModel = () => parse(readFileSync(file, 'utf8')).block.nodes.model;
-  const selectModel = async () => { await editor(page).getByLabel('Model node model', { exact: true }).focus(); await page.keyboard.press('Enter'); };
+  const selectModel = async () => { await editor(page).getByLabel('Model node model', { exact: true }).press('Enter'); };
   // The saved Model is read back from the file after each check and save.
   const checkAndSave = async () => {
     await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
@@ -596,7 +596,8 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
   } finally { await fixture.stop(false); }
 });
 
-test('large Workflow documents and oversized check schemas load, edit and save in both scopes', async ({ page }, info) => {
+// Each scope owns a complete transfer/commit/reread budget for this multi-MiB file.
+for (const [scope, id] of [['Workspace', 'large_workspace'], ['Global', 'large_global']] as const) test(`large Workflow documents and oversized check schemas load, edit and save in ${scope} scope`, async ({ page }, info) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = [];
   const frames: number[] = [];
@@ -618,33 +619,30 @@ test('large Workflow documents and oversized check schemas load, edit and save i
     authored.block.edges = [{ from: 'start', to: 'code' }, { from: 'code', to: 'contract' }, { from: 'contract', to: 'done' }];
     const documentBytes = JSON.stringify(authored);
     expect(Buffer.byteLength(documentBytes)).toBeGreaterThan(3 * 1024 * 1024);
-    const globalFile = join(fixture.directory, 'home/rustx/.agents/workflows/large_global.yaml');
-    const workspaceFile = join(fixture.workspaceA, '.agents/workflows/large_workspace.yaml');
+    const file = scope === 'Workspace' ? join(fixture.workspaceA, `.agents/workflows/${id}.yaml`) : join(fixture.directory, `home/rustx/.agents/workflows/${id}.yaml`);
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
     // Session navigation is a prerequisite, not part of large Workflow authoring.
     // Install the large inventory after its settings capture has completed.
-    writeFileSync(globalFile, documentBytes); writeFileSync(workspaceFile, documentBytes);
+    writeFileSync(file, documentBytes);
     await expect(page).toHaveTitle(/rustX/i);
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
-    for (const [scope, id, file] of [['Workspace', 'large_workspace', workspaceFile], ['Global', 'large_global', globalFile]]) {
-      await page.getByRole('tab', { name: scope, exact: true }).click();
-      await card(page, id).getByRole('button', { name: id, exact: true }).click();
-      const done = editor(page).getByLabel('Output node done', { exact: true });
-      await done.focus(); await done.press('Enter');
-      const inspector = page.getByRole('complementary', { name: 'Inspector' });
-      await inspector.getByRole('textbox', { name: 'Node title', exact: true }).fill(`Large ${scope} result`);
-      await inspector.getByRole('textbox', { name: 'Node title', exact: true }).press('Enter');
-      await page.getByRole('button', { name: 'Save File', exact: true }).click();
-      // Await the transfer/commit/reread lifecycle before checking its result;
-      // document admission does not impose a five-second save latency contract.
-      await page.getByRole('button', { name: 'Save File', exact: true }).waitFor({ state: 'visible' });
-      await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
-      expect(parse(readFileSync(file, 'utf8')).block.nodes.code.code).toBe(code.code);
-      expect(parse(readFileSync(file, 'utf8')).block.nodes.contract.result.schema).toEqual(schema);
-      await page.screenshot({ path: info.outputPath(`large-${scope.toLowerCase()}.png`) });
-      await page.getByRole('button', { name: 'Back to Workflows', exact: true }).first().click();
-    }
+    await page.getByRole('tab', { name: scope, exact: true }).click();
+    await card(page, id).getByRole('button', { name: id, exact: true }).click();
+    const done = editor(page).getByLabel('Output node done', { exact: true });
+    await done.focus(); await done.press('Enter');
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await inspector.getByRole('textbox', { name: 'Node title', exact: true }).fill(`Large ${scope} result`);
+    await inspector.getByRole('textbox', { name: 'Node title', exact: true }).press('Enter');
+    await page.getByRole('button', { name: 'Save File', exact: true }).click();
+    // Await the transfer/commit/reread lifecycle before checking its result;
+    // document admission does not impose a five-second save latency contract.
+    await page.getByRole('button', { name: 'Save File', exact: true }).waitFor({ state: 'visible' });
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    expect(parse(readFileSync(file, 'utf8')).block.nodes.code.code).toBe(code.code);
+    expect(parse(readFileSync(file, 'utf8')).block.nodes.contract.result.schema).toEqual(schema);
+    await page.screenshot({ path: info.outputPath(`large-${scope.toLowerCase()}.png`) });
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).first().click();
     expect(Math.max(...frames)).toBeLessThanOrEqual(1_048_576);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);

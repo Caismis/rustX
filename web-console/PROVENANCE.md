@@ -23,8 +23,8 @@ supersedes their collapsed-sidebar and modal-Settings geometry.
 - The workspace browser removes its unused collapsed-icon variant. Local source
   hashes and retained import closures are updated for every changed derived file.
 - The full-width Workflow canvas moves the former Start-icon rasterizer site.
-  Its obsolete one-pixel allowance is removed; Workflow references require exact
-  matches. Frozen comparator fixtures retain their measured historical evidence.
+  Its obsolete one-pixel allowance is removed; that site and its neighbors remain
+  exact. Frozen comparator fixtures retain their measured historical evidence.
 - Follow-up review separates retained local Home editors from attachment intent,
   resumes first-submission publication by its existing binding, keeps selected
   workbench iframe bodies within the existing budget, and scopes Settings-owned
@@ -38,6 +38,21 @@ supersedes their collapsed-sidebar and modal-Settings geometry.
   The strict local `Dark 390` recheck after the portal repair independently measured
   the same four corner sites and bounds in the dark reference. Its separate manifest
   entry records that capture's own RGBA pairs; the dark reference is also unchanged.
+- FULL CI run `42193746361`, job `127814031930`, evidence artifact `13494105808`
+  measured 547 curved-edge coverage pixels in `workflow-editor-linux.png`.
+  Independent reconstruction of the failed CI and passing strict local capture
+  found byte-identical SVG viewport DOM, path coordinates, paint order, selected
+  state, z-index, transforms and CSS resources. The canonical viewport SHA256 is
+  `4dd88f424c85838ec552a68dd847042bea37c16301ef972160d4935636929e25`.
+  The observed variation is raster coverage; Chromium's internal cause is not
+  established. The manifest records raw RGBA pairs and PNG hashes, with a separate
+  one-pixel region and actual observed channel bound for each of the 547 sites
+  (maximum 26). No surrounding rectangle inherits a bound. Comparator regressions
+  reject neighboring sites, foreign references, excess deltas and the retired
+  Start-icon allowance. The PNG reference and comparator implementation are unchanged.
+- Workflow browser acceptance dispatches a reopened Model's keyboard action to
+  its exact card. Each multi-MiB Global/Workspace authoring case has its own normal
+  test budget while retaining native save/reread and bounded-frame assertions.
 
 Navigation, authoring, authorization and native lifecycle remain rustX-owned.
 
