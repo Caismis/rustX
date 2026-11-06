@@ -70,6 +70,17 @@ supersedes their collapsed-sidebar and modal-Settings geometry.
   both, prove that the regions and bounds equal that observed union, and reject
   unmeasured neighbors, excessive deltas and foreign-reference use. There is no
   enclosing rectangle or global allowance; internal Chromium causes remain unproven.
+- FULL CI run `42239006386`, job `127967664835`, artifact `13516078875` measured
+  ten light conflict-state disclosure glyph-edge pixels: x=243 at y=841–845
+  and 896–900, each `[255,255,251,255]` to `[255,255,255,255]` (delta 4).
+  A strict local reproduction produced the byte-identical actual PNG. CI/local
+  Settings DOM matches after normalizing generated React Aria ID prefixes;
+  form values and selected-state annotations remain, and all 132 stylesheet
+  text blocks match. The markers are React Aria Disclosure `▸` spans. The strict
+  local observation independently reproduced the same reference mismatch.
+  Ten separate one-pixel regions retain the raw measurements and image hashes;
+  regressions reject neighboring sites, excessive deltas and foreign references.
+  The reference and comparator remain unchanged; no internal browser cause is inferred.
 - Workflow browser acceptance waits for a reopened Model's measured card to be
   visible, dispatches its keyboard action there and checks its Inspector.
   Each multi-MiB Global/Workspace authoring case has its own normal

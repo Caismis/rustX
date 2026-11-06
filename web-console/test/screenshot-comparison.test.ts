@@ -197,6 +197,31 @@ it.each(workflowCaptures)('Workflow run $run replays its complete raw capture un
   expect(compare(observed, 'workflow-library-workspace-linux.png', expected, noisePolicy).ok).toBe(false);
 });
 
+it('Settings conflict disclosure glyph edges admit only their ten measured blue-channel fringes', () => {
+  const name = 'settings-conflict-light-linux.png', expected = reference(name);
+  const entry = noisePolicy.find(row => row.reference === name)!;
+  const measured = entry.pixels as MeasuredNoisePixel[];
+  expect(measured.map(([x, y]) => [x, y])).toEqual([841, 842, 843, 844, 845, 896, 897, 898, 899, 900].map(y => [243, y]));
+  expect(entry.regions.flatMap(cells)).toEqual(measured.map(([x, y]) => [x, y]));
+  for (const region of entry.regions) expect(region).toMatchObject({ width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: 4 });
+  const observed = copy(expected);
+  for (const [x, y, before, after] of measured) {
+    expect(before).toEqual([255, 255, 251, 255]);
+    expect(after).toEqual([255, 255, 255, 255]);
+    paint(observed, x, y, after);
+  }
+  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, name, expected, []).ok).toBe(false);
+  expect(compare(observed, workflowReference, expected, noisePolicy).ok).toBe(false);
+  const excessive = copy(expected); nudge(excessive, 243, 841, 5);
+  expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  for (const [x, y] of [[242, 841], [244, 841], [243, 840], [243, 846], [243, 895], [243, 901]]) {
+    const neighbor = copy(expected); nudge(neighbor, x, y, 1);
+    const result = compare(neighbor, name, expected, noisePolicy);
+    expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
+  }
+});
+
 it.each(['light', 'dark'])('the %s narrow model input corners admit only their four measured pixels within individual deltas', theme => {
   const name = `model-advanced-${theme}-390-linux.png`, expected = reference(name);
   const entry = noisePolicy.find(row => row.reference === name)!;
