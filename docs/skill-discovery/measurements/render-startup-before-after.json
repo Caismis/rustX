@@ -10,6 +10,7 @@
     "layout_ms": 919.0999999642372
   },
   "after": {
+    "implementation_commit": "50ffb31c22018171702c58c10e3f7bbbc28f5b98",
     "change": "Use React Flow batched initial measurements; explicit node-internals refresh only after semantic definition edits",
     "render_ms": 975.1000000238419,
     "layout_ms": 935.1999999880791

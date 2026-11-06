@@ -90,9 +90,11 @@ were reused; this change's crate artifacts and binaries were rebuilt independent
 | Real-child process conformance | Passed: all 45 Subagent integration tests, including the 2 GiB no-copy provider-gate check |
 | `cargo test --all-features --no-fail-fast` | Passed: 5,965 tests, 0 failures, 20 existing ignored tests |
 | App Server protocol generation and TypeScript contracts | Passed; regenerated files have zero drift |
-| Web Console TypeScript and Vitest | Passed again after the final renderer follow-up: 4,068 tests, 4 skipped |
+| Web Console TypeScript and Vitest | Passed after the Office launcher follow-up: 4,069 tests, 4 skipped |
 | Selected rendered browser regressions | Passed: 82 tests with strict pixel comparison; original deadlines and cold-start counters retained |
 | Workflow editor and Harness/native detail parity | Passed after renderer follow-up: 17 tests, including native 256-node startup, semantic port edits and all 8 paired detail presentations |
+| Office conversion and launcher lifecycle | Passed: 17 focused tests, including actual descendant cgroups and deterministic exit-before-pipe-close settlement |
+| Office sidebar rendered regressions | Passed: 8 cases covering continuous pages, first-page readiness, localized retry and desktop/mobile layouts |
 | Resource revision regressions after macOS fixture correction | Passed: 8 Linux tests; macOS case runs in FULL CI |
 | Terminal Console TypeScript and Jest | Passed: 1,320 tests, 1 skipped |
 | CI controller Python tests | Passed: 64 tests |
@@ -165,6 +167,20 @@ images for inspection.
 Rendered QA covers pinned Chromium on Linux; native macOS behavior is separately
 covered by FULL CI. The Browser plugin remains optional for future in-app visual
 inspection.
+
+### Office launcher settlement follow-up
+
+The third FULL run exposed an existing Office launcher-loss race: a nonzero
+`systemd-run` exit recorded failure but waited for `close` before retiring its
+cgroup. Descendants can retain inherited pipes, so this deferred cleanup until
+the external deadline and could replace the intended failure with an unavailable
+error. Nonzero exit now enters the existing stop/retirement path immediately;
+completion still awaits physical settlement. The new event/gate test fails on the
+old code because no kill starts before pipe close, and proves the corrected path
+cannot settle before the retirement gate releases. All 17 focused conversion and
+real-cgroup lifecycle checks pass, including cancellation, external deadline,
+launcher loss, empty descendant cgroups and a successful next operation. No
+boundary assertion or timeout was relaxed.
 
 ## 7. Measurements and reproduction
 
@@ -245,7 +261,11 @@ Follow-up implementation revision:
 [`9120fd5c410fd3a398201c0b5f289c50cd345caf`](https://github.com/Caismis/rustX/commit/9120fd5c410fd3a398201c0b5f289c50cd345caf).
 The complete local Rust suite was rerun successfully on that revision. The
 [second FULL CI run](https://github.com/Caismis/rustX/actions/runs/42211680619)
-passed Linux, protocol, client and Host checks, but exposed the two browser issues
-described above. Its macOS full lane is still running. The renderer/hover
-follow-up is being committed on the same branch and will receive a fresh FULL
-run. The final report update will be documentation-only.
+passed Linux, protocol, client, Host and macOS full checks, but exposed the two
+browser issues described above. The renderer/hover follow-up is committed as
+[`50ffb31c22018171702c58c10e3f7bbbc28f5b98`](https://github.com/Caismis/rustX/commit/50ffb31c22018171702c58c10e3f7bbbc28f5b98).
+The [third FULL CI run](https://github.com/Caismis/rustX/actions/runs/42218559090)
+exposed the Office launcher-loss issue described above. Its remaining browser and
+macOS full lanes are still running. The Office fix and regression test receive
+another complete FULL run on the final implementation revision. The concluding
+report update is documentation-only.

@@ -92,7 +92,9 @@ export async function startOfficeSandbox(directory: string, command: string[], s
   child.stdin.on('error', () => {});
   child.stdout.on('data', header);
   child.on('error', () => stop(new Error('converter_unavailable')));
-  child.once('exit', code => { if (code !== 0 && !stopping) failure ??= new Error(owner ? 'converter_failure' : 'converter_unavailable'); });
+  // Descendants can retain the pipes after the launcher exits. Retire them
+  // immediately so their inherited handles cannot delay physical settlement.
+  child.once('exit', code => { if (code !== 0 && !stopping) stop(new Error(owner ? 'converter_failure' : 'converter_unavailable')); });
   child.once('close', () => { void (async () => {
     clearTimeout(timer); signal.removeEventListener('abort', abort);
     try {
